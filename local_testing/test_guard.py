@@ -23,6 +23,7 @@ GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 sys.path.insert(0, MEGAPAD_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(MEGAPAD_DIR, "bios.asm")
 KDOS_PATH = os.path.join(MEGAPAD_DIR, "kdos.f")
@@ -161,35 +162,19 @@ def run_forth(lines, max_steps=50_000_000, num_cores=1):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected, *, num_cores=1,
-          max_steps=50_000_000):
-    global _pass, _fail
-    output = run_forth(forth_lines, max_steps=max_steps,
-                       num_cores=num_cores)
-    clean = output.strip()
-    errors = ("Branch offset overflow", "Stack underflow", "not found")
-    if expected in clean and not any(marker in clean for marker in errors):
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        full output: {clean!r}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── GUARD creation and initial state ──\n")
+# ── GUARD creation and initial state ──
 
+def test_guard_creation_and_initial_state():
     check("spinning guard is initially free",
           ['GUARD _G1',
            ': _T _G1 GUARD-HELD? . ; _T'],
@@ -215,9 +200,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 0 0 -1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── GUARD-ACQUIRE / GUARD-RELEASE ──\n")
 
+# ── GUARD-ACQUIRE / GUARD-RELEASE ──
+
+def test_guard_acquire_and_release():
     check("acquire then release spinning guard",
           ['GUARD _G3',
            ': _T',
@@ -272,9 +258,10 @@ if __name__ == '__main__':
            ": _T ['] _BAD-RELEASE CATCH . ; _T"],
           "-257 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-GUARD (RAII) ──\n")
 
+# ── WITH-GUARD (RAII) ──
+
+def test_with_guard_raii():
     check("WITH-GUARD acquires and releases",
           ['GUARD _G6',
            ': _BODY  _G6 GUARD-HELD? . ;',
@@ -313,9 +300,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Recursive nesting ──\n")
 
+# ── Recursive nesting ──
+
+def test_recursive_nesting():
     check("re-entry on spinning guard nests correctly",
           ['GUARD _G9',
            ': _INNER  _G9 GUARD-ACQUIRE  _G9 GUARD-MINE? .  _G9 GUARD-RELEASE ;',
@@ -340,17 +328,19 @@ if __name__ == '__main__':
            '; _T'],
           "-1 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── GUARD-BLOCKING creation and state ──\n")
 
+# ── GUARD-BLOCKING creation and state ──
+
+def test_guard_blocking_creation_and_state():
     check("blocking guard is initially free",
           ['GUARD-BLOCKING _BG1',
            ': _T _BG1 GUARD-HELD? . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── GUARD-BLOCKING acquire/release ──\n")
 
+# ── GUARD-BLOCKING acquire/release ──
+
+def test_guard_blocking_acquire_and_release():
     check("acquire and release blocking guard",
           ['GUARD-BLOCKING _BG2',
            ': _T',
@@ -371,9 +361,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-GUARD blocking ──\n")
 
+# ── WITH-GUARD blocking ──
+
+def test_with_guard_blocking():
     check("WITH-GUARD works with blocking guard",
           ['GUARD-BLOCKING _BG4',
            ': _BODY  _BG4 GUARD-HELD? . ;',
@@ -404,9 +395,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 -1 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Multiple acquires / releases ──\n")
 
+# ── Multiple acquires / releases ──
+
+def test_multiple_acquires_and_releases():
     check("spinning guard can be acquired again after release",
           ['GUARD _G11',
            ': _T',
@@ -427,9 +419,10 @@ if __name__ == '__main__':
            '; _T'],
           "42 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Guard protecting shared state ──\n")
 
+# ── Guard protecting shared state ──
+
+def test_guard_protecting_shared_state():
     check("guard protects variable mutation",
           ['GUARD _G12',
            ': _INC  1 _CTR +! ;',
@@ -454,9 +447,10 @@ if __name__ == '__main__':
            '; _T'],
           "3 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── GUARD-INFO ──\n")
 
+# ── GUARD-INFO ──
+
+def test_guard_info():
     check("GUARD-INFO shows FREE for spinning guard",
           ['GUARD _G13',
            ': _T _G13 GUARD-INFO ; _T'],
@@ -481,9 +475,10 @@ if __name__ == '__main__':
            ': _T _BG9 GUARD-INFO ; _T'],
           "blocking")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Stack preservation ──\n")
 
+# ── Stack preservation ──
+
+def test_stack_preservation():
     check("WITH-GUARD preserves stack across call",
           ['GUARD _G16',
            ': _BODY ;',
@@ -514,9 +509,10 @@ if __name__ == '__main__':
            '_CT-TRY1 @ . _CT-TRY2 @ . _CT-OWNER @ .'],
           "0 -1 -1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Four-core ownership and contention ──\n")
 
+# ── Four-core ownership and contention ──
+
+def test_four_core_ownership_and_contention():
     check("four cores serialize one shared critical section",
           ['GUARD _MC-G',
            'VARIABLE _MC-START  0 _MC-START !',
@@ -760,9 +756,6 @@ if __name__ == '__main__':
            '_BL-GOT @ . _BL-G GUARD-HELD? .'],
           "-1 0 ", num_cores=4, max_steps=100_000_000)
 
-    # ────────────────────────────────────────────────────────────────
-    print()
-    print("=" * 40)
-    print(f"  {_pass} passed, {_fail} failed")
-    print("=" * 40)
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

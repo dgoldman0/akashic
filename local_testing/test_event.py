@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-event Forth library (event.f).
 
 Tests: EVENT, EVT-SET, EVT-RESET, EVT-SET?, EVT-PULSE, EVT-INFO,
@@ -37,6 +20,7 @@ EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -128,6 +112,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -155,32 +141,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── EVENT creation ──\n")
+# ── EVENT creation ──
 
+def test_event_creation():
     check("event initially unset",
           [': _T _EV1 EVT-SET? . ; _T'],
           "0 ")
@@ -205,9 +178,10 @@ if __name__ == '__main__':
           [': _T _EV1 _EV2 <> . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── EVT-SET / EVT-SET? / EVT-RESET ──\n")
 
+# ── EVT-SET / EVT-SET? / EVT-RESET ──
+
+def test_evt_set_query_and_reset():
     check("EVT-SET makes event set",
           [': _T _EV1 EVT-SET _EV1 EVT-SET? . ; _T'],
           "-1 ")
@@ -232,9 +206,10 @@ if __name__ == '__main__':
           [': _T _EV1 EVT-RESET _EV1 EVT-RESET _EV1 EVT-SET? . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── EVT-WAIT (fast path — already set) ──\n")
 
+# ── EVT-WAIT (fast path — already set) ──
+
+def test_evt_wait_fast_path():
     check("EVT-WAIT on set event returns immediately",
           [': _T _EV2 EVT-SET _EV2 EVT-WAIT 42 . ; _T'],
           "42 ")
@@ -243,9 +218,10 @@ if __name__ == '__main__':
           [': _T _EV2 EVT-SET _EV2 EVT-WAIT _EV2 EVT-SET? . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── EVT-WAIT-TIMEOUT ──\n")
 
+# ── EVT-WAIT-TIMEOUT ──
+
+def test_evt_wait_timeout():
     check("timeout on set event returns TRUE immediately",
           [': _T _EV2 EVT-SET _EV2 1000 EVT-WAIT-TIMEOUT . ; _T'],
           "-1 ")
@@ -258,9 +234,10 @@ if __name__ == '__main__':
           [': _T _EV3 EVT-RESET _EV3 0 EVT-WAIT-TIMEOUT . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── EVT-PULSE ──\n")
 
+# ── EVT-PULSE ──
+
+def test_evt_pulse():
     check("pulse on unset event leaves it unset",
           [': _T _EV3 EVT-RESET _EV3 EVT-PULSE _EV3 EVT-SET? . ; _T'],
           "0 ")
@@ -273,9 +250,10 @@ if __name__ == '__main__':
           [': _T _EV3 EVT-PULSE _EV3 8 + @ . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── EVT-INFO ──\n")
 
+# ── EVT-INFO ──
+
+def test_evt_info():
     check("EVT-INFO on unset event shows UNSET",
           [': _T _EV3 EVT-RESET _EV3 EVT-INFO ; _T'],
           "UNSET")
@@ -288,9 +266,10 @@ if __name__ == '__main__':
           [': _T _EV3 EVT-RESET _EV3 EVT-INFO ; _T'],
           "waiters=0")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Data structure integrity ──\n")
 
+# ── Data structure integrity ──
+
+def test_data_structure_integrity():
     check("set then reset preserves waiter slots",
           [': _T',
            '  _EV1 EVT-SET _EV1 EVT-RESET',
@@ -305,9 +284,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Constants ──\n")
 
+# ── Constants ──
+
+def test_event_constants():
     check("EVT-LOCK is 6",
           [': _T EVT-LOCK . ; _T'],
           "6 ")
@@ -324,9 +304,6 @@ if __name__ == '__main__':
           [': _T _EVT-MAX-WAITERS . ; _T'],
           "2 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print()
-    print("=" * 40)
-    print(f"  {_pass} passed, {_fail} failed")
-    print("=" * 40)
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

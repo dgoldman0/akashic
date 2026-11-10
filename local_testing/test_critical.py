@@ -20,6 +20,7 @@ CRIT_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "critical.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -115,6 +116,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -142,39 +145,27 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        full output: {clean!r}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == "__main__":
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CRITICAL-DEPTH initial state ──\n")
+# ── CRITICAL-DEPTH initial state ──
 
+def test_critical_depth_initial_state():
     check("initial depth is zero",
           [": _T CRITICAL-DEPTH . ; _T"],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CRITICAL-BEGIN / CRITICAL-END basics ──\n")
 
+# ── CRITICAL-BEGIN / CRITICAL-END basics ──
+
+def test_critical_begin_and_end():
     check("single BEGIN/END cycle",
           [": _T",
            "  CRITICAL-BEGIN",
@@ -192,9 +183,10 @@ if __name__ == "__main__":
           [": _T  CRITICAL-BEGIN  CRITICAL-END  CRITICAL-DEPTH . ; _T"],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Nesting ──\n")
 
+# ── Nesting ──
+
+def test_critical_nesting():
     check("nesting to depth 2",
           [": _T",
            "  CRITICAL-BEGIN",
@@ -232,9 +224,10 @@ if __name__ == "__main__":
            "; _T"],
           "1 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-CRITICAL ──\n")
 
+# ── WITH-CRITICAL ──
+
+def test_with_critical():
     check("WITH-CRITICAL executes xt",
           [": _BODY  42 _RES ! ;",
            ": _T  _CLR  ['] _BODY WITH-CRITICAL  _RES @ . ; _T"],
@@ -266,9 +259,10 @@ if __name__ == "__main__":
            "; _T"],
           "-99 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CRITICAL-LOCK / CRITICAL-UNLOCK ──\n")
 
+# ── CRITICAL-LOCK / CRITICAL-UNLOCK ──
+
+def test_critical_lock_and_unlock():
     check("CRITICAL-LOCK increases depth",
           [": _T",
            "  7 CRITICAL-LOCK",
@@ -300,9 +294,10 @@ if __name__ == "__main__":
            "; _T"],
           "1 2 1 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-CRITICAL-LOCK ──\n")
 
+# ── WITH-CRITICAL-LOCK ──
+
+def test_with_critical_lock():
     check("WITH-CRITICAL-LOCK executes xt",
           [": _BODY  77 _RES ! ;",
            ": _T  _CLR  ['] _BODY  7 WITH-CRITICAL-LOCK  _RES @ . ; _T"],
@@ -326,18 +321,20 @@ if __name__ == "__main__":
            "; _T"],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-CRITICAL-LOCK throw propagation ──\n")
 
+# ── WITH-CRITICAL-LOCK throw propagation ──
+
+def test_with_critical_lock_throw_propagation():
     check("WITH-CRITICAL-LOCK propagates throw code",
           [": _BOMB  -55 THROW ;",
            ": _WRAP  ['] _BOMB  7 WITH-CRITICAL-LOCK ;",
            ": _T  _CLR  ['] _WRAP CATCH  .  CRITICAL-DEPTH . ; _T"],
           "-55 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Multiple sequential sections ──\n")
 
+# ── Multiple sequential sections ──
+
+def test_multiple_sequential_sections():
     check("two consecutive critical sections",
           [": _T",
            "  CRITICAL-BEGIN  CRITICAL-DEPTH .  CRITICAL-END",
@@ -356,9 +353,10 @@ if __name__ == "__main__":
            "; _T"],
           "3 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CRITICAL-INFO ──\n")
 
+# ── CRITICAL-INFO ──
+
+def test_critical_info():
     check("CRITICAL-INFO outside section",
           [": _T  CRITICAL-INFO ; _T"],
           "[critical depth=0 ]")
@@ -367,9 +365,10 @@ if __name__ == "__main__":
           [": _T  CRITICAL-BEGIN  CRITICAL-INFO  CRITICAL-END ; _T"],
           "[critical depth=1 ]")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Stack preservation ──\n")
 
+# ── Stack preservation ──
+
+def test_stack_preservation():
     check("CRITICAL-BEGIN/END preserves data stack",
           [": _T  10 20 30",
            "  CRITICAL-BEGIN  CRITICAL-END",
@@ -387,9 +386,10 @@ if __name__ == "__main__":
            ": _T  10 20 30  ['] _NOP  7 WITH-CRITICAL-LOCK  . . . ; _T"],
           "30 20 10 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PREEMPT-OFF / PREEMPT-ON interaction ──\n")
 
+# ── PREEMPT-OFF / PREEMPT-ON interaction ──
+
+def test_preempt_off_and_on_interaction():
     check("PREEMPT-FLAG is 0 inside critical section",
           [": _T",
            "  CRITICAL-BEGIN",
@@ -398,9 +398,6 @@ if __name__ == "__main__":
            "; _T"],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  Total: {_pass + _fail}   Pass: {_pass}   Fail: {_fail}")
-    print(f"{'='*60}")
-    if _fail:
-        sys.exit(1)
+
+if __name__ == "__main__":
+    run_file_tests(__file__)

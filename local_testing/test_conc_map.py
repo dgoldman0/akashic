@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-conc-map Forth library (conc-map.f).
 
 Tests: CMAP, CMAP-PUT, CMAP-GET, CMAP-DEL, CMAP-COUNT,
@@ -43,6 +26,7 @@ CMAP_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "conc-map.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -136,18 +120,27 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -162,39 +155,27 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CMAP Creation ──\n")
+# ── CMAP Creation ──
 
+def test_cmap_creation():
     check("CMAP-COUNT starts at 0",
           [': _T _M1 CMAP-COUNT . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CMAP-PUT / CMAP-GET ──\n")
 
+# ── CMAP-PUT / CMAP-GET ──
+
+def test_cmap_put_and_get():
     check("put then get returns value",
           [': _T 1 _K1 ! 42 _V1 ! _K1 _V1 _M1 CMAP-PUT',
            '_K1 _M1 CMAP-GET @ . ; _T'],
@@ -239,9 +220,10 @@ if __name__ == '__main__':
            '_M1 CMAP-COUNT . ; _T'],
           "3 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CMAP-DEL ──\n")
 
+# ── CMAP-DEL ──
+
+def test_cmap_del():
     check("delete existing key returns -1",
           [': _T 1 _K1 ! 42 _V1 ! _K1 _V1 _M1 CMAP-PUT',
            '_K1 _M1 CMAP-DEL . ; _T'],
@@ -268,9 +250,10 @@ if __name__ == '__main__':
            '_K2 _M1 CMAP-GET @ . _M1 CMAP-COUNT . ; _T'],
           "20 1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CMAP-EACH ──\n")
 
+# ── CMAP-EACH ──
+
+def test_cmap_each():
     check("CMAP-EACH on empty map",
           [': _T 0 _ACC ! [\'] _SUM-VALS _M1 CMAP-EACH _ACC @ . ; _T'],
           "0 ")
@@ -293,9 +276,10 @@ if __name__ == '__main__':
            '[\'] _SUM-VALS _M1 CMAP-EACH _ACC @ . ; _T'],
           "60 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CMAP-CLEAR ──\n")
 
+# ── CMAP-CLEAR ──
+
+def test_cmap_clear():
     check("CMAP-CLEAR resets count to 0",
           [': _T 1 _K1 ! 42 _V1 ! _K1 _V1 _M1 CMAP-PUT',
            '2 _K2 ! 99 _V2 ! _K2 _V2 _M1 CMAP-PUT',
@@ -314,9 +298,10 @@ if __name__ == '__main__':
            '_K1 _M1 CMAP-GET @ . ; _T'],
           "77 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CMAP-INFO ──\n")
 
+# ── CMAP-INFO ──
+
+def test_cmap_info():
     check("CMAP-INFO outputs prefix",
           [': _T _M1 CMAP-INFO ; _T'],
           "[cmap")
@@ -325,9 +310,10 @@ if __name__ == '__main__':
           [': _T _M1 CMAP-INFO ; _T'],
           "count=")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Integration ──\n")
 
+# ── Integration ──
+
+def test_cmap_integration():
     check("put-get-update-get cycle",
           [': _T 1 _K1 ! 10 _V1 ! _K1 _V1 _M1 CMAP-PUT',
            '_K1 _M1 CMAP-GET @ .',
@@ -350,9 +336,6 @@ if __name__ == '__main__':
            '[\'] _SUM-VALS _M1 CMAP-EACH _ACC @ . _M1 CMAP-COUNT . ; _T'],
           "600 3 ")
 
-    # ────────────────────────────────────────────────────────────────
-    # Done
-    print(f"\n{'='*60}")
-    print(f"  {_pass} passed, {_fail} failed, {_pass + _fail} total")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

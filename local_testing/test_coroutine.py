@@ -22,6 +22,7 @@ COROUTINE_F = os.path.join(ROOT_DIR, "akashic", "concurrency", "coroutine.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -115,6 +116,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -142,32 +145,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        full output: {clean!r}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ================================================================
-    print("\n── Raw BIOS: TASK? when no background task ──\n")
+# ── Raw BIOS: TASK? when no background task ──
 
+def test_raw_bios_task_query_without_background_task():
     check("TASK? returns 0 for slot 1 with no bg task",
           [': _T 1 TASK? . ; _T'],
           "0 ")
@@ -192,9 +182,10 @@ if __name__ == '__main__':
           [': _T BG-ANY? . ; _T'],
           "0 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: PAUSE with no background task (no-op) ──\n")
 
+# ── Raw BIOS: PAUSE with no background task (no-op) ──
+
+def test_raw_bios_pause_without_background_task():
     check("PAUSE is no-op when no background task",
           [': _T PAUSE 42 . ; _T'],
           "42 ")
@@ -203,9 +194,10 @@ if __name__ == '__main__':
           [': _T PAUSE PAUSE PAUSE 99 . ; _T'],
           "99 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: BACKGROUND + TASK? + one-shot ──\n")
 
+# ── Raw BIOS: BACKGROUND + TASK? + one-shot ──
+
+def test_raw_bios_background_one_shot_task():
     check("BACKGROUND starts a task, 1 TASK? returns 1",
           [': _A1 42 _RES ! ;',
            ': _T',
@@ -235,9 +227,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: BACKGROUND2 + BACKGROUND3 ──\n")
 
+# ── Raw BIOS: BACKGROUND2 + BACKGROUND3 ──
+
+def test_raw_bios_background2_and_background3():
     check("BACKGROUND2 starts task in slot 2",
           [': _A4 99 _R2 ! ;',
            ': _T',
@@ -262,9 +255,10 @@ if __name__ == '__main__':
            '; _T'],
           "1 0 77 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: TASK-STOP (slot argument) ──\n")
 
+# ── Raw BIOS: TASK-STOP (slot argument) ──
+
+def test_raw_bios_task_stop_by_slot():
     check("1 TASK-STOP cancels slot 1",
           [': _BG BEGIN TASK-YIELD AGAIN ;',
            ': _T',
@@ -295,9 +289,10 @@ if __name__ == '__main__':
            '; _T'],
           "1 0 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: multi-round-trip PAUSE/TASK-YIELD ──\n")
 
+# ── Raw BIOS: multi-round-trip PAUSE/TASK-YIELD ──
+
+def test_raw_bios_pause_and_task_yield_round_trips():
     check("background task increments counter across PAUSEs",
           [': _BG  BEGIN 1 _CTR +! TASK-YIELD AGAIN ;',
            ': _T',
@@ -309,9 +304,10 @@ if __name__ == '__main__':
            '; _T'],
           "3 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: #TASKS ──\n")
 
+# ── Raw BIOS: #TASKS ──
+
+def test_raw_bios_task_count():
     check("#TASKS tracks active tasks",
           [': _BG BEGIN TASK-YIELD AGAIN ;',
            ': _T',
@@ -327,9 +323,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 1 2 3 0 ")
 
-    # ================================================================
-    print("\n── Raw BIOS: round-robin across 3 slots ──\n")
 
+# ── Raw BIOS: round-robin across 3 slots ──
+
+def test_raw_bios_round_robin_across_three_slots():
     check("PAUSE round-robins through all 3 slots",
           ['VARIABLE c1  VARIABLE c2  VARIABLE c3',
            ': T1  BEGIN  c1 @ 1 + c1 !  TASK-YIELD  AGAIN ;',
@@ -346,9 +343,10 @@ if __name__ == '__main__':
            '; _T'],
           "3 3 3 ")
 
-    # ================================================================
-    print("\n── BG-ALIVE? ──\n")
 
+# ── BG-ALIVE? ──
+
+def test_bg_alive():
     check("BG-ALIVE? TRUE when slot 1 running",
           [': _BG BEGIN TASK-YIELD AGAIN ;',
            ': _T',
@@ -377,9 +375,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 0 ")
 
-    # ================================================================
-    print("\n── BG-ANY? ──\n")
 
+# ── BG-ANY? ──
+
+def test_bg_any():
     check("BG-ANY? TRUE when a task is running",
           [': _BG BEGIN TASK-YIELD AGAIN ;',
            ': _T',
@@ -390,9 +389,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 0 ")
 
-    # ================================================================
-    print("\n── WITH-BACKGROUND ──\n")
 
+# ── WITH-BACKGROUND ──
+
+def test_with_background():
     check("WITH-BACKGROUND runs body and stops slot 1",
           [': _BG  BEGIN 1 _CTR +! TASK-YIELD AGAIN ;',
            ': _BODY PAUSE PAUSE PAUSE ;',
@@ -428,9 +428,10 @@ if __name__ == '__main__':
            '; _T'],
           "30 ")
 
-    # ================================================================
-    print("\n── WITH-BG (generic slot) ──\n")
 
+# ── WITH-BG (generic slot) ──
+
+def test_with_bg_generic_slot():
     check("WITH-BG slot 2 runs body and stops",
           [': _BG  BEGIN 1 _CTR +! TASK-YIELD AGAIN ;',
            ': _BODY PAUSE PAUSE ;',
@@ -451,9 +452,10 @@ if __name__ == '__main__':
            '; _T'],
           "42 0 ")
 
-    # ================================================================
-    print("\n── BG-POLL ──\n")
 
+# ── BG-POLL ──
+
+def test_bg_poll():
     check("BG-POLL installs polling loop in slot 1",
           [': _POLL1 1 _CTR +! ;',
            ': _T',
@@ -486,9 +488,10 @@ if __name__ == '__main__':
            '; _T'],
           "5 0 ")
 
-    # ================================================================
-    print("\n── BG-POLL-SLOT ──\n")
 
+# ── BG-POLL-SLOT ──
+
+def test_bg_poll_slot():
     check("BG-POLL-SLOT installs poll in slot 2",
           [': _P2 1 _R2 +! ;',
            ': _T',
@@ -524,9 +527,10 @@ if __name__ == '__main__':
            '; _T'],
           "3 3 ")
 
-    # ================================================================
-    print("\n── BG-WAIT-DONE ──\n")
 
+# ── BG-WAIT-DONE ──
+
+def test_bg_wait_done():
     check("BG-WAIT-DONE waits for slot 1 one-shot",
           [': _A4 77 _RES ! ;',
            ': _T',
@@ -551,9 +555,10 @@ if __name__ == '__main__':
            '; _T'],
           "88 0 ")
 
-    # ================================================================
-    print("\n── BG-WAIT-ALL ──\n")
 
+# ── BG-WAIT-ALL ──
+
+def test_bg_wait_all():
     check("BG-WAIT-ALL waits for all one-shot tasks",
           [': _W1 11 _RES ! ;',
            ': _W2 22 _R2 ! ;',
@@ -569,9 +574,10 @@ if __name__ == '__main__':
            '; _T'],
           "11 22 33 0 ")
 
-    # ================================================================
-    print("\n── BG-STOP-ALL ──\n")
 
+# ── BG-STOP-ALL ──
+
+def test_bg_stop_all():
     check("BG-STOP-ALL stops all slots",
           [': _BG BEGIN TASK-YIELD AGAIN ;',
            ': _T',
@@ -584,9 +590,10 @@ if __name__ == '__main__':
            '; _T'],
           "3 0 ")
 
-    # ================================================================
-    print("\n── BG-INFO ──\n")
 
+# ── BG-INFO ──
+
+def test_bg_info():
     check("BG-INFO shows all slots stopped",
           [': _T BG-INFO ; _T'],
           "[coroutine 1=-- 2=-- 3=-- n=0]")
@@ -601,9 +608,10 @@ if __name__ == '__main__':
            '; _T'],
           "[coroutine 1=ON 2=-- 3=ON n=2]")
 
-    # ================================================================
-    print("\n── Stack preservation across PAUSE ──\n")
 
+# ── Stack preservation across PAUSE ──
+
+def test_stack_preservation_across_pause():
     check("stack preserved across PAUSE round-trips",
           [': _BG BEGIN TASK-YIELD AGAIN ;',
            ': _T',
@@ -627,9 +635,6 @@ if __name__ == '__main__':
            '; _T'],
           "33 22 11 ")
 
-    # ================================================================
-    print()
-    print("=" * 40)
-    print(f"  {_pass} passed, {_fail} failed")
-    print("=" * 40)
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

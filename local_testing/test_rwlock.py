@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-rwlock Forth library (rwlock.f).
 
 Tests: RWLOCK, READ-LOCK, READ-UNLOCK, WRITE-LOCK, WRITE-UNLOCK,
@@ -39,6 +22,7 @@ RWLOCK_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "rwlock.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -125,18 +109,27 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -151,32 +144,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── RWLOCK creation ──\n")
+# ── RWLOCK creation ──
 
+def test_rwlock_creation():
     check("lock# stored correctly (6)",
           [': _T _RW1 @ . ; _T'],
           "6 ")
@@ -197,9 +177,10 @@ if __name__ == '__main__':
           [': _T _RW1 _RW2 <> . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Constants ──\n")
 
+# ── Constants ──
+
+def test_rwlock_constants():
     check("_RW-CELLS is 11",
           [': _T _RW-CELLS . ; _T'],
           "11 ")
@@ -208,9 +189,10 @@ if __name__ == '__main__':
           [': _T _RW-SIZE . ; _T'],
           "88 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Field accessors ──\n")
 
+# ── Field accessors ──
+
+def test_field_accessors():
     check("_RW-LOCK# is +0",
           [': _T _RW1 _RW-LOCK# _RW1 - . ; _T'],
           "0 ")
@@ -231,9 +213,10 @@ if __name__ == '__main__':
           [': _T _RW1 _RW-WEVT _RW1 - . ; _T'],
           "56 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Embedded events structure ──\n")
 
+# ── Embedded events structure ──
+
+def test_embedded_events_structure():
     check("read-event flag initially 0",
           [': _T _RW1 _RW-REVT @ . ; _T'],
           "0 ")
@@ -250,9 +233,10 @@ if __name__ == '__main__':
           [': _T _RW1 _RW-WEVT EVT-SET? . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── READ-LOCK / READ-UNLOCK ──\n")
 
+# ── READ-LOCK / READ-UNLOCK ──
+
+def test_read_lock_and_unlock():
     check("READ-LOCK increments readers to 1",
           [': _T _RW1 READ-LOCK _RW1 RW-READERS . _RW1 READ-UNLOCK ; _T'],
           "1 ")
@@ -281,9 +265,10 @@ if __name__ == '__main__':
           [': _T _RW1 READ-LOCK _RW1 RW-WRITER? . _RW1 READ-UNLOCK ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WRITE-LOCK / WRITE-UNLOCK ──\n")
 
+# ── WRITE-LOCK / WRITE-UNLOCK ──
+
+def test_write_lock_and_unlock():
     check("WRITE-LOCK sets writer flag",
           [': _T _RW1 WRITE-LOCK _RW1 RW-WRITER? . _RW1 WRITE-UNLOCK ; _T'],
           "-1 ")
@@ -311,9 +296,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Read then write sequencing ──\n")
 
+# ── Read then write sequencing ──
+
+def test_read_then_write_sequencing():
     check("read-lock, unlock, then write-lock succeeds",
           [': _T',
            '  _RW1 READ-LOCK _RW1 READ-UNLOCK',
@@ -328,9 +314,10 @@ if __name__ == '__main__':
            '; _T'],
           "1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-READ (RAII) ──\n")
 
+# ── WITH-READ (RAII) ──
+
+def test_with_read_raii():
     check("WITH-READ executes xt and unlocks",
           [': _NOOP 42 . ;',
            ": _T ['] _NOOP _RW1 WITH-READ _RW1 RW-READERS . ; _T"],
@@ -341,9 +328,10 @@ if __name__ == '__main__':
            ": _T ['] _CHK _RW1 WITH-READ ; _T"],
           "1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-WRITE (RAII) ──\n")
 
+# ── WITH-WRITE (RAII) ──
+
+def test_with_write_raii():
     check("WITH-WRITE executes xt and unlocks",
           [': _NOOP2 99 . ;',
            ": _T ['] _NOOP2 _RW1 WITH-WRITE _RW1 RW-WRITER? . ; _T"],
@@ -354,9 +342,10 @@ if __name__ == '__main__':
            ": _T ['] _CHK2 _RW1 WITH-WRITE ; _T"],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── RW-INFO ──\n")
 
+# ── RW-INFO ──
+
+def test_rw_info():
     check("RW-INFO shows lock#",
           [': _T _RW1 RW-INFO ; _T'],
           "lock#=")
@@ -377,9 +366,10 @@ if __name__ == '__main__':
           [': _T _RW1 RW-INFO ; _T'],
           "wevt:")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Cross-rwlock independence ──\n")
 
+# ── Cross-rwlock independence ──
+
+def test_cross_rwlock_independence():
     check("locking RW1 does not affect RW2 readers",
           [': _T _RW1 READ-LOCK _RW2 RW-READERS . _RW1 READ-UNLOCK ; _T'],
           "0 ")
@@ -392,9 +382,10 @@ if __name__ == '__main__':
           [': _T _RW1 @ . _RW2 @ . ; _T'],
           "6 5 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Data structure integrity ──\n")
 
+# ── Data structure integrity ──
+
+def test_data_structure_integrity():
     check("read-lock/unlock cycle preserves event state",
           [': _T',
            '  _RW1 READ-LOCK _RW1 READ-UNLOCK',
@@ -425,9 +416,6 @@ if __name__ == '__main__':
            '; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print()
-    print("=" * 40)
-    print(f"  {_pass} passed, {_fail} failed")
-    print("=" * 40)
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

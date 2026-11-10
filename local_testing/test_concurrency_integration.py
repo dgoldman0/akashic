@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Comprehensive edge-case and integration tests for the concurrency library.
 
 Covers event.f, semaphore.f, and rwlock.f together — focusing on:
@@ -40,6 +23,7 @@ RWLOCK_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "rwlock.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -139,18 +123,27 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -165,35 +158,21 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ══════════════════════════════════════════════════════════════════════
 #  Tests
 # ══════════════════════════════════════════════════════════════════════
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ EVENT EDGE CASES ═══\n")
-    # ────────────────────────────────────────────────────────────────
+# ═══ EVENT EDGE CASES ═══
 
+def test_event_edge_cases():
     check("EVT-SET on already-set event is safe",
           [': _T _EV1 EVT-SET _EV1 EVT-SET _EV1 EVT-SET? . ; _T'],
           "-1 ")
@@ -240,10 +219,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 0 0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ SEMAPHORE EDGE CASES ═══\n")
-    # ────────────────────────────────────────────────────────────────
 
+# ═══ SEMAPHORE EDGE CASES ═══
+
+def test_semaphore_edge_cases():
     check("SEM-SIGNAL on count=0 raises to 1",
           [': _T _S3 SEM-SIGNAL _S3 SEM-COUNT . ; _T'],
           "1 ")
@@ -320,10 +299,9 @@ if __name__ == '__main__':
           "1 3 ")
 
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ RWLOCK EDGE CASES ═══\n")
-    # ────────────────────────────────────────────────────────────────
+# ═══ RWLOCK EDGE CASES ═══
 
+def test_rwlock_edge_cases():
     check("nested read-locks on same rwlock (re-entrant reads)",
           [': _T',
            '  _RW1 READ-LOCK _RW1 READ-LOCK _RW1 READ-LOCK',
@@ -417,10 +395,10 @@ if __name__ == '__main__':
            ": _T ['] _MID2 _RW1 WITH-READ _RW1 RW-READERS . ; _T"],
           "2 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ CROSS-PRIMITIVE INTERACTIONS ═══\n")
-    # ────────────────────────────────────────────────────────────────
 
+# ═══ CROSS-PRIMITIVE INTERACTIONS ═══
+
+def test_cross_primitive_interactions():
     check("WITH-SEM inside WITH-READ",
           [': _INNER3 _S1 SEM-COUNT . ;',
            ": _MID3 ['] _INNER3 _S1 WITH-SEM ;",
@@ -464,10 +442,10 @@ if __name__ == '__main__':
            ': _T _ALL3 ; _T'],
           "-1 2 1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ STRESS / STABILITY ═══\n")
-    # ────────────────────────────────────────────────────────────────
 
+# ═══ STRESS / STABILITY ═══
+
+def test_stress_and_stability():
     check("100 event set/reset cycles",
           [': _T 100 0 DO _EV1 EVT-SET _EV1 EVT-RESET LOOP',
            '  _EV1 EVT-SET? . _EV1 8 + @ .',
@@ -513,10 +491,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ BOUNDARY CONDITIONS ═══\n")
-    # ────────────────────────────────────────────────────────────────
 
+# ═══ BOUNDARY CONDITIONS ═══
+
+def test_boundary_conditions():
     check("SEM-SIGNAL beyond initial count (3 -> 4 -> 5)",
           [': _T _S1 SEM-SIGNAL _S1 SEM-SIGNAL _S1 SEM-COUNT .',
            '  _S1 SEM-WAIT _S1 SEM-WAIT',        # restore
@@ -552,10 +530,10 @@ if __name__ == '__main__':
           [': _T _EV1 EVT-RESET _EV1 EVT-INFO ; _T'],
           "UNSET")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n═══ EXCEPTION SAFETY — COMPLEX ═══\n")
-    # ────────────────────────────────────────────────────────────────
 
+# ═══ EXCEPTION SAFETY — COMPLEX ═══
+
+def test_complex_exception_safety():
     check("WITH-SEM THROW does not corrupt semaphore state",
           [': _THRW 1 THROW ;',
            ": _WS1 ['] _THRW _S1 WITH-SEM ;",
@@ -608,9 +586,6 @@ if __name__ == '__main__':
            '; _T'],
           "3 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print()
-    print("=" * 50)
-    print(f"  {_pass} passed, {_fail} failed")
-    print("=" * 50)
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

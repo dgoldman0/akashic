@@ -23,6 +23,11 @@ sys.path.insert(0, str(AKASHIC_ROOT / "local_testing"))
 
 from asm import assemble  # noqa: E402
 from system import MegapadSystem  # noqa: E402
+from forth_snapshot import (  # noqa: E402
+    failure_message,
+    printed_output,
+    run_file_tests,
+)
 from akashic_tui import SOURCE_ROOT, dependency_order  # noqa: E402
 
 
@@ -305,7 +310,8 @@ def build_snapshot() -> None:
 
 
 def run_forth(lines: list[str], max_steps: int = 180_000_000) -> str:
-    assert _snapshot is not None
+    if _snapshot is None:
+        build_snapshot()
     bios, memory, cpu_states, ext_memory = _snapshot
     system = MegapadSystem(
         ram_size=4 * 1024 * 1024,
@@ -349,37 +355,26 @@ def run_forth(lines: list[str], max_steps: int = 180_000_000) -> str:
     return transcript
 
 
-passed = 0
-failed = 0
-
-
 def check(name: str, forth: list[str], expected: str) -> None:
-    global passed, failed
+    """Require EXPECTED among the words the program printed.
+
+    The printed words, without KDOS's ``ok``, ``>`` and ``Bye!``, are joined
+    by single spaces, so the expected results may span several output lines.
+    The check fails when KDOS reported a failed line.
+    """
     output = run_forth(forth)
-    diagnostics = ("? (not found)", "Stack underflow", "Branch offset overflow")
-    results = output
-    for command in forth + ["BYE"]:
-        results = results.replace(command + "\r\n", "")
-        results = results.replace(command + "\n", "")
-    tokens = [token for token in results.split() if token not in ("Bye!", "ok", ">")]
-    results = " ".join(tokens) + " "
+    printed = printed_output(name, forth, output)
+    words = [
+        word for word in printed.split() if word not in ("Bye!", "ok", ">")
+    ]
+    results = " ".join(words) + " "
     wanted = " ".join(expected.split()) + " "
-    if wanted in results and not any(item in output for item in diagnostics):
-        passed += 1
-        print(f"  PASS  {name}")
-    else:
-        failed += 1
-        print(
-            f"  FAIL  {name}\n"
-            f"        expected {expected!r}\n"
-            f"        results {results!r}\n"
-            f"        output tail {output[-5000:]!r}"
-        )
+    assert wanted in results, failure_message(
+        name, f"expected {expected!r} in the printed words {results!r}", output
+    )
 
 
-def main() -> int:
-    build_snapshot()
-
+def test_copy_is_exact_guarded_context_safe_and_descriptor_clean():
     check(
         "copy is exact, guarded, context-safe, and descriptor-clean",
         [
@@ -394,6 +389,8 @@ def main() -> int:
         "0 -1 -1 -1 -1 -1 -1 payload-across-io ",
     )
 
+
+def test_zero_progress_write_rolls_back_the_new_destination():
     check(
         "a zero-progress write rolls back the new destination",
         [
@@ -405,6 +402,8 @@ def main() -> int:
         "6 -1 0 -1 -1 ",
     )
 
+
+def test_target_sync_failure_rolls_back_before_verification():
     check(
         "a target sync failure rolls back before verification",
         [
@@ -415,6 +414,8 @@ def main() -> int:
         "6 -1 0 -1 ",
     )
 
+
+def test_destination_corruption_is_detected_and_rolled_back():
     check(
         "destination corruption is detected and rolled back",
         [
@@ -425,6 +426,8 @@ def main() -> int:
         "7 -1 0 -1 ",
     )
 
+
+def test_unexpected_write_throw_preserves_its_io_phase_and_unwinds():
     check(
         "an unexpected write THROW preserves its I/O phase and unwinds",
         [
@@ -436,6 +439,8 @@ def main() -> int:
         "6 -1 0 -1 -1 ",
     )
 
+
+def test_after_effect_close_attempts_both_descriptors_without_double_close():
     check(
         "after-effect close attempts both descriptors without double-close",
         [
@@ -450,6 +455,8 @@ def main() -> int:
         "6 -1 0 -1 -1 2 -1 -1 -1 -1 ",
     )
 
+
+def test_after_effect_rollback_delete_remains_explicitly_uncertain():
     check(
         "after-effect rollback delete remains explicitly uncertain",
         [
@@ -462,6 +469,8 @@ def main() -> int:
         "10 -1 0 -1 -1 -1 -1 ",
     )
 
+
+def test_after_effect_rollback_sync_remains_explicitly_uncertain():
     check(
         "after-effect rollback sync remains explicitly uncertain",
         [
@@ -474,6 +483,8 @@ def main() -> int:
         "10 -1 0 -1 -1 -1 -1 ",
     )
 
+
+def test_after_effect_selector_restore_preserves_publication_facts():
     check(
         "after-effect selector restore preserves publication facts",
         [
@@ -488,6 +499,8 @@ def main() -> int:
         "11 -1 -1 -1 -1 2 -1 -1 -1 ",
     )
 
+
+def test_after_effect_cut_delete_reports_durable_state_uncertainty():
     check(
         "after-effect cut delete reports durable-state uncertainty",
         [
@@ -500,6 +513,8 @@ def main() -> int:
         "9 0 -1 -1 -1 -1 -1 ",
     )
 
+
+def test_cut_never_removes_source_when_post_copy_delete_fails():
     check(
         "cut never removes source when post-copy delete fails",
         [
@@ -511,6 +526,8 @@ def main() -> int:
         "8 -1 -1 payload-across-io ",
     )
 
+
+def test_successful_cut_verifies_destination_before_removing_source():
     check(
         "successful cut verifies destination before removing source",
         [
@@ -521,19 +538,23 @@ def main() -> int:
         "0 0 -1 payload-across-io ",
     )
 
+
+def test_same_path_collision_and_directory_sources_are_rejected_pre_mutation():
     check(
         "same-path, collision, and directory sources are rejected pre-mutation",
         [
             "T-SETUP S\" /src.txt\" _TV @ VFS-RESOLVE _FEXP-SEL-IN ! "
             "_FCP-RUN .",
-            "T-SELECT-DEST S\" existing\" S\" /dest/src.txt\" T-PUT "
-            "_TO @ VFS-USE _FCP-RUN .",
+            ": _RUN-LINE T-SELECT-DEST S\" existing\" S\" /dest/src.txt\" T-PUT "
+            "_TO @ VFS-USE _FCP-RUN . ; _RUN-LINE",
             "S\" /dest\" DUP _FEXP-CLIP-PATH-LEN ! "
             "_FEXP-CLIP-PATH SWAP CMOVE _FCP-RUN .",
         ],
         "3 4 1 ",
     )
 
+
+def test_files_larger_than_one_explorer_buffer_half_copy_without_clipping():
     check(
         "files larger than one Explorer buffer half copy without clipping",
         [
@@ -550,9 +571,6 @@ def main() -> int:
         "0 -1 -1 ",
     )
 
-    print(f"\nExplorer transactions: {passed} passed, {failed} failed")
-    return 1 if failed else 0
-
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_file_tests(__file__)

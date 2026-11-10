@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-channel Forth library (channel.f).
 
 Tests: CHANNEL, CHAN-SEND, CHAN-RECV, CHAN-TRY-SEND, CHAN-TRY-RECV,
@@ -40,6 +23,7 @@ CHAN_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "channel.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -145,6 +129,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -172,32 +158,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHANNEL creation ──\n")
+# ── CHANNEL creation ──
 
+def test_channel_creation():
     check("initial count = 0",
           [': _T _CH1 CHAN-COUNT . ; _T'],
           "0 ")
@@ -234,9 +207,10 @@ if __name__ == '__main__':
           [': _T _CH1 _CHAN-EVT-NE EVT-SET? . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Constants ──\n")
 
+# ── Constants ──
+
+def test_channel_constants():
     check("_CHAN-FIXED-CELLS is 15",
           [': _T _CHAN-FIXED-CELLS . ; _T'],
           "15 ")
@@ -245,9 +219,10 @@ if __name__ == '__main__':
           [': _T _CHAN-FIXED-SIZE . ; _T'],
           "120 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Condition checks ──\n")
 
+# ── Condition checks ──
+
+def test_condition_checks():
     check("empty channel is empty",
           [': _T _CH2 _CHAN-EMPTY? . ; _T'],
           "-1 ")
@@ -256,9 +231,10 @@ if __name__ == '__main__':
           [': _T _CH2 _CHAN-FULL? . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHAN-TRY-SEND / CHAN-TRY-RECV basic ──\n")
 
+# ── CHAN-TRY-SEND / CHAN-TRY-RECV basic ──
+
+def test_chan_try_send_and_try_recv():
     check("try-send on empty succeeds",
           [': _T 42 _CH2 CHAN-TRY-SEND . ; _T'],
           "-1 ")
@@ -271,9 +247,10 @@ if __name__ == '__main__':
           [': _T _CH2 CHAN-TRY-RECV . . ; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHAN-SEND / CHAN-RECV (fast-path) ──\n")
 
+# ── CHAN-SEND / CHAN-RECV (fast-path) ──
+
+def test_chan_send_and_recv_fast_path():
     check("send then recv returns value",
           [': _T 99 _CH2 CHAN-SEND _CH2 CHAN-RECV . ; _T'],
           "99 ")
@@ -293,9 +270,10 @@ if __name__ == '__main__':
            ' _CH2 CHAN-COUNT . _CH2 CHAN-RECV DROP ; _T'],
           "1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Fill to capacity ──\n")
 
+# ── Fill to capacity ──
+
+def test_fill_to_capacity():
     check("try-send fills up capacity 4",
           [': _T',
            '  1 _CH1 CHAN-TRY-SEND DROP',
@@ -332,9 +310,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Wrap-around (ring head/tail wrapping) ──\n")
 
+# ── Wrap-around (ring head/tail wrapping) ──
+
+def test_ring_head_and_tail_wrap_around():
     check("head/tail wrap around correctly",
           [': _T',
            '  \\ Fill and drain twice to force wrap-around',
@@ -361,9 +340,10 @@ if __name__ == '__main__':
            '; _T'],
           "77 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHAN-CLOSE ──\n")
 
+# ── CHAN-CLOSE ──
+
+def test_chan_close():
     check("CHAN-CLOSE sets closed flag",
           [': _T _CH3 CHAN-CLOSE _CH3 CHAN-CLOSED? . ; _T'],
           "-1 ")
@@ -394,9 +374,10 @@ if __name__ == '__main__':
            ': _T _CH3 CHAN-CLOSE [\'] _chan-send-cl CATCH . ." |done" ; _T'],
           "-1 |done")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHAN-SELECT ──\n")
 
+# ── CHAN-SELECT ──
+
+def test_chan_select():
     check("select with one ready channel",
           [': _T',
            '  77 _CH4 CHAN-SEND',
@@ -437,9 +418,10 @@ if __name__ == '__main__':
            '; _T'],
           "42 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHAN-SEND-BUF / CHAN-RECV-BUF ──\n")
 
+# ── CHAN-SEND-BUF / CHAN-RECV-BUF ──
+
+def test_chan_send_buf_and_recv_buf():
     check("send-buf and recv-buf round-trip (1-cell channel)",
           [': _T',
            '   99 _V1 !',
@@ -466,9 +448,10 @@ if __name__ == '__main__':
            '; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CHAN-INFO ──\n")
 
+# ── CHAN-INFO ──
+
+def test_chan_info():
     check("chan-info shows open status",
           [': _T _CH2 CHAN-INFO ; _T'],
           "[channel")
@@ -477,9 +460,10 @@ if __name__ == '__main__':
           [': _T _CH2 CHAN-INFO ; _T'],
           "lock#=")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Event signaling ──\n")
 
+# ── Event signaling ──
+
+def test_event_signaling():
     check("send sets evt-ne (not-empty)",
           [': _T',
            '  42 _CH2 CHAN-SEND',
@@ -501,9 +485,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Edge cases ──\n")
 
+# ── Edge cases ──
+
+def test_channel_edge_cases():
     check("send and recv single value many times",
           [': _T',
            '  10 0 DO',
@@ -550,11 +535,6 @@ if __name__ == '__main__':
            ': _T _CH3 CHAN-CLOSE [\'] _sbuf-cl CATCH . ." |ok" ; _T'],
           "-1 |ok")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Summary ──\n")
-    total = _pass + _fail
-    print(f"  {_pass}/{total} passed, {_fail} failed.")
-    if _fail:
-        sys.exit(1)
-    else:
-        print("  All tests passed!")
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

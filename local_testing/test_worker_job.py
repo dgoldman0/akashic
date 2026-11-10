@@ -22,6 +22,11 @@ sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from asm import assemble  # noqa: E402
 from system import MegapadSystem  # noqa: E402
+from forth_snapshot import (  # noqa: E402
+    failure_message,
+    printed_output,
+    run_file_tests,
+)
 
 
 BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
@@ -178,7 +183,8 @@ def build_snapshot() -> None:
 
 
 def run_forth(lines: list[str], max_steps: int = 100_000_000) -> str:
-    assert _snapshot is not None
+    if _snapshot is None:
+        build_snapshot()
     bios, memory, core_states = _snapshot
     system = MegapadSystem(ram_size=1024 * 1024, num_cores=4)
     output = _capture_uart(system)
@@ -221,15 +227,16 @@ def run_forth(lines: list[str], max_steps: int = 100_000_000) -> str:
     return transcript
 
 
-passed = 0
-failed = 0
-
-
 def check(name: str, forth: list[str], expected: str) -> None:
-    global passed, failed
+    """Require the integers the program printed to be EXPECTED, exactly.
+
+    Each printed line that ends in KDOS's ``ok`` and holds only integers adds
+    its integers, in order.  The check fails when KDOS reported a failed line.
+    """
     output = run_forth(forth)
+    printed = printed_output(name, forth, output)
     results: list[str] = []
-    for raw in output.splitlines():
+    for raw in printed.splitlines():
         line = raw.strip()
         if not line.endswith("ok"):
             continue
@@ -237,23 +244,26 @@ def check(name: str, forth: list[str], expected: str) -> None:
         if fields and all(re.fullmatch(r"-?\d+", field) for field in fields):
             results.extend(fields)
     actual = " ".join(results) + (" " if results else "")
-    errors = ("Stack underflow", "Branch offset overflow", "not found")
-    if actual == expected and not any(marker in output for marker in errors):
-        passed += 1
-        print(f"  PASS  {name}")
-    else:
-        failed += 1
-        print(
-            f"  FAIL  {name}\n"
-            f"        expected {expected!r}\n"
-            f"        actual   {actual!r}\n"
-            f"        output   {output!r}"
-        )
+    assert actual == expected, failure_message(
+        name, f"expected the integers {expected!r}, printed {actual!r}", output
+    )
 
 
-def main() -> int:
-    build_snapshot()
+# One job's buffers, a worker word that adds one to its input, and the
+# job record, which most checks start from.
+JOB_SETUP = [
+    "CREATE _WJ-IN 8 ALLOT",
+    "CREATE _WJ-OUT 8 ALLOT",
+    "CREATE _WJ-SCRATCH 8 ALLOT",
+    "CREATE _WJ WJOB-SIZE ALLOT",
+    ": _WJ-WORK  ( job -- )",
+    "  DUP WJOB.IN-A @ @ 1+ OVER WJOB.OUT-A @ !",
+    "  8 SWAP WJOB-OUTPUT-LEN! DROP 0 ;",
+    "41 _WJ-IN ! 0 _WJ-OUT ! _WJ WJOB-INIT",
+]
 
+
+def test_execution_classes_separate_worker_and_owner_work():
     check(
         "execution classes separate worker and owner work",
         [
@@ -265,19 +275,11 @@ def main() -> int:
         "-1 -1 0 -1 ",
     )
 
-    setup = [
-        "CREATE _WJ-IN 8 ALLOT",
-        "CREATE _WJ-OUT 8 ALLOT",
-        "CREATE _WJ-SCRATCH 8 ALLOT",
-        "CREATE _WJ WJOB-SIZE ALLOT",
-        ": _WJ-WORK  ( job -- )",
-        "  DUP WJOB.IN-A @ @ 1+ OVER WJOB.OUT-A @ !",
-        "  8 SWAP WJOB-OUTPUT-LEN! DROP 0 ;",
-        "41 _WJ-IN ! 0 _WJ-OUT ! _WJ WJOB-INIT",
-    ]
+
+def test_worker_publishes_output_and_terminal_state():
     check(
         "worker publishes output and terminal state",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 7 99 _WJ WJOB-PREPARE .",
             "1 _WJ WJOB-SUBMIT .",
@@ -290,9 +292,11 @@ def main() -> int:
         "0 0 123 0 3 42 8 0 ",
     )
 
+
+def test_two_supervised_jobs_run_on_distinct_full_cores():
     check(
         "two supervised jobs run on distinct full cores",
-        setup + [
+        JOB_SETUP + [
             "CREATE _WJ-IN2 8 ALLOT CREATE _WJ-OUT2 8 ALLOT",
             "CREATE _WJ-SCRATCH2 8 ALLOT CREATE _WJ2 WJOB-SIZE ALLOT",
             "99 _WJ-IN2 ! _WJ2 WJOB-INIT",
@@ -309,9 +313,11 @@ def main() -> int:
         "0 0 0 0 0 3 0 3 42 100 0 0 ",
     )
 
+
+def test_unsupported_class_and_core_fail_closed():
     check(
         "unsupported class and core fail closed",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-OWNER-COMMIT 1 2 _WJ WJOB-PREPARE .",
             "_WJ WJOB-INIT",
@@ -322,9 +328,11 @@ def main() -> int:
         "1 0 4 ",
     )
 
+
+def test_invalid_generations_and_overlapping_spans_fail_closed():
     check(
         "invalid generations and overlapping spans fail closed",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 0 2 _WJ WJOB-PREPARE .",
             "_WJ WJOB-INIT",
@@ -337,9 +345,11 @@ def main() -> int:
         "1 1 1 ",
     )
 
+
+def test_worker_nonzero_result_becomes_failed_result():
     check(
         "worker nonzero result becomes failed result",
-        setup + [
+        JOB_SETUP + [
             ": _WJ-BOOM  DROP 73 ;",
             "' _WJ-BOOM _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 3 4 _WJ WJOB-PREPARE .",
@@ -349,9 +359,11 @@ def main() -> int:
         "0 0 73 4 0 ",
     )
 
+
+def test_worker_throw_is_contained_on_its_core():
     check(
         "worker throw is contained on its core",
-        setup + [
+        JOB_SETUP + [
             ": _WJ-THROW  DROP 74 THROW ;",
             "' _WJ-THROW _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 4 5 _WJ WJOB-PREPARE .",
@@ -361,9 +373,11 @@ def main() -> int:
         "0 0 74 4 0 ",
     )
 
+
+def test_cancelled_prepared_job_never_dispatches():
     check(
         "cancelled prepared job never dispatches",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 5 6 _WJ WJOB-PREPARE .",
             "_WJ WJOB-CANCEL . _WJ WJOB-POLL . .",
@@ -372,9 +386,11 @@ def main() -> int:
         "0 0 0 5 0 ",
     )
 
+
+def test_finished_job_wakes_the_owner_core_it_names():
     check(
         "a finished job wakes the owner core it names",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 6 7 _WJ WJOB-PREPARE .",
             "0 _WJ WJOB-NOTIFY! .",
@@ -389,9 +405,11 @@ def main() -> int:
         "0 0 0 2 0 3 0 0 ",
     )
 
+
+def test_job_without_an_owner_to_wake_sends_no_ipi():
     check(
         "a job without an owner to wake sends no IPI",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-PURE 7 8 _WJ WJOB-PREPARE .",
             "-1 _WJ WJOB-NOTIFY! . N-FULL-CORES _WJ WJOB-NOTIFY! .",
@@ -401,9 +419,11 @@ def main() -> int:
         "0 4 4 0 0 2 0 ",
     )
 
+
+def test_generation_and_caller_tag_reject_late_result():
     check(
         "generation and caller tag reject late result",
-        setup + [
+        JOB_SETUP + [
             "' _WJ-WORK _WJ-IN 8 _WJ-OUT 8 _WJ-SCRATCH 8",
             "  CCLASS-SNAPSHOT-READ 11 22 _WJ WJOB-PREPARE DROP",
             "11 22 _WJ WJOB-MATCH? .",
@@ -413,9 +433,6 @@ def main() -> int:
         "-1 0 0 ",
     )
 
-    print(f"\n{passed} passed, {failed} failed")
-    return 1 if failed else 0
-
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_file_tests(__file__)

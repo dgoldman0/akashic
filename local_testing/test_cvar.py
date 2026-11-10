@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-cvar Forth library (cvar.f).
 
 Tests: CVAR, CV@, CV!, CV-CAS, CV-ADD, CV-WAIT (fast path),
@@ -39,6 +22,7 @@ CVAR_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "cvar.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -134,6 +118,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -161,32 +147,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CVAR Creation & CV@ ──\n")
+# ── CVAR Creation & CV@ ──
 
+def test_cvar_creation_and_cv_fetch():
     check("CVAR initial value 0",
           [': _T _CV1 CV@ . ; _T'],
           "0 ")
@@ -203,9 +176,10 @@ if __name__ == '__main__':
           [': _T _CV4 CV@ . ; _T'],
           "100 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV! — Atomic Write ──\n")
 
+# ── CV! — Atomic Write ──
+
+def test_cv_store_atomic_write():
     check("CV! stores value",
           [': _T 99 _CV1 CV! _CV1 CV@ . ; _T'],
           "99 ")
@@ -226,9 +200,10 @@ if __name__ == '__main__':
           [': _T 10 _CV1 CV! 20 _CV2 CV! _CV1 CV@ . _CV2 CV@ . ; _T'],
           "10 20 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV-ADD — Atomic Fetch-and-Add ──\n")
 
+# ── CV-ADD — Atomic Fetch-and-Add ──
+
+def test_cv_add_atomic_fetch_and_add():
     check("CV-ADD increments by 1",
           [': _T 0 _CV1 CV! 1 _CV1 CV-ADD _CV1 CV@ . ; _T'],
           "1 ")
@@ -253,9 +228,10 @@ if __name__ == '__main__':
           [': _T 42 _CV1 CV! 0 _CV1 CV-ADD _CV1 CV@ . ; _T'],
           "42 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV-CAS — Compare-and-Swap ──\n")
 
+# ── CV-CAS — Compare-and-Swap ──
+
+def test_cv_cas_compare_and_swap():
     check("CV-CAS succeeds when match",
           [': _T 0 _CV1 CV! 0 1 _CV1 CV-CAS . _CV1 CV@ . ; _T'],
           "-1 1 ")
@@ -280,9 +256,10 @@ if __name__ == '__main__':
           [': _T 0 _CV1 CV! 0 -1 _CV1 CV-CAS . _CV1 CV@ . ; _T'],
           "-1 -1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV-WAIT — Fast Path ──\n")
 
+# ── CV-WAIT — Fast Path ──
+
+def test_cv_wait_fast_path():
     check("CV-WAIT returns immediately if value differs",
           [': _T 42 _CV1 CV! 0 _CV1 CV-WAIT 99 . ; _T'],
           "99 ")
@@ -291,9 +268,10 @@ if __name__ == '__main__':
           [': _T 1 _CV1 CV! -1 _CV1 CV-WAIT 77 . ; _T'],
           "77 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV-WAIT-TIMEOUT ──\n")
 
+# ── CV-WAIT-TIMEOUT ──
+
+def test_cv_wait_timeout():
     check("CV-WAIT-TIMEOUT returns TRUE if value already differs",
           [': _T 42 _CV1 CV! 0 _CV1 1000 CV-WAIT-TIMEOUT . ; _T'],
           "-1 ")
@@ -302,9 +280,10 @@ if __name__ == '__main__':
           [': _T 0 _CV1 CV! 0 _CV1 0 CV-WAIT-TIMEOUT . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV-RESET ──\n")
 
+# ── CV-RESET ──
+
+def test_cv_reset():
     check("CV-RESET sets value without notify",
           [': _T 99 _CV1 CV-RESET _CV1 CV@ . ; _T'],
           "99 ")
@@ -317,9 +296,10 @@ if __name__ == '__main__':
           [': _T 123 _CV1 CV-RESET _CV1 CV@ . ; _T'],
           "123 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── CV-INFO ──\n")
 
+# ── CV-INFO ──
+
+def test_cv_info():
     check("CV-INFO outputs prefix",
           [': _T _CV1 CV-INFO ; _T'],
           "[cvar")
@@ -328,9 +308,10 @@ if __name__ == '__main__':
           [': _T 42 _CV1 CV! _CV1 CV-INFO ; _T'],
           "val=")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Integration ──\n")
 
+# ── Integration ──
+
+def test_cvar_integration():
     check("multiple ops sequence: CV! CV-ADD CV@ ",
           [': _T 10 _CV1 CV! 5 _CV1 CV-ADD _CV1 CV@ . ; _T'],
           "15 ")
@@ -353,9 +334,6 @@ if __name__ == '__main__':
            '  _CV1 CV@ . ; _T'],
           "1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    # Done
-    print(f"\n{'='*60}")
-    print(f"  {_pass} passed, {_fail} failed, {_pass + _fail} total")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

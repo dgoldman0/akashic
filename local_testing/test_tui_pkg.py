@@ -2,8 +2,8 @@
 """Combined test suite for tui/app-image.f and tui/app-manifest.f.
 
 Two test sections with different setups:
-  Section A–F  (manifest):  Snapshot-based, no disk required.
-  Section G–I  (app-image): Disk-based, sequential on one system.
+  Sections A–F (manifest):  Snapshot-based, no disk required.
+  Section G    (app-image): Disk-based, sequential on one system.
 """
 import os
 import sys
@@ -24,6 +24,7 @@ sys.path.insert(0, EMU_DIR)
 
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import failure_message, run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -33,37 +34,37 @@ SECTOR = 512
 #  Dependency lists
 # ═══════════════════════════════════════════════════════════════════
 
-# Manifest tests need: utf8 + string + toml + app-manifest
-_MFT_DEPS = [
-    os.path.join(AK, "text",  "utf8.f"),
-    os.path.join(AK, "utils", "string.f"),
-    os.path.join(AK, "utils", "toml.f"),
-    os.path.join(AK, "tui",   "app-manifest.f"),
-]
+# Manifest tests load these modules with their REQUIRE closure.
+_MFT_ROOTS = (
+    "text/utf8.f",
+    "utils/string.f",
+    "utils/toml.f",
+    "tui/app-manifest.f",
+)
 
-# App-image tests need: full TUI stack + binimg + app-image
-_IMG_DEPS = [
-    os.path.join(AK, "text",  "utf8.f"),
-    os.path.join(AK, "utils", "string.f"),
-    os.path.join(AK, "utils", "toml.f"),
-    os.path.join(AK, "tui",   "ansi.f"),
-    os.path.join(AK, "tui",   "keys.f"),
-    os.path.join(AK, "tui",   "cell.f"),
-    os.path.join(AK, "tui",   "screen.f"),
-    os.path.join(AK, "tui",   "draw.f"),
-    os.path.join(AK, "tui",   "box.f"),
-    os.path.join(AK, "tui",   "region.f"),
-    os.path.join(AK, "tui",   "layout.f"),
-    os.path.join(AK, "tui",   "widget.f"),
-    os.path.join(AK, "tui",   "focus.f"),
-    os.path.join(AK, "utils", "term.f"),
-    os.path.join(AK, "tui",   "event.f"),
-    os.path.join(AK, "tui",   "app.f"),
-    os.path.join(AK, "utils", "uint-range.f"),
-    os.path.join(AK, "utils", "binimg.f"),
-    os.path.join(AK, "tui",   "app-image.f"),
-    os.path.join(AK, "tui",   "app-manifest.f"),
-]
+# App-image tests load these modules with their REQUIRE closure.
+_IMG_ROOTS = (
+    "text/utf8.f",
+    "utils/string.f",
+    "utils/toml.f",
+    "tui/ansi.f",
+    "tui/keys.f",
+    "tui/cell.f",
+    "tui/screen.f",
+    "tui/draw.f",
+    "tui/box.f",
+    "tui/region.f",
+    "tui/layout.f",
+    "tui/widget.f",
+    "tui/focus.f",
+    "utils/term.f",
+    "tui/event.f",
+    "tui/app.f",
+    "utils/uint-range.f",
+    "utils/binimg.f",
+    "tui/app-image.f",
+    "tui/app-manifest.f",
+)
 
 # ═══════════════════════════════════════════════════════════════════
 #  Emulator helpers (shared)
@@ -169,11 +170,7 @@ def build_mft_snapshot():
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
-    dep_lines = []
-    for p in _MFT_DEPS:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing dep: {p}")
-        dep_lines.extend(_load_forth_lines(p))
+    dep_lines = module_source_lines(_MFT_ROOTS)
 
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -207,7 +204,8 @@ def build_mft_snapshot():
         for ln in err_lines[-20:]:
             print(f"    {ln}")
 
-    _mft_snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _mft_snapshot = (bios_code, bytes(sys_obj.cpu.mem),
+                     save_cpu_state(sys_obj.cpu),
                      bytes(sys_obj._ext_mem))
     elapsed = time.time() - t0
     print(f"[*] Manifest snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
@@ -216,12 +214,21 @@ def build_mft_snapshot():
 
 def run_mft_forth(lines, max_steps=80_000_000):
     """Run Forth lines from the manifest snapshot, return UART text (ANSI-stripped)."""
-    mem_bytes, cpu_state, ext_mem_bytes = _mft_snapshot
+    if _mft_snapshot is None:
+        build_mft_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _mft_snapshot
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode()
@@ -299,64 +306,11 @@ def build_disk_image(files):
 #  Test framework
 # ═══════════════════════════════════════════════════════════════════
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when
+# a check fails or KDOS reports a failed line
+# (forth_snapshot.transcript_checks).
 
-def check(name, forth_lines, expected=None, check_fn=None, not_expected=None):
-    global _pass_count, _fail_count
-    output = run_mft_forth(forth_lines)
-    clean = output.strip()
-
-    if check_fn:
-        ok = check_fn(clean)
-    elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if not_expected is not None and ok:
-        ok = not_expected not in clean
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        if not_expected is not None:
-            print(f"        NOT expected: {not_expected!r}")
-        last = clean.split('\n')[-8:]
-        print(f"        got (last lines):")
-        for l in last:
-            print(f"          {l}")
-
-def check_img(name, buf, expected=None, check_fn=None):
-    """Check for app-image tests (use separate UART buf)."""
-    global _pass_count, _fail_count
-    raw = uart_text(buf)
-    clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z?]', '', raw).strip()
-
-    if check_fn:
-        ok = check_fn(clean)
-    elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        last = clean.split('\n')[-8:]
-        print(f"        got (last lines):")
-        for l in last:
-            print(f"          {l}")
+check, _, _ = transcript_checks(run_mft_forth)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -388,9 +342,7 @@ def toml_in_forth(toml_str):
 #  Section A: Manifest — Compilation
 # ═══════════════════════════════════════════════════════════════════
 
-def section_a():
-    print("\n── Section A: Manifest compilation ──")
-
+def test_manifest_compilation():
     check("A1-compile-clean",
           ['." R=MFTOK "'],
           expected="R=MFTOK")
@@ -422,9 +374,7 @@ uidl = true
 css = false
 """
 
-def section_b():
-    print("\n── Section B: Manifest basic parse ──")
-
+def test_manifest_basic_parse():
     setup = toml_in_forth(SAMPLE_TOML)
 
     # B1: MFT-PARSE returns non-zero
@@ -491,9 +441,7 @@ name = "minimal"
 entry = "go"
 """
 
-def section_c():
-    print("\n── Section C: Manifest optional defaults ──")
-
+def test_manifest_optional_defaults():
     setup = toml_in_forth(MINIMAL_TOML)
 
     # C1: title defaults to name
@@ -533,9 +481,7 @@ def section_c():
 #  Section D: Manifest — Dependency checks
 # ═══════════════════════════════════════════════════════════════════
 
-def section_d():
-    print("\n── Section D: Manifest dependency checks ──")
-
+def test_manifest_dependency_checks():
     setup = toml_in_forth(SAMPLE_TOML)
 
     # D1: dep present and true
@@ -576,9 +522,7 @@ def section_d():
 #  Section E: Manifest — Error cases
 # ═══════════════════════════════════════════════════════════════════
 
-def section_e():
-    print("\n── Section E: Manifest error cases ──")
-
+def test_manifest_error_cases():
     # E1: missing [app] section
     no_app = toml_in_forth("[other]\nfoo = 1\n")
     check("E1-no-app-section",
@@ -607,9 +551,7 @@ def section_e():
 #  Section F: Manifest — MFT-FREE
 # ═══════════════════════════════════════════════════════════════════
 
-def section_f():
-    print("\n── Section F: Manifest MFT-FREE ──")
-
+def test_manifest_free():
     setup = toml_in_forth(SAMPLE_TOML)
 
     # F1: MFT-FREE reclaims when at top of HERE
@@ -635,13 +577,13 @@ def section_f():
 #  Section G: App-image — Disk-based tests
 # ═══════════════════════════════════════════════════════════════════
 
-def section_g():
-    """App-image tests using a real filesystem.  Boots a fresh system
-    with a disk image containing pre-allocated .m64 file slots."""
-    global _pass_count, _fail_count
+def test_app_image_save_and_load():
+    """App-image tests using a real filesystem.
 
-    print("\n── Section G: App-image (disk-based) ──")
-
+    One system boots with a disk image holding two pre-allocated .m64 file
+    slots, and every step runs on it: G3 loads the image G2 saved, and G7
+    the one G6 saved.
+    """
     # Build disk with empty file slots for saving images
     out_sectors = 32  # 16KB per slot
     files = [
@@ -671,123 +613,73 @@ def section_g():
 
         # Load deps (everything through app-image.f + app-manifest.f)
         buf.clear()
-        dep_lines = []
-        for p in _IMG_DEPS:
-            if not os.path.exists(p):
-                raise FileNotFoundError(f"Missing dep: {p}")
-            dep_lines.extend(_load_forth_lines(p))
+        dep_lines = module_source_lines(_IMG_ROOTS)
 
         dep_payload = "\n".join(["ENTER-USERLAND"] + dep_lines) + "\n"
         steps = feed_and_run(sys_obj, dep_payload, max_steps=400_000_000)
         text = uart_text(buf)
         errs = [l for l in text.split('\n')
                 if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower())]
-        if errs:
-            print("  [!] Compilation errors:")
-            for ln in errs[-20:]:
-                print(f"      {ln}")
         print(f"  [*] All deps loaded. {steps:,} steps")
 
         # G1: Both files compile clean
-        _pass_count += 1
-        print(f"  PASS  G1-compile-clean")
+        assert not errs, failure_message(
+            "G1-compile-clean", "compile errors: " + " | ".join(errs[-20:]), text
+        )
+
+        def run_on_disk(forth_lines, max_steps):
+            buf.clear()
+            feed_and_run(sys_obj, "\n".join(forth_lines) + "\n",
+                         max_steps=max_steps)
+            return re.sub(r'\x1b\[[0-9;]*[a-zA-Z?]', '', uart_text(buf))
+
+        check_img, _, _ = transcript_checks(run_on_disk)
 
         # G2: APPI-MARK + APPI-ENTRY + APPI-SAVE round-trip
-        buf.clear()
-        forth = '\n'.join([
+        check_img("G2-save-returns-zero", [
             'APPI-MARK',
             ': MY-TEST-APP  77 . CR ;',
             "' MY-TEST-APP APPI-ENTRY",
             'APPI-SAVE test1.m64',
             '." R=" . CR',
-        ]) + '\n'
-        feed_and_run(sys_obj, forth, max_steps=200_000_000)
-        check_img("G2-save-returns-zero", buf, expected="R=0")
+        ], expected="R=0", max_steps=200_000_000)
 
         # G3: APPI-LOAD returns xt + 0
-        buf.clear()
-        forth = '\n'.join([
+        check_img("G3-load-exec-77", [
             'APPI-LOAD test1.m64',
             '." R=" . CR',          # print ior (should be 0)
             'EXECUTE',              # execute the loaded xt — should print 77
-        ]) + '\n'
-        feed_and_run(sys_obj, forth, max_steps=200_000_000)
-        check_img("G3-load-exec-77", buf,
-                  check_fn=lambda t: "R=0" in t and "77" in t)
+        ], check_fn=lambda t: "R=0" in t and "77" in t, max_steps=200_000_000)
 
         # G4: _APPI-ERR-LOAD constant exists
-        buf.clear()
-        forth = '_APPI-ERR-LOAD ." R=" . CR\n'
-        feed_and_run(sys_obj, forth, max_steps=50_000_000)
-        check_img("G4-err-load-constant", buf, expected="R=-100")
+        check_img("G4-err-load-constant", [
+            '_APPI-ERR-LOAD ." R=" . CR',
+        ], expected="R=-100", max_steps=50_000_000)
 
         # G5: APPI-MARK is callable (doesn't crash)
-        buf.clear()
-        forth = 'APPI-MARK ." R=OK" CR\n'
-        feed_and_run(sys_obj, forth, max_steps=50_000_000)
-        check_img("G5-mark-callable", buf, expected="R=OK")
+        check_img("G5-mark-callable", [
+            'APPI-MARK ." R=OK" CR',
+        ], expected="R=OK", max_steps=50_000_000)
 
         # G6: Save a second app, load it
-        buf.clear()
-        forth = '\n'.join([
+        check_img("G6-save-second-app", [
             'APPI-MARK',
             ': APP2  42 . CR ;',
             "' APP2 APPI-ENTRY",
             'APPI-SAVE test2.m64',
             '." R=" . CR',
-        ]) + '\n'
-        feed_and_run(sys_obj, forth, max_steps=200_000_000)
-        check_img("G6-save-second-app", buf, expected="R=0")
+        ], expected="R=0", max_steps=200_000_000)
 
-        buf.clear()
-        forth = '\n'.join([
+        check_img("G7-load-second-app-42", [
             'APPI-LOAD test2.m64',
             '." R=" . CR',
             'EXECUTE',
-        ]) + '\n'
-        feed_and_run(sys_obj, forth, max_steps=200_000_000)
-        check_img("G7-load-second-app-42", buf,
-                  check_fn=lambda t: "R=0" in t and "42" in t)
+        ], check_fn=lambda t: "R=0" in t and "42" in t, max_steps=200_000_000)
 
     finally:
         if os.path.exists(img_path):
             os.unlink(img_path)
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  Main
-# ═══════════════════════════════════════════════════════════════════
-
-def main():
-    global _pass_count, _fail_count
-
-    print("=" * 60)
-    print("  Combined test: tui/app-image.f + tui/app-manifest.f")
-    print("=" * 60)
-
-    # ── Manifest tests (snapshot-based) ──
-    build_mft_snapshot()
-    section_a()
-    section_b()
-    section_c()
-    section_d()
-    section_e()
-    section_f()
-
-    # ── App-image tests (disk-based) ──
-    section_g()
-
-    # ── Summary ──
-    total = _pass_count + _fail_count
-    print(f"\n{'=' * 60}")
-    print(f"  Results: {_pass_count} passed, {_fail_count} failed out of {total}")
-    if _fail_count == 0:
-        print("  ALL TESTS PASSED")
-    else:
-        print("  SOME TESTS FAILED")
-    print("=" * 60)
-    sys.exit(1 if _fail_count else 0)
-
-
 if __name__ == "__main__":
-    main()
+    run_file_tests(__file__)

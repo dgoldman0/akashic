@@ -32,6 +32,11 @@ sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from asm import assemble  # noqa: E402
 from system import MegapadSystem  # noqa: E402
+from forth_snapshot import (  # noqa: E402
+    failure_message,
+    printed_output,
+    run_file_tests,
+)
 
 
 BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
@@ -263,7 +268,8 @@ def build_snapshot() -> None:
 
 
 def run_forth(lines: list[str], max_steps: int = 120_000_000) -> str:
-    assert _snapshot is not None
+    if _snapshot is None:
+        build_snapshot()
     bios, memory, cpu_states, ext_memory = _snapshot
     system = MegapadSystem(
         ram_size=4 * 1024 * 1024,
@@ -307,40 +313,26 @@ def run_forth(lines: list[str], max_steps: int = 120_000_000) -> str:
     return transcript
 
 
-passed = 0
-failed = 0
-
-
 def check(name: str, forth: list[str], expected: str) -> None:
-    global passed, failed
+    """Require EXPECTED among the words the program printed.
+
+    The printed words, without KDOS's ``ok``, ``>`` and ``Bye!``, are joined
+    by single spaces, so the expected results may span several output lines.
+    The check fails when KDOS reported a failed line.
+    """
     output = run_forth(forth)
-    diagnostics = ("? (not found)", "Stack underflow", "Branch offset overflow")
-    results = output
-    for command in forth + ["BYE"]:
-        results = results.replace(command + "\r\n", "")
-        results = results.replace(command + "\n", "")
-    tokens = [
-        token for token in results.split()
-        if token not in ("Bye!", "ok", ">")
+    printed = printed_output(name, forth, output)
+    words = [
+        word for word in printed.split() if word not in ("Bye!", "ok", ">")
     ]
-    results = " ".join(tokens) + " "
+    results = " ".join(words) + " "
     wanted = " ".join(expected.split()) + " "
-    if wanted in results and not any(item in output for item in diagnostics):
-        passed += 1
-        print(f"  PASS  {name}")
-    else:
-        failed += 1
-        print(
-            f"  FAIL  {name}\n"
-            f"        expected {expected!r}\n"
-            f"        results {results!r}\n"
-            f"        output {output!r}"
-        )
+    assert wanted in results, failure_message(
+        name, f"expected {expected!r} in the printed words {results!r}", output
+    )
 
 
-def main() -> int:
-    build_snapshot()
-
+def test_paths_must_be_distinct_normalized_same_parent_and_mp64fs_safe():
     check(
         "paths must be distinct, normalized, same-parent, and MP64FS-safe",
         [
@@ -355,6 +347,8 @@ def main() -> int:
         "3 3 3 ",
     )
 
+
+def test_derived_companions_are_deterministic_distinct_and_mp64fs_safe():
     check(
         "derived companions are deterministic, distinct, and MP64FS-safe",
         [
@@ -398,6 +392,8 @@ def main() -> int:
         "31 31 31 8 8 8 8 s b m -1 -1 -1 -1 -1 -1 -1 ",
     )
 
+
+def test_derivation_rejects_reserved_targets_and_parent_length_overflow():
     check(
         "derivation rejects reserved targets and parent-length overflow",
         [
@@ -413,13 +409,15 @@ def main() -> int:
         "3 3 3 3 ",
     )
 
+
+def test_derived_paths_drive_the_complete_replacement_protocol():
     check(
         "derived paths drive the complete replacement protocol",
         [
             "T-VFS-NEW _TV ! _TV @ VFS-USE _TV @ _TR VREPL-INIT DROP",
             ': TDP S" /doc.txt" _TR VREPL-DERIVE-PATHS! . ; TDP',
             "_TR _VRO-R !",
-            'S" old" S" /doc.txt" T-PUT . T-SYNC',
+            ': _RUN-LINE S" old" S" /doc.txt" T-PUT . T-SYNC ; _RUN-LINE',
             'S" new" _TR VREPL-REPLACE . S" /doc.txt" T-SHOW',
             "_TR VREPL-STAGE$ _TV @ VFS-RESOLVE 0<> . "
             "_TR VREPL-BACKUP$ _TV @ VFS-RESOLVE 0<> . "
@@ -428,6 +426,8 @@ def main() -> int:
         "0 0 0 new 0 0 0 ",
     )
 
+
+def test_exact_io_loops_legal_partial_transfers_under_one_vfs_guard():
     check(
         "exact I/O loops legal partial transfers under one VFS guard",
         [
@@ -445,6 +445,8 @@ def main() -> int:
         "0 -1 5 0 -1 hello 5 ",
     )
 
+
+def test_exact_io_rejects_stalled_and_invalid_binding_counts():
     check(
         "exact I/O rejects stalled and invalid binding counts",
         [
@@ -469,6 +471,8 @@ def main() -> int:
         "9 0 67108874 0 67108874 0 1 1 0 9 0 67108874 0 67108874 0 ",
     )
 
+
+def test_vfs_transaction_holds_the_recursive_public_guard():
     check(
         "VFS transaction holds the recursive public guard",
         [
@@ -480,6 +484,8 @@ def main() -> int:
         "-1 -1 ",
     )
 
+
+def test_vfs_transaction_excludes_an_unrelated_full_core_caller():
     check(
         "VFS transaction excludes an unrelated full-core caller",
         [
@@ -496,6 +502,8 @@ def main() -> int:
         "0 -1 ",
     )
 
+
+def test_replacement_restores_caller_vfs_context_before_unlock():
     check(
         "replacement restores caller VFS context before unlock",
         [
@@ -506,6 +514,8 @@ def main() -> int:
         "0 -1 ",
     )
 
+
+def test_existing_target_replacement_commits_and_cleans_companions():
     check(
         "existing target replacement commits and cleans companions",
         [
@@ -517,6 +527,8 @@ def main() -> int:
         "0 new 0 0 0 ",
     )
 
+
+def test_absent_target_can_be_created_through_the_same_protocol():
     check(
         "absent target can be created through the same protocol",
         [
@@ -527,6 +539,8 @@ def main() -> int:
         "0 new 0 0 0 ",
     )
 
+
+def test_owner_precondition_rejects_before_staging():
     check(
         "owner precondition rejects before staging",
         [
@@ -540,6 +554,8 @@ def main() -> int:
         "5 old 0 0 0 ",
     )
 
+
+def test_throwing_precondition_fails_closed_without_leaking_stack_cells():
     check(
         "throwing owner precondition fails closed without leaking stack cells",
         [
@@ -552,6 +568,8 @@ def main() -> int:
         "5 -1 0 0 0 ",
     )
 
+
+def test_precondition_cannot_recursively_replace_another_descriptor():
     check(
         "precondition cannot recursively replace another descriptor",
         [
@@ -568,6 +586,8 @@ def main() -> int:
         "0 6 ",
     )
 
+
+def test_reserved_path_collision_with_directory_fails_closed():
     check(
         "reserved path collision with directory fails closed",
         [
@@ -579,6 +599,8 @@ def main() -> int:
         "0 7 2 0 0 0 ",
     )
 
+
+def test_missing_transaction_parent_is_recovery_state_not_target_absence():
     check(
         "missing transaction parent is recovery state, not target absence",
         [
@@ -592,27 +614,31 @@ def main() -> int:
         "0 7 7 ",
     )
 
+
+def test_target_and_every_companion_reject_terminal_symlink_redirects():
     check(
         "target and every companion reject terminal symlink redirects",
         [
             ': T-LINK-TYPE VFS-RP-NOFOLLOW-FINAL _TV @ '
             'VFS-RESOLVE-POLICY? ?DUP IF THROW THEN IN.TYPE @ . ;',
-            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
-            "S\" doc.txt\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            ": _RUN-LINE T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.txt\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP ; _RUN-LINE",
             "_TR VREPL-RECOVER . S\" /doc.txt\" T-LINK-TYPE",
-            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
-            "S\" doc.new\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            ": _RUN-LINE T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.new\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP ; _RUN-LINE",
             "_TR VREPL-RECOVER . S\" /doc.new\" T-LINK-TYPE",
-            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
-            "S\" doc.bak\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            ": _RUN-LINE T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.bak\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP ; _RUN-LINE",
             "_TR VREPL-RECOVER . S\" /doc.bak\" T-LINK-TYPE",
-            "T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
-            "S\" doc.txn\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP",
+            ": _RUN-LINE T-SETUP S\" real\" S\" /real.txt\" T-PUT DROP "
+            "S\" doc.txn\" 900 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP ; _RUN-LINE",
             "_TR VREPL-RECOVER . S\" /doc.txn\" T-LINK-TYPE",
         ],
         "7 3 7 3 7 3 7 3 ",
     )
 
+
+def test_symlinked_shared_parent_retains_ordinary_intermediate_traversal():
     check(
         "symlinked shared parent retains ordinary intermediate traversal",
         [
@@ -630,6 +656,8 @@ def main() -> int:
         "0 0 new 3 ",
     )
 
+
+def test_lying_write_is_caught_by_readback_before_target_mutation():
     check(
         "lying write is caught by readback before target mutation",
         [
@@ -643,6 +671,8 @@ def main() -> int:
         "4 old 0 0 0 ",
     )
 
+
+def test_pre_rotation_sync_failure_retains_old_target():
     check(
         "pre-rotation sync failure retains old target",
         [
@@ -655,6 +685,8 @@ def main() -> int:
         "4 old 0 0 0 ",
     )
 
+
+def test_commit_marker_sync_failure_reports_uncertain_and_keeps_backup():
     check(
         "commit-marker sync failure reports uncertain and keeps backup",
         [
@@ -667,6 +699,8 @@ def main() -> int:
         "9 new 0 -1 0 ",
     )
 
+
+def test_post_commit_cleanup_sync_failure_reports_committed_cleanup():
     check(
         "post-commit cleanup sync failure reports committed cleanup",
         [
@@ -679,6 +713,8 @@ def main() -> int:
         "2 new 0 0 0 ",
     )
 
+
+def test_recover_phase_verified_stage_without_marker():
     # Crash after stage sync, before marker creation.
     check(
         "recover phase: verified stage without marker",
@@ -692,6 +728,8 @@ def main() -> int:
         "0 old 0 0 0 ",
     )
 
+
+def test_recover_phase_durable_marker_before_rotation():
     # Crash after intent sync, before target rotation.
     check(
         "recover phase: durable marker before rotation",
@@ -706,6 +744,8 @@ def main() -> int:
         "1 old 0 0 0 ",
     )
 
+
+def test_recover_phase_backup_and_stage_restore_old_target():
     # Crash after old target has become backup.
     check(
         "recover phase: backup and stage restore old target",
@@ -721,6 +761,8 @@ def main() -> int:
         "1 old 0 0 0 ",
     )
 
+
+def test_recover_phase_marked_promoted_target_rolls_back():
     # Crash after candidate has target name but marker still denotes rollback.
     check(
         "recover phase: marked promoted target rolls back",
@@ -737,6 +779,8 @@ def main() -> int:
         "1 old 0 0 0 ",
     )
 
+
+def test_recover_phase_unmarked_promoted_target_wins():
     # Crash after marker removal was synced, before backup cleanup.
     check(
         "recover phase: unmarked promoted target wins",
@@ -754,6 +798,8 @@ def main() -> int:
         "0 new 0 0 0 ",
     )
 
+
+def test_recover_phase_absent_original_rolls_back_to_absence():
     check(
         "recover phase: absent original rolls back to absence",
         [
@@ -767,6 +813,8 @@ def main() -> int:
         "1 <absent> 0 0 0 ",
     )
 
+
+def test_unmarked_missing_target_restores_known_backup():
     check(
         "unmarked missing target restores known backup",
         [
@@ -778,6 +826,8 @@ def main() -> int:
         "1 old 0 0 0 ",
     )
 
+
+def test_corrupt_marker_fails_closed_and_preserves_backup():
     check(
         "corrupt marker fails closed and preserves backup",
         [
@@ -790,6 +840,8 @@ def main() -> int:
         "8 -1 -1 -1 ",
     )
 
+
+def test_marker_target_hash_mismatch_fails_closed_and_preserves_artifacts():
     check(
         "marker target-hash mismatch fails closed and preserves artifacts",
         [
@@ -802,6 +854,8 @@ def main() -> int:
         "0 8 -1 -1 -1 ",
     )
 
+
+def test_short_marker_read_has_distinct_fail_closed_status():
     check(
         "short marker read has distinct fail-closed status",
         [
@@ -814,9 +868,6 @@ def main() -> int:
         "8 -1 -1 -1 ",
     )
 
-    print(f"\n{passed}/{passed + failed} passed")
-    return 1 if failed else 0
-
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_file_tests(__file__)

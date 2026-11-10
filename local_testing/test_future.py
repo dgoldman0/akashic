@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-future Forth library (future.f).
 
 Tests: PROMISE, FULFILL, AWAIT, AWAIT-TIMEOUT, RESOLVED?,
@@ -39,6 +22,7 @@ FUTURE_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "future.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -134,18 +118,27 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -160,32 +153,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PROMISE creation ──\n")
+# ── PROMISE creation ──
 
+def test_promise_creation():
     check("promise value starts at 0",
           [': _T _P1 @ . ; _T'],
           "0 ")
@@ -222,9 +202,10 @@ if __name__ == '__main__':
           [': _T PROMISE 0<> . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Constants ──\n")
 
+# ── Constants ──
+
+def test_promise_constants():
     check("_FUT-PCELLS is 6",
           [': _T _FUT-PCELLS . ; _T'],
           "6 ")
@@ -237,9 +218,10 @@ if __name__ == '__main__':
           [': _T _FUT-BIND-CAP . ; _T'],
           "8 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── RESOLVED? ──\n")
 
+# ── RESOLVED? ──
+
+def test_resolved_query():
     check("pending promise: RESOLVED? = 0",
           [': _T _P1 RESOLVED? . ; _T'],
           "0 ")
@@ -248,9 +230,10 @@ if __name__ == '__main__':
           [': _T 42 _P1 FULFILL _P1 RESOLVED? . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── FULFILL / AWAIT (fast path) ──\n")
 
+# ── FULFILL / AWAIT (fast path) ──
+
+def test_fulfill_and_await_fast_path():
     check("fulfill with 42, await returns 42",
           [': _T 42 _P1 FULFILL _P1 AWAIT . ; _T'],
           "42 ")
@@ -279,9 +262,10 @@ if __name__ == '__main__':
           [': _T 77 _P1 FULFILL _P1 8 + @ . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Event state after FULFILL ──\n")
 
+# ── Event state after FULFILL ──
+
+def test_event_state_after_fulfill():
     check("pending: embedded event is UNSET",
           [': _T _P1 _FUT-EVT EVT-SET? . ; _T'],
           "0 ")
@@ -290,9 +274,10 @@ if __name__ == '__main__':
           [': _T 42 _P1 FULFILL _P1 _FUT-EVT EVT-SET? . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── AWAIT-TIMEOUT ──\n")
 
+# ── AWAIT-TIMEOUT ──
+
+def test_await_timeout():
     check("timeout on resolved promise returns TRUE immediately",
           [': _T 42 _P1 FULFILL _P1 1000 AWAIT-TIMEOUT . . ; _T'],
           "-1 42 ")
@@ -305,17 +290,19 @@ if __name__ == '__main__':
           [': _T _P1 1 AWAIT-TIMEOUT . . ; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Double FULFILL (error) ──\n")
 
+# ── Double FULFILL (error) ──
+
+def test_double_fulfill_is_an_error():
     check("double fulfill throws -1",
           [': _dbl-ful 99 _P1 FULFILL ;',
            ": _T 42 _P1 FULFILL ['] _dbl-ful CATCH . .\" |done\" ; _T"],
           "-1 |done")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── FUT-RESET ──\n")
 
+# ── FUT-RESET ──
+
+def test_fut_reset():
     check("reset clears resolved flag",
           [': _T 42 _P1 FULFILL _P1 FUT-RESET _P1 RESOLVED? . ; _T'],
           "0 ")
@@ -335,9 +322,10 @@ if __name__ == '__main__':
            '; _T'],
           "99 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── FUT-INFO ──\n")
 
+# ── FUT-INFO ──
+
+def test_fut_info():
     check("FUT-INFO on pending shows PENDING",
           [': _T _P1 FUT-INFO ; _T'],
           "PENDING")
@@ -354,9 +342,10 @@ if __name__ == '__main__':
           [': _T 42 _P1 FULFILL _P1 FUT-INFO ; _T'],
           "val=42")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Field accessors ──\n")
 
+# ── Field accessors ──
+
+def test_field_accessors():
     check("_FUT-VALUE is identity (offset 0)",
           [': _T _P1 _FUT-VALUE _P1 = . ; _T'],
           "-1 ")
@@ -369,9 +358,10 @@ if __name__ == '__main__':
           [': _T _P1 _FUT-EVT _P1 16 + = . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── ASYNC + SCHEDULE ──\n")
 
+# ── ASYNC + SCHEDULE ──
+
+def test_async_and_schedule():
     check("ASYNC returns a promise (non-zero addr)",
           [": _T ['] _RET-42 ASYNC 0<> . ; _T"],
           "-1 ")
@@ -410,9 +400,10 @@ if __name__ == '__main__':
           [": _T ['] _RET-42 ASYNC SCHEDULE @ . ; _T"],
           "42 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Multiple promises (independent) ──\n")
 
+# ── Multiple promises (independent) ──
+
+def test_multiple_promises_are_independent():
     check("fulfill two different promises",
           [': _T',
            '  10 _P1 FULFILL 20 _P2 FULFILL',
@@ -427,9 +418,10 @@ if __name__ == '__main__':
            '; _T'],
           "10 20 30 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Edge cases ──\n")
 
+# ── Edge cases ──
+
+def test_promise_edge_cases():
     check("fulfill then await then reset then fulfill again",
           [': _T',
            '  42 _P1 FULFILL _P1 AWAIT DROP',
@@ -447,11 +439,6 @@ if __name__ == '__main__':
            '; _T'],
           "99 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Summary ──\n")
-    total = _pass + _fail
-    print(f"  {_pass}/{total} passed, {_fail} failed.")
-    if _fail:
-        sys.exit(1)
-    else:
-        print("  All tests passed!")
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

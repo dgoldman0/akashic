@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-par Forth library (par.f).
 
 Tests: PAR-DO, PAR-MAP, PAR-REDUCE, PAR-FOR, PAR-SCATTER,
@@ -41,6 +24,7 @@ PAR_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "par.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -155,18 +139,27 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -181,32 +174,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Constants ──\n")
+# ── Constants ──
 
+def test_par_constants():
     check("_PAR-MAX-CORES is 16",
           [': _T _PAR-MAX-CORES . ; _T'],
           "16 ")
@@ -215,9 +195,10 @@ if __name__ == '__main__':
           [': _T NCORES 0> . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-DO ──\n")
 
+# ── PAR-DO ──
+
+def test_par_do():
     check("PAR-DO runs both XTs",
           [': _T',
            '  0 _RES !',
@@ -241,9 +222,10 @@ if __name__ == '__main__':
            '; _T'],
           "10 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-MAP basic ──\n")
 
+# ── PAR-MAP basic ──
+
+def test_par_map_basic():
     check("map double over 4 elements",
           [': _T',
            '  1 _ARR !  2 _ARR CELL+ !  3 _ARR 2 CELLS + !  4 _ARR 3 CELLS + !',
@@ -276,9 +258,10 @@ if __name__ == '__main__':
            '; _T'],
           "-1 -2 -3 -4 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-MAP edge cases ──\n")
 
+# ── PAR-MAP edge cases ──
+
+def test_par_map_edge_cases():
     check("map over 1 element",
           [': _T',
            '  42 _ARR !',
@@ -303,9 +286,10 @@ if __name__ == '__main__':
            '; _T'],
           "2 4 6 8 10 12 14 16 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-REDUCE basic ──\n")
 
+# ── PAR-REDUCE basic ──
+
+def test_par_reduce_basic():
     check("reduce sum of 4 elements",
           [': _T',
            '  10 _ARR !  20 _ARR CELL+ !  30 _ARR 2 CELLS + !  40 _ARR 3 CELLS + !',
@@ -334,9 +318,10 @@ if __name__ == '__main__':
            '; _T'],
           "99 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-REDUCE edge cases ──\n")
 
+# ── PAR-REDUCE edge cases ──
+
+def test_par_reduce_edge_cases():
     check("reduce single element",
           [': _T',
            '  42 _ARR !',
@@ -357,9 +342,10 @@ if __name__ == '__main__':
            '; _T'],
           "136 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-FOR basic ──\n")
 
+# ── PAR-FOR basic ──
+
+def test_par_for_basic():
     check("for-loop stores index squares",
           [': _T',
            "  ['] _FOR-SQ 0 4 PAR-FOR",
@@ -382,9 +368,10 @@ if __name__ == '__main__':
            '; _T'],
           "45 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-FOR edge cases ──\n")
 
+# ── PAR-FOR edge cases ──
+
+def test_par_for_edge_cases():
     check("for-loop empty range is noop",
           [': _T',
            '  0 _ACC !',
@@ -417,9 +404,10 @@ if __name__ == '__main__':
            '; _T'],
           "26 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-SCATTER / PAR-GATHER ──\n")
 
+# ── PAR-SCATTER / PAR-GATHER ──
+
+def test_par_scatter_and_gather():
     check("scatter sets up start/count for 8 elements",
           [': _T',
            '  _ARR 8 8 PAR-SCATTER',
@@ -435,9 +423,10 @@ if __name__ == '__main__':
            '; _T'],
           "42 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-INFO ──\n")
 
+# ── PAR-INFO ──
+
+def test_par_info():
     check("PAR-INFO shows active cores",
           [': _T PAR-INFO ; _T'],
           "[par active=")
@@ -450,9 +439,10 @@ if __name__ == '__main__':
           [': _T PAR-INFO ; _T'],
           "(full)")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Core-type awareness ──\n")
 
+# ── Core-type awareness ──
+
+def test_core_type_awareness():
     check("PAR-CORES defaults to N-FULL",
           [': _T PAR-CORES N-FULL = . ; _T'],
           "-1 ")
@@ -465,9 +455,10 @@ if __name__ == '__main__':
           [': _T PAR-USE-ALL PAR-USE-FULL PAR-CORES N-FULL = . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── PAR-MAP + PAR-REDUCE composition ──\n")
 
+# ── PAR-MAP + PAR-REDUCE composition ──
+
+def test_par_map_and_reduce_composition():
     check("double all then sum (1..4 -> 2+4+6+8 = 20)",
           [': _T',
            '  1 _ARR !  2 _ARR CELL+ !  3 _ARR 2 CELLS + !  4 _ARR 3 CELLS + !',
@@ -484,9 +475,10 @@ if __name__ == '__main__':
            '; _T'],
           "30 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Larger arrays ──\n")
 
+# ── Larger arrays ──
+
+def test_larger_arrays():
     check("map double 64 elements",
           [': _T',
            '  64 0 DO I 1+ I CELLS _BIG + ! LOOP',
@@ -503,11 +495,6 @@ if __name__ == '__main__':
            '; _T'],
           "2080 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Summary ──\n")
-    total = _pass + _fail
-    print(f"  {_pass}/{total} passed, {_fail} failed.")
-    if _fail:
-        sys.exit(1)
-    else:
-        print("  All tests passed!")
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

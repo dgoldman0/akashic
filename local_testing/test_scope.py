@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-scope Forth library (scope.f).
 
 Tests: TASK-GROUP, TG-SPAWN, TG-WAIT, TG-CANCEL, TG-ANY,
@@ -41,6 +24,7 @@ SCOPE_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "scope.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -165,6 +149,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -192,32 +178,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ──
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
-        _fail += 1
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Task Group Creation ──\n")
+# ── Task Group Creation ──
 
+def test_task_group_creation():
     check("TASK-GROUP: initial count is 0",
           [': _T _TG1 TG-COUNT . ; _T'],
           "0 ")
@@ -234,9 +207,10 @@ if __name__ == '__main__':
           [': _T _TG1 TG-COUNT . _TG2 TG-COUNT . ; _T'],
           "0 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-SPAWN + SCHEDULE ──\n")
 
+# ── TG-SPAWN + SCHEDULE ──
+
+def test_tg_spawn_and_schedule():
     check("TG-SPAWN increments active count",
           [": _T _CLR ['] _SET1 _TG1 TG-SPAWN _TG1 TG-COUNT . ; _T"],
           "1 ")
@@ -269,9 +243,10 @@ if __name__ == '__main__':
           [": _T _CLR ['] _NOOP _TG1 TG-SPAWN SCHEDULE _TG1 TG-ERROR . ; _T"],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-WAIT ──\n")
 
+# ── TG-WAIT ──
+
+def test_tg_wait():
     check("TG-WAIT on empty group is no-op",
           [': _T _TG1 TG-WAIT 42 . ; _T'],
           "42 ")
@@ -296,9 +271,10 @@ if __name__ == '__main__':
            "_TG1 TG-WAIT _RAN1 @ . ; _T"],
           "1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-CANCEL ──\n")
 
+# ── TG-CANCEL ──
+
+def test_tg_cancel():
     check("TG-CANCEL sets cancelled flag",
           [': _T _TG1 TG-CANCEL _TG1 TG-CANCELLED? . ; _T'],
           "-1 ")
@@ -316,9 +292,10 @@ if __name__ == '__main__':
           [': _T _TG1 TG-CANCEL _TG1 TG-CANCEL _TG1 TG-CANCELLED? . ; _T'],
           "-1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-ERROR (CATCH/THROW) ──\n")
 
+# ── TG-ERROR (CATCH/THROW) ──
+
+def test_tg_error():
     check("throwing task stores error code",
           [": _T ['] _THROW42 _TG1 TG-SPAWN SCHEDULE _TG1 TG-ERROR . ; _T"],
           "42 ")
@@ -341,9 +318,10 @@ if __name__ == '__main__':
            "SCHEDULE _RAN1 @ . _TG1 TG-ERROR . _TG1 TG-COUNT . ; _T"],
           "1 42 0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-ANY ──\n")
 
+# ── TG-ANY ──
+
+def test_tg_any():
     check("TG-ANY on empty group is no-op",
           [': _T _TG1 TG-ANY 42 . ; _T'],
           "42 ")
@@ -353,9 +331,10 @@ if __name__ == '__main__':
            "_TG1 TG-ANY _TG1 TG-CANCELLED? . _RAN1 @ . _RAN2 @ . ; _T"],
           "-1 1 1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── WITH-TASKS ──\n")
 
+# ── WITH-TASKS ──
+
+def test_with_tasks():
     check("WITH-TASKS spawns and waits (1 task)",
           [": _T _CLR ['] _WXT1 WITH-TASKS _RAN1 @ . ; _T"],
           "1 ")
@@ -380,9 +359,10 @@ if __name__ == '__main__':
           [": _T _CLR ['] _WXT-ERR WITH-TASKS ; _T"],
           "")  # just check it doesn't crash
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Nested WITH-TASKS ──\n")
 
+# ── Nested WITH-TASKS ──
+
+def test_nested_with_tasks():
     check("nested WITH-TASKS runs both levels",
           [": _T _CLR ['] _OUTER-XT WITH-TASKS _RAN1 @ . _RAN2 @ . ; _T"],
           "1 1 ")
@@ -391,9 +371,10 @@ if __name__ == '__main__':
           [": _T _CLR ['] _OUTER-XT WITH-TASKS THIS-GROUP @ . ; _T"],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-RESET ──\n")
 
+# ── TG-RESET ──
+
+def test_tg_reset():
     check("TG-RESET clears cancelled flag",
           [': _T _TG1 TG-CANCEL _TG1 TG-CANCELLED? .',
            '_TG1 TG-RESET _TG1 TG-CANCELLED? . ; _T'],
@@ -408,9 +389,10 @@ if __name__ == '__main__':
           [': _T _TG1 TG-RESET _TG1 TG-COUNT . ; _T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── TG-INFO ──\n")
 
+# ── TG-INFO ──
+
+def test_tg_info():
     check("TG-INFO outputs group prefix",
           [': _T _TG1 TG-INFO ; _T'],
           "[group")
@@ -419,9 +401,10 @@ if __name__ == '__main__':
           [': _T _TG1 TG-INFO ; _T'],
           "active=0")
 
-    # ────────────────────────────────────────────────────────────────
-    print("\n── Multiple Groups ──\n")
 
+# ── Multiple Groups ──
+
+def test_multiple_groups():
     check("two groups with tasks, both complete",
           [": _T _CLR ['] _SET1 _TG1 TG-SPAWN ['] _SET2 _TG2 TG-SPAWN",
            "_TG1 TG-WAIT _TG2 TG-WAIT _RAN1 @ . _RAN2 @ . ; _T"],
@@ -432,9 +415,6 @@ if __name__ == '__main__':
            "_TG2 TG-WAIT _TG1 TG-CANCELLED? . _TG2 TG-CANCELLED? . _RAN2 @ . ; _T"],
           "-1 0 1 ")
 
-    # ────────────────────────────────────────────────────────────────
-    # Done
-    print(f"\n{'='*60}")
-    print(f"  {_pass} passed, {_fail} failed, {_pass + _fail} total")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail else 0)
+
+if __name__ == '__main__':
+    run_file_tests(__file__)

@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-taxonomy (knowledge/taxonomy.f).
 
 Tests the hierarchical taxonomy engine: concept CRUD, tree structure,
@@ -29,12 +12,11 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
-STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-TAX_F      = os.path.join(ROOT_DIR, "akashic", "knowledge", "taxonomy.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -94,8 +76,10 @@ def build_snapshot():
     t0 = time.time()
     bios_code  = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    str_lines  = _load_forth_lines(STR_F)
-    tax_lines  = _load_forth_lines(TAX_F)
+    module_lines = module_source_lines((
+        "utils/string.f",
+        "knowledge/taxonomy.f",
+    ))
 
     # Test helpers:
     #   T-INIT  — create arena (131072 bytes in XMEM) + taxonomy, set as current
@@ -114,7 +98,7 @@ def build_snapshot():
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + str_lines + tax_lines + helpers
+    all_lines = kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 800_000_000
     while steps < mx:
@@ -141,6 +125,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16*(1<<20))
     buf = capture_uart(sys_obj)
@@ -170,41 +156,19 @@ def run_forth(lines, max_steps=50_000_000):
         steps += max(batch, 1)
     return uart_text(buf)
 
-# ── Test runner ───────────────────────────────────────────────────
+# ── Test framework ──
+#
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-_pass = 0
-_fail = 0
-
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if check_fn:
-        ok = check_fn(clean)
-    elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-    if ok:
-        _pass += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        last = clean.split('\n')[-5:]
-        print(f"        got (last lines): {last}")
+check, _, _ = transcript_checks(run_forth)
 
 # ── Tests ─────────────────────────────────────────────────────────
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    # ================================================================
-    print("\n── TAX-CREATE / TAX-DESTROY ──\n")
-    # ================================================================
+# ── TAX-CREATE / TAX-DESTROY ──
 
+def test_tax_create_and_destroy():
     check("create returns non-zero handle",
           [': _T T-INIT  _TX @ 0<> IF 1 ELSE 0 THEN . ; _T'],
           "1 ")
@@ -221,10 +185,10 @@ if __name__ == '__main__':
           [': _T T-INIT  TAX-COUNT . ; _T'],
           "0 ")
 
-    # ================================================================
-    print("\n── TAX-ADD (top-level concepts) ──\n")
-    # ================================================================
 
+# ── TAX-ADD (top-level concepts) ──
+
+def test_tax_add_top_level_concepts():
     check("add one concept returns non-zero",
           [': _T T-INIT  S" Animals" TAX-ADD  0<> IF 1 ELSE 0 THEN . ; _T'],
           "1 ")
@@ -257,10 +221,10 @@ if __name__ == '__main__':
            '_T'],
           "1 ")
 
-    # ================================================================
-    print("\n── TAX-ADD-UNDER (child concepts) ──\n")
-    # ================================================================
 
+# ── TAX-ADD-UNDER (child concepts) ──
+
+def test_tax_add_under_child_concepts():
     check("add-under returns non-zero",
           ['VARIABLE P',
            ': _T T-INIT',
@@ -314,10 +278,10 @@ if __name__ == '__main__':
            '_T'],
           "2 ")
 
-    # ================================================================
-    print("\n── TAX-ROOTS ──\n")
-    # ================================================================
 
+# ── TAX-ROOTS ──
+
+def test_tax_roots():
     check("roots returns 0 on empty",
           [': _T T-INIT  TAX-ROOTS NIP . ; _T'],
           "0 ")
@@ -342,10 +306,10 @@ if __name__ == '__main__':
            '_T'],
           "1 ")
 
-    # ================================================================
-    print("\n── TAX-CHILDREN / TAX-ANCESTORS ──\n")
-    # ================================================================
 
+# ── TAX-CHILDREN / TAX-ANCESTORS ──
+
+def test_tax_children_and_ancestors():
     check("children of leaf is 0",
           [': _T T-INIT',
            '  S" X" TAX-ADD  TAX-CHILDREN NIP . ;',
@@ -377,10 +341,10 @@ if __name__ == '__main__':
            '_T'],
           "2 ")
 
-    # ================================================================
-    print("\n── TAX-DESCENDANTS ──\n")
-    # ================================================================
 
+# ── TAX-DESCENDANTS ──
+
+def test_tax_descendants():
     check("descendants of leaf = 0",
           [': _T T-INIT',
            '  S" X" TAX-ADD  TAX-DESCENDANTS NIP . ;',
@@ -417,10 +381,10 @@ if __name__ == '__main__':
            '_T'],
           "3 ")
 
-    # ================================================================
-    print("\n── TAX-REMOVE ──\n")
-    # ================================================================
 
+# ── TAX-REMOVE ──
+
+def test_tax_remove():
     check("remove top-level concept, count=0",
           [': _T T-INIT',
            '  S" X" TAX-ADD  TAX-REMOVE',
@@ -469,10 +433,10 @@ if __name__ == '__main__':
            '_T'],
           "2 ")
 
-    # ================================================================
-    print("\n── TAX-MOVE (reparenting) ──\n")
-    # ================================================================
 
+# ── TAX-MOVE (reparenting) ──
+
+def test_tax_move_reparenting():
     check("move top-level under another",
           ['VARIABLE PA  VARIABLE PB',
            ': _T T-INIT',
@@ -505,10 +469,10 @@ if __name__ == '__main__':
            '_T'],
           "1 ")
 
-    # ================================================================
-    print("\n── TAX-RENAME ──\n")
-    # ================================================================
 
+# ── TAX-RENAME ──
+
+def test_tax_rename():
     check("rename changes label",
           ['VARIABLE C',
            ': _T T-INIT',
@@ -528,10 +492,10 @@ if __name__ == '__main__':
            '_T'],
           "1 ")
 
-    # ================================================================
-    print("\n── TAX-ADD-SYNONYM / TAX-REMOVE-SYNONYM / TAX-SYNONYMS ──\n")
-    # ================================================================
 
+# ── TAX-ADD-SYNONYM / TAX-REMOVE-SYNONYM / TAX-SYNONYMS ──
+
+def test_tax_synonyms():
     check("synonyms of isolated concept = 1 (self)",
           [': _T T-INIT',
            '  S" A" TAX-ADD  TAX-SYNONYMS NIP . ;',
@@ -583,10 +547,10 @@ if __name__ == '__main__':
            '_T'],
           "3 ")
 
-    # ================================================================
-    print("\n── TAX-SET-FACET / TAX-CLEAR-FACET / TAX-HAS-FACET? ──\n")
-    # ================================================================
 
+# ── TAX-SET-FACET / TAX-CLEAR-FACET / TAX-HAS-FACET? ──
+
+def test_tax_facets():
     check("fresh concept has no facets",
           [': _T T-INIT',
            '  S" X" TAX-ADD  TAX-FACETS@ . ;',
@@ -628,10 +592,10 @@ if __name__ == '__main__':
            '_T'],
           "0 1 ")
 
-    # ================================================================
-    print("\n── TAX-FILTER-FACET ──\n")
-    # ================================================================
 
+# ── TAX-FILTER-FACET ──
+
+def test_tax_filter_facet():
     check("filter-facet returns matching concepts",
           ['VARIABLE CA  VARIABLE CB  VARIABLE CC',
            ': _T T-INIT',
@@ -656,10 +620,10 @@ if __name__ == '__main__':
            '_T'],
           "1 ")
 
-    # ================================================================
-    print("\n── TAX-FIND / TAX-FIND-PREFIX ──\n")
-    # ================================================================
 
+# ── TAX-FIND / TAX-FIND-PREFIX ──
+
+def test_tax_find_and_find_prefix():
     check("find existing concept",
           [': _T T-INIT',
            '  S" Animals" TAX-ADD DROP',
@@ -707,10 +671,10 @@ if __name__ == '__main__':
            '_T'],
           "0 ")
 
-    # ================================================================
-    print("\n── TAX-CLASSIFY / TAX-UNCLASSIFY ──\n")
-    # ================================================================
 
+# ── TAX-CLASSIFY / TAX-UNCLASSIFY ──
+
+def test_tax_classify_and_unclassify():
     check("classify item under concept",
           ['VARIABLE C',
            ': _T T-INIT',
@@ -760,10 +724,10 @@ if __name__ == '__main__':
            '_T'],
           "42 ")
 
-    # ================================================================
-    print("\n── TAX-CATEGORIES (item → concepts) ──\n")
-    # ================================================================
 
+# ── TAX-CATEGORIES (item → concepts) ──
+
+def test_tax_categories_of_an_item():
     check("categories for unclassified item = 0",
           [': _T T-INIT',
            '  S" A" TAX-ADD DROP',
@@ -791,10 +755,10 @@ if __name__ == '__main__':
            '_T'],
           "2 ")
 
-    # ================================================================
-    print("\n── TAX-ITEMS-DEEP ──\n")
-    # ================================================================
 
+# ── TAX-ITEMS-DEEP ──
+
+def test_tax_items_deep():
     check("items-deep includes child items",
           ['VARIABLE P  VARIABLE C',
            ': _T T-INIT',
@@ -819,10 +783,10 @@ if __name__ == '__main__':
            '_T'],
           "3 ")
 
-    # ================================================================
-    print("\n── TAX-EACH-CHILD / TAX-EACH-ROOT ──\n")
-    # ================================================================
 
+# ── TAX-EACH-CHILD / TAX-EACH-ROOT ──
+
+def test_tax_each_child_and_each_root():
     check("each-child visits all children",
           ['VARIABLE _EACC  VARIABLE R',
            ': _EINC  TAX-ID _EACC @ + _EACC ! ;',
@@ -849,10 +813,10 @@ if __name__ == '__main__':
            '_T'],
           "6 ")
 
-    # ================================================================
-    print("\n── TAX-DFS / TAX-DFS-ALL ──\n")
-    # ================================================================
 
+# ── TAX-DFS / TAX-DFS-ALL ──
+
+def test_tax_dfs_and_dfs_all():
     check("dfs visits root + children",
           ['VARIABLE _DCNT  VARIABLE R',
            ': _DINC  DROP 1 _DCNT +! ;',
@@ -879,10 +843,10 @@ if __name__ == '__main__':
            '_T'],
           "3 ")
 
-    # ================================================================
-    print("\n── TAX-STATS ──\n")
-    # ================================================================
 
+# ── TAX-STATS ──
+
+def test_tax_stats():
     check("stats after classify",
           ['VARIABLE C',
            ': _T T-INIT',
@@ -902,10 +866,10 @@ if __name__ == '__main__':
            '_T'],
           "0 0 ")
 
-    # ================================================================
-    print("\n── TAX-FIND-SYNONYM ──\n")
-    # ================================================================
 
+# ── TAX-FIND-SYNONYM ──
+
+def test_tax_find_synonym():
     check("find-synonym finds by own label",
           ['VARIABLE C1',
            ': _T T-INIT',
@@ -924,10 +888,10 @@ if __name__ == '__main__':
            '_T'],
           "1 ")
 
-    # ================================================================
-    print("\n── Edge cases ──\n")
-    # ================================================================
 
+# ── Edge cases ──
+
+def test_taxonomy_edge_cases():
     check("remove from synonym ring cleans up",
           ['VARIABLE C1  VARIABLE C2',
            ': _T T-INIT',
@@ -968,10 +932,6 @@ if __name__ == '__main__':
            '_T'],
           "0 ")
 
-    # ────────────────────────────────────────────────────────────────
 
-    print()
-    print("=" * 40)
-    print(f"  {_pass} passed, {_fail} failed")
-    print("=" * 40)
-    sys.exit(1 if _fail else 0)
+if __name__ == '__main__':
+    run_file_tests(__file__)
