@@ -13833,8 +13833,7 @@ CREATE _EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK ALLOT
 \ Stage the insertion that publishes a linked target's smaller size NEW in
 \ place of OLD, behind its orphan record.
 : _EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE
-  ( new-size old-size inode-number expected-generation seconds nsec
-    transaction -- ior )
+  ( new old inode-number generation seconds nsec transaction -- ior )
     _EXT4-JTA-WRITER ! _EXT4-JTA-NSEC ! _EXT4-JTA-SECONDS !
     _EXT4-JTA-GEN ! _EXT4-JTA-INO ! _EXT4-JTA-OLD ! _EXT4-JTA-NEW !
     _EXT4-JTA-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
@@ -21594,9 +21593,9 @@ VARIABLE _XW-IOR
 
 \ The staged binding's write hook.  Caller bytes leave the block buffer on
 \ every return; the writer scrubs its own retained images.
-:NONAME  ( -- actual ior )
+: _XW-HOOK  ( -- actual ior )
     _XW-RUN _XW-DATA _EXT4-MAX-BLOCK 0 FILL ;
-_EXT4-WR-HOOK !
+' _XW-HOOK _EXT4-WR-HOOK !
 
 \ Prove the mounted free-block counters equal every initialized block
 \ bitmap before an operation drains releases through several committed

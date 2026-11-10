@@ -351,6 +351,8 @@ has not yet been qualified.
 
 **Link paths** (`fs/link-path.f`) give the path a document's link names, taken from the folder of the file that holds it, as Pad and the media widget's documents follow links; a link with a scheme such as `https:` names no file.
 
+**Module source** (`fs/vfs-module-source.f`) lets KDOS's `LOAD` and `REQUIRE` read modules from a mounted VFS, an ext4 volume among them, through the loader's module-source record; see [vfs-module-source.md](docs/utils/fs/vfs-module-source.md).
+
 ---
 
 ## Usage
