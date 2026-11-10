@@ -42554,122 +42554,134 @@ def test_staged_public_extent_root_growth_refuses_profile_four_without_io(
         backing.unlink(missing_ok=True)
 
 
+@pytest.fixture(scope="session")
+def single_free_block_fixture(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Build a full volume whose one free block cannot grow a full extent root.
+
+    The pinned debugfs writes /full-root.bin as four single-block extents,
+    which fill its inode's resident root, gives every other free block to
+    fallocated files, and then removes a one-block file written first.
+    Appending a block to /full-root.bin needs the freed block for its data
+    and a second block, which the volume lacks, for the root's first leaf.
+    """
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    directory = tmp_path_factory.mktemp("ext4-single-free-block")
+    image = directory / "single-free-block.img"
+    _copy_sparse_file(canonical_images["primary-1k-i256"], image)
+    block_size = 1024
+
+    def run_debugfs(label: str, commands: list[str]) -> None:
+        script = directory / f"{label}.debugfs"
+        script.write_text("\n".join(commands) + "\n")
+        made = subprocess.run(
+            [str(debugfs), "-w", "-f", str(script), str(image)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert made.returncode == 0, made.stdout + made.stderr
+
+    def free_blocks() -> int:
+        superblock, _, _ = _ext4_inode_record(image, 2)
+        assert struct.unpack_from("<I", superblock, 0x158)[0] == 0
+        return struct.unpack_from("<I", superblock, 0x0C)[0]
+
+    pinned = directory / "pin.bin"
+    pinned.write_bytes(bytes((0x50,)) * block_size)
+    # debugfs leaves a hole for each all-zero block it copies.
+    holed = directory / "full-root.bin"
+    holed.write_bytes(
+        b"".join(
+            bytes(block_size)
+            if logical % 2
+            else bytes((0xA0 + logical,)) * block_size
+            for logical in range(7)
+        )
+    )
+    fill_names = [f"/fill-{index:02d}.bin" for index in range(40)]
+    run_debugfs(
+        "shape",
+        [
+            f"write {pinned} /pin.bin",
+            f"write {holed} /full-root.bin",
+            *(f"write /dev/null {name}" for name in fill_names),
+        ],
+    )
+    root = _directory_entries_of(image, 2)
+    _, pin_inode, _ = _ext4_inode_record(image, root[b"pin.bin"])
+    free_block = _extent_root_physical(pin_inode, 0)
+    inode_number = root[b"full-root.bin"]
+    _, inode, _ = _ext4_inode_record(image, inode_number)
+    old_size = 7 * block_size
+    old_blocks = 4 * (block_size // 512)
+    assert struct.unpack_from("<I", inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == old_blocks
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 4, 4, 0)
+    extents = [
+        struct.unpack_from("<IHHI", inode, 0x34 + index * 12)
+        for index in range(4)
+    ]
+    assert [extent[:3] for extent in extents] == [
+        (0, 1, 0),
+        (2, 1, 0),
+        (4, 1, 0),
+        (6, 1, 0),
+    ]
+    # The freed block must not continue the file's last extent, or the
+    # append would fit the root as it is.
+    assert free_block != extents[-1][3] + 1
+
+    # Each round gives half of what is free to one more file and reads back
+    # what remains, since a file whose blocks come in more than four runs
+    # also takes a block for its extent tree.
+    names = iter(fill_names)
+    free = free_blocks()
+    while free:
+        count = free // 2 if free > 8 else 1
+        run_debugfs("fill", [f"fallocate {next(names)} 0 {count - 1}"])
+        remaining = free_blocks()
+        assert remaining < free
+        free = remaining
+    run_debugfs("free-one", ["rm /pin.bin"])
+    assert free_blocks() == 1
+    assert _ext4_block_allocation_state(image, (free_block,)) == {
+        free_block: False
+    }
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+    return {
+        "image": image,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "free_block": free_block,
+    }
+
+
 def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
-    staged_public_extent_root_growth_prestate: dict[str, object],
+    single_free_block_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
     """Require a distinct leaf block after selecting the sole free block."""
-    geometry = staged_public_extent_root_growth_prestate
-    path = geometry["path"]
-    input_patches = geometry["input_patches"]
-    superblock = geometry["superblock"]
-    inode = geometry["inode"]
-    inode_number = geometry["inode_number"]
-    inode_home = geometry["inode_home"]
-    block_size = geometry["block_size"]
-    old_size = geometry["old_size"]
-    old_blocks = geometry["old_blocks"]
-    data_candidate = geometry["data_candidate"]
-    original_blocks = geometry["original_blocks"]
-    original_data_candidate = geometry["original_data_candidate"]
-    assert isinstance(path, Path)
-    assert isinstance(input_patches, tuple)
-    assert isinstance(superblock, bytes)
-    assert isinstance(inode, bytes)
-    assert isinstance(inode_number, int)
-    assert isinstance(inode_home, int)
-    assert isinstance(block_size, int)
+    image = single_free_block_fixture["image"]
+    old_size = single_free_block_fixture["old_size"]
+    old_blocks = single_free_block_fixture["old_blocks"]
+    free_block = single_free_block_fixture["free_block"]
+    assert isinstance(image, Path)
     assert isinstance(old_size, int)
     assert isinstance(old_blocks, int)
-    assert isinstance(data_candidate, int)
-    assert isinstance(original_blocks, dict)
-    assert isinstance(original_data_candidate, bytes)
-
-    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
-    blocks_count = struct.unpack_from("<I", superblock, 0x04)[0] | (
-        struct.unpack_from("<I", superblock, 0x150)[0] << 32
-    )
-    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
-    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
-    descriptors_per_block = block_size // descriptor_size
-    seed = struct.unpack_from("<I", superblock, 0x270)[0]
-    group_count = (
-        blocks_count - first_data + blocks_per_group - 1
-    ) // blocks_per_group
-    candidate_group, candidate_index = divmod(
-        data_candidate - first_data,
-        blocks_per_group,
-    )
-    assert block_size == 1024
-    assert group_count == 8
-    assert descriptor_size == 64
-    assert descriptors_per_block == 16
-    assert (candidate_group, candidate_index) == (0, 1353)
-
-    prepared_gdt = bytearray(
-        _patched_ext4_home(
-            path,
-            input_patches,
-            2,
-            block_size=block_size,
-        )
-    )
-    bitmap_patches: list[tuple[int, bytes]] = []
-    expected_bitmaps: dict[int, bytes] = {}
-    for group in range(group_count):
-        descriptor_offset = group * descriptor_size
-        descriptor = bytearray(
-            prepared_gdt[
-                descriptor_offset : descriptor_offset + descriptor_size
-            ]
-        )
-        bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0] | (
-            struct.unpack_from("<I", descriptor, 0x20)[0] << 32
-        )
-        assert bitmap_home > 0
-        bitmap = bytearray(bytes((0xFF,)) * block_size)
-        expected_free = 0
-        if group == candidate_group:
-            bitmap[candidate_index // 8] &= ~(
-                1 << (candidate_index % 8)
-            )
-            expected_free = 1
-        bitmap_checksum = _crc32c_raw(bitmap, seed)
-        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
-        struct.pack_into("<H", descriptor, 0x12, flags & ~0x02)
-        struct.pack_into("<H", descriptor, 0x0C, expected_free)
-        struct.pack_into("<H", descriptor, 0x2C, 0)
-        struct.pack_into(
-            "<H", descriptor, 0x18, bitmap_checksum & 0xFFFF
-        )
-        struct.pack_into(
-            "<H", descriptor, 0x38, bitmap_checksum >> 16
-        )
-        descriptor[:] = _group_descriptor_with_checksum(
-            superblock,
-            descriptor,
-            group,
-        )
-        prepared_gdt[
-            descriptor_offset : descriptor_offset + descriptor_size
-        ] = descriptor
-        bitmap_patches.append((bitmap_home * block_size, bytes(bitmap)))
-        expected_bitmaps[bitmap_home] = bytes(bitmap)
-
-    prepared_super = bytearray(superblock)
-    struct.pack_into("<I", prepared_super, 0x0C, 1)
-    struct.pack_into("<I", prepared_super, 0x158, 0)
-    prepared_super[:] = _ext4_super_with_checksum(prepared_super)
-    prepared_patches = input_patches + (
-        (1024, bytes(prepared_super)),
-        (2 * block_size, bytes(prepared_gdt)),
-        *bitmap_patches,
-    )
+    assert isinstance(free_block, int)
 
     backing = tmp_path / "staged-public-root-growth-single-free.img"
     try:
-        output, trace, _ = run_recovery_forth(
-            path,
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
             backing,
             [
                 "CREATE _R1-STAT VFS-STATFS-SIZE ALLOT",
@@ -42692,7 +42704,7 @@ def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
                     "_R1-PROFILE", "_R1-V", 5, 1, 0
                 ),
                 (
-                    'S" /fixture/hardlink.txt" '
+                    'S" /full-root.bin" '
                     "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
                     "_R1-V VFS-OPEN? "
                     "CONSTANT _R1-OPEN-IOR CONSTANT _R1-FD"
@@ -42750,13 +42762,8 @@ def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
                             "_R1-WRITER _R1-PROFILE-BASE =",
                             "_R1-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_R1-HOMES 0=",
-                            f"_XW-RUN-FIRST @ {data_candidate} =",
+                            f"_XW-RUN-FIRST @ {free_block} =",
                             "_XW-ACTUAL @ 0=",
-                            "_XW-ACTUAL @ 0=",
-                            (
-                                "_XW-DATA _EXT4-MAX-BLOCK "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
@@ -42773,45 +42780,13 @@ def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
                     'IF ." EXT4-PUBLIC-ROOT-GROWTH-SINGLE-UNMOUNT" THEN'
                 ),
             ],
-            patches=prepared_patches,
             capture_media=backing,
         )
         _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-SINGLE-FREE")
         _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-SINGLE-UNMOUNT")
         assert trace == ()
-        final_superblock, final_inode, _ = _ext4_inode_record(
-            backing,
-            inode_number,
-        )
-        assert final_superblock == bytes(prepared_super)
-        assert final_inode == inode
-        assert _read_ext4_home(
-            backing,
-            2,
-            block_size=block_size,
-        ) == bytes(prepared_gdt)
-        for bitmap_home, expected_bitmap in expected_bitmaps.items():
-            assert _read_ext4_home(
-                backing,
-                bitmap_home,
-                block_size=block_size,
-            ) == expected_bitmap
-        assert _read_ext4_home(
-            backing,
-            data_candidate,
-            block_size=block_size,
-        ) == original_data_candidate
-        for physical, original in original_blocks.items():
-            assert _read_ext4_home(
-                backing,
-                physical,
-                block_size=block_size,
-            ) == original
-        assert _read_ext4_home(
-            backing,
-            inode_home,
-            block_size=block_size,
-        )[0x100:0x200] == inode
+        assert media_sha256 == _sha256(image)
+        assert _sha256(backing) == media_sha256
     finally:
         backing.unlink(missing_ok=True)
 
@@ -51901,10 +51876,10 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                                 "_DA-PROFILE-ARENA ARENA-USED "
                                 "_DA-PROFILE-USED ="
                             ),
-                            (
-                                f"_XB-PHYS @ "
-                                f"{extent_node_block} ="
-                            ),
+                            # The mount's ownership proof refuses a
+                            # block claimed twice at the first write,
+                            # before the write resolves any block.
+                            "_XB-PHYS @ 0=",
                             "_XW-ACTUAL @ 0=",
                             "_DA-CTX _EXT4-C.RECOVERY + @ 0=",
                             "_DA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
@@ -52063,9 +52038,14 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                                 "_DJ-IOR VFS-IOR-FLAGS "
                                 "VFS-IOR-F-CORRUPT ="
                             ),
+                            # The journal's inode and the file both
+                            # claim the node's block, so the mount's
+                            # ownership proof refuses the volume at the
+                            # first write, before the write resolves a
+                            # block.
                             (
                                 "_DJ-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-JOURNAL ="
+                                "EXT4-D-DATA-MAP ="
                             ),
                             "_DJ-V V.LAST-IOR @ _DJ-IOR =",
                             f"_DJ-CURSOR {write_offset} =",
@@ -52078,7 +52058,7 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                                 "_DJ-PROFILE-ARENA ARENA-USED "
                                 "_DJ-PROFILE-USED ="
                             ),
-                            f"_XB-PHYS @ {data_block} =",
+                            "_XB-PHYS @ 0=",
                             "_XW-ACTUAL @ 0=",
                             "_DJ-CTX _EXT4-C.RECOVERY + @ 0=",
                             "_DJ-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
