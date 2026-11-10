@@ -125,9 +125,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     assert check_report(report, policy) == []
     expected_summary = {
         "module_count": 702,
-        "resolved_require_occurrence_count": 2592,
-        "unique_resolved_edge_count": 2592,
-        "unresolved_require_count": 78,
+        "resolved_require_occurrence_count": 2605,
+        "unique_resolved_edge_count": 2605,
+        "unresolved_require_count": 65,
         "cycle_count": 0,
         "layer_violation_count": 0,
         "placement_debt_count": 0,
@@ -143,10 +143,10 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
 
 def test_unresolved_imports_are_named_debt_not_external_dependencies() -> None:
     report = _report()
-    assert len(report["unresolved_requires"]) == 78
+    assert len(report["unresolved_requires"]) == 65
     assert {entry["from"].split("/", 1)[0] for entry in report[
         "unresolved_requires"
-    ]} == {"audio", "store"}
+    ]} == {"audio"}
     assert all(entry["raw"] != entry["to"] for entry in report[
         "unresolved_requires"
     ])
