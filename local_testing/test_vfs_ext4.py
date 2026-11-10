@@ -5620,11 +5620,6 @@ def recovery_authority_fixture(
             (layout["primary_super"],),
             changed_tuple,
         ),
-        "primary-super-orphan": author(
-            "forbidden-primary-super-orphan",
-            (layout["primary_super"],),
-            stranded_orphan,
-        ),
         "primary-super-counters": author(
             "forbidden-primary-super-counters",
             (layout["primary_super"],),
@@ -5641,6 +5636,11 @@ def recovery_authority_fixture(
             bytes(cleared_inode_bitmap),
         ),
     }
+    orphan_head_image = author(
+        "committed-primary-super-orphan",
+        (layout["primary_super"],),
+        stranded_orphan,
+    )
     primary_super_repair_image = author(
         "primary-super-repair",
         (layout["primary_super"],),
@@ -5762,6 +5762,8 @@ def recovery_authority_fixture(
         "witness_gdt_blocks": witness_gdt_blocks,
         "bootstrap_repair_image": bootstrap_repair_image,
         "authority_images": authority_images,
+        "orphan_head_image": orphan_head_image,
+        "orphan_head_super": bytes(stranded_orphan),
         "primary_super_repair_image": primary_super_repair_image,
         "revoked_primary_super_repair_image": (
             revoked_primary_super_repair_image
@@ -6728,7 +6730,6 @@ def test_jbd2_sparse_witness_bootstraps_primary_metadata_repairs(
         "backup-super",
         "backup-gdt",
         "primary-super-tuple",
-        "primary-super-orphan",
         "primary-super-counters",
         "primary-gdt-locator",
         "journal-inode-bit",
@@ -6760,6 +6761,53 @@ def test_jbd2_preflight_freezes_recovery_authority(
     _assert_emitted(output, "EXT4-RECOVERY-AUTHORITY-FROZEN")
     assert trace == ()
     assert media_sha256 == _sha256(image)
+
+
+def test_jbd2_replays_committed_orphan_head_before_recovery_refusal(
+    recovery_authority_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    """A committed superblock may name an orphan; its record decides the mount.
+
+    Replay admits a primary superblock whose orphan list is not empty and
+    lands it.  The list here names inode 11, the linked lost+found directory,
+    which the mount's cleanup does not handle, so the mount then refuses.
+    """
+    image = recovery_authority_fixture["orphan_head_image"]
+    orphan_head_super = recovery_authority_fixture["orphan_head_super"]
+    layout = recovery_authority_fixture["layout"]
+    assert isinstance(image, Path)
+    assert isinstance(orphan_head_super, bytes)
+    assert isinstance(layout, dict)
+    block_size = layout["block_size"]
+    primary_offset = layout["primary_super"] * block_size
+    assert struct.unpack_from("<I", orphan_head_super, 0xE8)[0] == 11
+    replayed = bytearray(image.read_bytes())
+    assert replayed[primary_offset : primary_offset + block_size] != (
+        orphan_head_super
+    )
+    replayed[primary_offset : primary_offset + block_size] = orphan_head_super
+
+    backing = tmp_path / "committed-orphan-head-replayed.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                'IF ." EXT4-COMMITTED-ORPHAN-HEAD-REPLAYED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-COMMITTED-ORPHAN-HEAD-REPLAYED")
+    assert trace == (
+        ("write", layout["primary_super"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert media_sha256 == hashlib.sha256(replayed).hexdigest()
 
 
 def test_jbd2_committed_primary_super_payload_repairs_prefix_tear(
@@ -7326,9 +7374,12 @@ def test_jbd2_recovery_uses_anchor_after_torn_primary_journal_reset(
         ],
     )
     _assert_emitted(output, "EXT4-JBD2-PRIMARY-TEAR-REPAIRED")
+    # The journal reset flushes the superblock it repairs from the anchor,
+    # and recovery flushes again after every reset.
     assert retry_trace == (
         ("flush", 0, 0),
         ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
         ("flush", 0, 0),
         ("write", 2, 2),
         ("flush", 0, 0),
