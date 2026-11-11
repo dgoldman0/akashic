@@ -33,6 +33,12 @@ with --settings-safe-mode the settings disk's system settings ask for it;
 either way the run fails when the guest did not report safe mode for that
 reason, or no frame showed the notice that says so.  Without either, it
 fails when the guest reports safe mode on.
+
+With --system-volume the Desktop's modules are plain files on an ext4 system
+volume, built beside the boot image and attached as the third storage unit,
+and the boot mounts that volume and loads them from it
+(utils/fs/system-volume.f).  The journey is the same one.  The build needs
+the pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names.
 """
 from __future__ import annotations
 
@@ -163,6 +169,7 @@ def child(args) -> int:
         "every_frame_checks": args.every_frame_checks,
         "safe_mode": args.safe_mode,
         "settings_safe_mode": args.settings_safe_mode,
+        "system_volume": args.system_volume,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -184,6 +191,8 @@ def child(args) -> int:
         sys.argv.append("--safe-mode")
     if args.settings_safe_mode:
         sys.argv.append("--settings-safe-mode")
+    if args.system_volume:
+        sys.argv.append("--system-volume")
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -220,6 +229,8 @@ def supervise(args) -> int:
         command.append("--safe-mode")
     if args.settings_safe_mode:
         command.append("--settings-safe-mode")
+    if args.system_volume:
+        command.append("--system-volume")
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -235,6 +246,8 @@ def supervise(args) -> int:
         kind += ", safe mode"
     if args.settings_safe_mode:
         kind += ", safe mode from the system settings"
+    if args.system_volume:
+        kind += ", modules from the system volume"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -364,6 +377,10 @@ def main() -> int:
     parser.add_argument("--settings-safe-mode", action="store_true",
                         help="build the settings disk with Desk's system "
                              "settings asking for safe mode")
+    parser.add_argument("--system-volume", action="store_true",
+                        help="put the Desktop's modules on an ext4 system "
+                             "volume as plain files and load them from it "
+                             "(needs AKASHIC_E2FSPROGS_TOOL_DIR)")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

@@ -18,7 +18,9 @@ import re
 import subprocess
 import struct
 import sys
+import tempfile
 import time
+import uuid
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -606,6 +608,27 @@ MEGAPAD_RICH_TERMINAL_CONSUMERS = frozenset(
 APP_SHELL_MODULE = "tui/app-shell.f"
 MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
 MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
+# With --system-volume a profile's modules are plain files on the system
+# volume, the ext4 volume on the machine's third storage unit.  The boot
+# volume then carries only the closure of the module that mounts it,
+# deployed as the profile deploys its source, and autoexec.f mounts the
+# volume and makes it the source of LOAD and REQUIRE before the profile's
+# own REQUIREs run (docs/utils/fs/system-volume.md).  The arena is the
+# mount's storage: its records and its cache of entries and names.
+SYSTEM_VOLUME_MODULE = "utils/fs/system-volume.f"
+SYSTEM_VOLUME_ARENA_BYTES = 524288
+SYSTEM_VOLUME_BOOT_ENTRY = "_BOOT-SYSTEM-VOLUME"
+SYSTEM_VOLUME_BOOT_LINES = (
+    f": {SYSTEM_VOLUME_BOOT_ENTRY}  ( -- )",
+    f"    {SYSTEM_VOLUME_ARENA_BYTES} A-XMEM ARENA-NEW ?DUP IF",
+    '        NIP ." SYSTEM VOLUME FAIL arena ior=" . CR TX-FLUSH ABORT',
+    "    THEN",
+    "    SYSVOL-MOUNT ?DUP IF",
+    '        ." SYSTEM VOLUME FAIL mount ior=" . CR TX-FLUSH ABORT',
+    "    THEN",
+    "    SYSVOL-SOURCE MODULE-SOURCE! ;",
+    SYSTEM_VOLUME_BOOT_ENTRY,
+)
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -27399,11 +27422,19 @@ def _with_rich_desktop_boot_progress(
     autoexec: str,
     rich_terminal: RichTerminalProfile,
     chunk_names: tuple[str, ...],
+    *,
+    volume_modules: tuple[str, ...] = (),
 ) -> str:
-    """Instrument the generated rich Desk cold-load path before PT-START."""
+    """Instrument the generated rich Desk cold-load path before PT-START.
+
+    VOLUME_MODULES are the modules a system-volume image loads from that
+    volume.  Its chunks hold the volume's driver, and the framework is ready
+    once the last REQUIRE of one of those modules has run.
+    """
     if not chunk_names:
         raise RuntimeError("Rich Desktop boot progress requires source chunks")
-    if "[akashic boot] framework source " in autoexec:
+    chunk_label = "volume driver" if volume_modules else "framework"
+    if f"[akashic boot] {chunk_label} source " in autoexec:
         raise RuntimeError("Rich Desktop boot progress is already installed")
 
     lines = autoexec.splitlines()
@@ -27438,6 +27469,24 @@ def _with_rich_desktop_boot_progress(
         raise RuntimeError(
             "Rich Desktop boot progress requires canonical boot ordering"
         )
+    volume_module_set = set(volume_modules)
+    volume_requires = [
+        index
+        for index, line in enumerate(lines)
+        if (match := REQUIRE_RE.match(line))
+        and match.group(1) in volume_module_set
+    ]
+    if volume_modules and (
+        lines.count(SYSTEM_VOLUME_BOOT_ENTRY) != 1
+        or not volume_requires
+        or not positions[-1]
+        < lines.index(SYSTEM_VOLUME_BOOT_ENTRY)
+        < volume_requires[0]
+    ):
+        raise RuntimeError(
+            "Rich Desktop boot progress expected the system volume mounted "
+            "once, after its driver and before the modules it holds"
+        )
 
     width = max(2, len(str(len(chunk_names))))
     output: list[str] = []
@@ -27445,7 +27494,7 @@ def _with_rich_desktop_boot_progress(
         line: number
         for number, line in enumerate(chunk_lines, start=1)
     }
-    for line in lines:
+    for index, line in enumerate(lines):
         if line == userland_line:
             output.append(
                 _rich_desktop_boot_line(
@@ -27456,7 +27505,7 @@ def _with_rich_desktop_boot_progress(
             number = chunk_number_by_line[line]
             output.append(
                 _rich_desktop_boot_line(
-                    "framework source "
+                    f"{chunk_label} source "
                     f"{number:0{width}d}/{len(chunk_names):0{width}d}"
                 )
             )
@@ -27470,6 +27519,14 @@ def _with_rich_desktop_boot_progress(
                 _rich_desktop_boot_line("checked source loader ready")
             )
         elif line == chunk_lines[-1]:
+            output.append(
+                _rich_desktop_boot_line(f"{chunk_label} ready")
+            )
+        elif volume_modules and line == SYSTEM_VOLUME_BOOT_ENTRY:
+            output.append(
+                _rich_desktop_boot_line("system volume mounted")
+            )
+        elif volume_requires and index == volume_requires[-1]:
             output.append(
                 _rich_desktop_boot_line("framework ready")
             )
@@ -27918,8 +27975,16 @@ def _linked_autoexec(
     modules: tuple[str, ...],
     *,
     cold_source_codec: int | None = None,
+    system_volume: bool = False,
 ) -> str:
-    """Replace linked source REQUIREs while retaining injected test leaves."""
+    """Replace linked source REQUIREs while retaining injected test leaves.
+
+    With SYSTEM_VOLUME the chunks hold only what mounts the system volume,
+    and MODULES are files on it.  Their REQUIREs then stay, after the chunks
+    and the lines that mount the volume and select it as the module source.
+    A profile that is not linked has no chunks: the mounting module is a
+    file on the boot volume, and its REQUIRE takes their place.
+    """
     load_lines = [f"REQUIRE {name}" for name in chunk_names]
     if cold_source_codec is not None:
         load_lines = [
@@ -27940,6 +28005,10 @@ def _linked_autoexec(
             )
             for name in chunk_names
         ]
+    if system_volume:
+        if not chunk_names:
+            load_lines = [f"REQUIRE {SYSTEM_VOLUME_MODULE}"]
+        load_lines.extend(SYSTEM_VOLUME_BOOT_LINES)
     lines: list[str] = []
     inserted = False
     linked_modules = set(modules)
@@ -27949,15 +28018,21 @@ def _linked_autoexec(
             if not inserted:
                 lines.extend(load_lines)
                 inserted = True
-            continue
+            if not system_volume:
+                continue
         lines.append(line)
     if not inserted:
-        if cold_source_codec is not None:
+        if cold_source_codec is not None or system_volume:
             raise RuntimeError(
-                "Cold source profile autoexec has no linked REQUIRE insertion "
-                "point"
+                "Profile autoexec has no linked REQUIRE insertion point"
+                if system_volume
+                else "Cold source profile autoexec has no linked REQUIRE "
+                "insertion point"
             )
         lines[0:0] = load_lines
+    if system_volume and not chunk_names:
+        # A profile that is not linked keeps its autoexec as it wrote it.
+        return "\n".join(lines) + "\n"
     linked_autoexec = _minify_forth("\n".join(lines) + "\n")
     if cold_source_codec is not None:
         enter = linked_autoexec.find("ENTER-USERLAND")
@@ -28154,6 +28229,223 @@ def _build_settings_image(profile: Profile, target: Path, *, safe_mode: bool) ->
     return settings
 
 
+def system_image_path(image_path: Path) -> Path:
+    """The system volume's image built beside the boot disk's IMAGE_PATH."""
+
+    return image_path.with_name(f"{image_path.stem}-system{image_path.suffix}")
+
+
+def _system_image_for(image_path: Path) -> Path | None:
+    """The system volume a launch of IMAGE_PATH attaches as the third
+    storage unit, or None.  A --system-volume build writes it beside the boot
+    image and a build without the option removes it, so its presence is what
+    the last build of IMAGE_PATH chose."""
+
+    system = system_image_path(image_path)
+    return system if system.is_file() else None
+
+
+# The system volume's ext4 geometry.  The pinned profile fixes the rest
+# (local_testing/fixtures/ext4-profile/manifest.json): 256-byte inodes, a
+# 4 MiB journal, the feature set the driver is qualified against, and one
+# inode for every 16,384 bytes of a full block group, which the driver's
+# admission requires of each group whatever the volume's size.
+SYSTEM_VOLUME_BLOCK_BYTES = 4096
+SYSTEM_VOLUME_LABEL = "AKASHIC-SYSTEM"
+_SYSTEM_VOLUME_INODE_RATIO_BYTES = 16384
+_SYSTEM_VOLUME_INODE_BYTES = 256
+_SYSTEM_VOLUME_JOURNAL_BYTES = 4 << 20
+
+
+def system_volume_geometry(
+    file_sizes: tuple[int, ...], directories: int, block_bytes: int
+) -> tuple[int, int, int]:
+    """The bytes, block groups and inodes of a system volume that holds
+    files of FILE_SIZES in DIRECTORIES directories, from its content alone.
+
+    Each file takes its bytes rounded up to whole blocks and each directory
+    one block.  The journal takes 4 MiB.  An eighth of that sum is added for
+    the filesystem's own structures apart from its inode tables: the bitmaps,
+    the group descriptors with their reserve, and the orphan file.  A block
+    group spans eight times the block size in blocks, and each group carries
+    an inode table for one inode per 16,384 bytes of a full group.  The
+    volume has as many groups as its content and their inode tables fill and
+    as give every file and directory an inode, with sixteen over for the
+    reserved ones, and never fewer than two: the driver takes the backup
+    superblock of the second group as its witness when it checks the
+    journal.  Its size is rounded up to a whole MiB.
+    """
+
+    mib = 1 << 20
+    group_bytes = 8 * block_bytes * block_bytes
+    group_inodes = group_bytes // _SYSTEM_VOLUME_INODE_RATIO_BYTES
+    table_bytes = group_inodes * _SYSTEM_VOLUME_INODE_BYTES
+    data = sum(-(-size // block_bytes) for size in file_sizes) + directories
+    content = data * block_bytes + _SYSTEM_VOLUME_JOURNAL_BYTES
+    needed = content + content // 8
+    groups = max(
+        2,
+        -(-needed // (group_bytes - table_bytes)),
+        -(-(len(file_sizes) + directories + 16) // group_inodes),
+    )
+    # A volume reaches far enough into its last group for that group to
+    # hold its own inode table.
+    volume = max(
+        needed + groups * table_bytes,
+        (groups - 1) * group_bytes + table_bytes + mib,
+    )
+    return -(-volume // mib) * mib, groups, groups * group_inodes
+
+
+def _system_volume_toolchain() -> tuple[dict, dict[str, str], dict]:
+    """The ext4 fixtures' profile, its pinned environment and the verified
+    pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names: what a system
+    volume is built with.  A build asks for them before it writes anything."""
+
+    import generate_ext4_profile_fixtures as ext4_profile
+
+    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
+    if not tool_dir_value:
+        raise RuntimeError(
+            "--system-volume builds an ext4 image with the pinned e2fsprogs; "
+            "set AKASHIC_E2FSPROGS_TOOL_DIR to the folder that holds them"
+        )
+    manifest_path = ext4_profile.DEFAULT_MANIFEST
+    manifest = ext4_profile.load_manifest(manifest_path)
+    tool_dir = Path(tool_dir_value).resolve()
+    env = ext4_profile.pinned_environment(manifest, tool_dir, manifest_path)
+    try:
+        tools = ext4_profile.verify_toolchain(manifest, tool_dir, env)
+    except ext4_profile.ProfileError as error:
+        raise RuntimeError(str(error)) from error
+    return manifest, env, tools
+
+
+def _build_system_image(
+    modules: tuple[str, ...],
+    target: Path,
+    toolchain: tuple[dict, dict[str, str], dict],
+    *,
+    block_bytes: int = SYSTEM_VOLUME_BLOCK_BYTES,
+) -> dict[str, object]:
+    """Write the system volume to TARGET: an ext4 image that holds each of
+    MODULES as a plain file at its module path, the repository's text
+    unchanged.
+
+    TOOLCHAIN (:func:`_system_volume_toolchain`) makes it, with the
+    arguments, feature set and fixed time of the ext4 fixtures' profile.  The
+    volume's identity follows from its content, so the same modules give the
+    same image.  Returns facts about the volume for the build's report.
+    """
+
+    import generate_ext4_profile_fixtures as ext4_profile
+
+    manifest, env, tools = toolchain
+    if block_bytes not in manifest["platform_bounds"]["filesystem_block_bytes"]:
+        raise ValueError(f"the ext4 profile has no {block_bytes}-byte blocks")
+
+    sources = tuple(SOURCE_ROOT / module for module in modules)
+    sizes = tuple(source.stat().st_size for source in sources)
+    directories = _directories(set(modules))
+    identity = hashlib.sha256(f"{block_bytes}\n".encode())
+    for module, source in zip(modules, sources, strict=True):
+        identity.update(
+            f"{module}\0{hashlib.sha256(source.read_bytes()).hexdigest()}\n".encode()
+        )
+    digest = identity.digest()
+    volume_bytes, groups, inodes = system_volume_geometry(
+        sizes, len(directories), block_bytes
+    )
+    spec = {
+        "id": "system volume",
+        "profile": "primary",
+        "block_size": block_bytes,
+        "inode_size": manifest["profiles"]["primary"]["inode_size"],
+        "blocks_per_group": 8 * block_bytes,
+        "block_count": volume_bytes // block_bytes,
+        "expected_groups": groups,
+        "expected_inodes": inodes,
+        "uuid": str(uuid.UUID(bytes=digest[:16], version=4)),
+        "hash_seed": str(uuid.UUID(bytes=digest[16:], version=4)),
+        "label": SYSTEM_VOLUME_LABEL,
+    }
+    context = dict(spec)
+    context.update(
+        tool_dir=Path(tools["mke2fs"]["path"]).parent,
+        image=target,
+        feature_names=",".join(ext4_profile.profile_feature_names(manifest, spec)),
+    )
+
+    def run(
+        argv: list[str], what: str, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            argv, env=env, cwd=cwd, text=True, capture_output=True, check=False
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{what} failed for the system volume {target}:\n"
+                + result.stdout
+                + result.stderr
+            )
+        return result
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as image:
+        image.truncate(volume_bytes)
+    # The profile's arguments end with the image and its block count.  The
+    # inode count goes before them: mke2fs would otherwise scale a group's
+    # inodes down with a volume smaller than one group.
+    mkfs_argv = ext4_profile.render_argv(manifest["generator"]["mkfs_argv"], context)
+    run([*mkfs_argv[:-2], "-N", str(inodes), *mkfs_argv[-2:]], "mke2fs")
+    # debugfs splits a command on spaces, so it runs in the source root and
+    # takes each module by its path from there.  It gives a written file its
+    # host file's permission bits, which follow the checkout; every module is
+    # set to the same ones.
+    commands = [f"mkdir /{directory}" for directory in directories]
+    for module in modules:
+        if any(character.isspace() for character in module):
+            raise RuntimeError(f"module path holds white space: {module!r}")
+        commands.append(f"write {module} /{module}")
+        commands.append(f"sif /{module} mode 0100644")
+    with tempfile.TemporaryDirectory(prefix="akashic-system-volume-") as scratch:
+        script = Path(scratch) / "populate.debugfs"
+        script.write_text("\n".join(commands) + "\n", encoding="utf-8")
+        populated = run(
+            [tools["debugfs"]["path"], "-w", "-f", str(script), str(target)],
+            "debugfs",
+            SOURCE_ROOT,
+        )
+    # debugfs reports a command that failed on stderr and still exits zero.
+    complaints = [
+        line
+        for line in populated.stderr.splitlines()
+        if line.strip() and not line.startswith("debugfs ")
+    ]
+    if complaints:
+        raise RuntimeError(
+            f"debugfs could not populate the system volume {target}:\n"
+            + "\n".join(complaints[:20])
+        )
+    run([tools["e2fsck"]["path"], "-f", "-n", str(target)], "e2fsck")
+    # The facts the driver's admission checks, as the fixtures are checked.
+    try:
+        ext4_profile.validate_observed_superblock(
+            manifest, spec, ext4_profile.read_superblock(target)
+        )
+    except ext4_profile.ProfileError as error:
+        raise RuntimeError(str(error)) from error
+    return {
+        "path": target,
+        "bytes": volume_bytes,
+        "block_bytes": block_bytes,
+        "files": len(modules),
+        "source_bytes": sum(sizes),
+        "directories": len(directories),
+        "uuid": spec["uuid"],
+    }
+
+
 def default_image_path(profile: str, *, backend: str = "emulator") -> Path:
     selected = _machine_backend(backend)
     suffix = f"-{selected}" if selected in SEMANTIC_BACKENDS else ""
@@ -28294,8 +28586,19 @@ def build_image(
     every_frame_checks: bool = False,
     safe_mode: bool = False,
     settings_safe_mode: bool = False,
+    system_volume: bool = False,
 ) -> Path:
+    """Build PROFILE_NAME's boot image and the images of its other disks.
+
+    With SYSTEM_VOLUME the profile's Akashic modules are plain files on an
+    ext4 system volume written beside the boot image
+    (:func:`system_image_path`), and the boot image holds the closure of
+    utils/fs/system-volume.f in their place, deployed as the profile deploys
+    its source.  autoexec.f then mounts the volume and keeps the profile's
+    REQUIREs, which KDOS resolves as paths on it.
+    """
     profile, backend = _profile_backend(profile_name, backend)
+    system_volume_toolchain = _system_volume_toolchain() if system_volume else None
     if settings_safe_mode and DESK_SYSTEM_SETTINGS not in profile.settings_files:
         raise RuntimeError(
             "--settings-safe-mode needs a profile whose settings disk holds "
@@ -28324,6 +28627,15 @@ def build_image(
         else dependency_closure(composition_roots)
     )
     akashic_modules = modules
+    # What the boot volume deploys: the profile's modules, or what mounts
+    # the system volume that holds them.
+    deployed_modules = akashic_modules
+    if system_volume:
+        deployed_modules = (
+            dependency_order((SYSTEM_VOLUME_MODULE,))
+            if profile.linked
+            else dependency_closure((SYSTEM_VOLUME_MODULE,))
+        )
     if shadow_check:
         autoexec = _with_frame_shadow(autoexec, modules)
     if every_frame_checks:
@@ -28343,7 +28655,7 @@ def build_image(
     resources = set(profile.resources)
     linked_chunks = (
         _linked_chunks(
-            akashic_modules,
+            deployed_modules,
             profile.link_chunk_bytes,
             profile.audited_link_line_bytes,
         )
@@ -28412,12 +28724,13 @@ def build_image(
         cold_source_container_bytes += sum(
             map(len, cold_source_initial_files.values())
         )
-    if profile.linked:
+    if profile.linked or system_volume:
         autoexec = _linked_autoexec(
             autoexec,
             tuple(deployed_chunks),
             akashic_modules,
             cold_source_codec=profile.cold_source_codec,
+            system_volume=system_volume,
         )
     autoexec = _with_userland_xmem_reserve(
         autoexec, profile.general_xmem_reserve_bytes,
@@ -28433,6 +28746,7 @@ def build_image(
                 autoexec,
                 profile.rich_terminal,
                 tuple(deployed_chunks),
+                volume_modules=akashic_modules if system_volume else (),
             )
     elif profile.rich_boot_progress:
         raise RuntimeError(
@@ -28446,7 +28760,7 @@ def build_image(
     paths = (
         set(generated_files) | resources
         if profile.linked
-        else set(akashic_modules) | resources
+        else set(deployed_modules) | resources
     )
     regular_initial_paths = {path for path, _ in profile.initial_files}
     cold_initial_paths = set(cold_source_initial_files)
@@ -28486,7 +28800,7 @@ def build_image(
     image_paths = paths | initial_paths
     directories = _directories(image_paths)
     _validate_module_ids(
-        modules,
+        tuple(dict.fromkeys((*deployed_modules, *modules))),
         profile.initial_files
         + profile.cold_source_initial_files
         + generated_validation_files,
@@ -28632,6 +28946,15 @@ def build_image(
         if profile.settings_files
         else None
     )
+    system = (
+        _build_system_image(
+            akashic_modules, system_image_path(target), system_volume_toolchain
+        )
+        if system_volume_toolchain is not None
+        else None
+    )
+    if system is None:
+        system_image_path(target).unlink(missing_ok=True)
 
     info = fs.info()
     if info["free_sectors"] * 512 < profile.minimum_free_bytes:
@@ -28649,6 +28972,7 @@ def build_image(
     print(
         f"Built {profile_name} image: {target}\n"
         f"  {len(modules)} modules"
+        f"{' on the system volume, ' + str(len(deployed_modules)) + ' to mount it' if system_volume else ''}"
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
         f"{cold_source_summary}"
         f"{'MegaPad networking, ' if requires_networking else ''}"
@@ -28672,6 +28996,14 @@ def build_image(
             f"\n  settings disk: {settings}"
             f"{' (asks for safe mode)' if settings_safe_mode else ''}"
             if settings is not None
+            else ""
+        )
+        + (
+            f"\n  system volume: {system['path']}, ext4, "
+            f"{system['bytes']:,} bytes in {system['block_bytes']}-byte "
+            f"blocks, {system['files']} files of {system['source_bytes']:,} "
+            f"bytes in {system['directories']} directories"
+            if system is not None
             else ""
         )
     )
@@ -29328,6 +29660,7 @@ def smoke(
         MEGAPAD_ROOT / "bios.asm",
         storage_image=image_path,
         settings_image=_settings_image_for(profile, image_path),
+        system_image=_system_image_for(image_path),
         cols=cols,
         rows=rows,
         batch_steps=500_000,
@@ -35130,9 +35463,15 @@ def _megapad_launcher(mode: str) -> list[str]:
     return [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", mode]
 
 
-def _settings_storage_arguments(profile: Profile, image_path: Path) -> tuple[str, ...]:
+def _storage_unit_arguments(profile: Profile, image_path: Path) -> tuple[str, ...]:
+    """The options that attach the disks built beside IMAGE_PATH: PROFILE's
+    settings disk and, when the build wrote one, the system volume."""
     settings = _settings_image_for(profile, image_path)
-    return () if settings is None else ("--settings-storage", str(settings))
+    system = _system_image_for(image_path)
+    return (
+        *(() if settings is None else ("--settings-storage", str(settings))),
+        *(() if system is None else ("--system-storage", str(system))),
+    )
 
 
 def _session_server_command(
@@ -35188,7 +35527,7 @@ def _session_server_command(
             *_megapad_launcher(backend),
             "--storage",
             str(image_path),
-            *_settings_storage_arguments(profile, image_path),
+            *_storage_unit_arguments(profile, image_path),
             "--socket",
             socket_path,
             "--ram-kib",
@@ -35225,7 +35564,7 @@ def _session_server_command(
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",
         str(image_path),
-        *_settings_storage_arguments(profile, image_path),
+        *_storage_unit_arguments(profile, image_path),
         "--socket",
         socket_path,
         "--cols",
@@ -37321,6 +37660,15 @@ def _parser() -> argparse.ArgumentParser:
                 "for safe mode"
             ),
         )
+        command.add_argument(
+            "--system-volume",
+            action="store_true",
+            help=(
+                "put the profile's modules on an ext4 system volume as plain "
+                "files and load them from it; the boot image then holds what "
+                "mounts that volume (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -37479,6 +37827,7 @@ def main() -> int:
         every_frame_checks=args.every_frame_checks,
         safe_mode=args.safe_mode,
         settings_safe_mode=args.settings_safe_mode,
+        system_volume=args.system_volume,
     )
     if args.command == "build":
         return 0

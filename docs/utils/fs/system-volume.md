@@ -64,3 +64,53 @@ also leaves the current VFS as it found it.
 `SYSVOL-SOURCE` throws `VFS-E-NOVOLUME` before a mount. A boot that went on
 after a failed mount therefore stops at that word and never selects a source
 that reads nothing.
+
+## An image that boots this way
+
+`local_testing/akashic_tui.py` builds any profile's images this way with
+`--system-volume`. The profile's module closure goes onto an ext4 image
+written beside the boot image, `<name>-system.img`: each module a plain file
+at its module path, with the repository's text and its comments. The boot
+image keeps KDOS, its system modules, the profile's resources and its
+samples. In the place of the profile's modules it holds the closure of this
+module, deployed as the profile deploys source: checked cold-source chunks
+for the Desktop, plain files for a profile that is not linked. `autoexec.f`
+loads that closure, runs the sequence above, and then runs the profile's own
+`REQUIRE` lines, which KDOS resolves as paths on the volume. `smoke`, `serve`
+and `accept` attach the volume as the third storage unit, and
+`physical_desktop_acceptance.py --system-volume` runs the canonical journey
+on a Desktop built this way. The option is off unless it is given.
+
+The volume is made by the pinned e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR`
+names, with the ext4 fixtures' profile
+(`local_testing/fixtures/ext4-profile/manifest.json`): 4 KiB blocks, 256-byte
+inodes, a 4 MiB journal and the feature set the driver is qualified against.
+Its UUID and directory hash seed derive from the modules' paths and digests,
+and its times are the profile's fixed time, so the same sources give the same
+image. The build checks the finished volume with `e2fsck` and against the
+profile's superblock facts, as the fixtures are checked.
+
+Its size follows from its content and from two things the driver requires of
+any volume it mounts:
+
+- Each file takes its bytes rounded up to whole blocks and each directory one
+  block. The journal is added, and an eighth of that sum for the filesystem's
+  own structures apart from its inode tables.
+- A block group spans eight times the block size in blocks, and every group
+  carries an inode table for one inode per 16,384 bytes of a full group,
+  whatever the volume's size. The driver's admission refuses another count.
+- A volume has at least two block groups. The driver takes the backup
+  superblock of the second group as its witness when it checks the journal,
+  at every mount, read-only ones included.
+
+The volume has as many groups as its content with their inode tables fills,
+and as give every file and directory an inode; it reaches far enough into
+its last group to hold that group's inode table, and its size is rounded up
+to a whole MiB. With 4 KiB blocks a group is 128 MiB, so the smallest volume
+is 131 MiB, most of it never written: the image file is sparse. With 1 KiB
+blocks a group is 8 MiB and the smallest volume 10 MiB.
+
+A module loaded this way is evaluated a line at a time by KDOS's loader, so
+it keeps the rules of a plain file: no line longer than 255 bytes, and a
+comment or a string that closes on its own line. Loads nest as `REQUIRE`
+lines do, and KDOS nests at most sixteen.

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import struct
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -165,7 +167,7 @@ from diskutil import (  # noqa: E402
     PARENT_ROOT,
     pack_forth_source,
 )
-from forth_dependencies import module_key  # noqa: E402
+from forth_dependencies import dependency_markers, module_key  # noqa: E402
 from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
@@ -1899,6 +1901,51 @@ def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
     assert len(boot_lines) == len(chunks) + 4
     assert all(line.endswith("CR TX-FLUSH") for line in boot_lines)
 
+    # With a system volume the chunks are the volume's driver, and the
+    # framework is ready after the last REQUIRE of a module the volume holds.
+    entry = akashic_tui.SYSTEM_VOLUME_BOOT_ENTRY
+    volume_autoexec = autoexec + (
+        f"{entry}\n"
+        "REQUIRE one.f\n"
+        "REQUIRE local_testing/fixture.f\n"
+        "REQUIRE two.f\n"
+        ": after ;\n"
+    )
+    volume = _with_rich_desktop_boot_progress(
+        volume_autoexec,
+        DESKTOP_APT1_RICH_TERMINAL_BASE,
+        chunks,
+        volume_modules=("one.f", "two.f"),
+    ).splitlines()
+    assert "framework source" not in "\n".join(volume)
+    assert volume[volume.index(f"_BOOT-COLD-SOURCE {chunks[0]}") - 1].startswith(
+        '." [akashic boot] volume driver source 01/03"'
+    )
+    assert volume[volume.index(f"_BOOT-COLD-SOURCE {chunks[-1]}") + 1].startswith(
+        '." [akashic boot] volume driver ready"'
+    )
+    assert volume[volume.index(entry) + 1].startswith(
+        '." [akashic boot] system volume mounted"'
+    )
+    assert volume[volume.index("REQUIRE two.f") + 1].startswith(
+        '." [akashic boot] framework ready"'
+    )
+    assert sum("[akashic boot] framework ready" in line for line in volume) == 1
+    # The volume is mounted once, after its driver and before its modules.
+    for broken in (
+        autoexec + "REQUIRE one.f\n",
+        autoexec + f"REQUIRE one.f\n{entry}\n",
+        autoexec + f"{entry}\n{entry}\nREQUIRE one.f\n",
+        autoexec + f"{entry}\n",
+    ):
+        with pytest.raises(RuntimeError, match="system volume mounted once"):
+            _with_rich_desktop_boot_progress(
+                broken,
+                DESKTOP_APT1_RICH_TERMINAL_BASE,
+                chunks,
+                volume_modules=("one.f",),
+            )
+
 
 @pytest.mark.parametrize(
     ("field", "value", "error"),
@@ -2671,6 +2718,339 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
     assert "PROVIDED akashic-tui-desk-apt1" in linked_source
     assert "PROVIDED akashic-tui-screen-backend-apt1" in linked_source
     assert "PROVIDED rich-terminal.f" not in linked_source
+
+
+def _pinned_ext4_tools() -> Path:
+    """The pinned e2fsprogs a system volume is built with; skips without."""
+    value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
+    if not value:
+        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR to build a system volume")
+    return Path(value).resolve()
+
+
+def _system_volume_files(
+    image: Path, modules: tuple[str, ...], tool_dir: Path, scratch: Path
+) -> dict[str, bytes]:
+    """Each module's bytes as the volume holds them, read back by debugfs."""
+    scratch.mkdir()
+    script = scratch / "dump.debugfs"
+    script.write_text(
+        "".join(
+            f"dump /{module} {scratch / f'file-{index}'}\n"
+            for index, module in enumerate(modules)
+        )
+    )
+    environment = {"LC_ALL": "C", "TZ": "UTC", "PATH": f"{tool_dir}:/usr/bin:/bin"}
+    dumped = subprocess.run(
+        [str(tool_dir / "debugfs"), "-f", str(script), str(image)],
+        env=environment, text=True, capture_output=True, check=False,
+    )
+    assert dumped.returncode == 0, dumped.stderr
+    checked = subprocess.run(
+        [str(tool_dir / "e2fsck"), "-f", "-n", str(image)],
+        env=environment, text=True, capture_output=True, check=False,
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    return {
+        module: (scratch / f"file-{index}").read_bytes()
+        for index, module in enumerate(modules)
+    }
+
+
+def test_system_volume_geometry_follows_its_content() -> None:
+    geometry = akashic_tui.system_volume_geometry
+    journal = 4 << 20
+    mib = 1 << 20
+
+    for block in (1024, 2048, 4096):
+        group = 8 * block * block
+        table = group // 16384 * 256
+        # A group's inodes are the profile's for a full group, which the
+        # driver's admission requires, and there are at least two groups:
+        # the second holds the journal check's witness.
+        size, groups, inodes = geometry((1,), 0, block)
+        assert (groups, inodes) == (2, 2 * (group // 16384))
+        # The volume reaches into its second group, past that group's table.
+        assert group + table < size <= 2 * group
+        assert size % mib == 0
+
+    # 1 KiB blocks: 8 MiB groups with 512 inodes and a 128 KiB table each.
+    # Files round up to whole blocks and each directory takes one; the
+    # journal and an eighth come on top, then the groups' inode tables.
+    sizes = (1024, 1025, 12 * mib)
+    content = (1 + 2 + 12 * mib // 1024 + 3) * 1024 + journal
+    needed = content + content // 8
+    size, groups, inodes = geometry(sizes, 3, 1024)
+    assert groups == -(-needed // (8 * mib - 128 * 1024)) == 3
+    assert inodes == 3 * 512
+    assert size == -(-(needed + 3 * 128 * 1024) // mib) * mib == 19 * mib
+    # Every file needs an inode, so many small files add groups.
+    size, groups, inodes = geometry((0,) * 2000, 0, 1024)
+    assert groups == -(-(2000 + 16) // 512) == 4
+    assert inodes == 2048
+    assert 3 * 8 * mib < size <= 4 * 8 * mib
+
+
+def test_system_volume_autoexec_mounts_then_keeps_the_profile_requires() -> None:
+    autoexec = (
+        "\\ a comment\n"
+        "ENTER-USERLAND\n"
+        "REQUIRE one.f\n"
+        "REQUIRE two.f\n"
+        "REQUIRE local_testing/fixture.f\n"
+        ": run  ( -- ) ;\n"
+    )
+    entry = akashic_tui.SYSTEM_VOLUME_BOOT_ENTRY
+    chunk = COLD_SOURCE_CHUNK_TEMPLATE.format(index=0)
+    packed = _linked_autoexec(
+        autoexec,
+        (chunk,),
+        ("one.f", "two.f"),
+        cold_source_codec=COLD_SOURCE_CODEC_STORED,
+        system_volume=True,
+    )
+    order = [
+        packed.index(piece)
+        for piece in (
+            "ENTER-USERLAND\n",
+            f"REQUIRE {COLD_SOURCE_LOADER_PATH}\n",
+            f"_BOOT-COLD-SOURCE {chunk}\n",
+            f": {entry}\n",
+            "SYSVOL-MOUNT ?DUP IF\n",
+            "SYSVOL-SOURCE MODULE-SOURCE! ;\n",
+            f"\n{entry}\n",
+            "REQUIRE one.f\n",
+            "REQUIRE two.f\n",
+            "REQUIRE local_testing/fixture.f\n",
+        )
+    ]
+    assert order == sorted(order)
+    assert packed.count("REQUIRE one.f\n") == packed.count("REQUIRE two.f\n") == 1
+    assert "SYSTEM VOLUME FAIL mount ior=" in packed
+    assert "SYSTEM VOLUME FAIL arena ior=" in packed
+    assert f"{akashic_tui.SYSTEM_VOLUME_ARENA_BYTES} A-XMEM ARENA-NEW" in packed
+
+    # A profile that is not linked has no chunks.  The mounting module is a
+    # file on the boot volume, and the autoexec is otherwise as written.
+    plain = _linked_autoexec(
+        autoexec, (), ("one.f", "two.f"), system_volume=True
+    )
+    lines = plain.splitlines()
+    mounted = lines.index(entry)
+    assert lines[:2] == ["\\ a comment", "ENTER-USERLAND"]
+    assert lines[2] == f"REQUIRE {akashic_tui.SYSTEM_VOLUME_MODULE}"
+    assert lines[mounted + 1 :] == autoexec.splitlines()[2:]
+    assert COLD_SOURCE_LOADER_PATH not in plain
+
+    with pytest.raises(RuntimeError, match="no linked REQUIRE"):
+        _linked_autoexec(
+            "ENTER-USERLAND\nREQUIRE local_testing/fixture.f\n",
+            (),
+            ("one.f",),
+            system_volume=True,
+        )
+
+
+def test_desktop_apt1_system_volume_build_moves_the_modules_to_ext4(
+    tmp_path: Path,
+) -> None:
+    tool_dir = _pinned_ext4_tools()
+    profile = PROFILES["desktop-apt1"]
+    modules = dependency_order((MP64FS_VFS_PLATFORM_MODULE, *profile.roots))
+    boot_modules = dependency_order((akashic_tui.SYSTEM_VOLUME_MODULE,))
+    assert len(boot_modules) < 30 < len(modules)
+
+    target = tmp_path / "akashic-desktop-apt1.img"
+    image = build_image("desktop-apt1", target, system_volume=True)
+    system = akashic_tui.system_image_path(image)
+    assert system == tmp_path / "akashic-desktop-apt1-system.img"
+    assert akashic_tui._system_image_for(image) == system
+
+    # The boot volume: the system modules, and in chunks only what mounts
+    # the system volume.
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    assert filesystem.read_file(MEGAPAD_RICH_TERMINAL_MODULE)
+    packed_names = sorted(
+        entry.name
+        for entry in filesystem.list_files()
+        if re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
+    )
+    linked_source = b"".join(
+        _unpack_cold_source(filesystem.read_file(name)) for name in packed_names
+    ).decode("utf-8")
+    assert "PROVIDED akashic-system-volume" in linked_source
+    assert "PROVIDED akashic-vfs-ext4" in linked_source
+    assert "PROVIDED akashic-tui-desk-apt1" not in linked_source
+    assert "PROVIDED akashic-tui-screen-backend-apt1" not in linked_source
+    boot_entries = sorted(
+        entry.name
+        for entry in filesystem.list_files()
+        if entry.name not in packed_names
+    )
+
+    # autoexec.f: the driver's chunks, the mount, then the profile's own
+    # REQUIREs, which KDOS now resolves on the system volume.
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    width = max(2, len(str(len(packed_names))))
+    milestones = [
+        autoexec.index("[akashic boot] system modules ready"),
+        autoexec.index("[akashic boot] checked source loader ready"),
+        *(
+            autoexec.index(
+                "[akashic boot] volume driver source "
+                f"{number:0{width}d}/{len(packed_names):0{width}d}"
+            )
+            for number in range(1, len(packed_names) + 1)
+        ),
+        autoexec.index(f"_BOOT-COLD-SOURCE {packed_names[-1]}"),
+        autoexec.index("[akashic boot] volume driver ready"),
+        autoexec.index(f"\n{akashic_tui.SYSTEM_VOLUME_BOOT_ENTRY}\n"),
+        autoexec.index("[akashic boot] system volume mounted"),
+        autoexec.index(f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}\n"),
+        *(autoexec.index(f"REQUIRE {root}\n") for root in profile.roots),
+        autoexec.index("[akashic boot] framework ready"),
+        autoexec.index("[akashic boot] Practice ready"),
+        autoexec.index("[akashic boot] app descriptors ready"),
+        autoexec.index("[akashic boot] entering Desk"),
+        autoexec.index("APT1-DESK-RUN"),
+    ]
+    assert milestones == sorted(milestones)
+    assert "[akashic boot] framework source" not in autoexec
+    assert autoexec.count("[akashic boot] framework ready") == 1
+
+    # The system volume: every module of the closure, byte for byte, at
+    # its module path, and a size that follows from them.
+    held = _system_volume_files(system, modules, tool_dir, tmp_path / "dump")
+    for module in modules:
+        assert held[module] == (SOURCE_ROOT / module).read_bytes(), module
+    assert system.stat().st_size == akashic_tui.system_volume_geometry(
+        tuple((SOURCE_ROOT / module).stat().st_size for module in modules),
+        len(akashic_tui._directories(set(modules))),
+        akashic_tui.SYSTEM_VOLUME_BLOCK_BYTES,
+    )[0]
+
+    # The same modules give the same volume.
+    again = build_image(
+        "desktop-apt1", tmp_path / "again" / "desktop.img", system_volume=True
+    )
+    assert akashic_tui.system_image_path(again).read_bytes() == system.read_bytes()
+
+    # A launch attaches it as the third storage unit, after the settings
+    # disk, on either kind of machine.
+    settings = akashic_tui.settings_image_path(image)
+    for backend in ("emulator", "simulator"):
+        command = _session_server_command(
+            "desktop-apt1", image, socket_path="/tmp/desktop-apt1.sock",
+            cols=100, rows=32, backend=backend,
+        )
+        storage = command.index("--storage")
+        assert command[storage : storage + 6] == [
+            "--storage", str(image),
+            "--settings-storage", str(settings),
+            "--system-storage", str(system),
+        ]
+
+    # A build without the option takes the volume away again.
+    build_image("desktop-apt1", target)
+    assert not system.exists()
+    assert akashic_tui._system_image_for(image) is None
+    command = _session_server_command(
+        "desktop-apt1", image, socket_path="/tmp/desktop-apt1.sock",
+        cols=100, rows=32,
+    )
+    assert "--system-storage" not in command
+    rebuilt = MP64FS(bytearray(image.read_bytes()))
+    assert b"SYSVOL-MOUNT" not in rebuilt.read_file("autoexec.f")
+    assert b"[akashic boot] framework source 01/" in rebuilt.read_file("autoexec.f")
+    # Its chunks apart, the boot volume held the same entries either way.
+    chunks = [
+        entry.name
+        for entry in rebuilt.list_files()
+        if re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
+    ]
+    assert len(chunks) > len(packed_names)
+    assert boot_entries == sorted(
+        entry.name for entry in rebuilt.list_files() if entry.name not in chunks
+    )
+
+
+def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:
+    """Plain files load as their REQUIRE lines nest, and KDOS keeps a fixed
+    number of loader frames.  Linked chunks never nested, so only a
+    system-volume boot meets the limit."""
+    limit = int(
+        re.search(
+            r"^(\d+) CONSTANT _LD-MAXLVL$",
+            (MEGAPAD_ROOT / "kdos.f").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        ).group(1)
+    )
+    profile = PROFILES["desktop-apt1"]
+    loaded = set(dependency_order((akashic_tui.SYSTEM_VOLUME_MODULE,)))
+    deepest = 0
+
+    def load(module: str, depth: int) -> None:
+        nonlocal deepest
+        if module in loaded:
+            return
+        loaded.add(module)
+        deepest = max(deepest, depth)
+        text = (SOURCE_ROOT / module).read_text(encoding="utf-8")
+        for marker in dependency_markers(text, module):
+            load(marker.normalized, depth + 1)
+
+    # autoexec.f is itself a load, and its REQUIREs nest inside it.
+    for root in (MP64FS_VFS_PLATFORM_MODULE, *profile.roots):
+        load(root, 2)
+    assert 2 < deepest <= limit
+
+
+def test_system_volume_build_asks_for_the_pinned_tools_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AKASHIC_E2FSPROGS_TOOL_DIR", raising=False)
+    target = tmp_path / "desktop.img"
+    with pytest.raises(RuntimeError, match="AKASHIC_E2FSPROGS_TOOL_DIR"):
+        build_image("desktop-apt1", target, system_volume=True)
+    # Nothing was written: no boot image waits for a volume that is absent.
+    assert not target.exists()
+    assert not akashic_tui.system_image_path(target).exists()
+
+
+def test_system_volume_serves_a_profile_that_is_not_linked(
+    tmp_path: Path,
+) -> None:
+    tool_dir = _pinned_ext4_tools()
+    profile = PROFILES["agent-widgets"]
+    assert not profile.linked
+    modules = dependency_closure(profile.roots)
+    boot_modules = dependency_closure((akashic_tui.SYSTEM_VOLUME_MODULE,))
+
+    image = build_image(
+        "agent-widgets", tmp_path / "agent-widgets.img", system_volume=True
+    )
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    # The boot volume holds the mounting module's closure as plain files.
+    for module in boot_modules:
+        parent, _, name = module.rpartition("/")
+        assert filesystem.read_file(
+            name, parent=filesystem.resolve_path("/" + parent)
+        ) == (SOURCE_ROOT / module).read_bytes(), module
+    assert not any(
+        entry.name == "prompt.f" for entry in filesystem.list_files()
+    )
+    lines = filesystem.read_file("autoexec.f").decode("utf-8").splitlines()
+    entry = lines.index(akashic_tui.SYSTEM_VOLUME_BOOT_ENTRY)
+    assert lines.index("ENTER-USERLAND") < lines.index(
+        f"REQUIRE {akashic_tui.SYSTEM_VOLUME_MODULE}"
+    ) < entry < lines.index("REQUIRE tui/widgets/prompt.f")
+
+    held = _system_volume_files(
+        akashic_tui.system_image_path(image), tuple(sorted(modules)),
+        tool_dir, tmp_path / "dump",
+    )
+    for module in modules:
+        assert held[module] == (SOURCE_ROOT / module).read_bytes(), module
 
 
 def test_rich_terminal_consumers_select_boot_module_not_source_dependency() -> None:

@@ -226,6 +226,71 @@ stores its linked source verbatim (see the MP64FS note below), so those
 container and sector figures are historical. `--max-steps` and `--timeout` remain available for
 explicit qualification budgets and override the profile defaults exactly.
 
+### Modules from the system volume
+
+`build`, `smoke`, `serve` and `accept` take `--system-volume`. The profile's
+Akashic modules then go onto an ext4 image written beside the boot image,
+`<image>-system.img`, each a plain file at its module path with the
+repository's text. The boot image keeps KDOS, its system modules, the
+profile's resources and its samples, and in place of the profile's modules it
+holds the closure of `utils/fs/system-volume.f`, deployed as the profile
+deploys source: the Desktop's checked cold-source chunks, or plain files for
+a profile that is not linked. `autoexec.f` loads that closure, mounts the
+volume read-only, selects it as KDOS's module source, and then runs the
+profile's own `REQUIRE` lines, which KDOS resolves as paths on the volume. A
+launch attaches the volume as the third storage unit, whose medium is
+write-protected. A build without the option removes the volume's image
+again. [`docs/utils/fs/system-volume.md`](../docs/utils/fs/system-volume.md)
+describes the module, the volume's geometry and the rule for its size.
+
+```bash
+export AKASHIC_E2FSPROGS_TOOL_DIR=~/.cache/fantasy-engine/e2fsprogs-1.47.4/sbin
+python3 local_testing/akashic_tui.py build \
+  --profile desktop-apt1 --backend simulator --system-volume
+python3 local_testing/physical_desktop_acceptance.py --system-volume \
+  --akashic-root . --megapad-root ../megapad \
+  --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
+```
+
+The build needs the pinned e2fsprogs of the ext4 fixtures; it stops before
+writing anything when `AKASHIC_E2FSPROGS_TOOL_DIR` does not name them. The
+option is off unless it is given: the canonical Desktop still boots from
+linked chunks on its boot volume.
+
+Measured for `desktop-apt1` at MegaPad `c723d121`, from reset to the line
+that says the guest is entering Desk. On the emulator, in instructions:
+
+| Phase | Linked chunks | System volume |
+|---|---|---|
+| BIOS and KDOS | 56 M | 56 M |
+| networking, rich terminal and the cold-source loader | 294 M | 292 M |
+| the volume's driver, 24 modules in 8 chunks | | 404 M |
+| the mount | | 12 M |
+| the profile's 310 modules | 2,642 M | 3,558 M |
+| the rest | under 2 M | 2 M |
+| total | 2,992 M | 4,324 M |
+
+In system cycles the totals are 3,716 M and 5,388 M. The modules are 52
+chunks of 6.32 MB compacted source in the first column and 309 files of
+9.53 MB in the second, read through 1,259 `REQUIRE` lines; eight of the
+files are read only to find that the driver's chunks had loaded them. KDOS's
+loader spends about 15,000 instructions on a line whether it holds code or a
+comment, so the 53,000 comment and blank lines of the plain files, with
+their indentation, are most of the difference: a volume holding the same
+modules compacted as the linker compacts them loaded in 812 M fewer.
+Resolving all 310 paths and then reading every file, without evaluating
+them, costs 148 M and 202 M. The system disk serves 11,986 single-block
+reads, 46.8 MiB for those files, because the driver reads the same group
+descriptor, inode-table and bitmap blocks again for each inode and each data
+block. With 1 KiB blocks the volume is 16 MiB where the default's is
+131 MiB, and the boot is 444 M instructions longer.
+
+In the native simulator the same boot takes 9.3 s where the linked one takes
+2.5 s; that is host time, and there the driver's own code is the larger part.
+After it the mount has used 190,640 bytes of its 524,288-byte arena, the
+dictionary is 212 KB larger for the driver, and 1.26 MB less extended memory
+is free.
+
 ## Integrated Library Rabbit/Burrow qualification
 
 The integrated executable closure was qualified at Akashic
