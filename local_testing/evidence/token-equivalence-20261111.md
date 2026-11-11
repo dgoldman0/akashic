@@ -197,8 +197,9 @@ The state list has 61 entries, in the test's `STATE`, each with the
 pairs it differs in and its reason. Of them 30 differ in both pairs: the
 allocator's mark, the boot volume's cached directory, bitmap and last
 request, the loader's and the cold-source loader's record of the file read
-last, the stamp, and three cells of the VFS's MP64FS binding. The rest
-differ only with the system volume: the loader's frames and names, the
+last, the stamp, and three cells of the VFS's MP64FS binding. One, a copy
+of the allocator's mark, differs only in the linked pair. The rest differ
+only with the system volume: the loader's frames and names, the
 switch that turns token loading on, the registry's buckets, and the private
 cells of the ext4 driver's and the VFS's routines, which describe a volume
 of source files in one boot and a volume of token files in the other. An
