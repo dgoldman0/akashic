@@ -312,32 +312,61 @@ larger part. After it the mount has used 190,640 bytes of its 524,288-byte
 arena, the dictionary is 212 KB larger for the driver, and 1.26 MB less
 extended memory is free.
 
-### Modules from their token form (prototype)
+### Modules from their token form
 
 `build`, `smoke`, `serve` and `accept` take `--token-modules`. A module's
 token form is a record of what the interpreter did with its source, which
 KDOS loads without splitting text and with one dictionary search for each
 name; MegaPad's `docs/token-modules-proposal-2026-11-11.md` describes it.
-The option is a prototype of that proposal and is off unless it is given.
+The option is off unless it is given, and the branch that holds it is not
+merged.
 
 The build then runs twice. It first builds the image from source for the
 simulator, in a scratch directory, and boots it there once with MegaPad's
 token recorder attached to the runtime, which gives every source file the
-boot loaded its token form. It then writes the image asked for with each
-file in that form: a linked chunk keeps its cold-source container and holds
-the token form in place of the source, `networking.f`, `rich-terminal.f`
-and the cold-source loader hold theirs under their own names, and with
-`--system-volume` each module's form sits beside it on the volume as
-`<module>t` (`utils/string.f`, `utils/string.ft`), where KDOS looks once
-`autoexec.f` has set `MODULE-TOKENS`. `autoexec.f` itself stays source. A
-file the recorded boot did not load as a file has no form and stays source.
+boot loaded its token form and the order the loads began in. It then writes
+the image asked for with each file in that form, in the source's place:
+
+- a linked chunk keeps its cold-source container and holds the token form;
+- `networking.f`, `rich-terminal.f` and the cold-source loader hold theirs
+  under their own names;
+- with `--system-volume` each module's form stands on the volume at the
+  module's path with a `t` added (`utils/string.ft` for `utils/string.f`),
+  where KDOS looks once `autoexec.f` has set `MODULE-TOKENS`, and the volume
+  holds no source. A module that the boot loads before it mounts the volume
+  has a file there that only names it, so that a `REQUIRE` of its path
+  finds it loaded.
+
+`autoexec.f` itself stays source. A file the recorded boot did not load as a
+file, or whose load cannot be replayed, has no token form: it stays source
+on the boot volume and is absent from a system volume without source, and
+the build's report lists it.
+
+Every token file is stamped for the image it is built into. KDOS uses it
+only on the BIOS, the KDOS, the boot script and the files before it that
+the image has, and ends the boot at a file that is not current, naming it:
+the volume was built for another system. An image is therefore built again
+whenever any of those change, the boot script included.
+
+`--keep-module-source`, with `--token-modules` and `--system-volume`, writes
+every module's source on the system volume as well, beside its token file.
+That is the volume of a system that edits its own modules. KDOS there
+checks each token file against its source too and loads the source of one
+that is out of date, naming it, together with every module loaded after it.
 
 ```bash
 python3 local_testing/akashic_tui.py build \
-  --profile desktop-apt1 --backend emulator --token-modules
+  --profile desktop-apt1 --backend emulator --system-volume --token-modules
 ```
 
-`physical_desktop_acceptance.py` takes the option as well.
+`physical_desktop_acceptance.py` takes both options. Three test files hold
+this to its rules: `test_token_modules_build.py` (what a build writes and
+that it boots, with a changed KDOS, boot script and module planted),
+`test_cold_source_tokens.py` (chunks that hold token forms) and
+`test_token_equivalence.py`, which boots the Desktop from source and from
+token forms on the emulator and accounts for every byte of the two
+dictionaries that differs. That last one is four emulator boots and runs
+alone.
 
 ## Integrated Library Rabbit/Burrow qualification
 

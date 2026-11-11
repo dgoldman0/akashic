@@ -109,7 +109,7 @@ CREATE T-FILE /MODULE-FILE ALLOT
 """
 
 
-def _volume(directory: Path, files: dict[str, str]) -> Path:
+def _volume(directory: Path, files: dict[str, str | bytes]) -> Path:
     """The primary ext4 image with FILES written into it."""
 
     tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
@@ -136,7 +136,7 @@ def _volume(directory: Path, files: dict[str, str]) -> Path:
     commands = [f"mkdir {path}" for path in EXT4_DIRECTORIES]
     for index, (path, text) in enumerate(files.items()):
         host = directory / f"file-{index}"
-        host.write_text(text)
+        host.write_bytes(text if isinstance(text, bytes) else text.encode())
         commands.append(f"write {host} {path}")
     script = directory / "modules.debugfs"
     script.write_text("\n".join(commands) + "\n")

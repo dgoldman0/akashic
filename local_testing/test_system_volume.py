@@ -201,6 +201,121 @@ def test_a_volume_that_is_not_ext4_is_refused() -> None:
     )
 
 
+# ---- token files on the volume -------------------------------------------------
+#
+# MegaPad's tests/token_module_cases.py holds the loader's cases on KDOS's
+# own filesystem, for the BIOS and for the simulator.  These run the ones
+# that depend on the module source through ext4: a token file is found by
+# its path with a t added, and the source that ships beside one is found
+# again in the file's own folder.  The token files are that suite's, whose
+# records give ten times what the source they name gives, so the value a
+# word has tells which form was loaded.
+
+
+def _token_machine(tmp_path: Path, files: dict[str, bytes]) -> Machine:
+    volume = module_source._volume(tmp_path, files).read_bytes()
+    machine = Machine(volume)
+    assert machine.run("524288 T-MOUNT") == (0,)
+    assert machine.run("SYSVOL-SOURCE MODULE-SOURCE!  -1 MODULE-TOKENS !") == ()
+    return machine
+
+
+def _said(machine: Machine) -> str:
+    return " ".join(machine.runtime.drain_uart_output().decode("latin-1").split())
+
+
+def _stamp(machine: Machine) -> int:
+    (value,) = machine.run("LOAD-STAMP @")
+    return value
+
+
+def test_a_volume_of_token_files_alone_loads_nested_modules(
+    tmp_path: Path,
+) -> None:
+    from tests.token_module_cases import A, B, stamps, tokens
+    from shared.token_form import pack_module_name_file
+
+    at = stamps(B, A)
+    machine = _token_machine(
+        tmp_path,
+        {
+            "/mods/lib/b.ft": tokens("b", 0, requires="a", stamp=at[0]),
+            "/mods/lib/a.ft": tokens("a", 11, stamp=at[1]),
+            # A module that was loaded before the volume was mounted.
+            "/mods/c.ft": pack_module_name_file(b"vms.early"),
+        },
+    )
+
+    assert machine.run("PROVIDED vms.early  REQUIRE mods/c.f") == ()
+    assert machine.run("REQUIRE mods/lib/b.f  B-WORD A-WORD") == (12, 11)
+    assert machine.run("REQUIRE mods/lib/b.f  REQUIRE /mods/lib/a.f") == ()
+    said = _said(machine)
+    assert said.count("[load-a]") == said.count("[load-b]") == 1
+    assert "not found" not in said and "cannot be loaded" not in said
+    assert _stamp(machine) == at[2]
+    assert machine.run("_LD-SP @ _LD-FROM-SP @") == (0, 0)
+
+
+def test_a_stale_token_file_on_the_volume_ends_the_load_and_is_named(
+    tmp_path: Path,
+) -> None:
+    from tests.token_module_cases import A, B, STALE, stamps, tokens
+
+    at = stamps(B, A)
+    machine = _token_machine(
+        tmp_path,
+        {
+            "/mods/lib/b.ft": tokens("b", 0, requires="a", stamp=at[0]),
+            # Recorded under another text of the file loaded before it.
+            "/mods/lib/a.ft": tokens("a", 11, stamp=stamps(B + b"\n", A)[1]),
+            "/mods/c.ft": tokens("c", 30, stamp=at[0])[:-3],
+        },
+    )
+
+    assert machine.run("' REQUIRE CATCH mods/lib/b.f") == (7,)
+    said = _said(machine)
+    assert STALE in said and "Token file a.ft cannot be loaded" in said
+    assert "b.ft" not in said
+    assert machine.run("[DEFINED] B-WORD [DEFINED] A-WORD") == (0, 0)
+    # A file whose sizes do not account for its bytes is refused as loudly.
+    assert machine.run("' REQUIRE CATCH mods/c.f") == (6,)
+    assert "Token file mods/c.ft cannot be loaded" in _said(machine)
+    assert machine.run("[DEFINED] C-WORD _LD-SP @ _LD-FROM-SP @") == (0, 0, 0)
+
+
+def test_a_source_beside_its_token_file_is_found_in_the_files_own_folder(
+    tmp_path: Path,
+) -> None:
+    from tests.token_module_cases import A, B, module, stamps, tokens
+
+    at = stamps(B, A)
+    edited = module("a", 12)
+    machine = _token_machine(
+        tmp_path,
+        {
+            "/mods/lib/b.f": B,
+            "/mods/lib/b.ft": tokens("b", 0, requires="a", stamp=at[0], beside=True),
+            "/mods/lib/a.f": edited,
+            "/mods/lib/a.ft": tokens("a", 110, says=11, stamp=at[1], beside=True),
+            # Current, with its source beside it: the token file is used.
+            "/mods/c.f": module("c", 30),
+            "/mods/c.ft": tokens("c", 300, says=30, stamp=stamps()[0], beside=True),
+        },
+    )
+
+    assert machine.run("REQUIRE mods/c.f  C-WORD") == (300,)
+    assert "out of date" not in _said(machine)
+    # c.ft was recorded first of all, so b.ft and a.ft are now out of date
+    # by their stamps, and a.ft by its source as well.
+    assert machine.run("REQUIRE mods/lib/b.f  B-WORD A-WORD") == (13, 12)
+    said = _said(machine)
+    assert "Token file mods/lib/b.ft is out of date: loading its source" in said
+    assert "Token file a.ft is out of date: loading its source" in said
+    assert "cannot be loaded" not in said
+    assert _stamp(machine) == stamps(module("c", 30), B, edited)[3]
+    assert machine.run("_LD-SP @ _LD-FROM-SP @") == (0, 0)
+
+
 def test_the_boot_sequence_runs_on_the_emulator(
     system_volume_path: Path,
 ) -> None:

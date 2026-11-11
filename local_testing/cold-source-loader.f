@@ -3,6 +3,7 @@
 \ =====================================================================
 \  Public API:
 \    COLD-SOURCE-LOAD  ( i*x "filename" -- j*x status )
+\    CSL-LAST-NAME     ( -- c-addr u )  The file the last load named.
 \
 \  The filename is parsed by OPEN, so this leaf is for short files in the
 \  current MegaPad directory.  It is synchronous, non-reentrant, and must
@@ -17,8 +18,8 @@
 \
 \  Required resident words are OPEN/FSIZE/FREAD/(FCLOSE-NOFS),
 \  ALLOCATE/FREE,
-\  CRC32-IEEE-BUF, SOURCE-EVALUATE-CHECKED, TOKEN-FILE? and
-\  TOKEN-EVALUATE-CHECKED.  FREE is void.
+\  CRC32-IEEE-BUF, SOURCE-EVALUATE-CHECKED, LOAD-STAMP-SOURCE,
+\  TOKEN-FILE? and TOKEN-EVALUATE-CHECKED.  FREE is void.
 \ =====================================================================
 
 PROVIDED akashic-cold-source-loader
@@ -88,6 +89,16 @@ VARIABLE _CSL-ZCODE
 VARIABLE _CSL-ZDIST
 VARIABLE _CSL-ZLEN
 VARIABLE _CSL-ZN
+
+\ The name OPEN parsed, kept for whoever reports a failed load: the
+\ loads inside a file use KDOS's name buffer again.
+CREATE _CSL-NAME 24 ALLOT
+_CSL-NAME 24 0 FILL
+: CSL-LAST-NAME  ( -- c-addr u )
+    _CSL-NAME 0
+    BEGIN
+        DUP 24 < IF 2DUP + C@ 0<> ELSE FALSE THEN
+    WHILE 1+ REPEAT ;
 
 : CSL-LAST-EVAL@  ( -- source-status ) _CSL-LAST-EVAL @ ;
 : CSL-LAST-THROW@  ( -- throw-code ) _CSL-LAST-THROW @ ;
@@ -222,11 +233,15 @@ VARIABLE _CSL-ZN
 
 \ A stored payload is source text or the token form of source text, which
 \ KDOS tells apart by its first bytes and runs with the same statuses.
+\ Either way the payload is a file of the load.  KDOS takes a token form
+\ into the stamp of the load itself; this loader tells it of source text,
+\ as KDOS's own loader does for the files it reads.
 : _CSL-EVAL-BODY  ( i*x -- j*x )
     _CSL-RAW-A @ _CSL-RAW-U @
     2DUP TOKEN-FILE? IF
         TOKEN-EVALUATE-CHECKED
     ELSE
+        2DUP LOAD-STAMP-SOURCE
         SOURCE-EVALUATE-CHECKED
     THEN
     DUP _CSL-LAST-EVAL !
@@ -303,7 +318,8 @@ _CSL-RESET 0 _CSL-BUSY !
 \ =====================================================================
 
 : _CSL-RUN  ( i*x -- j*x status )
-    OPEN DUP 0= IF DROP CSL-S-OPEN EXIT THEN _CSL-FD !
+    OPEN NAMEBUF _CSL-NAME 24 CMOVE
+    DUP 0= IF DROP CSL-S-OPEN EXIT THEN _CSL-FD !
     \ FREAD follows only the primary MP64FS extent.  Qualification media
     \ enforces this at build time; reject a mismatched file here as well.
     _CSL-FD @ 48 + @ IF CSL-S-SIZE EXIT THEN
