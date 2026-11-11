@@ -54,8 +54,8 @@ needed cannot stay.
 
 Running it
 ----------
-The test builds four images and boots each on the emulator, about seven
-minutes and 1.5 GiB at its peak, so it is a heavyweight run: one at a time.
+The test builds four images and boots each on the emulator, about four
+minutes and 1.7 GiB at its peak, so it is a heavyweight run: one at a time.
 It needs the pinned e2fsprogs that ``AKASHIC_E2FSPROGS_TOOL_DIR`` names for
 the system-volume pair.  Each pair's report is printed, and written to the
 folder ``AKASHIC_TOKEN_EQUIVALENCE_REPORTS`` names when it is set.  The
