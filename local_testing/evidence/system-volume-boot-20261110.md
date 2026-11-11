@@ -148,3 +148,30 @@ data read in extent runs (reads fall below a thousand).
 Decided on 2026-11-11: the loader's per-line cost is cut first, in MegaPad,
 and whether the option becomes the default is decided on the boot measured
 after that.
+
+### The boot after the loader's cost per line was cut (2026-11-11)
+
+MegaPad 6370590a, 0f8e2302 and 00074ef7 cut what the loader spends on each
+line: an `EVALUATE` saves only its caller's live input, a blank or comment
+line returns at once, and a BIOS `SCAN` finds each line's end. Measured as
+above at MegaPad 00074ef7 and Akashic 9d1ae0b3:
+
+| Phase | Linked chunks | System volume |
+|---|---|---|
+| BIOS and KDOS | 26 | 26 |
+| networking, rich terminal, cold-source loader | 86 | 86 |
+| the volume's driver, 24 modules in 8 chunks | | 136 |
+| the mount | | 12 |
+| the profile's 310 modules | 906 | 1,170 |
+| the rest | 2 | 2 |
+| total | 1,020 | 1,432 |
+
+In system cycles the totals are 1,324 M and 1,852 M, about 13 and 19 seconds
+at the SoC's 100 MHz. The boot from the system volume is now 40% longer than
+the linked one, where it was 45% longer, and both are about a third of what
+they were. Parsing, lookup and compiling are the largest share of either,
+about 430 M instructions of the module phase; MegaPad's
+`docs/performance/loader-line-cost-2026-11-11.md` has the profile. In the
+simulator the boots take the host time they took.
+
+On that state the physical journey passed linked and with the option.

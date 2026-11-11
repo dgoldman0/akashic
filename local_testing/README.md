@@ -274,39 +274,43 @@ volume's directory has free. Desk with one applet carries none either way.
 `test_system_volume.py` boots a small profile built with the option on the
 emulator.
 
-Measured for `desktop-apt1` at MegaPad `c723d121`, from reset to the line
+Measured for `desktop-apt1` at MegaPad `00074ef7`, from reset to the line
 that says the guest is entering Desk. On the emulator, in instructions:
 
 | Phase | Linked chunks | System volume |
 |---|---|---|
-| BIOS and KDOS | 56 M | 56 M |
-| networking, rich terminal and the cold-source loader | 294 M | 292 M |
-| the volume's driver, 24 modules in 8 chunks | | 404 M |
+| BIOS and KDOS | 26 M | 26 M |
+| networking, rich terminal and the cold-source loader | 86 M | 86 M |
+| the volume's driver, 24 modules in 8 chunks | | 136 M |
 | the mount | | 12 M |
-| the profile's 310 modules | 2,642 M | 3,558 M |
-| the rest | under 2 M | 2 M |
-| total | 2,992 M | 4,324 M |
+| the profile's 310 modules | 906 M | 1,170 M |
+| the rest | 2 M | 2 M |
+| total | 1,020 M | 1,432 M |
 
-In system cycles the totals are 3,716 M and 5,388 M. The modules are 52
+In system cycles the totals are 1,324 M and 1,852 M. The modules are 52
 chunks of 6.32 MB compacted source in the first column and 309 files of
 9.53 MB in the second, read through 1,259 `REQUIRE` lines; eight of the
-files are read only to find that the driver's chunks had loaded them. KDOS's
-loader spends about 15,000 instructions on a line whether it holds code or a
-comment, so the 53,000 comment and blank lines of the plain files, with
-their indentation, are most of the difference: a volume holding the same
-modules compacted as the linker compacts them loaded in 812 M fewer.
-Resolving all 310 paths and then reading every file, without evaluating
-them, costs 148 M and 202 M. The system disk serves 11,986 single-block
-reads, 46.8 MiB for those files, because the driver reads the same group
-descriptor, inode-table and bitmap blocks again for each inode and each data
-block. With 1 KiB blocks the volume is 16 MiB where the default's is
-131 MiB, and the boot is 444 M instructions longer.
+files are read only to find that the driver's chunks had loaded them. A
+blank or comment line returns from the evaluator at once, so the plain
+files' 53,000 such lines cost little. Before MegaPad's loader was made
+cheaper for each line the totals were 2,992 M and 4,324 M;
+[`evidence/system-volume-boot-20261110.md`](evidence/system-volume-boot-20261110.md)
+has both measurements, and MegaPad's
+`docs/performance/loader-line-cost-2026-11-11.md` where the cost went.
 
-In the native simulator the same boot takes 9.3 s where the linked one takes
-2.5 s; that is host time, and there the driver's own code is the larger part.
-After it the mount has used 190,640 bytes of its 524,288-byte arena, the
-dictionary is 212 KB larger for the driver, and 1.26 MB less extended memory
-is free.
+These figures were taken at MegaPad `c723d121` and the loader's change does
+not touch what they measure. Resolving all 310 paths and then reading every
+file, without evaluating them, costs 148 M and 202 M. The system disk serves
+11,986 single-block reads, 46.8 MiB for those files, because the driver
+reads the same group descriptor, inode-table and bitmap blocks again for
+each inode and each data block. With 1 KiB blocks the volume is 16 MiB where
+the default's is 131 MiB, and it asks the disk for 26,289 blocks.
+
+In the native simulator the same boot takes about 10 s where the linked one
+takes about 2.7 s; that is host time, and there the driver's own code is the
+larger part. After it the mount has used 190,640 bytes of its 524,288-byte
+arena, the dictionary is 212 KB larger for the driver, and 1.26 MB less
+extended memory is free.
 
 ## Integrated Library Rabbit/Burrow qualification
 
