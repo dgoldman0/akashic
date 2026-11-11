@@ -21,6 +21,7 @@ if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui  # noqa: E402
+import sample_documents  # noqa: E402
 from akashic_tui import (  # noqa: E402
     APP_SHELL_MODULE,
     COLD_SOURCE_CHUNK_TEMPLATE,
@@ -2972,6 +2973,65 @@ def test_desktop_apt1_system_volume_build_moves_the_modules_to_ext4(
     assert boot_entries == sorted(
         entry.name for entry in rebuilt.list_files() if entry.name not in chunks
     )
+
+
+def test_the_desktops_root_scrolls_without_its_source_chunks(
+    tmp_path: Path,
+) -> None:
+    """The physical journey turns the wheel one detent over File Explorer's
+    detail table.  The root must then list a detent more than the table
+    shows, with the journey's pointer file shown before and after the turn.
+    A linked Desktop's source chunks used to supply those rows, and a Desktop
+    whose modules are on the system volume has few of them.  The files an
+    image is built with meet the step by themselves, with a detent to spare
+    on either side for the files Desk and its applets create as they start.
+    """
+
+    from rich_terminal_desktop_acceptance import (
+        POINTER_LIST_FILE,
+        POINTER_WHEEL_ROWS,
+    )
+
+    rows = sample_documents.DESKTOP_TABLE_ROWS
+    spare = POINTER_WHEEL_ROWS
+    image = build_image("desktop-apt1", tmp_path / "akashic-desktop-apt1.img")
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    # File Explorer lists a folder by name, ignoring case.  The chunks apart,
+    # a system-volume build's root holds the same entries.
+    listing = sorted(
+        (
+            entry.name
+            for entry in filesystem.list_files()
+            if entry.parent == PARENT_ROOT
+            and not re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
+        ),
+        key=str.lower,
+    )
+    assert len(listing) >= rows + POINTER_WHEEL_ROWS + spare
+    place = listing.index(POINTER_LIST_FILE)
+    assert POINTER_WHEEL_ROWS + spare <= place <= rows - 1 - spare
+
+    # The documents are text a person wrote: short, plain, and named as
+    # files are.  None repeats a name the journeys give a file of their own.
+    documents = sample_documents.SAMPLES
+    assert set(documents) <= set(listing)
+    for name, content in documents.items():
+        assert re.fullmatch(r"[a-z]+(-[a-z]+)*\.(md|txt)", name), name
+        text = content.decode("ascii")
+        assert text.endswith("\n") and 0 < len(content) <= 512, name
+        assert max(map(len, text.splitlines())) <= 72, name
+    assert not set(documents) & {
+        "notes.txt", "renamed.txt", "large-copy.txt", "smoke.txt", "journey.txt",
+    }
+
+    # Desk with File Explorer alone keeps the root its checks were written
+    # for: they find their rows in the first view.
+    alone = build_image("desktop-apt1-fexp", tmp_path / "akashic-fexp-alone.img")
+    held = {
+        entry.name
+        for entry in MP64FS(bytearray(alone.read_bytes())).list_files()
+    }
+    assert POINTER_LIST_FILE in held and not set(documents) & held
 
 
 def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:

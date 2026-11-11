@@ -81,12 +81,10 @@ and `accept` attach the volume as the third storage unit, and
 `physical_desktop_acceptance.py --system-volume` runs the canonical journey
 on a Desktop built this way. The option is off unless it is given.
 
-The canonical journey does not pass on such a Desktop yet. It passes its
-first 27 stages and stops at File Explorer's wheel step, which needs a root
-listing at least three rows longer than the table shows. On the linked
-Desktop the 52 source chunks in the boot volume's root supply those rows;
-with the modules on the system volume the root lists eight. Given a root of
-the usual length the whole journey passes.
+The canonical journey passes on such a Desktop. File Explorer's wheel step
+needs a root listing at least three rows longer than its table shows. A
+linked Desktop's source chunks once supplied those rows; the Desktop's sample
+documents now do, in either build.
 
 The volume is made by the pinned e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR`
 names, with the ext4 fixtures' profile

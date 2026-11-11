@@ -257,14 +257,20 @@ writing anything when `AKASHIC_E2FSPROGS_TOOL_DIR` does not name them. The
 option is off unless it is given: the canonical Desktop still boots from
 linked chunks on its boot volume.
 
-The canonical journey does not pass with the option yet. It passes its first
-27 stages and stops at File Explorer's wheel step, which needs a root listing
-at least three rows longer than the table shows. The linked Desktop's 52
-source chunks supply those rows, and with the modules on the system volume
-the boot volume's root lists eight. With the root padded to its usual length
-in a build made only to check this, the whole journey passed in 147 seconds
-where the linked Desktop's takes 138. `test_system_volume.py` boots a small
-profile built with the option on the emulator.
+The canonical journey passes with the option. Its wheel step in File
+Explorer needs a root listing at least three rows longer than the 35 its
+table shows there. A linked Desktop's 52 source chunks used to supply those
+rows without the step naming them, and with the modules on the system volume
+the boot volume's root lists eight. The Desktop's sample documents
+(`sample_documents.py`), two dozen short notes and lists in text and
+Markdown, now make its root long enough by its own files in either build:
+the files the image is built with, the chunks apart, number three more than
+that step needs, and the journey's pointer file is in the first view with
+rows to spare above and below it. Only Desktop images, Desk with Pad and File
+Explorer, carry them; Desk with one applet keeps the short root its checks
+find their rows in.
+`test_system_volume.py` boots a small profile built with the option on the
+emulator.
 
 Measured for `desktop-apt1` at MegaPad `c723d121`, from reset to the line
 that says the guest is entering Desk. On the emulator, in instructions:

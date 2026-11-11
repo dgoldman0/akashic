@@ -330,6 +330,7 @@ from rich_terminal import text_rules  # noqa: E402
 import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
 import qoi_codec  # noqa: E402
+import sample_documents  # noqa: E402
 import sample_pdf  # noqa: E402
 import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
@@ -27056,23 +27057,34 @@ SAMPLE_FILES = {
     "grid.csv": GRID_SAMPLE,
 }
 
+DESK_MODULE = "tui/applets/desk/desk.f"
+PAD_MODULE = "tui/applets/pad/pad.f"
 FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
 
 
 def _sample_files(modules) -> dict[str, bytes]:
-    """The sample files an image carries: the text samples, and the sample
-    picture, document and PDFs (sample_pdf.py) on images with File Explorer,
-    the viewer that shows them.  Keeping them off the others keeps their
-    MP64FS directories small."""
+    """The sample files an image carries.  Every image has the text samples.
+    One with File Explorer, the viewer that shows them, has the sample
+    picture, document and PDFs as well (sample_pdf.py).  The Desktop, which
+    is Desk with Pad to write in and File Explorer to list what is written,
+    also has the notes and lists a person keeps (sample_documents.py): they
+    make its root folder a list long enough to scroll.  Keeping each kind off
+    the other images keeps their MP64FS directories small, and it leaves the
+    root of Desk with one applet as short as that applet's checks, which find
+    their rows in the first view, were written for."""
 
+    samples = dict(SAMPLE_FILES)
     if FEXPLORER_MODULE in modules:
-        return {
-            **SAMPLE_FILES,
-            SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
-            SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
-            **sample_pdf.SAMPLES,
-        }
-    return SAMPLE_FILES
+        samples.update(
+            {
+                SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
+                SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
+                **sample_pdf.SAMPLES,
+            }
+        )
+        if DESK_MODULE in modules and PAD_MODULE in modules:
+            samples.update(sample_documents.SAMPLES)
+    return samples
 
 def _row_shows(
     screen: TerminalSnapshot, row: int, left: int, span: int, line: str
