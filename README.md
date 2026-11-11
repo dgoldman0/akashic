@@ -353,6 +353,8 @@ has not yet been qualified.
 
 **Module source** (`fs/vfs-module-source.f`) lets KDOS's `LOAD` and `REQUIRE` read modules from a mounted VFS, an ext4 volume among them, through the loader's module-source record; see [vfs-module-source.md](docs/utils/fs/vfs-module-source.md).
 
+**System volume** (`fs/system-volume.f`) mounts the ext4 volume on the machine's system storage unit read-only and provides the module source a boot selects, so that the system's modules load as individual files from that volume; see [system-volume.md](docs/utils/fs/system-volume.md).
+
 ---
 
 ## Usage
