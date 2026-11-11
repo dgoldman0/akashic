@@ -45,6 +45,7 @@ REQUIRE uint-range.f
 -9  CONSTANT IMG-E-CAPACITY
 -10 CONSTANT IMG-E-SHORT
 -11 CONSTANT IMG-E-NOMEM
+-12 CONSTANT IMG-E-UNSUPPORTED
 
 \ Old private spellings are retained for source compatibility.
 IMG-E-IO       CONSTANT _IMG-ERR-IO
@@ -63,6 +64,24 @@ IMG-E-NOEXEC   CONSTANT _IMG-ERR-NOEXEC
 \   segment, reloc[u64], export[32], import[32]
 \ Export: u64 code offset, char name[24] (NUL padded, length 1..23)
 \ Import: u64 fixup offset, char name[24] (NUL padded, length 1..23)
+
+\ =====================================================================
+\ The system an image needs
+\ =====================================================================
+
+\ An image's segment is the machine code the compiler emitted.  It can be
+\ built from, and run in, only a dictionary whose compiled words are MP64
+\ machine code, and DICT-MACHINE-CODE? is the Forth system's own answer to
+\ that.  Where the answer is no, every word that builds or loads an image
+\ refuses with IMG-E-UNSUPPORTED before it changes anything.  The question
+\ is asked when a word runs, so this source is the same on every system.
+: IMG-VERIFY-SYSTEM  ( -- ior )
+    DICT-MACHINE-CODE? IF 0 ELSE IMG-E-UNSUPPORTED THEN ;
+
+\ Why no build is in progress: this system cannot hold one, or none was
+\ marked.
+: _IMG-NO-BUILD  ( -- ior )
+    IMG-VERIFY-SYSTEM ?DUP IF EXIT THEN IMG-E-STATE ;
 
 \ =====================================================================
 \ Build state
@@ -160,6 +179,10 @@ VARIABLE _img-import-entry
 \ =====================================================================
 
 : IMG-MARK  ( -- )
+    \ A system that cannot build an image marks nothing: no relocation
+    \ buffer is reserved, and each later build word answers
+    \ IMG-E-UNSUPPORTED.
+    IMG-VERIFY-SYSTEM IF EXIT THEN
     \ A second mark commits the previous undiscarded region and begins
     \ another one, preserving the historical IMG-MARK behaviour.
     0 _RELOC-ACTIVE !
@@ -176,7 +199,7 @@ VARIABLE _img-import-entry
     -1 _img-marked ! ;
 
 : IMG-DISCARD  ( -- ior )
-    _img-marked @ 0= IF IMG-E-STATE EXIT THEN
+    _img-marked @ 0= IF _IMG-NO-BUILD EXIT THEN
     0 _RELOC-ACTIVE !
     _img-reloc-buf @ _img-mark-latest @ DICT-ROLLBACK
     0 _img-marked !
@@ -185,7 +208,7 @@ VARIABLE _img-import-entry
 
 : IMG-PROVIDED  ( "token" -- )
     PARSE-NAME
-    _img-marked @ 0= IF IMG-E-STATE _IMG-LATCH DROP EXIT THEN
+    _img-marked @ 0= IF _IMG-NO-BUILD _IMG-LATCH DROP EXIT THEN
     PN-LEN @ DUP 0= OVER 23 > OR IF
         DROP IMG-E-FORMAT _IMG-LATCH DROP EXIT
     THEN
@@ -224,7 +247,7 @@ VARIABLE _img-import-entry
 
 : _IMG-EXPORT  ( xt name-a name-u -- ior )
     _img-u0 ! _img-a1 ! _img-a0 !
-    _img-marked @ 0= IF IMG-E-STATE EXIT THEN
+    _img-marked @ 0= IF _IMG-NO-BUILD EXIT THEN
     _img-u0 @ 0= _img-u0 @ 23 > OR IF IMG-E-EXPORT EXIT THEN
     _img-a0 @ _IMG-SEG-XT>ENTRY DUP 0= IF DROP IMG-E-EXPORT EXIT THEN
     DUP ENTRY>NAME _img-a1 @ _img-u0 @ _IMG-SAME? 0= IF
@@ -272,7 +295,7 @@ VARIABLE _img-import-entry
     ENTRY>NAME _img-a0 @ -ROT _IMG-ENTRY-NAMED _IMG-LATCH DROP ;
 
 : IMG-XMEM  ( -- )
-    _img-marked @ 0= IF IMG-E-STATE _IMG-LATCH DROP EXIT THEN
+    _img-marked @ 0= IF _IMG-NO-BUILD _IMG-LATCH DROP EXIT THEN
     _img-flags @ _IMG-FLAG-XMEM OR _img-flags ! ;
 
 \ =====================================================================
@@ -288,7 +311,7 @@ VARIABLE _img-import-entry
     1 _RELOC-COUNT +! ;
 
 : _IMG-FINALIZE  ( -- ior )
-    _img-marked @ 0= IF IMG-E-STATE EXIT THEN
+    _img-marked @ 0= IF _IMG-NO-BUILD EXIT THEN
     _img-finalized @ IF _img-build-error @ EXIT THEN
     0 _RELOC-ACTIVE !
     HERE _img-mark-base @ - _img-seg-size !
@@ -968,10 +991,12 @@ VARIABLE _img-load-entry
     _img-load-base @ 0 ;
 
 : IMG-LOAD-MEM  ( image-a image-u -- ior )
+    IMG-VERIFY-SYSTEM ?DUP IF NIP NIP EXIT THEN
     _IMG-VERIFY-MEM DUP 0<> IF EXIT THEN DROP
     _IMG-LOAD-VERIFIED NIP ;
 
 : IMG-LOAD-EXEC-MEM  ( image-a image-u -- xt ior )
+    IMG-VERIFY-SYSTEM ?DUP IF NIP NIP 0 SWAP EXIT THEN
     _IMG-VERIFY-MEM DUP 0<> IF 0 SWAP EXIT THEN DROP
     _imv-flags @ _IMG-FLAG-EXEC AND 0= IF 0 IMG-E-NOEXEC EXIT THEN
     _imv-entry @ _img-selected-offset !
@@ -980,6 +1005,7 @@ VARIABLE _img-load-entry
 
 : IMG-LOAD-EXPORT  ( image-a image-u name-a name-u -- xt ior )
     _img-request-len ! _img-request-name ! _img-u1 ! _img-a1 !
+    IMG-VERIFY-SYSTEM ?DUP IF 0 SWAP EXIT THEN
     _img-a1 @ _img-u1 @ _IMG-VERIFY-MEM DUP 0<> IF 0 SWAP EXIT THEN DROP
     _img-request-name @ _img-request-len @ _IMG-EXPORT-FIND-PARSED
     DUP 0<> IF

@@ -68,6 +68,7 @@ REQUIRE app-desc.f
 -138 CONSTANT ALOAD-E-UNEXPECTED        \ unexpected throw before load commit
 -139 CONSTANT ALOAD-E-QUARANTINE        \ unexpected throw after load commit
 -140 CONSTANT ALOAD-E-BUSY              \ recursive/concurrent loader entry
+-141 CONSTANT ALOAD-E-UNSUPPORTED       \ this system runs no machine code
 
 4096    CONSTANT ALOAD-MANIFEST-MAX     \ 4 KiB installed manifest hard cap
 1048576 CONSTANT ALOAD-IMAGE-MAX        \ 1 MiB installed image hard cap
@@ -536,19 +537,25 @@ VARIABLE _alp-path-char
     0 _aload-snapshot-valid ! 0 _aload-committed !
     0 _aload-busy ! ;
 
+\ An installed applet is a machine-code image.  A system whose dictionary
+\ holds no machine code cannot run one, so each entry refuses before it
+\ reads a manifest or an image.
 : ALOAD-FROM-MFT  ( mft -- desc status )
+    IMG-VERIFY-SYSTEM IF DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
     COREID 0<> IF DROP 0 ALOAD-E-CORE EXIT THEN
     _aload-busy @ IF DROP 0 ALOAD-E-BUSY EXIT THEN
     _ALOAD-API-RESET _aload-mft ! -1 _aload-busy !
     ['] _ALOAD-FROM-MFT-THUNK CATCH _ALOAD-API-FINISH ;
 
 : ALOAD-MANIFEST  ( doc-a doc-u -- desc status )
+    IMG-VERIFY-SYSTEM IF 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
     COREID 0<> IF 2DROP 0 ALOAD-E-CORE EXIT THEN
     _aload-busy @ IF 2DROP 0 ALOAD-E-BUSY EXIT THEN
     _ALOAD-API-RESET _alm-doc-u ! _alm-doc-a ! -1 _aload-busy !
     ['] _ALOAD-MANIFEST-THUNK CATCH _ALOAD-API-FINISH ;
 
 : ALOAD-PATH  ( manifest-path-a manifest-path-u -- desc status )
+    IMG-VERIFY-SYSTEM IF 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
     COREID 0<> IF 2DROP 0 ALOAD-E-CORE EXIT THEN
     _aload-busy @ IF 2DROP 0 ALOAD-E-BUSY EXIT THEN
     _ALOAD-API-RESET _alp-path-u ! _alp-path-a ! -1 _aload-busy !

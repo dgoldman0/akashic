@@ -4,11 +4,30 @@
 
 MF64 is a trusted-native transport format, not a sandbox or authenticity mechanism. Verification checks structure and resolves imports against the current dictionary. It does not authenticate an image, constrain imported authority, inspect native semantics, or provide unload isolation.
 
+## The system an image needs
+
+An image's segment is the machine code the BIOS compiler emitted. It can be built from, and run in, only a dictionary whose compiled words are MP64 machine code. The Forth system states that itself through BIOS `DICT-MACHINE-CODE?`: the BIOS answers true, and MegaPad's simulator and its hybrid mode answer false, because they keep each definition in another form.
+
+```forth
+IMG-VERIFY-SYSTEM  ( -- ior )
+```
+
+`IMG-VERIFY-SYSTEM` returns zero where images can be built and loaded and `IMG-E-UNSUPPORTED` elsewhere. It is the one statement of the rule. Every word that builds or loads an image applies it before changing anything:
+
+- `IMG-MARK` marks nothing and reserves no relocation storage, and each later build word (`IMG-DISCARD`, `IMG-EXPORT`, `IMG-ENTRY-NAMED`, `IMG-BUFFER-MAX`, `IMG-BUILD-INTO`, and the raw-file `IMG-SAVE` words) returns `IMG-E-UNSUPPORTED`. Definitions compiled after a refused mark stay in the dictionary as ordinary words, so a caller that compiles source for an image should ask `IMG-VERIFY-SYSTEM` first, as the application builder does.
+- `IMG-LOAD-MEM`, `IMG-LOAD-EXEC-MEM` and `IMG-LOAD-EXPORT`, and the raw-file `IMG-LOAD` words through them, return `IMG-E-UNSUPPORTED` without verifying, allocating or splicing.
+
+`IMG-VERIFY-MEM`, `IMG-EXPORT-FIND` and the raw-file inspection words work on every system: they read an image as data.
+
+The rule is asked when a word runs, not when this module is compiled, so the module's source is the same on every system.
+
 ## Memory API
 
 The primary API operates on counted memory buffers and is the interface VFS code should use:
 
 ```forth
+IMG-VERIFY-SYSTEM ( -- ior )
+
 IMG-MARK          ( -- )
 IMG-DISCARD       ( -- ior )
 IMG-PROVIDED      ( "token" -- )
@@ -46,7 +65,7 @@ IMG-DISCARD THROW
 
 Calling `IMG-MARK` again without first calling `IMG-DISCARD` preserves the historical behavior: the previous marked region is left committed in the live dictionary and a new build starts. Code that wants rollback must pair every mark with a successful discard.
 
-`IMG-DISCARD` stops tracking, restores the saved `LATEST`, and rolls `HERE` back through both the compiled segment and its reserved relocation buffer. It returns `IMG-E-STATE` if no build is marked. Building an image does not discard automatically; the live segment remains usable until the caller discards it.
+`IMG-DISCARD` stops tracking, restores the saved `LATEST`, and rolls `HERE` back through both the compiled segment and its reserved relocation buffer. It returns `IMG-E-STATE` if no build is marked, or `IMG-E-UNSUPPORTED` on a system that cannot mark one. Building an image does not discard automatically; the live segment remains usable until the caller discards it.
 
 ### Registration words
 
@@ -150,6 +169,7 @@ A successful load is permanent: binimg exposes no unload operation. The module i
 | -9 | `IMG-E-CAPACITY` | count cap or destination/file capacity exceeded |
 | -10 | `IMG-E-SHORT` | truncated header/body or short raw-file read |
 | -11 | `IMG-E-NOMEM` | DMA, dictionary, or XMEM allocation failed |
+| -12 | `IMG-E-UNSUPPORTED` | this system's dictionary holds no MP64 machine code, so it can neither build an image nor load one |
 
 The old private `_IMG-ERR-*` aliases remain only for source compatibility. New code should use the public `IMG-E-*` names.
 

@@ -2464,6 +2464,9 @@ CREATE _DESK-EV  24 ALLOT
 \ state lives in Desk's, since only Desk opens it.
 
 : _DESK-CATALOG-STATUS$  ( status -- a u )
+    DUP ALOAD-E-UNSUPPORTED = IF
+        DROP S" this system cannot run machine-code applets" EXIT
+    THEN
     DUP 0< IF DROP S" launch failed" EXIT THEN
     CASE
         ACAT-S-OK OF S" ready" ENDOF

@@ -1625,6 +1625,10 @@ VARIABLE _PBUILD-DIAG-U
     THEN ;
 
 : _PAD-BUILD-GENERIC-ERROR  ( status -- )
+    DUP ABUILD-E-UNSUPPORTED = IF
+        DROP S" Nothing was built: applets are machine code, and this system compiles none."
+        _PAD-OUTPUT-APPEND EXIT
+    THEN
     DUP ABUILD-E-SETUP = IF
         DROP S" Build service is not connected to Desk's catalog."
         _PAD-OUTPUT-APPEND EXIT

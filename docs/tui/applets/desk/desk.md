@@ -227,7 +227,11 @@ it, and pointer input outside it is ignored.  An open is only recorded by the
 list and carried out by Desk after the host's dispatch returns, so no slot is
 launched or closed from inside the launcher's own callbacks.  The overlay
 never takes focus or a taskbar entry, and closing it relays out the tiles.  Package resolution is manifest-bound:
-`ACE-MANIFEST$ ALOAD-PATH`.  Desk does not evaluate catalog text or load any
+`ACE-MANIFEST$ ALOAD-PATH`.  A package is a machine-code image, so on a system
+whose Forth is not compiled to machine code, as in MegaPad's simulator and its
+hybrid mode, the loader refuses with `ALOAD-E-UNSUPPORTED` before it reads
+anything and the status line says "this system cannot run machine-code
+applets"; every other loader failure reads "launch failed".  Desk does not evaluate catalog text or load any
 package during catalog activation.  Built-ins bind only when the exact
 component ID matches a queued descriptor.  The companion releaser calls
 `ALOAD-DESC-FREE` for loader-created package descriptors on replacement or

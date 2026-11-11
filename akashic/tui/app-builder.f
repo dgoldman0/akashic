@@ -57,6 +57,7 @@ REQUIRE ../math/sha3.f
 -211 CONSTANT ABUILD-E-PUBLISH
 -212 CONSTANT ABUILD-E-CATALOG
 -213 CONSTANT ABUILD-E-THROW
+-214 CONSTANT ABUILD-E-UNSUPPORTED
 
 4096   CONSTANT ABUILD-MANIFEST-MAX
 524288 CONSTANT ABUILD-SOURCE-MAX
@@ -316,6 +317,9 @@ VARIABLE _ab-max
 VARIABLE _ab-entry-xt
 
 : _AB-INSTALL-BODY  ( -- status )
+    \ An image is machine code.  A system whose dictionary holds none can
+    \ build nothing, and says so before a file is read or source compiled.
+    IMG-VERIFY-SYSTEM DUP IF ABUILD-E-UNSUPPORTED _AB-FAIL EXIT THEN DROP
     _ab-catalog @ 0= IF ABUILD-E-SETUP EXIT THEN
 
     _ab-path-a @ _ab-path-u @ ABUILD-MANIFEST-MAX _AB-READ-FILE

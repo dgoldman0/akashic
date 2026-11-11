@@ -24,7 +24,9 @@ The module is synchronous and non-reentrant. A recursive or concurrent call retu
 
 ## Build and install pipeline
 
-For one call, the builder:
+An image is MP64 machine code, so the builder first asks binimg's `IMG-VERIFY-SYSTEM` whether this system's dictionary holds any. Where it holds none, as in MegaPad's simulator and its hybrid mode, the call returns `ABUILD-E-UNSUPPORTED` with `IMG-E-UNSUPPORTED` as its detail, before a file is read or a line of source is compiled, and Pad's output says "Nothing was built: applets are machine code, and this system compiles none."
+
+Otherwise, for one call, the builder:
 
 1. exact-reads the project manifest through VFS, with a 4096-byte limit;
 2. parses and validates it as a project manifest;
@@ -116,5 +118,6 @@ so callers that need a longer lifetime must copy it.
 | -211 | `ABUILD-E-PUBLISH` | immutable VFS replacement or recovery failed |
 | -212 | `ABUILD-E-CATALOG` | catalog upsert or result lookup failed |
 | -213 | `ABUILD-E-THROW` | an unexpected throw occurred outside checked source evaluation |
+| -214 | `ABUILD-E-UNSUPPORTED` | this system's dictionary holds no machine code, so it cannot build an image; nothing was read or compiled |
 
 Unexpected throws are caught, reported as `ABUILD-E-THROW`, and followed by normal cleanup. If cleanup itself cannot discard an otherwise live image build, the builder reports `ABUILD-E-IMAGE` when no earlier error was already established.

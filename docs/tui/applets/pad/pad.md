@@ -190,6 +190,11 @@ rollback. The output pane shows that location, and F4 opens or focuses its
 source buffer and moves the cursor there. A later non-busy build replaces the
 retained diagnostic; failures before source validation provide no jump target.
 
+An applet image is MP64 machine code. On a system whose Forth is not compiled
+to machine code, as in MegaPad's simulator and its hybrid mode, the builder
+refuses before it reads the project, and the output pane says "Nothing was
+built: applets are machine code, and this system compiles none."
+
 ## File I/O
 
 Pad uses the abstract VFS API rather than KDOS directory internals. It

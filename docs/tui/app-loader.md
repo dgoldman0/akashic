@@ -28,7 +28,9 @@ The successful descriptor is one heap allocation containing the `APP-DESC` plus 
 
 ## Load pipeline
 
-The installed-manifest pipeline is deliberately ordered:
+An installed applet is an MF64 image of MP64 machine code. Each of the three load words first asks binimg's `IMG-VERIFY-SYSTEM` whether this system's dictionary holds machine code. Where it holds none, as in MegaPad's simulator and its hybrid mode, the word returns `0 ALOAD-E-UNSUPPORTED` before it reads a manifest or an image, and Desk's launcher shows "this system cannot run machine-code applets".
+
+Otherwise the installed-manifest pipeline is deliberately ordered:
 
 1. Run `MFT-VALIDATE-INSTALLED`.
 2. Open the declared image through VFS, require a size of 1 byte through 1 MiB, and exact-read it into a heap buffer.
@@ -98,5 +100,6 @@ Manifest statuses `MFT-E-NO-PACKAGE` through `MFT-E-ALLOC` (`-110` through `-119
 | -138 | `ALOAD-E-UNEXPECTED` | unexpected throw before the load commit |
 | -139 | `ALOAD-E-QUARANTINE` | unexpected throw after the load commit |
 | -140 | `ALOAD-E-BUSY` | recursive or concurrent loader entry |
+| -141 | `ALOAD-E-UNSUPPORTED` | this system's dictionary holds no machine code, so it cannot run an image; nothing was read |
 
 The loader is non-reentrant and intentionally does not hold a guard across VFS I/O. Call it synchronously on core 0.

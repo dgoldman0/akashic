@@ -46,6 +46,11 @@ APPI-SAVE my-app.m64              \ write image to disk
 |----------|-------|---------|
 | `_APPI-ERR-LOAD` | -100 | Image load failed (from `APPI-RUN`). The underlying binimg ior is printed before the throw. |
 
+On a system whose dictionary holds no machine code, binimg refuses both
+directions: `APPI-MARK` marks nothing, and `APPI-SAVE`, `APPI-LOAD` and
+`APPI-RUN` report `IMG-E-UNSUPPORTED` (-12). See
+[binimg](../utils/binimg.md), "The system an image needs".
+
 ## Guard Support
 
 When `GUARDED` is defined, all five public words are wrapped with
