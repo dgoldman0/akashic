@@ -312,6 +312,33 @@ larger part. After it the mount has used 190,640 bytes of its 524,288-byte
 arena, the dictionary is 212 KB larger for the driver, and 1.26 MB less
 extended memory is free.
 
+### Modules from their token form (prototype)
+
+`build`, `smoke`, `serve` and `accept` take `--token-modules`. A module's
+token form is a record of what the interpreter did with its source, which
+KDOS loads without splitting text and with one dictionary search for each
+name; MegaPad's `docs/token-modules-proposal-2026-11-11.md` describes it.
+The option is a prototype of that proposal and is off unless it is given.
+
+The build then runs twice. It first builds the image from source for the
+simulator, in a scratch directory, and boots it there once with MegaPad's
+token recorder attached to the runtime, which gives every source file the
+boot loaded its token form. It then writes the image asked for with each
+file in that form: a linked chunk keeps its cold-source container and holds
+the token form in place of the source, `networking.f`, `rich-terminal.f`
+and the cold-source loader hold theirs under their own names, and with
+`--system-volume` each module's form sits beside it on the volume as
+`<module>t` (`utils/string.f`, `utils/string.ft`), where KDOS looks once
+`autoexec.f` has set `MODULE-TOKENS`. `autoexec.f` itself stays source. A
+file the recorded boot did not load as a file has no form and stays source.
+
+```bash
+python3 local_testing/akashic_tui.py build \
+  --profile desktop-apt1 --backend emulator --token-modules
+```
+
+`physical_desktop_acceptance.py` takes the option as well.
+
 ## Integrated Library Rabbit/Burrow qualification
 
 The integrated executable closure was qualified at Akashic

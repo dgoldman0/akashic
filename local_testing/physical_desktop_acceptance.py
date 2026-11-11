@@ -39,6 +39,11 @@ volume, built beside the boot image and attached as the third storage unit,
 and the boot mounts that volume and loads them from it
 (utils/fs/system-volume.f).  The journey is the same one.  The build needs
 the pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names.
+
+With --token-modules the image is first built and booted from source in the
+simulator, which records what the interpreter does with each source file,
+and the Desktop then loads those files from their token forms (MegaPad's
+docs/token-modules-proposal-2026-11-11.md).  The journey is the same one.
 """
 from __future__ import annotations
 
@@ -170,6 +175,7 @@ def child(args) -> int:
         "safe_mode": args.safe_mode,
         "settings_safe_mode": args.settings_safe_mode,
         "system_volume": args.system_volume,
+        "token_modules": args.token_modules,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -193,6 +199,8 @@ def child(args) -> int:
         sys.argv.append("--settings-safe-mode")
     if args.system_volume:
         sys.argv.append("--system-volume")
+    if args.token_modules:
+        sys.argv.append("--token-modules")
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -231,6 +239,8 @@ def supervise(args) -> int:
         command.append("--settings-safe-mode")
     if args.system_volume:
         command.append("--system-volume")
+    if args.token_modules:
+        command.append("--token-modules")
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -248,6 +258,8 @@ def supervise(args) -> int:
         kind += ", safe mode from the system settings"
     if args.system_volume:
         kind += ", modules from the system volume"
+    if args.token_modules:
+        kind += ", modules from their token forms"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -381,6 +393,10 @@ def main() -> int:
                         help="put the Desktop's modules on an ext4 system "
                              "volume as plain files and load them from it "
                              "(needs AKASHIC_E2FSPROGS_TOOL_DIR)")
+    parser.add_argument("--token-modules", action="store_true",
+                        help="load the Desktop's source from its token "
+                             "forms, recorded from a source boot of the "
+                             "simulator when the image is built")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

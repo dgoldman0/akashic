@@ -27992,6 +27992,7 @@ def _linked_autoexec(
     *,
     cold_source_codec: int | None = None,
     system_volume: bool = False,
+    module_tokens: bool = False,
 ) -> str:
     """Replace linked source REQUIREs while retaining injected test leaves.
 
@@ -28025,6 +28026,9 @@ def _linked_autoexec(
         if not chunk_names:
             load_lines = [f"REQUIRE {SYSTEM_VOLUME_MODULE}"]
         load_lines.extend(SYSTEM_VOLUME_BOOT_LINES)
+        if module_tokens:
+            # The volume's modules have their token forms beside them.
+            load_lines.append(MODULE_TOKENS_BOOT_LINE)
     lines: list[str] = []
     inserted = False
     linked_modules = set(modules)
@@ -28343,6 +28347,7 @@ def _build_system_image(
     toolchain: tuple[dict, dict[str, str], dict],
     *,
     block_bytes: int = SYSTEM_VOLUME_BLOCK_BYTES,
+    token_files: dict[str, bytes] | None = None,
 ) -> dict[str, object]:
     """Write the system volume to TARGET: an ext4 image that holds each of
     MODULES as a plain file at its module path, the repository's text
@@ -28363,10 +28368,21 @@ def _build_system_image(
     sources = tuple(SOURCE_ROOT / module for module in modules)
     sizes = tuple(source.stat().st_size for source in sources)
     directories = _directories(set(modules))
+    # Each module's token form, when the build has one, goes beside it.
+    token_forms = {
+        module: form
+        for module, source in zip(modules, sources, strict=True)
+        if (form := _token_form(source.read_bytes(), token_files)) is not None
+    }
+    sizes += tuple(map(len, token_forms.values()))
     identity = hashlib.sha256(f"{block_bytes}\n".encode())
     for module, source in zip(modules, sources, strict=True):
         identity.update(
             f"{module}\0{hashlib.sha256(source.read_bytes()).hexdigest()}\n".encode()
+        )
+    for module, form in token_forms.items():
+        identity.update(
+            f"{module}{TOKEN_FORM_SUFFIX}\0{hashlib.sha256(form).hexdigest()}\n".encode()
         )
     digest = identity.digest()
     volume_bytes, groups, inodes = system_volume_geometry(
@@ -28425,6 +28441,13 @@ def _build_system_image(
         commands.append(f"write {module} /{module}")
         commands.append(f"sif /{module} mode 0100644")
     with tempfile.TemporaryDirectory(prefix="akashic-system-volume-") as scratch:
+        for number, (module, form) in enumerate(token_forms.items()):
+            if any(character.isspace() for character in scratch):
+                raise RuntimeError(f"scratch path holds white space: {scratch!r}")
+            staged = Path(scratch) / f"{number}.ft"
+            staged.write_bytes(form)
+            commands.append(f"write {staged} /{module}{TOKEN_FORM_SUFFIX}")
+            commands.append(f"sif /{module}{TOKEN_FORM_SUFFIX} mode 0100644")
         script = Path(scratch) / "populate.debugfs"
         script.write_text("\n".join(commands) + "\n", encoding="utf-8")
         populated = run(
@@ -28455,8 +28478,10 @@ def _build_system_image(
         "path": target,
         "bytes": volume_bytes,
         "block_bytes": block_bytes,
-        "files": len(modules),
-        "source_bytes": sum(sizes),
+        "files": len(modules) + len(token_forms),
+        "source_bytes": sum(sizes) - sum(map(len, token_forms.values())),
+        "token_files": len(token_forms),
+        "token_bytes": sum(map(len, token_forms.values())),
         "directories": len(directories),
         "uuid": spec["uuid"],
     }
@@ -28592,6 +28617,95 @@ def _with_safe_mode(autoexec: str, modules: tuple[str, ...]) -> str:
     return _after_last_require(autoexec, "CHK-WHY-BOOT CHK-SAFE-ON", "--safe-mode")
 
 
+# A module's token form sits beside it on a volume, named as the module
+# with a t added: utils/string.f, utils/string.ft.  KDOS reads it in the
+# module's place once MODULE-TOKENS is set.
+TOKEN_FORM_SUFFIX = "t"
+MODULE_TOKENS_BOOT_LINE = "-1 MODULE-TOKENS !"
+# The boot script stays source: it is the file a person edits to change
+# what the machine loads.
+TOKEN_FORM_SOURCE_ONLY = frozenset({"autoexec.f"})
+
+
+def _token_form(
+    content: bytes, token_files: dict[str, bytes] | None
+) -> bytes | None:
+    """The token form recorded for a source file with CONTENT, if any."""
+
+    if not token_files:
+        return None
+    return token_files.get(hashlib.sha256(content).hexdigest())
+
+
+def _record_token_files(image_path: Path, profile: Profile) -> dict[str, bytes]:
+    """Boot IMAGE_PATH from source in MegaPad's simulator with its token
+    recorder attached, and return each loaded source file's token form by
+    the SHA-256 of its text.
+
+    The record is made by the interpreter that loads the source, so the
+    builder keeps no reader of Forth for it.  A file whose load cannot be
+    replayed has no entry and stays source.
+    """
+
+    from shared.storage import STORAGE_UNIT_TABLE
+    from shared.token_form import TokenFormError
+    from simulator.image_bootstrap import prepare_image_bootstrap
+    from simulator.platform import create_one_core_address_space
+    from simulator.runtime import MegaForthRuntime
+    from simulator.server import _CANONICAL_HBW_MIB
+    from simulator.storage import HostedStorageService
+    from simulator.token_recorder import TokenRecorder
+
+    paths = (
+        image_path,
+        _settings_image_for(profile, image_path),
+        _system_image_for(image_path),
+        None,
+    )
+    services = {
+        unit.host_name: None
+        if unit_path is None
+        else HostedStorageService(
+            image_path=unit_path, write_protected=unit.write_protected
+        )
+        for unit, unit_path in zip(STORAGE_UNIT_TABLE, paths, strict=True)
+    }
+    memory = create_one_core_address_space(
+        bank0_size=DEFAULT_RAM_KIB << 10,
+        external_size=profile.default_ext_mem_mib << 20,
+        vram_size=DEFAULT_VRAM_MIB << 20,
+        hbw_size=_CANONICAL_HBW_MIB << 20,
+        initial_epoch_ms=time.time_ns() // 1_000_000,
+    )
+    memory.mmio.rtc.bind_monotonic_clock(time.monotonic_ns)
+    runtime = MegaForthRuntime(
+        memory=memory, **services, execution_backend="native"
+    )
+    recorder = TokenRecorder()
+    recorder.attach(runtime)
+    try:
+        prepare_image_bootstrap(
+            memory=memory,
+            **services,
+            terminal_cols=DESKTOP_ACCEPTANCE_COLS,
+            terminal_rows=DESKTOP_ACCEPTANCE_ROWS,
+            runtime=runtime,
+        )
+    except Exception as error:
+        raise RuntimeError(
+            "The source boot that records the token forms failed: "
+            f"{type(error).__name__}: {str(error)[:600]}\n"
+            + bytes(runtime.uart_output[-1200:]).decode("utf-8", "replace")
+        ) from error
+    token_files: dict[str, bytes] = {}
+    for unit in recorder.units:
+        try:
+            token_files[unit.digest] = unit.token_file()
+        except TokenFormError:
+            continue
+    return token_files
+
+
 def build_image(
     profile_name: str,
     output: Path | None = None,
@@ -28603,6 +28717,8 @@ def build_image(
     safe_mode: bool = False,
     settings_safe_mode: bool = False,
     system_volume: bool = False,
+    token_modules: bool = False,
+    token_files: dict[str, bytes] | None = None,
 ) -> Path:
     """Build PROFILE_NAME's boot image and the images of its other disks.
 
@@ -28612,7 +28728,48 @@ def build_image(
     utils/fs/system-volume.f in their place, deployed as the profile deploys
     its source.  autoexec.f then mounts the volume and keeps the profile's
     REQUIREs, which KDOS resolves as paths on it.
+
+    With TOKEN_MODULES the image is first built from source for the
+    simulator and booted there once with MegaPad's token recorder attached.
+    Every source file that boot loaded then goes into the image in its token
+    form: a linked chunk and a system module of the boot volume in the source
+    file's place, and a module of the system volume beside its source.
+    TOKEN_FILES gives those forms directly, by the SHA-256 of each source.
     """
+    if token_modules and token_files is None:
+        with tempfile.TemporaryDirectory(prefix="akashic-token-record-") as scratch:
+            with contextlib.redirect_stdout(sys.stderr):
+                recorded = build_image(
+                    profile_name,
+                    Path(scratch) / "source.img",
+                    codex_auth_checkpoint,
+                    backend="simulator",
+                    shadow_check=shadow_check,
+                    every_frame_checks=every_frame_checks,
+                    safe_mode=safe_mode,
+                    settings_safe_mode=settings_safe_mode,
+                    system_volume=system_volume,
+                )
+            token_files = _record_token_files(recorded, PROFILES[profile_name])
+        if not token_files:
+            raise RuntimeError("The recording boot loaded no source file")
+    token_bytes = [0, 0, 0]  # files, source bytes, token bytes
+
+    def tokens_for(name: str, content: bytes) -> bytes:
+        """CONTENT, or its token form when the build has one."""
+
+        form = (
+            None
+            if name in TOKEN_FORM_SOURCE_ONLY
+            else _token_form(content, token_files)
+        )
+        if form is None:
+            return content
+        token_bytes[0] += 1
+        token_bytes[1] += len(content)
+        token_bytes[2] += len(form)
+        return form
+
     profile, backend = _profile_backend(profile_name, backend)
     system_volume_toolchain = _system_volume_toolchain() if system_volume else None
     if settings_safe_mode and DESK_SYSTEM_SETTINGS not in profile.settings_files:
@@ -28679,7 +28836,14 @@ def build_image(
         else {}
     )
     deployed_chunks = linked_chunks
-    generated_files: dict[str, bytes] = dict(linked_chunks)
+    generated_files: dict[str, bytes] = (
+        {
+            name: tokens_for(name, source)
+            for name, source in linked_chunks.items()
+        }
+        if profile.cold_source_codec is None
+        else {}
+    )
     generated_validation_files: tuple[tuple[str, bytes], ...] = ()
     cold_source_initial_files: dict[str, bytes] = {}
     cold_source_raw_bytes = 0
@@ -28694,11 +28858,21 @@ def build_image(
                 "Cold source chunk limit exceeds the audited guest decoder "
                 f"bound of {COLD_SOURCE_RAW_MAX_BYTES} bytes"
             )
-        deployed_chunks = _container_linked_chunks(
-            linked_chunks,
-            COLD_SOURCE_RAW_MAX_BYTES,
-            codec=profile.cold_source_codec,
-        )
+        deployed_chunks = {
+            COLD_SOURCE_CHUNK_TEMPLATE.format(index=index): (
+                _pack_cold_source(
+                    source, COLD_SOURCE_RAW_MAX_BYTES,
+                    codec=profile.cold_source_codec,
+                )
+                if (form := tokens_for(name, source)) is source
+                # A token form is binary already; it is stored as it is.
+                else _pack_cold_source(
+                    form, COLD_SOURCE_RAW_MAX_BYTES,
+                    codec=COLD_SOURCE_CODEC_STORED,
+                )
+            )
+            for index, (name, source) in enumerate(linked_chunks.items())
+        }
         cold_source_raw_bytes = sum(map(len, linked_chunks.values()))
         cold_source_container_bytes = sum(map(len, deployed_chunks.values()))
         loader_source = (
@@ -28710,7 +28884,9 @@ def build_image(
             )
         generated_files = dict(deployed_chunks)
         loader_content = loader_source.read_bytes()
-        generated_files[COLD_SOURCE_LOADER_PATH] = loader_content
+        generated_files[COLD_SOURCE_LOADER_PATH] = tokens_for(
+            COLD_SOURCE_LOADER_PATH, loader_content
+        )
         generated_validation_files = (
             (COLD_SOURCE_LOADER_PATH, loader_content),
         )
@@ -28747,6 +28923,7 @@ def build_image(
             akashic_modules,
             cold_source_codec=profile.cold_source_codec,
             system_volume=system_volume,
+            module_tokens=bool(token_files) and system_volume,
         )
     autoexec = _with_userland_xmem_reserve(
         autoexec, profile.general_xmem_reserve_bytes,
@@ -28851,16 +29028,22 @@ def build_image(
     if requires_networking:
         fs.inject_file(
             "networking.f",
-            pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
+            tokens_for(
+                "networking.f",
+                pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
+            ),
             ftype=FTYPE_FORTH,
         )
     if requires_rich_terminal:
         fs.inject_file(
             MEGAPAD_RICH_TERMINAL_MODULE,
-            pack_forth_source(
-                (
-                    MEGAPAD_ROOT / MEGAPAD_RICH_TERMINAL_MODULE
-                ).read_bytes()
+            tokens_for(
+                MEGAPAD_RICH_TERMINAL_MODULE,
+                pack_forth_source(
+                    (
+                        MEGAPAD_ROOT / MEGAPAD_RICH_TERMINAL_MODULE
+                    ).read_bytes()
+                ),
             ),
             ftype=FTYPE_FORTH,
         )
@@ -28876,6 +29059,8 @@ def build_image(
             if not source.is_file():
                 raise FileNotFoundError(f"Missing Akashic resource: {path}")
             content = source.read_bytes()
+            if path.endswith(".f"):
+                content = tokens_for(path, content)
         disk_path = PurePosixPath(path)
         is_cold_source_chunk = (
             profile.cold_source_codec is not None
@@ -28964,7 +29149,10 @@ def build_image(
     )
     system = (
         _build_system_image(
-            akashic_modules, system_image_path(target), system_volume_toolchain
+            akashic_modules,
+            system_image_path(target),
+            system_volume_toolchain,
+            token_files=token_files,
         )
         if system_volume_toolchain is not None
         else None
@@ -29019,7 +29207,19 @@ def build_image(
             f"{system['bytes']:,} bytes in {system['block_bytes']}-byte "
             f"blocks, {system['files']} files of {system['source_bytes']:,} "
             f"bytes in {system['directories']} directories"
+            + (
+                f", {system['token_files']} token forms of "
+                f"{system['token_bytes']:,} bytes beside them"
+                if system["token_files"]
+                else ""
+            )
             if system is not None
+            else ""
+        )
+        + (
+            f"\n  token forms on the boot volume: {token_bytes[0]} files, "
+            f"{token_bytes[1]:,} source bytes -> {token_bytes[2]:,} bytes"
+            if token_files
             else ""
         )
     )
@@ -37685,6 +37885,15 @@ def _parser() -> argparse.ArgumentParser:
                 "mounts that volume (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
             ),
         )
+        command.add_argument(
+            "--token-modules",
+            action="store_true",
+            help=(
+                "load the profile's source from its token form: the image is "
+                "first built and booted from source in the simulator, which "
+                "records what the interpreter does with each file"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -37844,6 +38053,7 @@ def main() -> int:
         safe_mode=args.safe_mode,
         settings_safe_mode=args.settings_safe_mode,
         system_volume=args.system_volume,
+        token_modules=args.token_modules,
     )
     if args.command == "build":
         return 0
