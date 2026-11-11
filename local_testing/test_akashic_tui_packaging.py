@@ -2963,7 +2963,8 @@ def test_desktop_apt1_system_volume_build_moves_the_modules_to_ext4(
     rebuilt = MP64FS(bytearray(image.read_bytes()))
     assert b"SYSVOL-MOUNT" not in rebuilt.read_file("autoexec.f")
     assert b"[akashic boot] framework source 01/" in rebuilt.read_file("autoexec.f")
-    # Its chunks apart, the boot volume held the same entries either way.
+    # Its chunks apart, the boot volume held the same entries either way,
+    # and with the option the Desktop's sample documents beside them.
     chunks = [
         entry.name
         for entry in rebuilt.list_files()
@@ -2971,7 +2972,8 @@ def test_desktop_apt1_system_volume_build_moves_the_modules_to_ext4(
     ]
     assert len(chunks) > len(packed_names)
     assert boot_entries == sorted(
-        entry.name for entry in rebuilt.list_files() if entry.name not in chunks
+        [entry.name for entry in rebuilt.list_files() if entry.name not in chunks]
+        + list(sample_documents.SAMPLES)
     )
 
 
