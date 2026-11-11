@@ -7,11 +7,14 @@ driver, mount, select the source, and REQUIRE a tree of modules by path.
 The boot disk is an MP64FS image on the first unit and the system volume
 is the third unit, write-protected, as on a device.  The volume is the
 module-source suite's: the pinned profile's primary image with the module
-tree written into it by the pinned debugfs.  The last test runs the same
-sequence on the emulator, where the BIOS itself reaches the unit.
+tree written into it by the pinned debugfs.  One test runs the same
+sequence on the emulator, where the BIOS itself reaches the unit.  The last
+boots a profile the image builder made with --system-volume, on the
+emulator: its boot volume, its ext4 volume and its autoexec as built.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -263,3 +266,31 @@ def test_the_boot_sequence_runs_on_the_emulator(
     assert marker("B1") == "101 102 103 104 1 4 4"
     assert marker("B2") == "1 1 0 0"
     assert bytes(attached[0]._image_data) == volume
+
+
+def test_a_profile_built_with_its_modules_on_the_volume_boots_on_the_emulator(
+    tmp_path: Path,
+) -> None:
+    """The image builder's --system-volume path end to end, through the BIOS.
+
+    The profile is not linked, so KDOS loads the mounting module's closure,
+    the ext4 driver in it, as plain files from the boot volume.  autoexec.f
+    then mounts the volume the build wrote and runs the profile's own
+    REQUIREs, which resolve on ext4, and the profile's contract checks must
+    pass as they do when its modules sit on the boot volume.
+    """
+
+    if not os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR"):
+        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR to build a system volume")
+    import akashic_tui
+
+    profile = "media-type-contracts"
+    assert not akashic_tui.PROFILES[profile].linked
+    image = akashic_tui.build_image(
+        profile, tmp_path / "volume-boot.img", system_volume=True
+    )
+    assert akashic_tui.system_image_path(image).is_file()
+    max_steps, timeout = akashic_tui._smoke_limits(profile, None, None)
+    assert akashic_tui.smoke(
+        profile, image, cols=100, rows=32, max_steps=max_steps, timeout=timeout
+    )
