@@ -324,8 +324,8 @@ merged.
 The build then runs twice. It first builds the image from source for the
 simulator, in a scratch directory, and boots it there once with MegaPad's
 token recorder attached to the runtime, which gives every source file the
-boot loaded its token form and the order the loads began in. It then writes
-the image asked for with each file in that form, in the source's place:
+boot loaded its token form. It then writes the image asked for with each
+file in that form, in the source's place:
 
 - a linked chunk keeps its cold-source container and holds the token form;
 - `networking.f`, `rich-terminal.f` and the cold-source loader hold theirs
@@ -342,17 +342,18 @@ file, or whose load cannot be replayed, has no token form: it stays source
 on the boot volume and is absent from a system volume without source, and
 the build's report lists it.
 
-Every token file is stamped for the image it is built into. KDOS uses it
-only on the BIOS, the KDOS, the boot script and the files before it that
-the image has, and ends the boot at a file that is not current, naming it:
-the volume was built for another system. An image is therefore built again
-whenever any of those change, the boot script included.
+Every token file states the system its image boots, by the BIOS's
+`BOOT-ID`: the BIOS's code and the image's KDOS. KDOS uses the file on that
+system only and ends the boot at a file built for another, naming it: the
+volume was built for another system. An image is therefore built again
+when the BIOS or KDOS changes. An edit to the boot script changes nothing.
 
 `--keep-module-source`, with `--token-modules` and `--system-volume`, writes
 every module's source on the system volume as well, beside its token file.
 That is the volume of a system that edits its own modules. KDOS there
-checks each token file against its source too and loads the source of one
-that is out of date, naming it, together with every module loaded after it.
+checks each token file against its source too, by length and CRC-32, and
+loads the source of a module that was edited, naming it. No other module is
+affected.
 
 ```bash
 python3 local_testing/akashic_tui.py build \
@@ -361,7 +362,8 @@ python3 local_testing/akashic_tui.py build \
 
 `physical_desktop_acceptance.py` takes both options. Three test files hold
 this to its rules: `test_token_modules_build.py` (what a build writes and
-that it boots, with a changed KDOS, boot script and module planted),
+that it boots, with a changed KDOS, an edited boot script and an edited
+module planted),
 `test_cold_source_tokens.py` (chunks that hold token forms) and
 `test_token_equivalence.py`, which boots the Desktop from source and from
 token forms on the emulator and accounts for every byte of the two

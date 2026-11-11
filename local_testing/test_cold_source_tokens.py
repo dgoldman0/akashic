@@ -4,8 +4,7 @@ A linked chunk of a token build keeps its AKSRC001 container and holds the
 chunk's token form in place of its source (MegaPad's
 docs/token-modules-proposal-2026-11-11.md).  The loader hands a payload
 that begins as a token file to KDOS's TOKEN-EVALUATE-CHECKED and any other
-to SOURCE-EVALUATE-CHECKED, after telling KDOS that the load of a source
-file begins, so that the stamp of the load holds every chunk in order.
+to SOURCE-EVALUATE-CHECKED.
 
 These tests run the loader in the simulator with containers on the boot
 disk.  The token files are those of MegaPad's tests/token_module_cases.py.
@@ -23,12 +22,11 @@ from simulator.platform import create_one_core_address_space
 from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 from test_textarea import MEGAPAD_ROOT
-from tests.token_module_cases import A, C, STALE, stamps, tokens
+from tests.token_module_cases import OTHER_SYSTEM, tokens
 
 LOADER = Path(__file__).resolve().with_name("cold-source-loader.f")
 EVALUATE_FAILED = 12
 PLAIN = b": S-WORD 7 ;\n"
-START = stamps()[0]
 
 
 def _container(payload: bytes) -> bytes:
@@ -77,66 +75,42 @@ class Machine:
         return self.said()
 
 
-def test_token_and_source_chunks_load_in_order_under_one_stamp() -> None:
-    at = stamps(A, PLAIN)
+def test_token_and_source_chunks_load_in_whatever_order() -> None:
     machine = Machine(
         {
-            "tok-a.src": _container(tokens("a", 11, stamp=at[0])),
+            "tok-a.src": _container(tokens("a", 11)),
             "src-s.src": _container(PLAIN),
-            "tok-c.src": _container(tokens("c", 30, stamp=at[2])),
+            "tok-c.src": _container(tokens("c", 30)),
         }
     )
 
-    assert machine.run("COLD-SOURCE-LOAD tok-a.src  A-WORD") == (0, 11)
-    assert machine.run("COLD-SOURCE-LOAD src-s.src  S-WORD") == (0, 7)
-    # The source chunk is part of the stamp: the token chunk recorded after
-    # it is current only because the loader said that its load began.
+    # A token chunk is used when it was built for this system, whatever was
+    # loaded before it: another token chunk, a source chunk, or nothing.
     assert machine.run("COLD-SOURCE-LOAD tok-c.src  C-WORD") == (0, 30)
-    assert machine.run("LOAD-STAMP @") == (stamps(A, PLAIN, C)[3],)
-    assert machine.named() == "tok-c.src"
+    assert machine.run("COLD-SOURCE-LOAD src-s.src  S-WORD") == (0, 7)
+    assert machine.run("COLD-SOURCE-LOAD tok-a.src  A-WORD") == (0, 11)
+    assert machine.named() == "tok-a.src"
     assert "cannot" not in machine.said()
 
 
-def test_a_source_chunk_with_another_text_makes_the_next_token_chunk_stale() -> None:
-    at = stamps(A, PLAIN)
-    machine = Machine(
-        {
-            "tok-a.src": _container(tokens("a", 11, stamp=at[0])),
-            "src-s.src": _container(b": S-WORD 8 ;\n"),
-            "tok-c.src": _container(tokens("c", 30, stamp=at[2])),
-        }
-    )
-
-    assert machine.run("COLD-SOURCE-LOAD tok-a.src") == (0,)
-    assert machine.run("COLD-SOURCE-LOAD src-s.src  S-WORD") == (0, 8)
-    here = machine.run("HERE LATEST")
-    assert machine.run("COLD-SOURCE-LOAD tok-c.src  CSL-LAST-EVAL@") == (
-        EVALUATE_FAILED, 7,
-    )
-    assert STALE in machine.said()
-    assert machine.named() == "tok-c.src"
-    assert machine.run("[DEFINED] C-WORD") == (0,)
-    assert machine.run("HERE LATEST") == here
-
-
 def test_a_token_chunk_that_cannot_be_replayed_is_reported_and_leaves_nothing() -> None:
-    good = tokens("a", 11, stamp=START)
+    good = tokens("a", 11)
     machine = Machine(
         {
-            "stale.src": _container(tokens("a", 11, stamp=START ^ 1)),
+            "other.src": _container(tokens("a", 11, boot_id=1)),
             "cut.src": _container(good[:-3]),
-            "none.src": _container(tokens("a", 11, stamp=0)),
+            "none.src": _container(tokens("a", 11, boot_id=0)),
             "good.src": _container(good),
         }
     )
     here = machine.run("HERE LATEST")
 
-    for name, status in (("stale.src", 7), ("cut.src", 6), ("none.src", 7)):
+    for name, status in (("other.src", 7), ("cut.src", 6), ("none.src", 7)):
         assert machine.run(f"COLD-SOURCE-LOAD {name}  CSL-LAST-EVAL@") == (
             EVALUATE_FAILED, status,
         ), name
         said = machine.said()
-        assert (STALE in said) == (status == 7), name
+        assert (OTHER_SYSTEM in said) == (status == 7), name
         assert machine.named() == name
         assert machine.run("[DEFINED] A-WORD") == (0,)
         assert machine.run("HERE LATEST") == here

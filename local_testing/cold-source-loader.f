@@ -18,8 +18,8 @@
 \
 \  Required resident words are OPEN/FSIZE/FREAD/(FCLOSE-NOFS),
 \  ALLOCATE/FREE,
-\  CRC32-IEEE-BUF, SOURCE-EVALUATE-CHECKED, LOAD-STAMP-SOURCE,
-\  TOKEN-FILE? and TOKEN-EVALUATE-CHECKED.  FREE is void.
+\  CRC32-IEEE-BUF, SOURCE-EVALUATE-CHECKED, TOKEN-FILE? and
+\  TOKEN-EVALUATE-CHECKED.  FREE is void.
 \ =====================================================================
 
 PROVIDED akashic-cold-source-loader
@@ -233,15 +233,11 @@ _CSL-NAME 24 0 FILL
 
 \ A stored payload is source text or the token form of source text, which
 \ KDOS tells apart by its first bytes and runs with the same statuses.
-\ Either way the payload is a file of the load.  KDOS takes a token form
-\ into the stamp of the load itself; this loader tells it of source text,
-\ as KDOS's own loader does for the files it reads.
 : _CSL-EVAL-BODY  ( i*x -- j*x )
     _CSL-RAW-A @ _CSL-RAW-U @
     2DUP TOKEN-FILE? IF
         TOKEN-EVALUATE-CHECKED
     ELSE
-        2DUP LOAD-STAMP-SOURCE
         SOURCE-EVALUATE-CHECKED
     THEN
     DUP _CSL-LAST-EVAL !

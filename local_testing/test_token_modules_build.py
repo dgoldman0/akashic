@@ -2,17 +2,17 @@
 
 A build with --token-modules boots the image once from source in MegaPad's
 simulator, records what the interpreter does with each file, and writes
-each file in its token form, stamped for the image (MegaPad's
+each file in its token form, built for the system the image boots (MegaPad's
 docs/token-modules-proposal-2026-11-11.md).  A system volume then holds
 token files and no source, and --keep-module-source writes the source
 beside them.
 
-The first tests hold the builder's own part to its rules on small
-recordings.  The last two build Desk with File Explorer both ways, read
-the volume back, boot it in the simulator, and plant one fault each: a
-changed KDOS or boot script must end the boot of a volume without source,
-loudly and by name, and an edited module must load from its source where
-the source ships, taking the modules after it with it.  Each build boots
+The first tests hold the builder's own part to its rules.  The last two
+build Desk with File Explorer both ways, read the volume back, boot it in
+the simulator, and plant faults.  On a volume without source a changed KDOS
+ends the boot, loudly and by name, and an edited boot script changes
+nothing.  Where the source ships, an edited module loads from its source
+and every other module still loads from its token file.  Each build boots
 the image once to record it, so those two take about a minute each; they
 need the pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names.
 """
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import zlib
 from pathlib import Path
 
 import pytest
@@ -37,57 +38,30 @@ from akashic_tui import (
 )
 from diskutil import FLAG_SYSTEM, FTYPE_FORTH, MP64FS
 from forth_dependencies import PROVIDED_RE
-from shared.boot_identity import boot_identity, stamp_start, stamp_take, text_identity
+from shared.boot_identity import boot_identity
 from shared.token_form import is_token_file, unpack_token_file
-from tests.token_module_cases import RECORDED_SOURCES, record, stamps
+from tests.token_module_cases import OTHER_SYSTEM, RECORDED_SOURCES, record
 
 PROFILE = "desktop-apt1-fexp"
-STALE = "Token form recorded on another system: this volume was built for another system"
 
 
-# ---- the recording a build keeps -------------------------------------------
+# ---- the builder's own part -------------------------------------------------
 
 
-def test_a_recording_stamps_each_form_for_the_image_it_goes_into() -> None:
+def test_a_token_form_states_the_system_its_image_boots() -> None:
     recorder, _ = record(RECORDED_SOURCES, "top.f")
-    recording = akashic_tui._TokenRecording(recorder)
-    top, lib = RECORDED_SOURCES["top.f"], RECORDED_SOURCES["lib.f"]
+    token_files = {unit.digest: unit.token_file() for unit in recorder.units}
+    lib = RECORDED_SOURCES["lib.f"]
 
-    with pytest.raises(RuntimeError, match="not fixed yet"):
-        recording.form(lib)
-    # The first file loaded is the boot script.  The image writes it again,
-    # so its text there, and the image's own BOOT-ID, set every stamp.
-    script = top + b"\\ the line an image adds\n"
-    recording.stamp(1234, script)
-    form = unpack_token_file(recording.form(lib))
-    assert form.stamp == stamps(script, lib, boot=1234)[1]
-    assert form.stamp != stamps(top, lib, boot=1234)[1]
-    assert (form.text_identity, form.source_beside) == (text_identity(lib), False)
-    assert unpack_token_file(recording.form(lib, source_beside=True)).source_beside
-    # The script itself stays source, and so does a text that was not loaded.
-    assert recording.form(top) is None
-    assert recording.form(b": NEVER-LOADED ;\n") is None
-
-
-def test_a_recording_refuses_a_boot_the_stamp_could_not_follow() -> None:
-    # A file that takes entries out of the dictionary has no token form.
-    # It ends its load before the first token file begins, so KDOS, which
-    # starts the stamp there, would leave it out.
-    sources = {
-        "boot.f": b"LOAD undo.f\nLOAD after.f\n",
-        "undo.f": b": U-ONE 1 ;\nHERE LATEST DICT-ROLLBACK\n",
-        "after.f": b": AFTER 2 ;\n",
-    }
-    recorder, _ = record(sources, "boot.f")
-    recording = akashic_tui._TokenRecording(recorder)
-    with pytest.raises(RuntimeError, match="ends its load before the first token file"):
-        recording.stamp(1, sources["boot.f"])
-
-    # One text loaded twice would need two stamps in one file.
-    twice = {"boot.f": b"LOAD same.f\nLOAD same.f\n", "same.f": b": SAME 1 ;\n"}
-    recorder, _ = record(twice, "boot.f")
-    with pytest.raises(RuntimeError, match="one source text twice"):
-        akashic_tui._TokenRecording(recorder)
+    form = unpack_token_file(akashic_tui._token_form(lib, token_files, 1234))
+    assert (form.boot_id, form.source_beside) == (1234, False)
+    assert (form.source_bytes, form.source_crc32) == (len(lib), zlib.crc32(lib))
+    beside = akashic_tui._token_form(lib, token_files, 1234, source_beside=True)
+    assert unpack_token_file(beside).source_beside
+    # A text the recording did not load has no form, and a build that
+    # recorded nothing has none for any text.
+    assert akashic_tui._token_form(b": NEVER-LOADED ;\n", token_files, 1234) is None
+    assert akashic_tui._token_form(lib, None, 1234) is None
 
 
 def test_a_chunk_that_cannot_be_loaded_is_named_by_the_boot_script() -> None:
@@ -166,10 +140,16 @@ def _said(runtime) -> str:
     return " ".join(bytes(runtime.uart_output).decode("latin-1").split())
 
 
-def _replace_boot_file(image: Path, name: str, change) -> None:
-    """Write NAME on the boot volume again with CHANGE applied to it."""
+def _changed_boot_volume(image: Path, target: Path, name: str, change) -> Path:
+    """A copy of IMAGE at TARGET, beside the same settings and system
+    disks, with NAME on its boot volume written again with CHANGE applied."""
 
-    fs = MP64FS(bytearray(image.read_bytes()))
+    target.write_bytes(image.read_bytes())
+    for unit in ("settings", "system"):
+        companion = image.with_name(f"{image.stem}-{unit}{image.suffix}")
+        if companion.is_file():
+            os.link(companion, target.with_name(f"{target.stem}-{unit}{target.suffix}"))
+    fs = MP64FS(bytearray(target.read_bytes()))
     first = [entry.name for entry in fs.list_files() if entry.ftype == FTYPE_FORTH][0]
     data = fs.read_file(name)
     flags = FLAG_SYSTEM if name == "kdos.f" else 0
@@ -177,7 +157,8 @@ def _replace_boot_file(image: Path, name: str, change) -> None:
     fs.inject_file(name, change(data), ftype=FTYPE_FORTH, flags=flags)
     # The BIOS boots the first Forth file of the directory: still KDOS.
     assert [e.name for e in fs.list_files() if e.ftype == FTYPE_FORTH][0] == first
-    fs.save(image)
+    fs.save(target)
+    return target
 
 
 def test_a_token_system_volume_holds_token_files_alone_and_boots(
@@ -191,60 +172,61 @@ def test_a_token_system_volume_holds_token_files_alone_and_boots(
         system_volume=True, token_modules=True,
     )
     system = akashic_tui.system_image_path(image)
+    boot = MP64FS(bytearray(image.read_bytes()))
+    identity = boot_identity(boot.read_file("kdos.f"))
 
     # The volume: one file for each module, at its path with a t added, and
     # no source.  A module the boot loads before the mount is only named.
+    # Every other file is the module's token form, built for the system
+    # that this image's BIOS and KDOS make.
     held = _volume_files(tool_dir, system, tmp_path / "dump")
     assert sorted(held) == sorted(module + "t" for module in modules)
     named_only = set()
     for module in modules:
         form = unpack_token_file(held[module + "t"])
-        text = (SOURCE_ROOT / module).read_text()
-        assert form.module_name.decode() == PROVIDED_RE.search(text).group(1), module
+        text = (SOURCE_ROOT / module).read_bytes()
+        assert form.module_name.decode() == PROVIDED_RE.search(text.decode()).group(1), module
         assert not form.source_beside
         if form.records:
-            assert form.stamp and form.text_identity == text_identity(text.encode())
+            assert form.boot_id == identity, module
+            assert (form.source_bytes, form.source_crc32) == (len(text), zlib.crc32(text))
         else:
             named_only.add(module)
     assert named_only == set(modules) & before_mount and named_only
 
     # The boot volume: the script stays source and turns token loading on,
-    # and the first token file it loads holds the stamp that this image's
-    # KDOS and this script give.
-    boot = MP64FS(bytearray(image.read_bytes()))
+    # and the system modules and chunks state the same system.
     script = boot.read_file("autoexec.f")
     assert akashic_tui.MODULE_TOKENS_BOOT_LINE.encode() in script
     assert not is_token_file(script)
-    first = unpack_token_file(boot.read_file("networking.f"))
-    assert first.stamp == stamp_take(
-        stamp_start(boot_identity(boot.read_file("kdos.f"))), text_identity(script)
-    )
+    assert unpack_token_file(boot.read_file("networking.f")).boot_id == identity
 
-    runtime = _boot(image)
-    said = _said(runtime)
+    said = _said(_boot(image))
     assert "cannot be loaded" not in said and "out of date" not in said
     assert "not found" not in said.lower()
 
-    # One changed byte of KDOS, or of the boot script, and the volume was
-    # built for another system: the boot ends at the first token file.  The
-    # refusal unwinds through the boot script's own load, whose rollback
-    # then faults, because the script entered userland after its load
-    # began; any load that fails inside the script ends that way.
-    for name, change in (
-        ("kdos.f", lambda data: data.replace(b"KDOS v1.1", b"KDOS v1.2", 1)),
-        ("autoexec.f", lambda data: data + b"\\ a line added after the build\n"),
-    ):
-        changed = tmp_path / f"changed-{name}.img"
-        changed.write_bytes(image.read_bytes())
-        for unit in ("settings", "system"):
-            companion = image.with_name(f"{image.stem}-{unit}{image.suffix}")
-            if companion.is_file():
-                os.link(companion, changed.with_name(f"{changed.stem}-{unit}{changed.suffix}"))
-        _replace_boot_file(changed, name, change)
-        with pytest.raises(RuntimeError) as failed:
-            _boot(changed)
-        assert STALE in " ".join(str(failed.value).split()), name
-        assert "Token file networking.f cannot be loaded" in str(failed.value), name
+    # An edit to the boot script changes nothing: every token file is still
+    # used.
+    edited = _changed_boot_volume(
+        image, tmp_path / "edited-script.img", "autoexec.f",
+        lambda data: data + b"\\ a line added after the build\n",
+    )
+    said = _said(_boot(edited))
+    assert "cannot be loaded" not in said and "out of date" not in said
+
+    # One changed byte of KDOS, and the volume was built for another
+    # system: the boot ends at the first token file.  The refusal unwinds
+    # through the boot script's own load, whose rollback then faults,
+    # because the script entered userland after its load began; any load
+    # that fails inside the script ends that way.
+    other = _changed_boot_volume(
+        image, tmp_path / "other-kdos.img", "kdos.f",
+        lambda data: data.replace(b"KDOS v1.1", b"KDOS v1.2", 1),
+    )
+    with pytest.raises(RuntimeError) as failed:
+        _boot(other)
+    assert OTHER_SYSTEM in " ".join(str(failed.value).split())
+    assert "Token file networking.f cannot be loaded" in str(failed.value)
 
 
 def test_keeping_module_source_writes_it_beside_the_token_files(
@@ -264,13 +246,13 @@ def test_keeping_module_source_writes_it_beside_the_token_files(
     forms = {path: unpack_token_file(data) for path, data in held.items() if path.endswith("t")}
     assert set(held) == set(modules) | set(forms)
     assert 0 < len(forms) < len(modules)
-    assert all(form.source_beside and form.records and form.stamp for form in forms.values())
+    assert all(form.source_beside and form.records and form.boot_id for form in forms.values())
 
     said = _said(_boot(image))
     assert "cannot be loaded" not in said and "out of date" not in said
 
-    # An edited module loads from its source, and takes with it the modules
-    # loaded after it; those before it still load from their token files.
+    # An edited module loads from its source.  No other module is affected:
+    # each still loads from its token file.
     edited = "tui/applets/fexplorer/fexplorer.f"
     assert edited + "t" in forms
     host = tmp_path / "edited.f"
@@ -281,8 +263,6 @@ def test_keeping_module_source_writes_it_beside_the_token_files(
         write=True,
     )
     said = _said(_boot(image))
-    assert "Token file fexplorer.ft is out of date: loading its source" in said \
-        or f"Token file {edited}t is out of date: loading its source" in said
-    out_of_date = said.count("is out of date: loading its source")
-    assert 1 <= out_of_date < len(forms)
+    assert said.count("is out of date: loading its source") == 1
+    assert "fexplorer.ft is out of date: loading its source" in said
     assert "cannot be loaded" not in said

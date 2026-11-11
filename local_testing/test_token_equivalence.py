@@ -112,7 +112,6 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("_LD-STK", (VOLUME,),
      "the loader's saved frames: the cursor and remaining length of a file that was loading"),
     ("MODULE-TOKENS", (VOLUME,), "the switch that the token boot's script sets"),
-    ("LOAD-STAMP", BOTH, "the stamp of the load, which only a boot that meets a token file starts"),
     ("_TKF-A", BOTH, "the token file whose header was checked last; the source boot checks none"),
     ("_TKF-U", BOTH, "that file's length"),
     ("_SEC-CUR", BOTH, "the checked source evaluator's cursor; the token boot walks no source chunk"),
