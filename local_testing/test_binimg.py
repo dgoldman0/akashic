@@ -353,6 +353,11 @@ def main():
         for e in errors:
             print(f"    {e}")
 
+    # Userland first, as a boot loads its modules: the library then compiles
+    # into extended memory.  Loaded before it, the library ran the kernel
+    # dictionary through the base of the Bank-0 heap.
+    feed_and_run(sys_obj, 'ENTER-USERLAND\n', max_steps=10_000_000)
+
     # ── 3. Load binimg.f ─────────────────────────────────────────────
     print("[*] Loading binimg.f ...")
     buf.clear()
@@ -804,12 +809,8 @@ def main():
     p4_passed = 0
     p4_failed = 0
 
-    # Switch to userland so ALLOT uses ext mem (no overflow guard)
+    # The machine has been in userland since before the library loaded.
     buf.clear()
-    feed_and_run(sys_obj, 'ENTER-USERLAND\n', max_steps=10_000_000)
-    uland_text = uart_text(buf)
-    if uland_text.strip():
-        print(f"    ENTER-USERLAND: {uland_text.strip()}")
 
     # 4.1 PROVIDED + 4.3 ENTRY: save a module with both
     buf.clear()
@@ -1155,6 +1156,7 @@ def main():
 
     # Feed KDOS
     feed_and_run(sys_obj2, kdos_payload, max_steps=800_000_000)
+    feed_and_run(sys_obj2, 'ENTER-USERLAND\n', max_steps=10_000_000)
     buf2.clear()
 
     # Feed binimg.f

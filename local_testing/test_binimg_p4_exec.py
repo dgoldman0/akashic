@@ -17,7 +17,7 @@
 # │ See test_coroutine.py for the corrected pattern.             │
 # └──────────────────────────────────────────────────────────────┘
 """Focused Phase 4 test: exec2, noexec, XMEM only.
-Boots KDOS, loads binimg.f, enters userland, then runs ONLY the three
+Boots KDOS, enters userland, loads binimg.f, then runs ONLY the three
 operations that previously hung (infinite DO loop, now fixed with ?DO).
 """
 import os, sys, struct, time, tempfile
@@ -147,6 +147,12 @@ def main():
     steps = feed_and_run(sys_obj, kdos_payload, max_steps=800_000_000)
     print(f"[*] KDOS booted. {steps:,} steps in {time.time()-t0:.1f}s")
 
+    # Userland first, as a boot loads its modules: the library then compiles
+    # into extended memory.  Loaded before it, the library ran the kernel
+    # dictionary through the base of the Bank-0 heap.
+    buf.clear()
+    feed_and_run(sys_obj, 'ENTER-USERLAND\n', max_steps=100_000_000)
+
     # Load binimg.f
     buf.clear()
     binimg_payload = "\n".join(
@@ -160,9 +166,6 @@ def main():
         os.unlink(img_path); return
     print(f"[*] binimg.f loaded. {steps:,} steps")
 
-    # Enter userland
-    buf.clear()
-    feed_and_run(sys_obj, 'ENTER-USERLAND\n', max_steps=100_000_000)
 
     passed = 0; failed = 0
 

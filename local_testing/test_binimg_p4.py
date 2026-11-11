@@ -16,7 +16,7 @@
 # │                                                              │
 # │ See test_coroutine.py for the corrected pattern.             │
 # └──────────────────────────────────────────────────────────────┘
-"""Minimal Phase 4 test — boot, load binimg, enter userland, save one .m64."""
+"""Minimal Phase 4 test — boot, enter userland, load binimg, save one .m64."""
 import os, sys, struct, time, tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -123,6 +123,14 @@ def main():
     feed_and_run(sys_obj, kdos_payload, buf, "KDOS", max_steps=800_000_000)
     print(f"[*] KDOS done.")
 
+    # Userland first, as a boot loads its modules: the library then compiles
+    # into extended memory.  Loaded before it, the library ran the kernel
+    # dictionary through the base of the Bank-0 heap.
+    buf.clear()
+    feed_and_run(sys_obj, 'ENTER-USERLAND\n', buf, "uland", max_steps=50_000_000)
+    ut = uart_text(buf)
+    print(f"[*] ENTER-USERLAND: {ut.strip()}")
+
     # Load binimg.f
     buf.clear()
     binimg_payload = "\n".join(
@@ -132,11 +140,6 @@ def main():
     bt = uart_text(buf)
     if bt.strip(): print(f"    binimg output: {bt.strip()[:200]}")
 
-    # Enter userland
-    buf.clear()
-    feed_and_run(sys_obj, 'ENTER-USERLAND\n', buf, "uland", max_steps=50_000_000)
-    ut = uart_text(buf)
-    print(f"[*] ENTER-USERLAND: {ut.strip()}")
 
     # Phase 4 save — feed one line at a time to find hang point
     lines = [
