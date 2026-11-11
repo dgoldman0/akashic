@@ -129,8 +129,13 @@ those rows without the step naming them. In a build made only to check this,
 with the root padded to its usual length, the whole journey passed with the
 modules loaded from the system volume.
 
-Decided on 2026-11-11: the Desktop's sample set gains ordinary documents, so
-that the root listing is long by its own content.
+Decided on 2026-11-11: a Desktop built with the option carries ordinary
+sample documents, 24 short notes and lists, so that its root listing is long
+by its own content (a4fb1679, a644d65d, e9dc6f74). A linked Desktop's image is
+unchanged: its chunk files already make the root long, and the documents
+would take 24 of the 42 entries its boot volume's directory has free. At
+e9dc6f74 and MegaPad 26b98fd9 the journey passed with the option and without
+it.
 
 ### What would cut the boot's cost
 
