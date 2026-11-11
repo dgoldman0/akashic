@@ -5,9 +5,10 @@ source, which KDOS replays through the interpreter's own steps (MegaPad's
 `docs/token-modules-proposal-2026-11-11.md`). This note keeps the outputs
 that say the form may be trusted: the strict comparison of a boot from
 source with a boot from token forms, and the physical Desktop journeys run
-from token forms. Both branches are `token-modules` and neither is merged.
+from token forms.
 
-Every run here was made on MegaPad d6f95654 and Akashic e15c8240, with both
+Every run here was made on MegaPad d6f95654 and Akashic e15c8240, the heads
+of the two `token-modules` branches before they were merged, with both
 trees clean before and after. Those commits hold the rule that says when a
 token file is used as it was decided on 2026-11-11: a token file is used
 when it was built for this system and, where its source ships beside it,
