@@ -2975,16 +2975,17 @@ def test_desktop_apt1_system_volume_build_moves_the_modules_to_ext4(
     )
 
 
-def test_the_desktops_root_scrolls_without_its_source_chunks(
+def test_a_system_volume_desktops_root_scrolls_by_its_own_documents(
     tmp_path: Path,
 ) -> None:
     """The physical journey turns the wheel one detent over File Explorer's
     detail table.  The root must then list a detent more than the table
     shows, with the journey's pointer file shown before and after the turn.
-    A linked Desktop's source chunks used to supply those rows, and a Desktop
-    whose modules are on the system volume has few of them.  The files an
-    image is built with meet the step by themselves, with a detent to spare
-    on either side for the files Desk and its applets create as they start.
+    A linked Desktop's source chunks supply those rows.  A Desktop whose
+    modules are on the system volume has few chunks, so it carries the sample
+    documents, and the files it is built with meet the step by themselves:
+    without its chunks, and with a detent to spare on either side for the
+    files Desk and its applets create as they start.
     """
 
     from rich_terminal_desktop_acceptance import (
@@ -2992,16 +2993,22 @@ def test_the_desktops_root_scrolls_without_its_source_chunks(
         POINTER_WHEEL_ROWS,
     )
 
+    _pinned_ext4_tools()
+    documents = sample_documents.SAMPLES
     rows = sample_documents.DESKTOP_TABLE_ROWS
     spare = POINTER_WHEEL_ROWS
-    image = build_image("desktop-apt1", tmp_path / "akashic-desktop-apt1.img")
-    filesystem = MP64FS(bytearray(image.read_bytes()))
-    # File Explorer lists a folder by name, ignoring case.  The chunks apart,
-    # a system-volume build's root holds the same entries.
+
+    def entries(profile: str, where: str, *, system_volume: bool) -> list:
+        image = build_image(
+            profile, tmp_path / where / "akashic.img", system_volume=system_volume
+        )
+        return MP64FS(bytearray(image.read_bytes())).list_files()
+
+    # File Explorer lists a folder by name, ignoring case.
     listing = sorted(
         (
             entry.name
-            for entry in filesystem.list_files()
+            for entry in entries("desktop-apt1", "volume", system_volume=True)
             if entry.parent == PARENT_ROOT
             and not re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
         ),
@@ -3013,7 +3020,6 @@ def test_the_desktops_root_scrolls_without_its_source_chunks(
 
     # The documents are text a person wrote: short, plain, and named as
     # files are.  None repeats a name the journeys give a file of their own.
-    documents = sample_documents.SAMPLES
     assert set(documents) <= set(listing)
     for name, content in documents.items():
         assert re.fullmatch(r"[a-z]+(-[a-z]+)*\.(md|txt)", name), name
@@ -3024,14 +3030,24 @@ def test_the_desktops_root_scrolls_without_its_source_chunks(
         "notes.txt", "renamed.txt", "large-copy.txt", "smoke.txt", "journey.txt",
     }
 
-    # Desk with File Explorer alone keeps the root its checks were written
-    # for: they find their rows in the first view.
-    alone = build_image("desktop-apt1-fexp", tmp_path / "akashic-fexp-alone.img")
-    held = {
+    # A linked Desktop carries none of them: its chunks make its root long,
+    # and its boot volume's directory keeps the room it had.
+    linked = {
         entry.name
-        for entry in MP64FS(bytearray(alone.read_bytes())).list_files()
+        for entry in entries("desktop-apt1", "linked", system_volume=False)
     }
-    assert POINTER_LIST_FILE in held and not set(documents) & held
+    assert POINTER_LIST_FILE in linked and not set(documents) & linked
+
+    # Desk with File Explorer alone carries none either way: its checks find
+    # their rows in the first view of a short root.
+    for where, system_volume in (("alone", False), ("alone-volume", True)):
+        alone = {
+            entry.name
+            for entry in entries(
+                "desktop-apt1-fexp", where, system_volume=system_volume
+            )
+        }
+        assert POINTER_LIST_FILE in alone and not set(documents) & alone
 
 
 def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:

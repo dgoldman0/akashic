@@ -1,26 +1,29 @@
 """The Desktop's sample documents: the notes and lists a person keeps.
 
-A Desktop image, Desk with Pad and File Explorer, carries these beside the
-other samples (akashic_tui._sample_files).  Each is a short plain text or
-Markdown file that Pad opens and File Explorer previews, the Markdown ones
-as documents.  None holds a date or a link, so an image's copy is the same
-on every day and no preview leads to a file that is absent.
+A Desktop image built with --system-volume carries these beside the other
+samples (akashic_tui._sample_files).  The Desktop is Desk with Pad and File
+Explorer.  Each document is a short plain text or Markdown file that Pad
+opens and File Explorer previews, the Markdown ones as documents.  None
+holds a date or a link, so an image's copy is the same on every day and no
+preview leads to a file that is absent.
 
-They also make the Desktop's root folder a list worth scrolling.  File
-Explorer sorts its detail table by name, and on the canonical Desktop the
-table shows DESKTOP_TABLE_ROWS rows.  The physical journey's wheel step
-(rich_terminal_desktop_acceptance.py) turns the wheel one detent over that
-table, so the root must list at least one detent more than the table shows,
-with the journey's pointer file shown before and after the turn.  The root's
-own files meet that with a detent to spare on either side: the files the
-image is built with, without the source chunks a linked profile adds and
-without the files Desk and its applets create as they start
-(test_akashic_tui_packaging.py checks it).
+They ship where the modules live on the system volume.  There nothing else
+makes the root folder a list long enough to scroll, and they stand for what
+a user volume will hold.  File Explorer sorts its detail table by name, and
+on the canonical Desktop the table shows DESKTOP_TABLE_ROWS rows.  The
+physical journey's wheel step (rich_terminal_desktop_acceptance.py) turns
+the wheel one detent over that table, so the root must list at least one
+detent more than the table shows, with the journey's pointer file shown
+before and after the turn.  The root's own files meet that with a detent to
+spare on either side: the files the image is built with, without the source
+chunks that hold the volume's driver and without the files Desk and its
+applets create as they start (test_akashic_tui_packaging.py checks it).
 
-Desk with a single applet carries none of them.  The checks of File
-Explorer alone find each row and each folder in the first view of its table
-and of its tree, and with these files beside a linked image's source chunks
-that root would no longer fit either view.
+A linked Desktop carries none of them.  Its source chunks already make its
+root long, and they leave its boot volume's directory little room: the
+documents would take 24 of the 42 entries it has free.  Desk with a single
+applet carries none either.  The checks of File Explorer alone find each
+row and each folder in the first view of its table and of its tree.
 """
 
 from __future__ import annotations

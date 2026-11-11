@@ -259,16 +259,18 @@ linked chunks on its boot volume.
 
 The canonical journey passes with the option. Its wheel step in File
 Explorer needs a root listing at least three rows longer than the 35 its
-table shows there. A linked Desktop's 52 source chunks used to supply those
-rows without the step naming them, and with the modules on the system volume
-the boot volume's root lists eight. The Desktop's sample documents
-(`sample_documents.py`), two dozen short notes and lists in text and
-Markdown, now make its root long enough by its own files in either build:
-the files the image is built with, the chunks apart, number three more than
-that step needs, and the journey's pointer file is in the first view with
-rows to spare above and below it. Only Desktop images, Desk with Pad and File
-Explorer, carry them; Desk with one applet keeps the short root its checks
-find their rows in.
+table shows there. A linked Desktop's 52 source chunks supply those rows
+without the step naming them; with the modules on the system volume the boot
+volume's root lists eight chunks. A Desktop built with the option therefore
+carries the sample documents (`sample_documents.py`), two dozen short notes
+and lists in text and Markdown. They ship where the modules live on the
+system volume, since there nothing else makes the root long, and they stand
+for what a user volume will hold. The files that image is built with, its
+chunks apart, number three more than the step needs, and the journey's
+pointer file is in the first view with rows to spare above and below it. A
+linked Desktop's image holds the files it held before: its chunks make its
+root long, and the documents would take 24 of the 42 entries its boot
+volume's directory has free. Desk with one applet carries none either way.
 `test_system_volume.py` boots a small profile built with the option on the
 emulator.
 

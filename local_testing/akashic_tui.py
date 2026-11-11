@@ -27062,16 +27062,20 @@ PAD_MODULE = "tui/applets/pad/pad.f"
 FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
 
 
-def _sample_files(modules) -> dict[str, bytes]:
+def _sample_files(modules, *, system_volume: bool = False) -> dict[str, bytes]:
     """The sample files an image carries.  Every image has the text samples.
     One with File Explorer, the viewer that shows them, has the sample
-    picture, document and PDFs as well (sample_pdf.py).  The Desktop, which
-    is Desk with Pad to write in and File Explorer to list what is written,
-    also has the notes and lists a person keeps (sample_documents.py): they
-    make its root folder a list long enough to scroll.  Keeping each kind off
-    the other images keeps their MP64FS directories small, and it leaves the
-    root of Desk with one applet as short as that applet's checks, which find
-    their rows in the first view, were written for."""
+    picture, document and PDFs as well (sample_pdf.py).
+
+    A Desktop built with SYSTEM_VOLUME also has the notes and lists a person
+    keeps (sample_documents.py).  The Desktop is Desk with Pad to write in
+    and File Explorer to list what is written.  The documents ship where the
+    modules live on the system volume: there nothing else makes the root
+    folder a list long enough to scroll, and they stand for what a user
+    volume will hold.  A linked Desktop has its source chunks in that root
+    and little room left in its boot volume's directory, so its image stays
+    as it was.  Desk with one applet never has them: that applet's checks
+    find their rows in the first view of a short root."""
 
     samples = dict(SAMPLE_FILES)
     if FEXPLORER_MODULE in modules:
@@ -27082,7 +27086,7 @@ def _sample_files(modules) -> dict[str, bytes]:
                 **sample_pdf.SAMPLES,
             }
         )
-        if DESK_MODULE in modules and PAD_MODULE in modules:
+        if system_volume and DESK_MODULE in modules and PAD_MODULE in modules:
             samples.update(sample_documents.SAMPLES)
     return samples
 
@@ -28654,7 +28658,7 @@ def build_image(
         autoexec = _with_every_frame_checks(autoexec, modules)
     if safe_mode:
         autoexec = _with_safe_mode(autoexec, modules)
-    samples = _sample_files(modules)
+    samples = _sample_files(modules, system_volume=system_volume)
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
     )

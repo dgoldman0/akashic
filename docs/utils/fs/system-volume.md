@@ -82,9 +82,13 @@ and `accept` attach the volume as the third storage unit, and
 on a Desktop built this way. The option is off unless it is given.
 
 The canonical journey passes on such a Desktop. File Explorer's wheel step
-needs a root listing at least three rows longer than its table shows. A
-linked Desktop's source chunks once supplied those rows; the Desktop's sample
-documents now do, in either build.
+needs a root listing at least three rows longer than its table shows, and a
+linked Desktop's source chunks supply those rows. A Desktop built this way
+has few chunks in its root, so its boot image also carries the sample
+documents (`local_testing/sample_documents.py`). They ship where the modules
+live on the system volume, since there nothing else makes the root long, and
+they stand for what a user volume will hold. A linked Desktop's image is
+unchanged.
 
 The volume is made by the pinned e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR`
 names, with the ext4 fixtures' profile
