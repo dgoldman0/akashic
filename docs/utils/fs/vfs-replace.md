@@ -150,6 +150,58 @@ A binding that sets `VFS-CAP-DURABLE-MUTATIONS` without
 victim. It publishes through the marker and the backup, and the routine
 leaves out the syncs, since each step is on the medium when it returns.
 
+### Cost on ext4
+
+Both publications were measured on the exact emulator on 2026-11-15, on the
+64 MiB test fixture volume with a 2 KiB `/doc.txt`, a mount arena of 524,288
+bytes and a writer profile of 16 metadata, 16 data and 2 revoke credits. Each
+row is the emulator's own count for the one interpreted line that ran
+`VREPL-REPLACE`, with every row returning status 0. Seconds are system cycles
+divided by 10^8, the processor time of a 100 MHz device; the emulator
+completes storage transfers and flushes at once, so a device's storage
+latency comes on top. Writes are 1 KiB blocks, and transactions are the JBD2
+commit blocks among them.
+
+| Case | Publication | Instructions | Cycles | Seconds | Writes | Flushes | Transactions | Syncs |
+|---|---|---|---|---|---|---|---|---|
+| Existing 2 KiB, new 2 KiB | one rename | 129.6 M | 165.6 M | 1.66 | 112 | 61 | 5 | 0 |
+| | marker and backup | 385.9 M | 494.8 M | 4.95 | 319 | 210 | 12 | 6 |
+| Existing 2 KiB, new 64 KiB | one rename | 206.6 M | 263.9 M | 2.64 | 234 | 94 | 8 | 0 |
+| | marker and backup | 464.3 M | 594.7 M | 5.95 | 441 | 243 | 15 | 6 |
+| Existing 64 KiB, new 64 KiB | one rename | 205.7 M | 262.7 M | 2.63 | 236 | 94 | 8 | 0 |
+| | marker and backup | 463.0 M | 593.2 M | 5.93 | 441 | 243 | 15 | 6 |
+| File absent, new 2 KiB | one rename | 66.9 M | 85.8 M | 0.86 | 70 | 39 | 3 | 0 |
+| | marker and backup | 251.8 M | 323.0 M | 3.23 | 217 | 140 | 8 | 4 |
+
+A save by one rename over an existing file takes five transactions: the
+stage's create, its write, the rename, and two that drain the old file from
+the orphan file. A first save takes the first three. A 64 KiB stage is
+written in four transactions of 16 data blocks, the writer profile's data
+credit, where 2 KiB takes one.
+
+Every row began on a volume whose journal a sync had just landed clean, so
+each includes the journal's activation, which the note below measured at
+2.1 M cycles, 6 writes and 6 flushes for a single write. Publication by one
+rename leaves the journal active, and the next save starts there: a second
+2 KiB save over the 2 KiB file, with no sync in between, cost 157.2 M
+cycles, 108 writes and 55 flushes. A save that is the first write of its
+mount also carries the driver's ownership proof, which the note measured at
+35.4 M cycles.
+
+The marker rows are the measurement recorded in
+[`user-volume-20261115.md`](../../../local_testing/evidence/user-volume-20261115.md),
+taken at Akashic `86d817ea`, when every binding published through the
+marker. The rename rows were taken by that note's method at Akashic
+`dd275371` with MegaPad `5dd6fe1e`. A run of the same commit with the
+capability cleared on the mounted binding took the marker protocol and
+reproduced the note's four rows in every column, so the protocol costs on
+ext4 what it did before the choice existed.
+
+The volume's size was not varied. The note measured a single overwrite and
+a sync at 4.6 times their 64 MiB cost on a 256 MiB volume, through
+computation that grows with the volume, so both publications are expected
+to cost more there; neither was run on a larger volume.
+
 ## Recovery states
 
 `VREPL-RECOVER` is safe to run at activation before opening the target. One
