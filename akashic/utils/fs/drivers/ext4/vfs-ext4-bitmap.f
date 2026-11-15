@@ -205,6 +205,31 @@ VARIABLE _EXT4-UB-SPAN
     THEN
     0 ;
 
+VARIABLE _EXT4-UI-BUF
+VARIABLE _EXT4-UI-CTX
+VARIABLE _EXT4-UI-BYTES
+
+\ Build the bitmap an INODE_UNINIT group stands for, as the kernel's
+\ ext4_read_inode_bitmap does: every inode of the group clear, and every
+\ bit after them set to the end of the block.  As in ext4_mark_bitmap_end,
+\ the bits up to the next byte boundary are set one at a time and whole
+\ bytes fill the rest.  BUFFER holds one filesystem block.
+: _EXT4-BUILD-UNINIT-INODE-BITMAP  ( buffer ctx -- ior )
+    _EXT4-UI-CTX ! _EXT4-UI-BUF !
+    _EXT4-UI-CTX @ _EXT4-C.IPG + @ 7 + 8 / DUP _EXT4-UI-BYTES !
+    _EXT4-UI-CTX @ _EXT4-C.BSIZE + @ U> IF
+        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UI-BUF @ _EXT4-UI-BYTES @ 0 FILL
+    _EXT4-UI-BUF @ _EXT4-UI-BYTES @ +
+    _EXT4-UI-CTX @ _EXT4-C.BSIZE + @ _EXT4-UI-BYTES @ - 255 FILL
+    _EXT4-UI-BUF @ _EXT4-UI-BYTES @ 8 *
+    _EXT4-UI-CTX @ _EXT4-C.IPG + @
+    _EXT4-UI-BYTES @ 8 * OVER - BITSET-RANGE-SET? 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
 VARIABLE _EXT4-BA-BLOCK
 VARIABLE _EXT4-BA-CTX
 VARIABLE _EXT4-BA-GROUP

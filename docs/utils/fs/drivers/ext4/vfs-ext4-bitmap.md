@@ -4,11 +4,11 @@
 public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade rather than
 this source unit directly.
 
-The unit owns nine stack services: canonical block- and inode-group counts,
+The unit owns ten stack services: canonical block- and inode-group counts,
 the exact physical interval for a block group, block- and inode-bitmap CRC
-calculation, authenticated block- and inode-bitmap loading, the bitmap a
-`BLOCK_UNINIT` group stands for, and the raw single-block allocation
-predicate. It depends directly on
+calculation, authenticated block- and inode-bitmap loading, the bitmaps a
+`BLOCK_UNINIT` and an `INODE_UNINIT` group stand for, and the raw
+single-block allocation predicate. It depends directly on
 [`vfs-ext4-admission.f`](vfs-ext4-admission.md),
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md), and the generic checked
 `bitset.f` layer. It has no callback or execution-token dependency on later
@@ -39,13 +39,22 @@ equal the clear bits that leaves, or the group's accounting is
 `EXT4-D-GEOMETRY` corruption and nothing may be allocated from it. The
 facade's allocator uses it as the raw bitmap of such a group.
 
+`_EXT4-BUILD-UNINIT-INODE-BITMAP` builds the bitmap an `INODE_UNINIT` group
+stands for into a caller-supplied block, as the kernel's
+`ext4_read_inode_bitmap` builds it: every inode of the group clear, and every
+bit after them set to the end of the block. As in `ext4_mark_bitmap_end`, the
+bits up to the next byte boundary are set one at a time and whole bytes fill
+the rest. It reads neither the medium nor a descriptor; the facade's inode
+allocation checks the group's descriptor and uses the result as the raw
+bitmap of such a group.
+
 `_EXT4-BLOCK-ALLOCATED?` intentionally remains a narrower raw predicate. It
 validates physical and exact group geometry, but returns `FALSE 0` for
 `BLOCK_UNINIT`; facade-owned require wrappers decide when that negative result
 is corruption and also enforce mutation-owner alias policy. It therefore does
 not delegate to the stricter authenticated block-bitmap loader.
 
-All 28 GBC/GIC/GBR/LBB/LIB/UB/BA scratch cells are private. The two CRC
+All 31 GBC/GIC/GBR/LBB/LIB/UB/UI/BA scratch cells are private. The two CRC
 calculators are stack-direct, so their former four scratch cells are gone.
 Mount-wide bitmap validation remains in the facade because it composes CRC
 evidence with allocation ownership and group accounting, but its duplicate CRC
