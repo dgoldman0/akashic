@@ -12290,9 +12290,12 @@ VARIABLE _EXT4-CS-J
 : _EXT4-CS!  ( value index -- )  CELLS _EXT4-CS-BASE @ + ! ;
 
 \ Sort N cells at BASE into ascending unsigned order, by Shell sort with
-\ Knuth's gaps.
+\ Knuth's gaps.  Fewer than two cells are already in order, and the first
+\ gap is one, so a pass over no cells would start past its limit, which a
+\ counted loop never meets.
 : _EXT4-SORT-CELLS  ( base n -- )
     _EXT4-CS-N ! _EXT4-CS-BASE !
+    _EXT4-CS-N @ 2 U< IF EXIT THEN
     1 BEGIN DUP 3 * 1+ _EXT4-CS-N @ U< WHILE 3 * 1+ REPEAT _EXT4-CS-GAP !
     BEGIN _EXT4-CS-GAP @ WHILE
         _EXT4-CS-N @ _EXT4-CS-GAP @ ?DO
