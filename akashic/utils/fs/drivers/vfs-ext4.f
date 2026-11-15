@@ -23429,7 +23429,6 @@ VARIABLE _XC-HASH-SUPER
 
 VARIABLE _XC-FI-GROUP
 VARIABLE _XC-FI-VISITED
-VARIABLE _XC-FI-SAW-UNINIT
 VARIABLE _XC-GROUP-INODES
 VARIABLE _XC-GROUP-BASE
 VARIABLE _XC-GROUP-FREE
@@ -23437,6 +23436,9 @@ VARIABLE _XC-GROUP-NEW-FREE
 VARIABLE _XC-GROUP-UNUSED
 VARIABLE _XC-GROUP-NEW-UNUSED
 VARIABLE _XC-GROUP-HIGH-WATER
+VARIABLE _XC-GROUP-UNINIT
+VARIABLE _XC-GROUP-UNZEROED
+VARIABLE _XC-TABLE-FRESH
 VARIABLE _XC-BITMAP-HOME
 VARIABLE _XC-BITMAP-CRC
 VARIABLE _XC-BITMAP-NEW-CRC
@@ -23518,6 +23520,92 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-GROUP-BASE @ 1+ 2DUP U> IF - ELSE 2DROP 0 THEN
     _XC-GROUP-INODES @ MIN ;
 
+\ Whether no other inode of the table block that holds the selected
+\ inode's record is in use, by the group's inode bitmap at BITMAP, in which
+\ the selected inode is clear.
+: _XC-FI-BLOCK-IDLE?  ( bitmap -- idle? valid? )
+    _XC-GROUP-INODES @
+    _XC-CTX @ _EXT4-C.BSIZE + @ _XC-CTX @ _EXT4-C.ISIZE + @ /
+    _XC-FIRST-CLEAR @ OVER / OVER *
+    SWAP OVER + _XC-GROUP-INODES @ MIN OVER -
+    BITSET-ALL-CLEAR? ;
+
+\ Take the selected inode of the scanned group: the counts its descriptor
+\ takes, the inode's number and its record.  The unused count falls when
+\ the inode lies at or past the group's high-water mark.  A group leaving
+\ INODE_UNINIT has used none of its table, whatever unused count its
+\ descriptor carries, as the kernel's __ext4_new_inode reads it.
+: _XC-FI-TAKE  ( -- found? ior )
+    _XC-GROUP-FREE @ 0= IF
+        FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _XC-GROUP-FREE @ 1- _XC-GROUP-NEW-FREE !
+    _XC-GROUP-UNINIT @ IF
+        0
+    ELSE
+        _XC-GROUP-INODES @ _XC-GROUP-UNUSED @ -
+    THEN _XC-GROUP-HIGH-WATER !
+    _XC-FIRST-CLEAR @ _XC-GROUP-HIGH-WATER @ U< IF
+        _XC-GROUP-UNUSED @
+    ELSE
+        _XC-GROUP-INODES @ _XC-FIRST-CLEAR @ 1+ -
+    THEN _XC-GROUP-NEW-UNUSED !
+    _XC-DIRECTORY @ IF
+        _XC-GROUP-USED-DIRS @ _XC-GROUP-INODES @ U< 0= IF
+            FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+        THEN
+        _XC-GROUP-USED-DIRS @ 1+ _XC-GROUP-NEW-USED-DIRS !
+    ELSE
+        _XC-GROUP-USED-DIRS @ _XC-GROUP-NEW-USED-DIRS !
+    THEN
+    _XC-GROUP-BASE @ _XC-FIRST-CLEAR @ + 1+ DUP _XC-INODE !
+    _XC-CTX @ _EXT4-C.INODES + @ U> IF
+        FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _XC-FI-CAPTURE-RECORD ?DUP IF FALSE SWAP EXIT THEN
+    TRUE 0 ;
+
+\ An INODE_UNINIT group has no inode in use.  Its descriptor counts every
+\ inode free, which the bounds its caller checked leave no directory, and
+\ nothing has written its bitmap block: the bitmap the group stands for has
+\ every inode clear, so the first eligible inode is the one to take.  The
+\ flag is corrupt on group 0, whose reserved inodes are always in use, as
+\ the kernel's ext4_read_inode_bitmap holds.  The cold plan fixes the
+\ bitmap's home and proves the home's role; staging builds the bitmap.
+: _XC-FI-SCAN-UNINIT-GROUP  ( -- found? ior )
+    _XC-FI-GROUP @ 0= _XC-GROUP-FREE @ _XC-GROUP-INODES @ <> OR IF
+        FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _XC-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-BITMAP-LO + L@
+    _XC-BITMAP-HOME !
+    _EXT4-GD-BLOCK @ _XC-GDT-HOME !
+    _EXT4-GD-OFF @ _XC-GDT-OFF !
+    _XC-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-TABLE-LO + L@
+    _XC-INODE-TABLE !
+    0 _XC-BITMAP-CRC !
+    _XC-FIRST-ELIGIBLE-INDEX DUP _XC-FIRST-CLEAR !
+    _XC-GROUP-INODES @ U< 0= IF FALSE 0 EXIT THEN
+    _XC-BITMAP-HOME @ _XC-FI-GROUP @ _XC-CTX @
+    _EXT4-VALIDATE-INODE-BITMAP-HOME ?DUP IF FALSE SWAP EXIT THEN
+    _XC-FI-GROUP @ _XC-CTX @ _EXT4-LOAD-DESC ?DUP IF FALSE SWAP EXIT THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-INODE-UNINIT AND 0=
+    _XC-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-BITMAP-LO + L@
+    _XC-BITMAP-HOME @ <> OR
+    _EXT4-GD-BLOCK @ _XC-GDT-HOME @ <> OR
+    _EXT4-GD-OFF @ _XC-GDT-OFF @ <> OR
+    _XC-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-TABLE-LO + L@
+    _XC-INODE-TABLE @ <> OR IF
+        FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _XC-GROUP-UNZEROED @ _XC-TABLE-FRESH !
+    _XC-FI-TAKE ;
+
+\ Look for a free inode in the scanned group.  A group still INODE_UNINIT
+\ is made ready by the inode it gives.  In a group whose table the builder
+\ did not zero, an inode whose table block holds no other inode in use is
+\ staged in a block of zeros, as the kernel's __ext4_get_inode_loc gives it,
+\ so that no byte the builder left reaches the table's used part; a zeroed
+\ table's block is kept as media holds it.
 : _XC-FI-SCAN-GROUP  ( -- found? ior )
     _XC-FI-GROUP @ _XC-CTX @ _EXT4-GROUP-INODE-COUNT
     _XC-IOR ! _XC-GROUP-INODES !
@@ -23525,9 +23613,8 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-FI-GROUP @ _XC-CTX @ _EXT4-LOAD-DESC ?DUP IF
         FALSE SWAP EXIT
     THEN
-    _EXT4-GD-FLAGS @ _EXT4-BG-INODE-UNINIT AND IF
-        -1 _XC-FI-SAW-UNINIT ! FALSE 0 EXIT
-    THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-INODE-UNINIT AND 0<> _XC-GROUP-UNINIT !
+    _EXT4-GD-FLAGS @ _EXT4-BG-INODE-ZEROED AND 0= _XC-GROUP-UNZEROED !
     _XC-CTX @ _EXT4-C.DESC + DUP
     _EXT4-JFI-DESC-FREE@ DUP _XC-GROUP-FREE !
     _XC-GROUP-INODES @ U> IF
@@ -23549,6 +23636,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-FI-GROUP @ _XC-CTX @ _EXT4-C.IPG + @ _EXT4-UMUL?
     _XC-IOR ! _XC-GROUP-BASE !
     _XC-IOR @ ?DUP IF FALSE SWAP EXIT THEN
+    _XC-GROUP-UNINIT @ IF _XC-FI-SCAN-UNINIT-GROUP EXIT THEN
     _XC-FI-GROUP @ _XC-CTX @ _EXT4-LOAD-INODE-BITMAP
     _XC-IOR ! _XC-BITMAP-HOME !
     _XC-IOR @ ?DUP IF FALSE SWAP EXIT THEN
@@ -23591,36 +23679,19 @@ VARIABLE _XC-NEW-DIR-IMAGE
         DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     IF FALSE VFS-E-CONFLICT EXIT THEN
-    _XC-GROUP-FREE @ 0= IF
-        FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    _XC-CTX @ _EXT4-C.BLOCK + _XC-FI-BLOCK-IDLE? 0= IF
+        DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    _XC-GROUP-FREE @ 1- _XC-GROUP-NEW-FREE !
-    _XC-GROUP-INODES @ _XC-GROUP-UNUSED @ -
-    _XC-GROUP-HIGH-WATER !
-    _XC-FIRST-CLEAR @ _XC-GROUP-HIGH-WATER @ U< IF
-        _XC-GROUP-UNUSED @
-    ELSE
-        _XC-GROUP-INODES @ _XC-FIRST-CLEAR @ 1+ -
-    THEN _XC-GROUP-NEW-UNUSED !
-    _XC-DIRECTORY @ IF
-        _XC-GROUP-USED-DIRS @ _XC-GROUP-INODES @ U< 0= IF
-            FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-        THEN
-        _XC-GROUP-USED-DIRS @ 1+ _XC-GROUP-NEW-USED-DIRS !
-    ELSE
-        _XC-GROUP-USED-DIRS @ _XC-GROUP-NEW-USED-DIRS !
-    THEN
-    _XC-GROUP-BASE @ _XC-FIRST-CLEAR @ + 1+ DUP _XC-INODE !
-    _XC-CTX @ _EXT4-C.INODES + @ U> IF
-        FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _XC-FI-CAPTURE-RECORD ?DUP IF FALSE SWAP EXIT THEN
-    TRUE 0 ;
+    _XC-GROUP-UNZEROED @ AND _XC-TABLE-FRESH !
+    _XC-FI-TAKE ;
 
+\ The new inode comes from the parent's group, or from the first group
+\ after it, wrapping, that has one free.  The superblock counts a free
+\ inode, so a round that finds none contradicts it.
 : _XC-FIND-FREE-INODE  ( -- ior )
     _XC-CTX @ _EXT4-C.FREE-INODES + @ 0= IF VFS-E-NOSPC EXIT THEN
     _XC-PARENT-GROUP @ _XC-FI-GROUP !
-    0 _XC-FI-VISITED ! 0 _XC-FI-SAW-UNINIT !
+    0 _XC-FI-VISITED !
     BEGIN
         _XC-FI-VISITED @ _XC-CTX @ _EXT4-C.GROUPS + @ U<
     WHILE
@@ -23630,9 +23701,6 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _XC-IOR @ ?DUP IF EXIT THEN
         _XC-FI-ADVANCE
     REPEAT
-    _XC-FI-SAW-UNINIT @ IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
     EXT4-D-GEOMETRY _EXT4-CORRUPT ;
 
 : _XC-LINK-TARGET-CACHE-MATCH?  ( -- flag )
@@ -24312,8 +24380,13 @@ VARIABLE _XC-NEW-ROOT
 : _XC-REPLACE-INODE  ( plan -- plan ior )
     _XC-IMAGE @ _XC-INODE-HOME @ _XC-WRITER @ _EXT4-JTX-META-REPLACE ;
 
+\ A new inode's record is built in place.  When the cold plan found its
+\ table block fresh, the rest of the block is staged as zeros.
 : _XC-STAGE-NEW-INODE  ( plan -- plan ior )
     _XC-ACQUIRE-INODE ?DUP IF EXIT THEN
+    _XC-TABLE-FRESH @ IF
+        _XC-IMAGE @ _XC-CTX @ _EXT4-C.BSIZE + @ 0 FILL
+    THEN
     _XC-NEW-INODE-PTR @ _XC-BUILD-NEW-INODE ?DUP IF EXIT THEN
     _XC-REPLACE-INODE ;
 
@@ -24849,13 +24922,17 @@ VARIABLE _XC-ACQ-HOME
     0 _XN-NEW-NODES ! 0 _XN-EXISTING !
     _XC-PARENT-GROUP @ _XC-GROUP-GOAL _XN-GOAL ! ;
 
+\ The group's descriptor as the transaction stages it still describes the
+\ group the cold plan read.  It carries INODE_UNINIT exactly when the plan
+\ found the group so, and an initialized group's descriptor authenticates
+\ the bitmap; an INODE_UNINIT descriptor's bitmap checksum means nothing.
 : _XC-VALIDATE-EFFECTIVE-DESC  ( -- ior )
     _XC-DESC @ _XC-FI-GROUP @ _XC-CTX @
     _EXT4-GROUP-DESC-CHECKSUM? ?DUP IF NIP EXIT THEN 0= IF
         EXT4-D-DESC-CHECKSUM _EXT4-CORRUPT EXIT
     THEN
     _XC-DESC @ _EXT4-GD.FLAGS + W@
-    _EXT4-BG-INODE-UNINIT AND IF
+    _EXT4-BG-INODE-UNINIT AND 0<> _XC-GROUP-UNINIT @ <> IF
         EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
     THEN
     _XC-DESC @ _EXT4-GD.INODE-BITMAP-HI + L@
@@ -24870,9 +24947,11 @@ VARIABLE _XC-ACQ-HOME
     _XC-INODE-TABLE @ <> IF
         EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
-    _XC-DESC @ _EXT4-JFI-DESC-BITMAP-CRC@
-    _XC-BITMAP-CRC @ <> IF
-        EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+    _XC-GROUP-UNINIT @ 0= IF
+        _XC-DESC @ _EXT4-JFI-DESC-BITMAP-CRC@
+        _XC-BITMAP-CRC @ <> IF
+            EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
     THEN
     _XC-DESC @ _EXT4-JFI-DESC-FREE@ _XC-GROUP-FREE @ <> IF
         VFS-E-CONFLICT EXIT
@@ -24883,26 +24962,60 @@ VARIABLE _XC-ACQ-HOME
     _XC-GROUP-USED-DIRS @ <> IF VFS-E-CONFLICT EXIT THEN
     0 ;
 
-: _XC-STAGE-INODE-ALLOCATION  ( plan -- plan ior )
-    _XC-HR-INODE-GDT _XC-GDT-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
-    _XC-HR-INODE-BITMAP _XC-BITMAP-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
+\ The bitmap an INODE_UNINIT group stands for, built in writer scratch,
+\ with its checksum recorded for the staging that follows.  The raw
+\ descriptor must still carry the flag, and the group's bitmap is first
+\ staged by this allocation, so the transaction holds no image of it.
+: _XC-BUILD-RAW-INODE-BITMAP  ( -- bitmap ior )
+    _XC-FI-GROUP @ _XC-CTX @ _EXT4-LOAD-DESC ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-INODE-UNINIT AND 0=
+    _XC-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-BITMAP-LO + L@
+    _XC-BITMAP-HOME @ <> OR IF
+        0 EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _XC-BITMAP-HOME @ _XC-WRITER @ _EXT4-JTX-META-IMAGE
+    ?DUP IF NIP 0 SWAP EXIT THEN
+    IF 0 EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT THEN
+    _XC-WRITER @ _EXT4-JWR.SCRATCH-B + @ _XC-CTX @
+    _EXT4-BUILD-UNINIT-INODE-BITMAP ?DUP IF 0 SWAP EXIT THEN
+    _XC-WRITER @ _EXT4-JWR.SCRATCH-B + @ DUP _XC-CTX @
+    _EXT4-INODE-BITMAP-CRC ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    _XC-BITMAP-CRC ! 0 ;
+
+\ The group's inode bitmap as media holds it, in which the selected inode
+\ is clear: the authenticated block, whose checksum is the one the cold
+\ plan read, or the built bitmap of an INODE_UNINIT group.
+: _XC-RAW-INODE-BITMAP  ( -- bitmap ior )
+    _XC-GROUP-UNINIT @ IF _XC-BUILD-RAW-INODE-BITMAP EXIT THEN
     _XC-FI-GROUP @ _XC-CTX @ _EXT4-LOAD-INODE-BITMAP
     _XC-IOR !
-    _XC-IOR @ IF DROP _XC-IOR @ EXIT THEN
+    _XC-IOR @ IF DROP 0 _XC-IOR @ EXIT THEN
     _XC-BITMAP-HOME @ <> IF
-        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+        0 EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
     _XC-CTX @ _EXT4-C.BLOCK +
     _XC-GROUP-INODES @ _XC-FIRST-CLEAR @ BITSET-TEST? 0= IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+        DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    IF VFS-E-CONFLICT EXIT THEN
+    IF 0 VFS-E-CONFLICT EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK + _XC-CTX @ _EXT4-INODE-BITMAP-CRC
-    ?DUP IF NIP EXIT THEN
+    ?DUP IF NIP 0 SWAP EXIT THEN
     _XC-BITMAP-CRC @ <> IF
-        EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+        0 EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
     THEN
-    _XC-CTX @ _EXT4-C.BLOCK + _XC-BITMAP-HOME @ _XC-WRITER @
+    _XC-CTX @ _EXT4-C.BLOCK + 0 ;
+
+\ Stage a new inode's accounting: its bit in the group's inode bitmap, and
+\ in the group's primary descriptor the free and unused counts, the
+\ directory count, the bitmap's checksum and a clear INODE_UNINIT, which
+\ makes a group ready with its first inode.  The table's ITABLE_ZEROED
+\ flag and the group's block side stay as they are: the allocator readies
+\ a BLOCK_UNINIT group with its first block.
+: _XC-STAGE-INODE-ALLOCATION  ( plan -- plan ior )
+    _XC-HR-INODE-GDT _XC-GDT-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
+    _XC-HR-INODE-BITMAP _XC-BITMAP-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
+    _XC-RAW-INODE-BITMAP ?DUP IF NIP EXIT THEN
+    _XC-BITMAP-HOME @ _XC-WRITER @
     _EXT4-JTX-META-ACQUIRE
     DUP IF NIP EXIT THEN DROP DUP _XC-IMAGE !
     DUP _XC-GROUP-INODES @ _XC-FIRST-CLEAR @ BITSET-TEST? 0= IF
@@ -24937,6 +25050,8 @@ VARIABLE _XC-ACQ-HOME
     _XC-GROUP-NEW-UNUSED @ _XC-DESC @ _XC-DESC-ITABLE-UNUSED!
     _XC-GROUP-NEW-USED-DIRS @ _XC-DESC @ _EXT4-DESC-USED-DIRS!
     _XC-BITMAP-NEW-CRC @ _XC-DESC @ _EXT4-JFI-DESC-BITMAP-CRC!
+    _XC-DESC @ _EXT4-GD.FLAGS + DUP W@
+    _EXT4-BG-INODE-UNINIT INVERT AND SWAP W!
     _XC-DESC @ _XC-FI-GROUP @ _XC-CTX @
     _EXT4-RESTAMP-GROUP-DESC ?DUP IF EXIT THEN
     _XC-IMAGE @ _XC-GDT-HOME @ _XC-WRITER @

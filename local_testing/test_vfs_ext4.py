@@ -89991,6 +89991,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
             "( physical-block ctx -- allocated? ior )"
         ),
         ": _EXT4-BUILD-UNINIT-BLOCK-BITMAP  ( group buffer ctx -- ior )",
+        ": _EXT4-BUILD-UNINIT-INODE-BITMAP  ( buffer ctx -- ior )",
     )
     service_names = (
         "_EXT4-GROUP-BLOCK-COUNT",
@@ -90002,6 +90003,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-LOAD-INODE-BITMAP",
         "_EXT4-BLOCK-ALLOCATED?",
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP",
+        "_EXT4-BUILD-UNINIT-INODE-BITMAP",
     )
     for definition in service_definitions:
         assert bitmap.splitlines().count(definition) == 1
@@ -90045,8 +90047,11 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-UB-FIRST",
         "_EXT4-UB-COUNT",
         "_EXT4-UB-SPAN",
+        "_EXT4-UI-BUF",
+        "_EXT4-UI-CTX",
+        "_EXT4-UI-BYTES",
     }
-    assert len(private_cells) == 28
+    assert len(private_cells) == 31
     assert all(cell not in facade for cell in private_cells)
     for removed in (
         "_EXT4-BBC-BUFFER",
@@ -90083,6 +90088,9 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
     block_loader = word_body(bitmap_executable, "_EXT4-LOAD-BLOCK-BITMAP")
     inode_loader = word_body(bitmap_executable, "_EXT4-LOAD-INODE-BITMAP")
     allocated = word_body(bitmap_executable, "_EXT4-BLOCK-ALLOCATED?")
+    uninit_inodes = word_body(
+        bitmap_executable, "_EXT4-BUILD-UNINIT-INODE-BITMAP"
+    )
     validate = word_body(facade_executable, "_EXT4-VALIDATE-BITMAPS")
 
     assert bitmap.index(service_definitions[0]) < bitmap.index(
@@ -90154,6 +90162,18 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
     )
     assert "DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated
 
+    # The bitmap an INODE_UNINIT group stands for: the group's inodes
+    # clear, every later bit of the block set, and no read of the medium.
+    assert "_EXT4-C.IPG + @ 7 + 8 / DUP _EXT4-UI-BYTES !" in uninit_inodes
+    assert uninit_inodes.index("_EXT4-UI-BYTES @ 0 FILL") < (
+        uninit_inodes.index("255 FILL")
+    ) < uninit_inodes.index("BITSET-RANGE-SET?")
+    assert (
+        "_EXT4-C.BSIZE + @ _EXT4-UI-BYTES @ - 255 FILL" in uninit_inodes
+    )
+    assert "_EXT4-READ-BLOCK" not in uninit_inodes
+    assert "_EXT4-LOAD-DESC" not in uninit_inodes
+
     assert validate.count("_EXT4-BLOCK-BITMAP-CRC") == 1
     assert validate.count("_EXT4-INODE-BITMAP-CRC") == 1
     assert validate.count("?DUP IF NIP EXIT THEN") == 2
@@ -90177,8 +90197,9 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-LOAD-BLOCK-BITMAP": 14,
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 4,
         "_EXT4-LOAD-INODE-BITMAP": 11,
+        "_EXT4-BUILD-UNINIT-INODE-BITMAP": 1,
         "_EXT4-BLOCK-BITMAP-CRC": 8,
-        "_EXT4-INODE-BITMAP-CRC": 10,
+        "_EXT4-INODE-BITMAP-CRC": 11,
     }
     for service, count in expected_facade_calls.items():
         assert facade_executable.count(service) == count
@@ -92560,7 +92581,15 @@ def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
 
     eligible = word_body("_XC-FIRST-ELIGIBLE-INDEX")
     scan = word_body("_XC-FI-SCAN-GROUP")
+    uninit_scan = word_body("_XC-FI-SCAN-UNINIT-GROUP")
+    take = word_body("_XC-FI-TAKE")
+    idle = word_body("_XC-FI-BLOCK-IDLE?")
+    find = word_body("_XC-FIND-FREE-INODE")
+    raw = word_body("_XC-RAW-INODE-BITMAP")
+    built = word_body("_XC-BUILD-RAW-INODE-BITMAP")
     stage = word_body("_XC-STAGE-INODE-ALLOCATION")
+    effective = word_body("_XC-VALIDATE-EFFECTIVE-DESC")
+    new_inode = word_body("_XC-STAGE-NEW-INODE")
 
     assert "_EXT4-SB.FIRST-INO + L@" in eligible
     assert (
@@ -92604,13 +92633,104 @@ def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
     ) < scan.index("BITSET-TEST?")
     assert "?DO" not in scan
 
+    # A group still INODE_UNINIT is scanned without its bitmap block, which
+    # nothing has written, and gives its first eligible inode.
+    assert (
+        "_EXT4-GD-FLAGS @ _EXT4-BG-INODE-UNINIT AND 0<> _XC-GROUP-UNINIT !"
+        in scan
+    )
+    assert (
+        "_EXT4-GD-FLAGS @ _EXT4-BG-INODE-ZEROED AND 0= _XC-GROUP-UNZEROED !"
+        in scan
+    )
+    assert scan.index(
+        "_XC-GROUP-UNINIT @ IF _XC-FI-SCAN-UNINIT-GROUP EXIT THEN"
+    ) < scan.index("_EXT4-LOAD-INODE-BITMAP")
+    assert "_EXT4-LOAD-INODE-BITMAP" not in uninit_scan
+    assert "_EXT4-READ-BLOCK" not in uninit_scan
+    assert "BITSET-" not in uninit_scan
+    assert (
+        "_XC-FI-GROUP @ 0= _XC-GROUP-FREE @ _XC-GROUP-INODES @ <> OR IF\n"
+        "        FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT"
+    ) in uninit_scan
+    assert "_XC-FIRST-ELIGIBLE-INDEX DUP _XC-FIRST-CLEAR !" in uninit_scan
+    assert uninit_scan.index("_XC-FIRST-ELIGIBLE-INDEX") < uninit_scan.index(
+        "_EXT4-VALIDATE-INODE-BITMAP-HOME"
+    ) < uninit_scan.index("_EXT4-LOAD-DESC") < uninit_scan.index(
+        "_EXT4-BG-INODE-UNINIT AND 0="
+    ) < uninit_scan.index("_XC-FI-TAKE")
+    assert "_XC-GROUP-UNZEROED @ _XC-TABLE-FRESH !" in uninit_scan
+    assert scan.rstrip().endswith("_XC-FI-TAKE")
+    assert uninit_scan.rstrip().endswith("_XC-FI-TAKE")
+
+    # Both scans take the inode through one word.  A group leaving
+    # INODE_UNINIT has no high-water mark, whatever its descriptor says.
+    assert (
+        "_XC-GROUP-UNINIT @ IF\n"
+        "        0\n"
+        "    ELSE\n"
+        "        _XC-GROUP-INODES @ _XC-GROUP-UNUSED @ -\n"
+        "    THEN _XC-GROUP-HIGH-WATER !"
+    ) in take
+    assert "_XC-GROUP-INODES @ _XC-FIRST-CLEAR @ 1+ -" in take
+    assert take.index("_XC-GROUP-NEW-UNUSED !") < take.index(
+        "_XC-FI-CAPTURE-RECORD"
+    )
+    for moved in ("_XC-GROUP-HIGH-WATER", "_XC-FI-CAPTURE-RECORD"):
+        assert moved not in scan
+        assert moved not in uninit_scan
+
+    # The table block is staged from zeros only where its group's table was
+    # never zeroed and the block holds no other inode in use.
+    assert "BITSET-ALL-CLEAR?" in idle
+    assert "_EXT4-C.BSIZE + @ _XC-CTX @ _EXT4-C.ISIZE + @ /" in idle
+    assert (
+        "_XC-CTX @ _EXT4-C.BLOCK + _XC-FI-BLOCK-IDLE? 0= IF\n"
+        "        DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in scan
+    assert "_XC-GROUP-UNZEROED @ AND _XC-TABLE-FRESH !" in scan
+    assert scan.index("BITSET-TEST?") < scan.index("_XC-FI-BLOCK-IDLE?")
+    assert (
+        "_XC-TABLE-FRESH @ IF\n"
+        "        _XC-IMAGE @ _XC-CTX @ _EXT4-C.BSIZE + @ 0 FILL"
+    ) in new_inode
+    assert new_inode.index("_XC-ACQUIRE-INODE") < new_inode.index(
+        "0 FILL"
+    ) < new_inode.index("_XC-BUILD-NEW-INODE")
+
+    # No group is passed over for being uninitialized.
+    assert "_XC-FI-SAW-UNINIT" not in source
+    assert "_EXT4-UNSUPPORTED" not in find
+    assert find.rstrip().endswith("EXT4-D-GEOMETRY _EXT4-CORRUPT")
+
     exact_test = "_XC-GROUP-INODES @ _XC-FIRST-CLEAR @ BITSET-TEST?"
-    assert stage.count("BITSET-TEST?") == 2
-    assert stage.count(exact_test) == 2
+    assert raw.count("BITSET-TEST?") == 1
+    assert raw.count(exact_test) == 1
+    assert "DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in raw
+    assert "IF 0 VFS-E-CONFLICT EXIT THEN" in raw
+    assert raw.count("_EXT4-INODE-BITMAP-CRC") == 1
+    assert raw.index(
+        "_XC-GROUP-UNINIT @ IF _XC-BUILD-RAW-INODE-BITMAP EXIT THEN"
+    ) < raw.index("_EXT4-LOAD-INODE-BITMAP") < raw.index(
+        "BITSET-TEST?"
+    ) < raw.index("_EXT4-INODE-BITMAP-CRC") < raw.index(
+        "_XC-BITMAP-CRC @ <>"
+    )
+    assert built.index("_EXT4-LOAD-DESC") < built.index(
+        "_EXT4-BG-INODE-UNINIT AND 0="
+    ) < built.index("_EXT4-JTX-META-IMAGE") < built.index(
+        "_EXT4-BUILD-UNINIT-INODE-BITMAP"
+    ) < built.index("_EXT4-INODE-BITMAP-CRC") < built.index(
+        "_XC-BITMAP-CRC !"
+    )
+    assert "IF 0 EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT THEN" in built
+    assert "_EXT4-LOAD-INODE-BITMAP" not in built
+    assert "_EXT4-READ-BLOCK" not in built
+
+    assert stage.count("BITSET-TEST?") == 1
+    assert stage.count(exact_test) == 1
     assert f"DUP {exact_test}" in stage
-    assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in stage
     assert "2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in stage
-    assert "IF VFS-E-CONFLICT EXIT THEN" in stage
     assert "IF DROP VFS-E-CONFLICT EXIT THEN" in stage
     assert (
         "_XC-WRITER @ _EXT4-JWR.SCRATCH-B + @\n"
@@ -92625,14 +92745,32 @@ def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
         match.start()
         for match in re.finditer("_EXT4-INODE-BITMAP-CRC", stage)
     ]
-    assert len(tests) == 2
-    assert len(crcs) == 3
+    assert len(tests) == 1
+    assert len(crcs) == 2
     move = stage.index("MOVE")
     set_bit = stage.index("BITSET-BIT-SET?")
-    assert tests[0] < crcs[0] < stage.index(
+    assert stage.index("_XC-RAW-INODE-BITMAP") < stage.index(
         "_EXT4-JTX-META-ACQUIRE"
-    ) < tests[1] < crcs[1] < move < set_bit < crcs[2]
+    ) < tests[0] < crcs[0] < move < set_bit < crcs[1]
     assert set_bit < stage.index("_EXT4-JTX-META-REPLACE")
+
+    # The descriptor edit clears INODE_UNINIT with the counts and checksum
+    # it records, after the effective descriptor agreed with the cold plan.
+    assert stage.index("_XC-VALIDATE-EFFECTIVE-DESC") < stage.index(
+        "_EXT4-JFI-DESC-BITMAP-CRC!"
+    ) < stage.index("_EXT4-BG-INODE-UNINIT INVERT AND") < stage.index(
+        "_EXT4-RESTAMP-GROUP-DESC"
+    )
+    assert (
+        "_EXT4-BG-INODE-UNINIT AND 0<> _XC-GROUP-UNINIT @ <> IF\n"
+        "        EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT"
+    ) in effective
+    assert (
+        "_XC-GROUP-UNINIT @ 0= IF\n"
+        "        _XC-DESC @ _EXT4-JFI-DESC-BITMAP-CRC@"
+    ) in effective
+    assert "_EXT4-BG-INODE-ZEROED" not in stage
+    assert "_EXT4-BG-BLOCK-UNINIT" not in stage
 
     for removed in (
         "_EXT4-BIT-RANGE-CLEAR?",

@@ -2011,17 +2011,64 @@ block, answers that error (see
 CREATE allocates an empty root-owned mode-0666 regular inode with one link,
 an empty depth-zero extent root, `extra_isize` 32, trusted-clock
 atime/mtime/ctime/crtime, an advanced nonzero generation, and a full inode
-checksum. Inode selection starts in the parent's group and wraps across the
-groups. It accepts only initialized inode groups, verifies the bitmap checksum
-and its free count, skips reserved inode numbers, proves that the bitmap and
-inode-table homes have their unique descriptor roles, and rechecks the
-selected clear bit. Allocation updates the inode bitmap,
-`bg_free_inodes_count`, `bg_itable_unused`, and `s_free_inodes_count` and
-restamps their checksums; groups that need inode-table initialization refuse
-with the write-policy detail. An insert into slack stages the new
-inode-table block, the parent's, the parent's block, the inode descriptor and
-bitmap, and the primary superblock, six homes at most. A missing trusted
-clock refuses before the writer is touched.
+checksum. Inode selection starts in the parent's group and takes the first
+group, wrapping, that has an inode free. In a group whose inode bitmap is in
+use it verifies the bitmap checksum and its free count, skips reserved inode
+numbers, proves that the bitmap and inode-table homes have their unique
+descriptor roles, and rechecks the selected clear bit. Allocation updates the
+inode bitmap, `bg_free_inodes_count`, `bg_itable_unused`, and
+`s_free_inodes_count` and restamps their checksums. An insert into slack
+stages the new inode-table block, the parent's, the parent's block, the inode
+descriptor and bitmap, and the primary superblock, six homes at most. A
+missing trusted clock refuses before the writer is touched.
+
+##### Inode groups on first use
+
+`mke2fs` leaves every group but the first `INODE_UNINIT`: the group's
+descriptor counts all its inodes free, and nothing has written its inode
+bitmap block. A volume from the profile's options therefore starts with 500
+free inodes in ready groups whatever its size. The writer makes each further
+group ready with the first inode it takes there, in that inode's own
+transaction, as it makes a `BLOCK_UNINIT` group ready with its first block.
+What it stages follows the kernel's `ext4_read_inode_bitmap` and
+`__ext4_new_inode`:
+
+- The bitmap the group stands for has every inode clear and every bit after
+  them set to the end of the block. The writer builds it in scratch, sets the
+  new inode's bit, and stages the whole block, so nothing the medium held in
+  that block survives. The pinned `e2fsck` reports a bitmap block whose
+  padding is not set.
+- The descriptor loses `INODE_UNINIT`, its free count falls by one, its
+  directory count rises for a folder, and it takes the bitmap's checksum and
+  then its own. Its `bg_itable_unused` becomes the count of the group's
+  inodes after the new one. An `INODE_UNINIT` group has used none of its
+  table, so the count its descriptor carried is not consulted.
+- `ITABLE_ZEROED` stays as it is, and so does the group's block side: a
+  `BLOCK_UNINIT` group keeps that flag until the allocator takes its first
+  block there, which a new folder's block does in the same transaction. The
+  kernel's allocator readies the block bitmap with the first inode. The
+  format does not ask for that, libext2fs leaves the flag as the writer does,
+  and the pinned `e2fsck` passes a group that has inodes in use and
+  `BLOCK_UNINIT` set.
+
+The cold plan refuses, as corrupt geometry, an `INODE_UNINIT` descriptor that
+does not count every inode free, and the flag on group 0, whose reserved
+inodes are always in use. The transaction is an ordinary insert: the same six
+homes for a file and eight for a folder, under the same sealed certificate.
+Recovery replays it or drops it whole, so a power cut leaves the group either
+`INODE_UNINIT` and untouched or ready with its inode.
+
+A table without `ITABLE_ZEROED` holds whatever the medium held, as the tables
+of a volume from a default `mke2fs` on Linux do until a kernel mount has
+zeroed them. The kernel initializes such a table a block at a time:
+`__ext4_get_inode_loc` gives a new inode whose table block holds no other
+inode in use a block of zeros in place of the medium's bytes, and the lazy
+initializer later zeroes only the blocks past the used ones before it sets
+`ITABLE_ZEROED`. The writer keeps that rule. In a group without the flag, a
+new inode whose table block holds no other inode in use is staged in a block
+of zeros; in a group with the flag the block is staged as the medium holds
+it, which is zeros or the records its earlier inodes left. The new inode's
+generation follows the one its table entry held on the medium in both cases.
 
 #### MKDIR
 

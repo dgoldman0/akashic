@@ -61,6 +61,7 @@ REQUIRE ../../../../math/crc.f
 15         CONSTANT _EXT4-N-BLOCK-PTRS
 1 CONSTANT _EXT4-BG-INODE-UNINIT
 2 CONSTANT _EXT4-BG-BLOCK-UNINIT
+4 CONSTANT _EXT4-BG-INODE-ZEROED
 
 \ Superblock offsets (all ext4 fields are little-endian).
 0x000 CONSTANT _EXT4-SB.INODES

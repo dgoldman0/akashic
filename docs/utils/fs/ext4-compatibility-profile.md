@@ -106,9 +106,11 @@ authenticated slack in either an existing one-block linear directory or an
 existing depth-zero HTree leaf. A full admitted one-block linear parent instead
 converts atomically to a checksummed depth-zero HTree root and two hash-sorted
 leaves, allocating exactly two blocks and publishing exact three-block parent
-size, sector, and extent state. It allocates from an initialized inode bitmap
-and commits the selected namespace blocks, parent/new inode records,
-allocation bitmaps, descriptors, and primary-super accounting atomically.
+size, sector, and extent state. It allocates from the inode bitmap of the
+parent's group or the next with an inode free, making an `INODE_UNINIT` group
+ready with its first inode, and commits the selected namespace blocks,
+parent/new inode records, allocation bitmaps, descriptors, and primary-super
+accounting atomically.
 An existing depth-zero HTree may also split a full hash-selected leaf under the
 bound seeded half-MD4 policy while its root retains an entry slot. The split
 rewrites that leaf and the root,
@@ -2297,11 +2299,12 @@ block linear directory or an HTree at level zero or one. It inserts through
 the directory insert that CREATE and LINK share, described in the driver
 document, which takes a block's slack or grows the parent as the kernel does.
 The parent link count must be from 2 through 64999. Inherited ACL or setgid
-policy, non-root ownership, broader maps, lazy inode-table initialization, and
-an exhausted parent link count refuse without approximation.
+policy, non-root ownership, broader maps, and an exhausted parent link count
+refuse without approximation.
 
-Selection authenticates one initialized inode-bitmap slot and one clear data-
-bitmap bit. A complete parent-map audit proves that the selected linear block
+Selection authenticates one inode-bitmap slot, in a group it makes ready when
+the group is still `INODE_UNINIT`, and one clear data-bitmap bit.
+A complete parent-map audit proves that the selected linear block
 or indexed leaf occurs exactly once in that parent. A paired whole-filesystem
 owner proof then excludes every other inode from both that selected block and
 the distinct child candidate. Dry staging occurs before journal activation,

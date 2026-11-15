@@ -111,8 +111,9 @@ Broader write and recovery cases advance from reachable evidence while full
 existing multi-leaf depth-one ratchet is closed through target-leaf selection,
 selected-key repair, in-place editing under a full root, and selected-leaf
 splitting while the root retains index capacity. The staged binding also
-publishes crash-closed regular-file `CREATE`. It allocates one inode from an
-initialized inode group and inserts an empty root-owned mode-0666 file into
+publishes crash-closed regular-file `CREATE`. It allocates one inode from the
+parent's group or the next with one free, making an `INODE_UNINIT` group ready
+with its first inode, and inserts an empty root-owned mode-0666 file into
 authenticated slack in either a one-block linear directory or an existing
 depth-zero HTree leaf. If the hash-selected leaf is full, the same operation
 may split it under the bound seeded half-MD4 policy while the depth-zero HTree
@@ -131,8 +132,8 @@ canonical depth-zero HTree root and two packed leaves. Conversion allocates
 exactly two blocks, builds a one-to-three-entry
 inline parent extent root according to physical adjacency, and derives exact
 `8/0/0` through `12/0/0` credit from the distinct inode, directory, bitmap,
-descriptor, and primary-superblock homes. Directory xattrs/default ACLs, lazy
-inode-group initialization, and non-root credential policy still refuse before
+descriptor, and primary-superblock homes. Directory xattrs/default ACLs and
+non-root credential policy still refuse before
 publication. The staged binding also publishes strict same-block shrink
 `TRUNCATE` as exact `2/0/0`, one-block release to zero through the modern-
 orphan cleanup path, all three regular-file `UNLINK` lifetimes, bounded one-
