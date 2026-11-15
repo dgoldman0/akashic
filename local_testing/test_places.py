@@ -114,6 +114,10 @@ def test_declarations_are_checked():
         '     S" docs" S" /x" PLACE-WRITABLE PVA @ PLACES-DECLARE R. .',
         '     S" rel" S" docs" PLACE-WRITABLE PVA @ PLACES-DECLARE R. .',
         '     S" odd" S" /" 7 PVA @ PLACES-DECLARE R. .',
+        # A folder is declared by its own path: no `..`, no empty name.
+        '     S" b1" S" /a/../b" PLACE-WRITABLE PVA @ PLACES-DECLARE R. .',
+        '     S" b2" S" /docs/" PLACE-WRITABLE PVA @ PLACES-DECLARE R. .',
+        '     S" b3" S" //docs" PLACE-WRITABLE PVA @ PLACES-DECLARE R. .',
         '     S" va" PLACES-VOLUME R. PVA @ = .',
         '     S" Va" PLACES-VOLUME R. .',
         # A writable grant of a read-only place, and a second grant.
@@ -123,7 +127,8 @@ def test_declarations_are_checked():
         '     PLACE-READ-ONLY D-ALL @ R@ PLSET-GRANT R. .',
         '     R> PLSET-FREE ;',
         'T',
-    ], [INVALID, 0, EXISTS, 0, INVALID, 0, INVALID, 0, 0, -1, INVALID, 0,
+    ], [INVALID, 0, EXISTS, 0, INVALID, 0, INVALID, 0,
+        INVALID, 0, INVALID, 0, INVALID, 0, 0, -1, INVALID, 0,
         READONLY, 0, 0, -1, EXISTS, 0])
 
 
@@ -349,3 +354,35 @@ def test_the_default_set():
         '     SET @ PLSET-FREE  PLACES-DEFAULT . ;',
         'T',
     ], [0, -1, -1, 0])
+
+
+def test_a_live_entry_is_placed_by_its_own_parent_chain():
+    """PLACE-PATH, PLACE-HOLDS? and PLACE-RENAME take a live entry.  They
+    find the folder among the entry's parents and match it against the
+    declared path, so they look nothing up before they use the entry."""
+    expect([
+        'VARIABLE P-DEEP',
+        ': T  S" deep" S" /docs/sub" PLACE-WRITABLE PVA @ PLACES-DECLARE THROW',
+        '     PLACE-WRITABLE SWAP SET @ PLSET-GRANT THROW P-DEEP !',
+        '     S" f" P-DEEP @ PLACE-CREATE THROW DROP',
+        '     S" /docs/sub/f" VA @ VFS-RESOLVE P-DEEP @ _PB 256 PLACE-PATH',
+        '         R. _PB SWAP TYPE SPACE',
+        '     S" /docs/sub" VA @ VFS-RESOLVE P-DEEP @ _PB 256 PLACE-PATH',
+        '         R. _PB SWAP TYPE SPACE',
+        '     S" /docs/sub" VA @ VFS-RESOLVE P-DEEP @ PLACE-HOLDS? .',
+        '     S" /docs/a.txt" VA @ VFS-RESOLVE P-DEEP @ PLACE-HOLDS? .',
+        '     S" /docs" VA @ VFS-RESOLVE P-DEEP @ PLACE-HOLDS? .',
+        '     VA @ V.ROOT @ P-DEEP @ PLACE-HOLDS? .  0 P-DEEP @ PLACE-HOLDS? .',
+        '     S" /docs/a.txt" VA @ VFS-RESOLVE P-DEEP @ _PB 256 PLACE-PATH R. .',
+        # Another volume's entry is in no place of this one.
+        '     VB @ V.ROOT @ P-DEEP @ PLACE-HOLDS? .',
+        '     S" g" S" /docs/sub/f" VA @ VFS-RESOLVE P-DEEP @ PLACE-RENAME R.',
+        '     S" /docs/sub/g" VA @ VFS-RESOLVE 0<> .',
+        '     S" h" S" /docs/a.txt" VA @ VFS-RESOLVE P-DEEP @ PLACE-RENAME R.',
+        '     S" h" S" /docs/sub" VA @ VFS-RESOLVE P-DEEP @ PLACE-RENAME R.',
+        # A folder of the same name elsewhere is not the place's folder.
+        '     S" /secret" VA @ VFS-CD? THROW  S" sub" VA @ VFS-MKDIR THROW',
+        '     S" /" VA @ VFS-CD? THROW',
+        '     S" /secret/sub" VA @ VFS-RESOLVE P-DEEP @ PLACE-HOLDS? . ;',
+        'T',
+    ], [0, "/f", 0, "/", -1, 0, 0, 0, 0, XDEV, 0, 0, 0, -1, XDEV, INVALID, 0])

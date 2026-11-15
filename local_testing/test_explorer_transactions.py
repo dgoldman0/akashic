@@ -202,7 +202,7 @@ HELPERS = [
     "0 _TF-USE-CALLS ! 0 _TF-USE-THROW-AT !",
     "['] VFS-CLOSE _FCP-CLOSE-XT ! ['] VFS-USE _FCP-USE-XT !",
     "['] VFS-RM _FCP-RM-XT ! ['] VFS-SYNC _FCP-SYNC-XT !",
-    "T-VFS-NEW _TV ! _TV @ _FEXP-VFS !",
+    "T-VFS-NEW _TV ! _TV @ _FCP-VFS !",
     "_TV @ VFS-USE S\" dest\" _TV @ VFS-MKDIR THROW",
     "S\" payload-across-io\" S\" /src.txt\" T-PUT",
     "T-CLIP-SRC T-SELECT-DEST _FEXP-CLIP-COPY _FEXP-CLIP-OP !",
@@ -249,7 +249,11 @@ def build_snapshot() -> None:
         "9 CONSTANT _FCP-S-DELETE-SYNC",
         "10 CONSTANT _FCP-S-ROLLBACK",
         "11 CONSTANT _FCP-S-INTERNAL",
-        "VARIABLE _FEXP-VFS VARIABLE _FEXP-SEL-IN",
+        # The transaction keeps its own instance cell; the applet's front
+        # sets it and the clipboard's place, which this fixture stands in
+        # for.
+        "VARIABLE _FEXP-SEL-IN",
+        "VARIABLE _FEXP-SEL-PLACE VARIABLE _FEXP-CLIP-PLACE",
         "VARIABLE _FEXP-CLIP-OP",
         "VARIABLE _FEXP-CLIP-PATH-LEN",
         "CREATE _FEXP-CLIP-PATH _FEXP-PATH-CAP ALLOT",

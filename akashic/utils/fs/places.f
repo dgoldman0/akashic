@@ -20,7 +20,12 @@
 \
 \  A place keeps no entry of its folder.  It resolves the folder when it
 \  is asked, so a folder that another holder renames, or the driver
-\  evicts, is found again or reported absent.
+\  evicts, is found again or reported absent.  A word that is handed a
+\  live entry looks nothing up before it uses the entry, since a lookup
+\  may evict it: it finds the folder on the entry's own parent chain and
+\  matches that chain against the declared folder path, name for name.
+\  A folder is therefore declared by its own path, with no symbolic link
+\  in it.
 \
 \  The registry never stops a boot: every word answers a status, and
 \  composition decides what an unavailable place means.
@@ -168,6 +173,32 @@ VARIABLE _PL-CHANGES     0 _PL-CHANGES !
     REPEAT
     NIP NIP ;
 
+\ A folder is "/" or names joined and led by single slashes, none of
+\ them `.` or `..`: the path the folder's entry has on its volume.
+VARIABLE _PLV-START
+
+: _PL-FOLDER-NAME?  ( a u -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    DUP 1 = IF DROP C@ [CHAR] . <> EXIT THEN
+    DUP 2 = IF
+        DROP DUP C@ [CHAR] . = SWAP 1+ C@ [CHAR] . = AND 0= EXIT
+    THEN
+    2DROP -1 ;
+
+: _PL-FOLDER-PATH?  ( a u -- flag )
+    OVER C@ [CHAR] / <> IF 2DROP 0 EXIT THEN
+    DUP 1 = IF 2DROP -1 EXIT THEN
+    1 _PLV-START !
+    DUP 1 DO
+        OVER I + C@ [CHAR] / = IF
+            OVER _PLV-START @ + I _PLV-START @ - _PL-FOLDER-NAME? 0= IF
+                2DROP 0 UNLOOP EXIT
+            THEN
+            I 1+ _PLV-START !
+        THEN
+    LOOP
+    SWAP _PLV-START @ + SWAP _PLV-START @ - _PL-FOLDER-NAME? ;
+
 VARIABLE _PDC-NA   VARIABLE _PDC-NU
 VARIABLE _PDC-FA   VARIABLE _PDC-FU
 VARIABLE _PDC-ACCESS
@@ -178,8 +209,8 @@ VARIABLE _PDC-D
     DUP PLACE-READ-ONLY = SWAP PLACE-WRITABLE = OR ;
 
 \ PLACES-DECLARE ( name-a name-u folder-a folder-u access volume -- decl ior )
-\   Declare the place NAME: FOLDER, a path from the volume's root, with
-\   ACCESS.  The volume need not be attached yet.
+\   Declare the place NAME: FOLDER, the folder's own path from the
+\   volume's root, with ACCESS.  The volume need not be attached yet.
 : PLACES-DECLARE  ( name-a name-u folder-a folder-u access volume -- decl ior )
     _PDC-VOL ! _PDC-ACCESS ! _PDC-FU ! _PDC-FA ! _PDC-NU ! _PDC-NA !
     _PDC-VOL @ 0= IF 0 VFS-E-INVALID EXIT THEN
@@ -187,7 +218,7 @@ VARIABLE _PDC-D
     _PDC-ACCESS @ _PL-ACCESS? 0= IF 0 VFS-E-INVALID EXIT THEN
     _PDC-FA @ 0= _PDC-FU @ 1 < OR IF 0 VFS-E-INVALID EXIT THEN
     _PDC-FU @ VFS-PATH-MAX > IF 0 VFS-E-NAMETOOLONG EXIT THEN
-    _PDC-FA @ C@ [CHAR] / <> IF 0 VFS-E-INVALID EXIT THEN
+    _PDC-FA @ _PDC-FU @ _PL-FOLDER-PATH? 0= IF 0 VFS-E-INVALID EXIT THEN
     _PDC-NA @ _PDC-NU @ _PL-DECL-FIND IF 0 VFS-E-EXISTS EXIT THEN
     64 _PDC-NU @ + _PDC-FU @ + ALLOCATE IF DROP 0 VFS-E-NOMEM EXIT THEN
     _PDC-D !
@@ -461,6 +492,71 @@ VARIABLE _PLB-ROOT     \ its folder
     R> _PLB-V @ V.CWD !
     ?DUP IF THROW THEN ;
 
+\ The number of names in a folder path, and of steps from an entry up to
+\ its volume's root.
+: _PL-NAMES  ( a u -- n )
+    0 -ROT
+    BEGIN DUP 0> WHILE
+        OVER C@ [CHAR] / = IF
+            1 /STRING
+        ELSE
+            ROT 1+ -ROT
+            BEGIN
+                DUP 0> IF OVER C@ [CHAR] / <> ELSE 0 THEN
+            WHILE
+                1 /STRING
+            REPEAT
+        THEN
+    REPEAT
+    2DROP ;
+
+: _PL-DEPTH  ( inode -- n )
+    0 SWAP BEGIN IN.PARENT @ ?DUP WHILE SWAP 1+ SWAP REPEAT ;
+
+VARIABLE _PLF-A
+VARIABLE _PLF-END
+
+\ _PL-IS-FOLDER? ( dentry folder-a folder-u -- flag )
+\   The entry's path from its volume's root is the folder path, name for
+\   name from the last one up.
+: _PL-IS-FOLDER?  ( dentry folder-a folder-u -- flag )
+    OVER + _PLF-END ! _PLF-A !
+    BEGIN
+        BEGIN
+            _PLF-END @ _PLF-A @ > IF
+                _PLF-END @ 1- C@ [CHAR] / =
+            ELSE 0 THEN
+        WHILE
+            -1 _PLF-END +!
+        REPEAT
+        _PLF-END @ _PLF-A @ >
+    WHILE
+        _PLF-END @
+        BEGIN
+            DUP _PLF-A @ > IF DUP 1- C@ [CHAR] / <> ELSE 0 THEN
+        WHILE
+            1-
+        REPEAT                                      ( dentry start )
+        OVER IN.PARENT @ 0= IF 2DROP 0 EXIT THEN
+        DUP _PLF-END @ OVER -                       ( dentry start start len )
+        3 PICK IN.NAME @ _VFS-STR-GET STR-STR= 0= IF 2DROP 0 EXIT THEN
+        _PLF-END !
+        IN.PARENT @
+    REPEAT
+    IN.PARENT @ 0= ;
+
+\ _PL-ROOT-OF ( inode decl -- root | 0 )
+\   The declared folder as a live entry's ancestor, or the entry itself,
+\   found on the entry's own parent chain; 0 when the entry is not in
+\   the folder.  Nothing is looked up, so the entry stays as it is.
+: _PL-ROOT-OF  ( inode decl -- root | 0 )
+    >R
+    DUP D.OWNER @ R@ _PD.VOLUME @ _PV.VFS @ <> IF DROP R> DROP 0 EXIT THEN
+    DUP _PL-DEPTH R@ _PD-FOLDER _PL-NAMES -         ( inode steps )
+    DUP 0< IF 2DROP R> DROP 0 EXIT THEN
+    0 ?DO IN.PARENT @ LOOP                          ( candidate )
+    DUP R> _PD-FOLDER _PL-IS-FOLDER? 0= IF DROP 0 THEN ;
+
 \ _PL-UNDER? ( inode root -- flag )
 \   ROOT is INODE or one of its parents.
 : _PL-UNDER?  ( inode root -- flag )
@@ -509,12 +605,11 @@ VARIABLE _PLK-POLICY
     ['] _PL-RESOLVE VFS-TRANSACTION ;
 
 : _PL-HOLDS?  ( inode place -- flag )
-    OVER 0= IF 2DROP 0 EXIT THEN
-    _PL-ENTER IF DROP 0 EXIT THEN
-    _PLB-ROOT @ _PL-UNDER? ;
+    OVER 0= OVER _PLACE? 0= OR IF 2DROP 0 EXIT THEN
+    _PG.DECL @ _PL-ROOT-OF 0<> ;
 
 \ PLACE-HOLDS? ( inode place -- flag )
-\   Whether a live entry lies in the place.
+\   Whether a live entry lies in the place.  The entry is not disturbed.
 : PLACE-HOLDS?  ( inode place -- flag )
     ['] _PL-HOLDS? VFS-TRANSACTION ;
 
@@ -565,12 +660,16 @@ VARIABLE _PLP-CAP
 
 : _PL-PLACE-PATH  ( inode place buf cap -- len ior )
     _PLP-CAP ! _PLP-BUF !
-    OVER 0= IF 2DROP 0 VFS-E-INVALID EXIT THEN
-    _PL-ENTER ?DUP IF NIP 0 SWAP EXIT THEN
-    _PLB-ROOT @ _PLP-BUF @ _PLP-CAP @ _PL-PATH ;
+    OVER 0= OVER _PLACE? 0= OR IF 2DROP 0 VFS-E-INVALID EXIT THEN
+    DUP PLACE-VFS 0= IF NIP PLACE-STATUS 0 SWAP EXIT THEN
+    OVER SWAP _PG.DECL @ _PL-ROOT-OF                ( inode root|0 )
+    DUP 0= IF 2DROP 0 VFS-E-XDEV EXIT THEN
+    _PLP-BUF @ _PLP-CAP @ _PL-PATH ;
 
 \ PLACE-PATH ( inode place buf cap -- len ior )
-\   A live entry's path in the place, "/" for the place's folder.
+\   A live entry's path in the place, "/" for the place's folder, and
+\   VFS-E-XDEV for an entry that is not in the place.  The entry is not
+\   disturbed.
 : PLACE-PATH  ( inode place buf cap -- len ior )
     ['] _PL-PLACE-PATH VFS-TRANSACTION ;
 
@@ -674,16 +773,23 @@ VARIABLE _PLR-IN
 : PLACE-RM  ( path-a path-u place -- ior )
     ['] _PL-RM VFS-TRANSACTION ;
 
+VARIABLE _PLN-P
+
 : _PL-RENAME  ( new-a new-u inode place -- ior )
-    _PL-ENTER-WRITE ?DUP IF >R DROP 2DROP R> EXIT THEN
+    DUP _PLN-P !
+    _PLACE? 0= IF DROP 2DROP VFS-E-INVALID EXIT THEN
     DUP 0= IF DROP 2DROP VFS-E-INVALID EXIT THEN
-    DUP _PLB-ROOT @ = IF DROP 2DROP VFS-E-INVALID EXIT THEN
-    DUP _PLB-ROOT @ _PL-UNDER? 0= IF DROP 2DROP VFS-E-XDEV EXIT THEN
-    _PLB-V @ VFS-RENAME ;
+    _PLN-P @ PLACE-VFS 0= IF DROP 2DROP _PLN-P @ PLACE-STATUS EXIT THEN
+    _PLN-P @ PLACE-WRITABLE? 0= IF DROP 2DROP VFS-E-READONLY EXIT THEN
+    DUP _PLN-P @ _PG.DECL @ _PL-ROOT-OF             ( new-a new-u inode root|0 )
+    DUP 0= IF 2DROP 2DROP VFS-E-XDEV EXIT THEN
+    OVER = IF DROP 2DROP VFS-E-INVALID EXIT THEN
+    _PLN-P @ PLACE-VFS VFS-RENAME ;
 
 \ PLACE-RENAME ( new-a new-u inode place -- ior )
 \   Give a live entry of the place another name in its folder.  An
-\   existing name is refused.
+\   existing name is refused.  The entry is found in the place by its own
+\   parent chain, so it is not disturbed before it is renamed.
 : PLACE-RENAME  ( new-a new-u inode place -- ior )
     ['] _PL-RENAME VFS-TRANSACTION ;
 

@@ -15,14 +15,16 @@ authority policy.
 | `CSC-SEMANTIC-RREF!` | `( schema -- )` | resource value bounded by the canonical semantic-RREF maximum |
 | `CSC-OPTIONAL-SEMANTIC-RREF!` | `( schema -- )` | null or bounded semantic-RREF resource value |
 | `CSC-RREF-TEXT!` | `( schema -- )` | UTF-8 string bounded to canonical RREF text |
-| `CSC-VFS-LOCATOR-TEXT!` | `( schema -- )` | UTF-8 string bounded for `vfs:` plus a 512-byte Explorer path |
+| `CSC-VFS-LOCATOR-TEXT!` | `( schema -- )` | UTF-8 string bounded for a backing locator, `vfs://<place>/<path>` |
 
 `CSC-RREF-TEXT-MAX` follows `IRES-RREF-URI-MAX` and is currently 110 bytes.
-`CSC-VFS-LOCATOR-TEXT-MAX` is separately fixed at 516 bytes. They are not
-interchangeable: existing 516-byte resource schemas may admit VFS locators and
-must not be narrowed merely because a semantic RREF is shorter.
+`CSC-VFS-LOCATOR-TEXT-MAX` follows `IRES-VFS-URI-MAX`, 773 bytes: the
+six-byte prefix, a place name of up to 255 bytes and a path of up to 512
+bytes. They are not interchangeable: resource schemas of that bound may
+admit backing locators and must not be narrowed merely because a semantic
+RREF is shorter.
 
 Schema validation checks type, byte bound, and UTF-8. Canonical RREF grammar
-and VFS prefix/path policy remain with `IRES-RREF@`, `IRES-VFS-PATH`, and the
+and locator place/path policy remain with `IRES-RREF@`, `IRES-PLACE@`, and the
 owning capability; an initializer alone cannot prove locator provenance or
 grant authority.

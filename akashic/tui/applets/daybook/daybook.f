@@ -40,6 +40,7 @@ REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource.f
+REQUIRE ../../../interop/place-resource.f
 REQUIRE ../../../interop/resource-session.f
 REQUIRE automation-view.f
 REQUIRE ../../../utils/clipboard.f
@@ -2087,7 +2088,8 @@ VARIABLE _DB-SOURCE-VALUE
         ENDOF
         RSES-M-STALE OF IRES-S-INVALID ENDOF
         RSES-M-BLOCKED OF IRES-S-INVALID ENDOF
-        S" /daybook.md" _DB-SOURCE-VALUE @ IRES-VFS! SWAP
+        S" /daybook.md" _DB-CURRENT-INSTANCE @ CINST-HOME
+            _DB-SOURCE-VALUE @ IRES-PLACE! SWAP
     ENDCASE ;
 
 : _DB-SOURCE-COMPLETE  ( request -- )
@@ -2427,7 +2429,7 @@ CREATE _DB-AR-LOCATOR QLOC-SIZE ALLOT
     _DB-IO-CAP _DB-AGENDA-SCHEMA CS-MAX-LEN!
     _DB-RESOURCE-SCHEMA CS-INIT
     CV-T-RESOURCE _DB-RESOURCE-SCHEMA CS-ALLOW!
-    516 _DB-RESOURCE-SCHEMA CS-MAX-LEN!
+    IRES-VFS-URI-MAX _DB-RESOURCE-SCHEMA CS-MAX-LEN!
     _DB-INT-SCHEMA CS-INIT
     CV-T-INT _DB-INT-SCHEMA CS-ALLOW!
 

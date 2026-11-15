@@ -787,14 +787,17 @@ KINDS["explorer"] = Kind(
     modules=("tui/semantic-collections.f", "tui/widgets/explorer.f"),
     change=(
         "EXPL-EXPAND-ALL", "EXPL-COLLAPSE-ALL", "EXPL-SHOW-HIDDEN!",
-        "EXPL-REFRESH", "EXPL-NEW-FILE", "EXPL-NEW-DIR", "EXPL-ROOT!",
+        "EXPL-REFRESH", "EXPL-NEW-FILE", "EXPL-NEW-DIR",
         "EXPL-RENAME",
     ),
     same=(
         "EXPL-SELECTED", "EXPL-ON-OPEN", "EXPL-ON-SELECT",
-        "EXPL-SHOW-HIDDEN?", "EXPL-VFS", "EXPL-TREE", "EXPL-DELETE",
+        "EXPL-SHOW-HIDDEN?", "EXPL-SET", "EXPL-TREE", "EXPL-DELETE",
     ),
-    other=("EXPL-NEW", "EXPL-FREE", "EXPL-ENTRY-KEY"),
+    other=(
+        "EXPL-NEW", "EXPL-FREE", "EXPL-ENTRY-KEY", "EXPL-PLACE-KEY",
+        "EXPL-PATH-KEY",
+    ),
     minimum=20,
     scenario=r'''
 \ Keys reach the explorer's tree, and its rename input while it renames,
@@ -815,7 +818,20 @@ CREATE _EX-EV 24 ALLOT
     S" .hidden" VFS-CUR VFS-MKFILE DROP
     S" docs" VFS-CUR VFS-CD DROP  S" readme" VFS-CUR VFS-MKFILE DROP
     S" .." VFS-CUR VFS-CD DROP ;
-: _EX-MAKE  ( -- widget )  0 0 10 30 RGN-NEW _EX-VFS DUP V.ROOT @ EXPL-NEW ;
+\ Each explorer shows a set of its own: one writable place over its
+\ file system's root, on a volume named for it, with one label for all.
+VARIABLE _EX-N  0 _EX-N !
+CREATE _EX-NAME 3 ALLOT
+: _EX-NAME$  ( -- a u )
+    101 _EX-NAME C!  120 _EX-NAME 1+ C!  _EX-N @ 48 + _EX-NAME 2 + C!
+    1 _EX-N +!  _EX-NAME 3 ;
+: _EX-SET  ( vfs -- set )
+    _EX-NAME$ 2DUP PLACES-VOLUME THROW >R
+    ROT R@ PVOL-ATTACH THROW
+    S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW
+    S" Files" 2 PICK PLACE-LABEL! THROW
+    PLSET-NEW THROW >R  PLACE-WRITABLE SWAP R@ PLSET-GRANT THROW DROP  R> ;
+: _EX-MAKE  ( -- widget )  0 0 10 30 RGN-NEW _EX-VFS _EX-SET EXPL-NEW ;
 : _ES1  _WR-W @ EXPL-EXPAND-ALL ;             ' _ES1 _WR-STEP
 : _ES2  _WR-W @ EXPL-COLLAPSE-ALL ;           ' _ES2 _WR-STEP
 : _ES3  -1 _WR-W @ EXPL-SHOW-HIDDEN! ;        ' _ES3 _WR-STEP
@@ -823,7 +839,7 @@ CREATE _EX-EV 24 ALLOT
 : _ES5  _WR-W @ EXPL-NEW-FILE ;               ' _ES5 _WR-STEP
 : _ES6  _WR-W @ EXPL-NEW-DIR ;                ' _ES6 _WR-STEP
 ' _ES1 _WR-STEP
-: _ES8  _WR-W @ EXPL-VFS V.ROOT @ _WR-W @ EXPL-ROOT! ;    ' _ES8 _WR-STEP
+' _ES2 _WR-STEP
 : _ES10  KEY-RIGHT _EX-KEY ;                  ' _ES10 _WR-STEP
 : _ES11  KEY-DOWN _EX-KEY ;                   ' _ES11 _WR-STEP
 : _ES9  _WR-W @ EXPL-RENAME ;                 ' _ES9 _WR-STEP
@@ -832,11 +848,11 @@ CREATE _EX-EV 24 ALLOT
 _EX-MAKE CONSTANT _EX-A  _EX-MAKE CONSTANT _EX-B
 _EX-A _EX-B _WR-RUN
 _EX-A _WR-W !
-: _EQ1  _WR-W @ EXPL-SELECTED DROP ;          ' _EQ1 _WR-STILL
+: _EQ1  _WR-W @ EXPL-SELECTED 2DROP ;         ' _EQ1 _WR-STILL
 : _EQ2  ['] _WR-NOP2 _WR-W @ EXPL-ON-OPEN ;   ' _EQ2 _WR-STILL
 : _EQ3  ['] _WR-NOP2 _WR-W @ EXPL-ON-SELECT ;     ' _EQ3 _WR-STILL
 : _EQ4  _WR-W @ EXPL-SHOW-HIDDEN? DROP ;      ' _EQ4 _WR-STILL
-: _EQ5  _WR-W @ EXPL-VFS DROP ;               ' _EQ5 _WR-STILL
+: _EQ5  _WR-W @ EXPL-SET DROP ;               ' _EQ5 _WR-STILL
 : _EQ6  _WR-W @ EXPL-TREE DROP ;              ' _EQ6 _WR-STILL
 \ Deleting asks first, in a dialog of its own; the explorer is as it was.
 : _EQ7  _WR-W @ EXPL-DELETE ;                 ' _EQ7 _WR-STILL

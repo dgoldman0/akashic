@@ -146,6 +146,16 @@ reported absent. `PLSET-REVISION` moves when the set's membership or
 access changes and when any volume attaches, detaches or is refused, so a
 list of places redraws.
 
+`PLACE-PATH`, `PLACE-HOLDS?` and `PLACE-RENAME` are handed a live entry,
+and a lookup may evict an entry that nothing holds open. They therefore
+look nothing up before they use it: they find the folder on the entry's
+own parent chain, by the depth of the declared folder path, and match
+that chain against the path name for name. A folder is for that reason
+declared by its own path, `/` or plain names joined by single slashes,
+with no `.` or `..` and no symbolic link in it; `PLACES-DECLARE` refuses
+the first three, and a folder reached through a link answers
+`VFS-E-XDEV` to those three words.
+
 Each volume has one current directory, which the resolver uses for
 relative paths and the ext4 driver requires as the parent of a new entry.
 The `PLACE-` words set it and restore it inside one `VFS-TRANSACTION`, so
@@ -192,9 +202,13 @@ CINST-PLACES  ( instance -- set | 0 )
 ```
 
 `IRES-PLACE@` looks the name up in the reader's own set, so a resource
-naming a place the reader was not given fails, which is where a
-Practice's choice takes effect. `CINST-PLACES` is the service lookup
-described above.
+naming a place the reader was not given fails with `IRES-S-NO-PLACE`,
+which is where a Practice's choice takes effect. `IRES-PLACE-PARSE` is the
+same for a URI's text, and `CINST-PLACES` is the service lookup described
+above, with `CINST-HOME` and `CINST-ORIGIN` for the two roles. A schema
+bounds a locator by `IRES-VFS-URI-MAX`, 773 bytes: the prefix, a name of
+any length the rule allows, and a path of 512 bytes, the path capacity the
+components that exchange files keep.
 
 ### Copy and move
 
@@ -227,13 +241,21 @@ copy is retried and is otherwise a hidden file.
 ```forth
 EXPL-NEW      ( rgn set -- widget )
 EXPL-SELECTED ( widget -- inode place )    inode 0 on a place's own row
+EXPL-SET      ( widget -- set )
+EXPL-PLACE-KEY  ( place -- key )
+EXPL-PATH-KEY   ( path-a path-u place -- key )
 on-open and on-select callbacks  ( inode place explorer -- )
 ```
 
 Its top rows are the set's places by label, each opening onto its
-folder. An unavailable place shows its reason and stays closed, and a
-read-only place refuses rename, delete and new. The name limit comes from
-the volume (`VSF.NAMEMAX`). The rows are tree rows of the canonical
+folder. An unavailable place shows its reason after its label and stays
+closed, and a read-only place refuses rename, delete and new, as does a
+place's own row. A top row's node is the place handle and every other
+node a VFS entry; the widget tells them apart by asking the set. The tree
+calls the key callback for each row in order and a query stops at the row
+it finds, so the last place that callback saw is the row's place, which
+stays exact when two places show one folder. The name limit comes from
+the place (`PLACE-NAME-LIMIT`). The rows are tree rows of the canonical
 widget, mounted on an ordinary `<region>`, so the cell fallback and rich
 output draw the same list with no UIDL annotation, scene or terminal call
 added.
@@ -291,27 +313,50 @@ runs once after slice 8.
 
 ## Status
 
-In the tree: `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
-`local_testing/test_places.py` on two RAM volumes.
+Slice 1 is in the tree. The linked build declares one place and everything
+below runs on it.
 
-The runtime works over a set. `tui/platform/mp64fs-vfs.f` reports the
-instance it mounts or adopts as the volume `boot`. The image builder
-follows that module's load with the declaration every build has today
-(`PLACES_BOOT_LINES` in `local_testing/akashic_tui.py`): one writable
-place over the boot volume's root, required, and a default set in which
-it is home and origin. `PACT-ACTIVATE` takes a set, reads the Practice
-head from its home, stores the set in `CTX.PLACES`, and narrows it in
-recovery; a set with no usable home activates in recovery with no head.
-`PACT-PLACES` answers the activation's set, and Desk lends it under
-`org.akashic.fs.places` through its service table, whose getters now
-receive the asking instance. The sandbox requires a context with no
-place set.
+- `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
+  `local_testing/test_places.py` on two RAM volumes.
+- The runtime works over a set. `tui/platform/mp64fs-vfs.f` reports the
+  instance it mounts or adopts as the volume `boot`. The image builder
+  follows that module's load with the declaration every build has today
+  (`PLACES_BOOT_LINES` in `local_testing/akashic_tui.py`): one writable
+  place over the boot volume's root, required, and a default set in which
+  it is home and origin. `PACT-ACTIVATE` takes a set, reads the Practice
+  head from its home, stores the set in `CTX.PLACES`, and narrows it in
+  recovery; a set with no usable home activates in recovery with no head.
+  `PACT-PLACES` answers the activation's set, and Desk lends it under
+  `org.akashic.fs.places` through its service table, whose getters
+  receive the asking instance. The sandbox requires a context with no
+  place set.
+- The resource form is `vfs://<place>/<path>` everywhere. Daybook, Grid
+  and Sound Lab name their file in their home; File Explorer and Pad name
+  a file in its place and read a locator in their own set. The old form
+  and `IRES-VFS-PATH` are gone.
+- The explorer widget takes a set. `EXPL-VFS` and `EXPL-ROOT!` are gone.
+- File Explorer and Pad obtain their set through `CINST-PLACES` and work
+  through the `PLACE-` words. Each reads its configuration from the
+  origin.
 
-Two bridges last until the second slice, when stores take places. Desk
-still hands the stores that take an instance the one under the home
-(`_DESK-HOME-VFS`), and the sandbox store, catalog and Agent store the
-selected instance. Because those stores write through the instance,
-narrowing a set also marks the volumes under its places read-only.
+What slice 1 leaves as it found it, for the slices named:
+
+- Desk still hands the stores that take an instance the one under the
+  home (`_DESK-HOME-VFS`), and the sandbox store, catalog and Agent store
+  the selected instance. Because those stores write through the instance,
+  narrowing a set also marks the volumes under its places read-only.
+  Slice 2 gives each store a place and removes both.
+- File Explorer's paste runs its transaction on one volume and refuses a
+  source on another. Slice 3 replaces it with `PLACE-COPY`.
+- Pad keeps one replacement descriptor and points it at a document's
+  volume for each read and write, through the selector the load
+  transaction still brackets. Slice 2 removes the selector.
+- `PLACE-NAME-LIMIT` asks the volume, and the MP64FS binding gives no
+  answer yet, so the limit there is the VFS's 255 and the binding's own
+  refusal of a name over 23 bytes stands.
+- Starting Desk with a home that is missing has run only as the
+  activation's own case; the stores' answers with no home are exercised
+  when the user volume attaches (slice 4).
 
 ## Open
 

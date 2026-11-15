@@ -14,6 +14,7 @@ PROVIDED akashic-desk-agent-caps
 
 REQUIRE ../agent/access-profile.f
 REQUIRE ../../../interop/capability-facet.f
+REQUIRE ../../../interop/resource.f
 REQUIRE ../../../text/utf8.f
 REQUIRE ../../../utils/memory-span.f
 
@@ -174,11 +175,11 @@ VARIABLE _DACI-C
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         0 _DACAND!
     S" org.akashic.daybook" S" daybook.source"
-        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 516
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         1 _DACAND!
     S" org.akashic.pad" S" pad.document.active"
-        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 516
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         2 _DACAND!
     S" org.akashic.pad" S" pad.document.text"
@@ -186,7 +187,7 @@ VARIABLE _DACI-C
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         3 _DACAND!
     S" org.akashic.fexplorer" S" fexplorer.resource.selected"
-        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 516
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         4 _DACAND!
     S" org.akashic.fexplorer" S" fexplorer.preview.text"
@@ -202,7 +203,7 @@ VARIABLE _DACI-C
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         7 _DACAND!
     S" org.akashic.grid" S" grid.source"
-        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 516
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX
         DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
         8 _DACAND!
     S" org.akashic.streams" S" streams.source.query"
@@ -218,10 +219,10 @@ VARIABLE _DACI-C
         CAP-E-MUTATE CAP-E-PERSIST OR DACAND-REVIEW-FLAGS 8
         DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR 11 _DACAND!
     S" org.akashic.pad" S" pad.document.open"
-        CAP-E-NAVIGATE DACAND-REVIEW-FLAGS 516
+        CAP-E-NAVIGATE DACAND-REVIEW-FLAGS IRES-VFS-URI-MAX
         DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR 12 _DACAND!
     S" org.akashic.fexplorer" S" fexplorer.resource.reveal"
-        CAP-E-NAVIGATE DACAND-REVIEW-FLAGS 516
+        CAP-E-NAVIGATE DACAND-REVIEW-FLAGS IRES-VFS-URI-MAX
         DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR 13 _DACAND!
     S" org.akashic.grid" S" grid.cell.set-selected"
         CAP-E-MUTATE DACAND-REVIEW-FLAGS 40
