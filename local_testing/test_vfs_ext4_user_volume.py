@@ -9,6 +9,7 @@ the driver on them through the helpers of test_vfs_ext4.py.
 
 from __future__ import annotations
 
+import gc
 import random
 import re
 import struct
@@ -28,6 +29,19 @@ _EPOCH_MS = ext4._STAGED_APPEND_EPOCH_MS
 _BG_INODE_UNINIT = 0x1
 _BG_BLOCK_UNINIT = 0x2
 _BG_INODE_ZEROED = 0x4
+
+
+@pytest.fixture(autouse=True)
+def _free_machines_between_cases():
+    """Collect each case's machines and media before the next case runs.
+
+    A run's machine and its media sit in reference cycles, and the
+    collector counts objects, not bytes, so a few dozen runs can hold
+    several gibibytes before it looks.  The power-cut cases collect after
+    every cut for the same reason.
+    """
+    yield
+    gc.collect()
 
 
 # ---------------------------------------------------------------------
@@ -970,6 +984,83 @@ def test_mkdir_readies_both_sides_of_a_group(
     assert _names(backing, "/firstdir", jbd2_toolchain).keys() == {".", ".."}
 
 
+def test_create_readies_a_group_on_the_second_descriptor_block(
+    jbd2_toolchain: dict[str, object],  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    """On a 256 MiB volume, group 16 is the first of the second flex group.
+
+    Its descriptor lies in the second block of the descriptor table, and
+    its bitmaps and inode table at the start of its own blocks.  With the
+    sixteen groups before it full, a create takes its first inode.
+    """
+    source = _make_volume(
+        tmp_path / "wide.img",
+        jbd2_toolchain,
+        mebibytes=256,
+        commands=_fill_commands(tmp_path, 499 + 15 * _INODES_PER_GROUP),
+    )
+    before = _groups(source, jbd2_toolchain)
+    assert len(before) == 32
+    for group in range(16):
+        assert before[group]["free_inodes"] == 0
+    assert before[16]["flags"] == {"INODE_UNINIT", "ITABLE_ZEROED"}
+    first = 16 * _INODES_PER_GROUP + 1
+    backing = tmp_path / "wide-created.img"
+    output, _, _ = ext4.run_recovery_forth(
+        source,
+        backing,
+        [
+            *_mount("_GW"),
+            "_GW-FFREE CONSTANT _GW-FREE-BEFORE",
+            (
+                'S" wide.txt" _GW-V VFS-MKFILE? '
+                "CONSTANT _GW-IOR CONSTANT _GW-D"
+            ),
+            "_GW-FFREE CONSTANT _GW-FREE-AFTER",
+            *_checked(
+                "_GW-OK",
+                "EXT4-READY-WIDE-GROUP",
+                [
+                    *_mounted("_GW"),
+                    "_GW-D 0<>",
+                    *_first_use_checks("_GW", first, 16),
+                    "_XC-FI-VISITED @ 16 =",
+                    "_XC-GDT-HOME @ 3 =",
+                    "_XC-GDT-OFF @ 0=",
+                    f"_XC-BITMAP-HOME @ {before[16]['inode_bitmap']} =",
+                    f"_XC-INODE-HOME @ {before[16]['inode_table']} =",
+                    "_GW-CTX _EXT4-C.J.HOME-WRITES + @ 6 =",
+                ],
+            ),
+            *_unmount("_GW", "EXT4-READY-WIDE-GROUP-UNMOUNTED"),
+        ],
+        capture_media=backing,
+        max_steps=2_400_000_000,
+    )
+    source.unlink()
+    _emitted(output, "EXT4-READY-WIDE-GROUP")
+    _emitted(output, "EXT4-READY-WIDE-GROUP-UNMOUNTED")
+    ext4._assert_e2fsck_clean(backing, jbd2_toolchain)
+    after = _groups(backing, jbd2_toolchain)
+    assert after[16]["flags"] == {"ITABLE_ZEROED"}
+    assert after[16]["free_inodes"] == _INODES_PER_GROUP - 1
+    assert after[16]["unused_inodes"] == _INODES_PER_GROUP - 1
+    assert after[16]["inode_bitmap"] > 16 * 8192
+    bitmap = ext4._read_ext4_home(
+        backing, after[16]["inode_bitmap"], block_size=_BLOCK
+    )
+    assert bitmap == b"\x01" + bytes(63) + b"\xff" * (_BLOCK - 64)
+    assert after[16]["inode_bitmap_csum"] == _inode_bitmap_csum(
+        backing, bitmap
+    )
+    for group in (*range(16), *range(17, 32)):
+        assert after[group] == before[group]
+    assert _names(backing, "/", jbd2_toolchain)["wide.txt"] == first
+    _assert_checked_inode(backing, first)
+    backing.unlink()
+
+
 def test_unzeroed_inode_table_blocks_are_staged_from_zeros(
     full_group_volumes: dict[str, Path],
     jbd2_toolchain: dict[str, object],  # noqa: F811
@@ -1146,3 +1237,200 @@ def test_create_refuses_an_uninit_group_that_counts_an_inode_in_use(
     assert trace == ()
     assert media_sha256 == ext4._sha256(damaged)
 
+
+# ---------------------------------------------------------------------
+#  A power cut in the transaction that readies a group
+# ---------------------------------------------------------------------
+
+# The operation, its name, the volume, and the group and inode it takes.
+_FIRST_USES = {
+    "create": (
+        'S" beyond.txt" _PC-V VFS-MKFILE? CONSTANT _PC-IOR DROP',
+        "beyond.txt",
+        "one",
+        1,
+        513,
+    ),
+    "mkdir": (
+        'S" beyond" _PC-V VFS-MKDIR CONSTANT _PC-IOR',
+        "beyond",
+        "four",
+        4,
+        2049,
+    ),
+}
+
+
+def _first_use(
+    source: Path, media: Path, kind: str, fault_ordinal: int | None
+) -> tuple[tuple[str, int, int], ...]:
+    """Run the first use of group 1, cutting one write when asked."""
+    faults = None
+    if fault_ordinal is not None:
+        faults = {
+            fault_ordinal: {
+                "stage": "media",
+                "sector_index": 1,
+                "byte_index": 0,
+                "result": ext4.STORAGE_RESULT_MEDIA_FAILURE,
+                "command": ext4.STORAGE_CMD_WRITE,
+            }
+        }
+    output, trace, _ = ext4.run_recovery_forth(
+        source,
+        media,
+        [
+            *_mount("_PC"),
+            _FIRST_USES[kind][0],
+            '." [FIRST-USE " _PC-MOUNT-IOR . _PC-PROFILE-BIND-IOR . ." ]"',
+        ],
+        write_faults_by_ordinal=faults,
+        capture_media=media,
+    )
+    assert _numbers(output, "FIRST-USE") == [0, 0]
+    return trace
+
+
+def _recovered_presence(
+    torn: Path, recovered: Path, name: str
+) -> bool:
+    """Recover TORN on a fresh mount and say whether NAME is there."""
+    output, _, _ = ext4.run_recovery_forth(
+        torn,
+        recovered,
+        [
+            f"{1 << 20} A-XMEM ARENA-NEW THROW CONSTANT _PR-ARENA",
+            (
+                "_PR-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _PR-MOUNT-IOR CONSTANT _PR-V"
+            ),
+            (
+                f'S" /{name}" _PR-V VFS-RESOLVE? '
+                "CONSTANT _PR-IOR CONSTANT _PR-D"
+            ),
+            "0 _PR-V VFS-UNMOUNT CONSTANT _PR-UNMOUNT-IOR",
+            (
+                '." [RECOVERED " _PR-MOUNT-IOR . _PR-UNMOUNT-IOR . '
+                '_PR-D 0<> . ." ]"'
+            ),
+        ],
+        capture_media=recovered,
+    )
+    mount_ior, unmount_ior, present = _numbers(output, "RECOVERED")
+    assert (mount_ior, unmount_ior) == (0, 0)
+    return present != 0
+
+
+def _continue_after_recovery(recovered: Path, continued: Path) -> None:
+    """The recovered volume takes a create on a writable mount."""
+    output, _, _ = ext4.run_recovery_forth(
+        recovered,
+        continued,
+        [
+            *_mount("_PA"),
+            (
+                'S" after.txt" _PA-V VFS-MKFILE? '
+                "CONSTANT _PA-IOR CONSTANT _PA-D"
+            ),
+            *_checked(
+                "_PA-OK",
+                "EXT4-POWER-CUT-CONTINUES",
+                [
+                    *_mounted("_PA"),
+                    "_PA-IOR 0=",
+                    "_PA-D 0<>",
+                    "_PA-V V.LAST-IOR @ 0=",
+                    "_PA-V V.FLAGS @ VFS-F-RO AND 0=",
+                ],
+            ),
+            *_unmount("_PA", "EXT4-POWER-CUT-CONTINUES-UNMOUNTED"),
+        ],
+        capture_media=continued,
+    )
+    _emitted(output, "EXT4-POWER-CUT-CONTINUES")
+    _emitted(output, "EXT4-POWER-CUT-CONTINUES-UNMOUNTED")
+
+
+@pytest.mark.parametrize("kind", ("create", "mkdir"))
+def test_power_cut_while_readying_a_group_keeps_all_or_nothing(
+    full_group_volumes: dict[str, Path],
+    jbd2_toolchain: dict[str, object],  # noqa: F811
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    """Cut each write of the first use of a group; recover on a new mount.
+
+    A create readies group 1's inode side, and a folder readies both sides
+    of group 4.  Every cut tears one block between its two sectors and
+    ends the run's writes there.  The next mount either finds the new name
+    with its group ready or finds neither, each state passes e2fsck, and
+    every cut after the first that kept the name keeps it.  The volumes
+    recovered from the first cut, the last, and the two on either side of
+    the commit then take another create, in that group either way.
+    """
+    _, name, volume, group, inode = _FIRST_USES[kind]
+    source = full_group_volumes[volume]
+    before = _groups(source, jbd2_toolchain)
+    whole = tmp_path / "whole.img"
+    writes = [
+        event
+        for event in _first_use(source, whole, kind, None)
+        if event[0] == "write"
+    ]
+    whole.unlink()
+    assert len(writes) > 12
+    kept: list[bool] = []
+    continued: set[int] = set()
+
+    def takes_a_create(ordinal: int, recovered: Path, present: bool) -> None:
+        if ordinal in continued:
+            return
+        continued.add(ordinal)
+        after = tmp_path / f"continued-{ordinal}.img"
+        _continue_after_recovery(recovered, after)
+        ext4._assert_e2fsck_clean(after, jbd2_toolchain)
+        assert _names(after, "/", jbd2_toolchain)["after.txt"] == (
+            inode + 1 if present else inode
+        ), ordinal
+        after.unlink()
+
+    earlier: tuple[int, Path, bool] | None = None
+    for ordinal in range(1, len(writes) + 1):
+        torn = tmp_path / f"torn-{ordinal}.img"
+        recovered = tmp_path / f"recovered-{ordinal}.img"
+        trace = _first_use(source, torn, kind, ordinal)
+        cut_writes = [event for event in trace if event[0] == "write"]
+        assert cut_writes == writes[:ordinal], ordinal
+        present = _recovered_presence(torn, recovered, name)
+        torn.unlink()
+        kept.append(present)
+        ext4._assert_e2fsck_clean(recovered, jbd2_toolchain)
+        root = _names(recovered, "/", jbd2_toolchain)
+        if present:
+            assert root[name] == inode, ordinal
+            _assert_group_ready(
+                recovered,
+                jbd2_toolchain,
+                group,
+                flags={"ITABLE_ZEROED"},
+                used=(0,),
+                high_water=1,
+                directories=1 if kind == "mkdir" else 0,
+            )
+        else:
+            assert name not in root, ordinal
+            assert _groups(recovered, jbd2_toolchain) == before, ordinal
+        edge = earlier is not None and earlier[2] != present
+        if earlier is not None:
+            if edge:
+                takes_a_create(*earlier)
+            earlier[1].unlink()
+        if edge or ordinal in (1, len(writes)):
+            takes_a_create(ordinal, recovered, present)
+        earlier = (ordinal, recovered, present)
+        gc.collect()
+    assert earlier is not None
+    earlier[1].unlink()
+    assert kept == sorted(kept), kept
+    assert kept[0] is False and kept[-1] is True, kept
+    assert len(continued) == 4, continued
