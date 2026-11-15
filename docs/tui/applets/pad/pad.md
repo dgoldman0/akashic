@@ -197,6 +197,16 @@ built: applets are machine code, and this system compiles none."
 
 ## File I/O
 
+Pad works in the place set it is given (`CINST-PLACES`,
+`docs/utils/fs/places.md`). A document is a place and a path in it, and a
+tab keeps both. A typed path is in the active document's place, or in the
+set's home when there is none; the full form `vfs://<place>/<path>` names
+another place of the set. The sidebar lists the set's places, and
+`pad.toml` is read from the set's origin. For each read and write Pad
+binds the document to its volume (`PLACE-BIND`, `PLACE-BIND-WRITE`) and
+points its one replacement descriptor there, so a read-only place refuses
+a save with "This place is read-only".
+
 Pad uses the abstract VFS API rather than KDOS directory internals. It
 canonicalizes every path, rejects traversal and reserved replacement names,
 captures one immutable buffer snapshot, and publishes that snapshot through

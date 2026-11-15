@@ -30,6 +30,7 @@ REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/resource.f
+REQUIRE ../../../interop/place-resource.f
 REQUIRE ../../../audio/osc.f
 REQUIRE ../../../audio/pcm-fp16.f
 REQUIRE ../../../audio/wav.f
@@ -336,7 +337,11 @@ VARIABLE _SL-TN
     S" owned_active_voice=" _SL-SUMMARY+
     _SL-OWNED-ACTIVE? IF S" true" ELSE S" false" THEN
     _SL-SUMMARY+ _SL-SUMMARY-NL
-    S" output=vfs:/soundlab.wav" _SL-SUMMARY+ ;
+    S" output=" _SL-SUMMARY+
+    _SL-CURRENT-INSTANCE @ CINST-HOME ?DUP IF
+        IRES-VFS-PREFIX$ _SL-SUMMARY+ PLACE-NAME _SL-SUMMARY+
+        S" /soundlab.wav" _SL-SUMMARY+
+    THEN ;
 
 \ ---------------------------------------------------------------------
 \ Status and invalidation
@@ -1216,7 +1221,8 @@ VARIABLE _SL-SOURCE-REQ
     THEN
     DROP _SL-SOURCE-REQ !
     CPRINC-COMPONENT _SL-SOURCE-REQ @ CBR.PRINCIPAL !
-    S" /soundlab.wav" _SL-SOURCE-REQ @ CBR.ARGS IRES-VFS! IF
+    S" /soundlab.wav" _SL-CURRENT-INSTANCE @ CINST-HOME
+        _SL-SOURCE-REQ @ CBR.ARGS IRES-PLACE! IF
         _SL-SOURCE-REQ @ CBR-FREE EXIT
     THEN
     ['] _SL-REVEAL-COMPLETE _SL-SOURCE-REQ @ CBR.COMPLETE-XT !
@@ -1457,7 +1463,8 @@ VARIABLE _SL-CAP-N
 
 : _SL-CAP-OUTPUT-HANDLER  ( request instance -- status )
     _SL-ACTIVATE
-    S" /soundlab.wav" ROT CBR.RESULT IRES-VFS!
+    S" /soundlab.wav" ROT CBR.RESULT
+        _SL-CURRENT-INSTANCE @ CINST-HOME SWAP IRES-PLACE!
     IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
 
 : _SL-CAP-PLAYBACK-HANDLER  ( request instance -- status )
@@ -1493,7 +1500,7 @@ VARIABLE _SL-CAP-N
     _SL-DURATION-MIN _SL-DURATION-SCHEMA CS-MIN!
     _SL-DURATION-MAX _SL-DURATION-SCHEMA CS-MAX!
     _SL-RESOURCE-SCHEMA CS-INIT CV-T-RESOURCE _SL-RESOURCE-SCHEMA CS-ALLOW!
-    516 _SL-RESOURCE-SCHEMA CS-MAX-LEN!
+    IRES-VFS-URI-MAX _SL-RESOURCE-SCHEMA CS-MAX-LEN!
 
     SOUNDLAB-CAP-SHAPE _SL-CAP-COMMON
     CAP-K-COMMAND SOUNDLAB-CAP-SHAPE CAP.KIND !

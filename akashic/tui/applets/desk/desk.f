@@ -494,6 +494,16 @@ VARIABLE _DXIO-RESET-STATUS
 : DESK-RECOVERY?  ( -- flag )
     _DESK-PRACTICE-ACTIVATION PACT-RECOVERY? ;
 
+\ The instance under the home of the Practice's places, for the stores
+\ that still take an instance; 0 when there is no usable home, and each
+\ store then opens as a service that says why.
+: _DESK-HOME-VFS  ( -- vfs | 0 )
+    DESK-CONTEXT ?DUP 0= IF 0 EXIT THEN
+    CTX.PLACES @ ?DUP 0= IF 0 EXIT THEN
+    PLSET-HOME DUP 0= IF EXIT THEN
+    DUP PLACE-STATUS IF DROP 0 EXIT THEN
+    PLACE-VFS ;
+
 : DESK-CATALOG  ( -- catalog | 0 )
     _DESK-CATALOG @ ;
 
@@ -1135,8 +1145,9 @@ VARIABLE _DSSA-ENTRY
 \ No owner: an entry any caller may borrow.
 : _DESK-ANY  ( -- 0 0 ) 0 0 ;
 
-\ Adds the service ID names, which GETTER-XT gets, lent only to the
-\ component OWNER names, or to any caller when OWNER is _DESK-ANY.
+\ Adds the service ID names, which GETTER-XT ( caller -- service | 0 )
+\ gets for the runtime instance asking, lent only to the component OWNER
+\ names, or to any caller when OWNER is _DESK-ANY.
 : _DESK-SERVICE+  ( id-a id-u owner-a owner-u getter-xt -- status )
     _DSSA-GET-XT ! _DSSA-OWNER-U ! _DSSA-OWNER-A ! _DSSA-ID-U ! _DSSA-ID-A !
     _DSSA-ID-A @ 0= _DSSA-ID-U @ 0> 0= OR
@@ -1159,13 +1170,6 @@ VARIABLE _DSSA-ENTRY
     1 _DESK-SERVICE-COUNT +!
     _DSS-S-OK ;
 
-: _DESK-SERVICE@  ( id-a id-u -- service | 0 )
-    _DESK-SERVICE-FIND ?DUP IF
-        _DSS-GET-XT + @ EXECUTE
-    ELSE
-        0
-    THEN ;
-
 : _DESK-SERVICE-TABLE-INIT  ( -- )
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY * 0 FILL
     0 _DESK-SERVICE-COUNT ! ;
@@ -1173,47 +1177,65 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-TABLE-FINI  ( -- )
     _DESK-SERVICE-TABLE-INIT ;
 
-: _DESK-SERVICE-XIO@  ( -- service | 0 )
+: _DESK-SERVICE-XIO@  ( caller -- service | 0 )
+    DROP
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO ELSE 0 THEN ;
 
-: _DESK-SERVICE-AGENT-RUNTIME@  ( -- service | 0 )
+: _DESK-SERVICE-AGENT-RUNTIME@  ( caller -- service | 0 )
+    DROP
     _DESK-AGENT-RUNTIME @ ;
 
-: _DESK-SERVICE-TOOL-GATEWAY@  ( -- service | 0 )
+: _DESK-SERVICE-TOOL-GATEWAY@  ( caller -- service | 0 )
+    DROP
     _DESK-TOOL-GATEWAY @ ;
 
-: _DESK-SERVICE-PROVIDER-SOURCE@  ( -- service | 0 )
+: _DESK-SERVICE-PROVIDER-SOURCE@  ( caller -- service | 0 )
+    DROP
     _DESK-AGENT-SOURCE @ ;
 
-: _DESK-SERVICE-ACCESS-PROFILE@  ( -- service | 0 )
+: _DESK-SERVICE-ACCESS-PROFILE@  ( caller -- service | 0 )
+    DROP
     _DESK-AGENT-RUNTIME @ ?DUP IF ARUNTIME-ACCESS-PROFILE ELSE 0 THEN ;
 
-: _DESK-SERVICE-REGISTRY@  ( -- service | 0 )
+: _DESK-SERVICE-REGISTRY@  ( caller -- service | 0 )
+    DROP
     _DESK-REGISTRY @ ;
 
-: _DESK-SERVICE-CONTEXT@  ( -- service | 0 )
+: _DESK-SERVICE-CONTEXT@  ( caller -- service | 0 )
+    DROP
     DESK-CONTEXT ;
 
-: _DESK-SERVICE-RESOURCE-REGISTRY@  ( -- service | 0 )
+: _DESK-SERVICE-RESOURCE-REGISTRY@  ( caller -- service | 0 )
+    DROP
     _DESK-RREG @ ;
 
-: _DESK-SERVICE-REQUEST-BUS@  ( -- service | 0 )
+: _DESK-SERVICE-REQUEST-BUS@  ( caller -- service | 0 )
+    DROP
     _DESK-BUS @ ;
 
-: _DESK-SERVICE-DAYBOOK@  ( -- service | 0 )
+: _DESK-SERVICE-DAYBOOK@  ( caller -- service | 0 )
+    DROP
     _DESK-DAYBOOK-STATUS @ 0=
     _DESK-DAYBOOK-OWNER @ 0<> AND IF SDOC-SERVICE ELSE 0 THEN ;
 
-: _DESK-SERVICE-REMINDERS@  ( -- service | 0 )
+: _DESK-SERVICE-REMINDERS@  ( caller -- service | 0 )
+    DROP
     _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP 0 THEN ;
 
-: _DESK-SERVICE-AGENT-DISPATCH@  ( -- service | 0 )
+: _DESK-SERVICE-AGENT-DISPATCH@  ( caller -- service | 0 )
+    DROP
     _DESK-AGENT-DISPATCH DUP ADISP-VALID? 0= IF DROP 0 THEN ;
 
-: _DESK-SERVICE-ENDPOINT@  ( -- service )
+: _DESK-SERVICE-ENDPOINT@  ( caller -- service )
+    DROP
     _DESK-ENDPOINT ;
 
-: _DESK-SERVICE-OWNERS@  ( -- service ) _DESK-OWNERS ;
+: _DESK-SERVICE-OWNERS@  ( caller -- service ) DROP _DESK-OWNERS ;
+
+\ The place set CALLER works in.  The Practice activation decides it;
+\ Desk names no applet here.
+: _DESK-SERVICE-PLACES@  ( caller -- set | 0 )
+    _DESK-PRACTICE-ACTIVATION PACT-PLACES ;
 
 : _DESK-LIBRARY$  ( -- a u ) S" org.akashic.library.applet" ;
 
@@ -1305,6 +1327,8 @@ VARIABLE _DSSA-ENTRY
         ['] _DESK-SERVICE-OWNERS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.interop.endpoint" _DESK-ANY ['] _DESK-SERVICE-ENDPOINT@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.fs.places" _DESK-ANY ['] _DESK-SERVICE-PLACES@
         _DESK-SERVICE+ ;
 
 \ Whether CALLER, the runtime instance asking, may borrow ENTRY's service:
@@ -1321,8 +1345,8 @@ VARIABLE _DSSA-ENTRY
 : _DESK-ENDPOINT-SERVICE  ( id-a id-u caller desk-instance -- service | 0 )
     _DESK-USE-STATE
     >R _DESK-SERVICE-FIND ?DUP 0= IF R> DROP 0 EXIT THEN
-    R> OVER _DESK-LENDS? 0= IF DROP 0 EXIT THEN
-    _DSS-GET-XT + @ EXECUTE ;
+    R@ OVER _DESK-LENDS? 0= IF DROP R> DROP 0 EXIT THEN
+    R> SWAP _DSS-GET-XT + @ EXECUTE ;
 
 VARIABLE _DIR-ID-A
 VARIABLE _DIR-ID-U
@@ -1547,7 +1571,7 @@ VARIABLE _DMF-EFFECTS
         _DESK-DAYBOOK-STATUS ! DROP EXIT
     THEN
     DROP _DESK-RREG !
-    DESK-CONTEXT CTX.VFS @ _DESK-DAYBOOK-RID DESK-CONTEXT
+    _DESK-HOME-VFS _DESK-DAYBOOK-RID DESK-CONTEXT
         _DESK-RREG @ _DESK-REGISTRY @ SDOC-ACTIVATE
     DUP _DESK-DAYBOOK-STATUS ! IF
         DROP EXIT
@@ -1557,7 +1581,7 @@ VARIABLE _DMF-EFFECTS
 \ Opens Daybook's reminders over the Practice filesystem.  A store Desk
 \ cannot use still opens a service, which says why.
 : _DESK-REMINDERS-INIT  ( -- )
-    DESK-CONTEXT CTX.VFS @ _DESK-REMINDERS DBSVC-OPEN DROP ;
+    _DESK-HOME-VFS _DESK-REMINDERS DBSVC-OPEN DROP ;
 
 \ Opens scheduled runs over the Practice filesystem: the Agent's
 \ dispatcher over its runtime, the broker over the Practice's
@@ -1566,9 +1590,9 @@ VARIABLE _DMF-EFFECTS
 \ why; in recovery there is no Practice, so no broker, and Daybook's
 \ service has no client: scheduled runs are unavailable.
 : _DESK-SCHEDULES-INIT  ( -- )
-    _DESK-AGENT-RUNTIME @ DESK-CONTEXT CTX.VFS @ _DESK-AGENT-DISPATCH ADISP-INIT DROP
+    _DESK-AGENT-RUNTIME @ _DESK-HOME-VFS _DESK-AGENT-DISPATCH ADISP-INIT DROP
     _DESK-AGENT-DISPATCH _DESK-SCHEDULE-HANDLER DSAG-HANDLER-INIT
-    DESK-CONTEXT CTX.VFS @ DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
+    _DESK-HOME-VFS DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
     _DESK-BROKER SBRK-VALID? 0= IF EXIT THEN
     _DESK-SCHEDULE-HANDLER _DESK-BROKER SBRK-HANDLER!
     _DESK-BROKER SBRK-CLIENT _DESK-REMINDERS DBSVC-CLIENT! ;
@@ -1763,7 +1787,6 @@ VARIABLE _DMC-CANDIDATE
     _DESK-AUTHORITY @ _DINI-CONTEXT @ CTX.AUTHORITY !
     _DESK-BUS @ _DINI-CONTEXT @ CTX.QUEUE !
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
-    VFS-CUR _DINI-CONTEXT @ CTX.VFS !
     _DESK-DAYBOOK-INIT
     _DESK-REMINDERS-INIT
     _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
@@ -2404,7 +2427,8 @@ VARIABLE _DSG-N
     \ Load config if a buffer was supplied before DESK-RUN
     _DESK-CFG-A @ ?DUP IF _DESK-CFG-L @ DESK-LOAD-CONFIG THEN
     _DESK-PRACTICE-ACTIVATION PACT-INIT
-    VFS-CUR _DESK-PRACTICE-ACTIVATION PACT-ACTIVATE
+    PLACES-DEFAULT DUP 0= ABORT" desk: composition declared no places"
+    _DESK-PRACTICE-ACTIVATION PACT-ACTIVATE
     DUP PACT-S-OK <> SWAP PACT-S-RECOVERY <> AND
     ABORT" desk: Practice activation failed"
     DESK-RECOVERY? IF

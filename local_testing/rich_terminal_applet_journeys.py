@@ -107,6 +107,10 @@ FEXP_RENAMED_NOTICE = "Renamed"
 FEXP_PHOTO = "spice-market.qoi"
 FEXP_PHOTO_SIZE = (2160, 1620)
 FEXP_PHOTO_FACTS = "QOI, 2160 \u00d7 1620"
+# The label of the place the image declares (akashic_tui.PLACES_BOOT_LABEL):
+# the first row of File Explorer's folder tree, which opens onto the boot
+# volume's root.
+FEXP_PLACE_LABEL = "Files"
 # A picture file the terminal cannot decode (akashic_tui.py's damaged
 # check), and what CELL says of it once the terminal has refused it.
 FEXP_DAMAGED = "damaged.png"
@@ -973,7 +977,8 @@ class FexpAloneJourney(_AppletJourney):
     in its folder tree, all through item and tab events.
 
     The detail table is a TABLE item view with Name, Size (a number column),
-    and Type columns, and the sidebar a TREE whose root is "/".  A SELECT
+    and Type columns, and the sidebar a TREE whose first row is the place
+    the image declares, by its label.  A SELECT
     on large.txt's row selects it and the status bar shows its path.  F2
     opens the rename prompt holding the name, a TEXT field in a modal region
     over the tile with the table and tree rich and inactive beneath it; a
@@ -1741,7 +1746,8 @@ class FexpAloneJourney(_AppletJourney):
             )
         bounds = _desk_content_bounds(projection)
         root = tree.content.items[0]
-        if root.fields[0].text != "/" or not root.state & ItemState.EXPANDABLE:
+        if (root.fields[0].text != FEXP_PLACE_LABEL
+                or not root.state & ItemState.EXPANDABLE):
             raise PhysicalDesktopAcceptanceError(
                 f"File Explorer's tree starts with {root.fields[0].text!r}"
             )

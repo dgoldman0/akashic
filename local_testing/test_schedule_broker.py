@@ -466,10 +466,10 @@ def test_a_run_starts_under_its_permission_alone(forth):
         "FH-RUN @ AMRUN.FACET DUP CFACET.PRACTICE-ID HD PHEAD.ID RID= . "
         "CFACET.COUNT @ . CR",
         # Its Context: an active child of the root, in Desk's Practice, with
-        # no filesystem.
+        # no places.
         "FH-RUN @ AMRUN.CONTEXT @ DUP ROOT @ <> . DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0<> . "
         "DUP CTX.PARENT-ID @ ROOT @ CTX.ID @ = . DUP CTX.PRACTICE @ HD = . "
-        "DUP CTX.EPOCH @ . CTX.VFS @ . CR",
+        "DUP CTX.EPOCH @ . CTX.PLACES @ . CR",
         # The run's IDs.
         "RQ SDSP-R.KEY B32. CR",
         "FH-RUN @ AMRUN.CONTEXT @ DUP CTX.ID @ . CTX.GENERATION @ . CR",

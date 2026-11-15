@@ -609,6 +609,37 @@ MEGAPAD_RICH_TERMINAL_CONSUMERS = frozenset(
 APP_SHELL_MODULE = "tui/app-shell.f"
 MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
 MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
+# The places this build declares (docs/utils/fs/places.md).  The platform
+# module reports the boot volume; composition declares one writable place
+# over its root and a default set in which that place is both the home,
+# where records are written, and the origin, where shipped files are read.
+# The origin is required, so a boot without it stops here with a message.
+# Applets ask the set for its home, its origin and its list, so the names
+# below appear nowhere else.
+PLACES_BOOT_ENTRY = "_boot-places-declare"
+# The name composition gives the build's one place.  A check that reads a
+# file's locator on the screen builds it from this.
+PLACES_BOOT_PLACE = "files"
+# What a person reads for it, as the first row of an explorer's tree.
+PLACES_BOOT_LABEL = "Files"
+PLACES_BOOT_LINES = (
+    "VARIABLE _boot-place  VARIABLE _boot-places",
+    f": {PLACES_BOOT_ENTRY}  ( -- )",
+    '    S" boot" PLACES-VOLUME ABORT" PLACES FAIL volume"',
+    f'    >R S" {PLACES_BOOT_PLACE}" S" /" PLACE-WRITABLE R> PLACES-DECLARE',
+    '        ABORT" PLACES FAIL place"  _boot-place !',
+    f'    S" {PLACES_BOOT_LABEL}" _boot-place @ PLACE-LABEL! ABORT" PLACES FAIL label"',
+    "    -1 _boot-place @ PLACE-REQUIRED!",
+    "    PLACES-CHECK ?DUP IF",
+    '        NIP ." PLACES FAIL origin ior=" . CR TX-FLUSH ABORT',
+    "    THEN DROP",
+    '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
+    "    PLACE-WRITABLE _boot-place @ _boot-places @ PLSET-GRANT",
+    '        ABORT" PLACES FAIL grant"',
+    "    DUP _boot-places @ PLSET-HOME!  _boot-places @ PLSET-ORIGIN!",
+    "    _boot-places @ PLACES-DEFAULT! ;",
+    PLACES_BOOT_ENTRY,
+)
 # With --system-volume a profile's modules are plain files on the system
 # volume, the ext4 volume on the machine's third storage unit.  The boot
 # volume then carries only the closure of the module that mounts it,
@@ -9096,7 +9127,7 @@ VARIABLE _ct-wide-map-field
     S" name" _ct-key S" Alpha" _ct-q _ct-comma
     S" items" _ct-key 91 _ct-c 49 _ct-c _ct-comma
         S" true" _ct-s _ct-comma S" null" _ct-s 93 _ct-c _ct-comma
-    S" uri" _ct-key S" vfs:/notes.txt" _ct-q
+    S" uri" _ct-key S" vfs://files/notes.txt" _ct-q
     125 _ct-c ;
 
 : _ct-duplicate  ( -- )
@@ -9260,7 +9291,7 @@ VARIABLE _ct-wide-map-field
     S" keep-schema" _ct-copy-text= _ct-assert
     _ct-stack
     128 _ct-resource-schema CS-MAX-LEN!
-    _ct-reset S" vfs:/notes.txt" _ct-q
+    _ct-reset S" vfs://files/notes.txt" _ct-q
     _ct-json _ct-json-u @ _ct-resource-schema _ct-copy
     IVJSON-DECODE-AS 0= _ct-assert
     _ct-copy CV-TYPE@ CV-T-RESOURCE = _ct-assert
@@ -10203,6 +10234,9 @@ CREATE _pc-aout PHEAD-SIZE ALLOT
 CREATE _pc-arejected PHEAD-SIZE ALLOT
 CREATE _pc-pact PACT-SIZE ALLOT
 VARIABLE _pc-validator-reject
+VARIABLE _pc-avolume
+VARIABLE _pc-adecl
+VARIABLE _pc-aset
 VARIABLE _pc-first-epoch
 
 : _pc-semantic-validator  ( head data -- status )
@@ -10243,11 +10277,21 @@ VARIABLE _pc-first-epoch
     _pc-arejected PHEAD.REVISION @ 2 = _pc-assert
     _pc-arejected PHEAD.CURRENT-ROOT @ 42 = _pc-assert
 
+    \ The activation works over a place set whose home is the volume.
+    S" pc-volume" PLACES-VOLUME 0= _pc-assert _pc-avolume !
+    _pc-avfs @ _pc-avolume @ PVOL-ATTACH 0= _pc-assert
+    S" pc-home" S" /" PLACE-WRITABLE _pc-avolume @ PLACES-DECLARE
+        0= _pc-assert _pc-adecl !
+    PLSET-NEW 0= _pc-assert _pc-aset !
+    PLACE-WRITABLE _pc-adecl @ _pc-aset @ PLSET-GRANT 0= _pc-assert
+        _pc-aset @ PLSET-HOME!
     _pc-pact PACT-INIT
     ['] _pc-semantic-validator _pc-validator-reject
         PACT-TRUST-STRUCTURAL _pc-pact PACT-VALIDATOR!
         PACT-S-OK = _pc-assert
-    _pc-avfs @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    0 _pc-pact PACT-PLACES _pc-aset @ = _pc-assert
+    _pc-aset @ PLSET-HOME PLACE-WRITABLE? _pc-assert
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-FALLBACK? _pc-assert
     _pc-pact PACT-RECOVERY? 0= _pc-assert
@@ -10258,16 +10302,17 @@ VARIABLE _pc-first-epoch
     _pc-pact PACT.CONTEXT @ DUP CTX-VALID? _pc-assert
     DUP CTX.EPOCH @ _pc-pact PACT.EPOCH @ = _pc-assert
     DUP CTX.PRACTICE @ _pc-pact PACT-HEAD = _pc-assert
-    CTX.VFS @ _pc-avfs @ = _pc-assert
+    CTX.PLACES @ _pc-aset @ = _pc-assert
     _pc-pact PACT.EPOCH @ DUP 0> _pc-assert _pc-first-epoch !
     _pc-pact PACT-DEACTIVATE
-    _pc-avfs @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    0 _pc-pact PACT-PLACES 0= _pc-assert
+    _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
     _pc-pact PACT.EPOCH @ DUP 0> _pc-assert
     _pc-first-epoch @ <> _pc-assert
     _pc-pact PACT-DEACTIVATE
 
     -1 _pc-validator-reject !
-    _pc-avfs @ _pc-pact PACT-ACTIVATE
+    _pc-aset @ _pc-pact PACT-ACTIVATE
         PACT-S-RECOVERY = _pc-assert
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-RECOVERY? _pc-assert
@@ -10276,10 +10321,25 @@ VARIABLE _pc-first-epoch
     _pc-pact PACT-AUTHENTICATED? 0= _pc-assert
     _pc-pact PACT.CONTEXT @ CTX.FLAGS @
         CTX-F-ACTIVE CTX-F-READONLY OR CTX-F-RECOVERY OR = _pc-assert
+    \ Recovery narrows every place of the set, and its volume with it.
+    _pc-aset @ PLSET-HOME PLACE-WRITABLE? 0= _pc-assert
+    S" x" _pc-aset @ PLSET-HOME PLACE-CREATE
+        VFS-IOR-REASON VFS-R-READONLY = _pc-assert DROP
+    _pc-pact PACT.FLAGS @ PACT-F-PLACES-READONLY = _pc-assert
     _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0<> _pc-assert
     _pc-pact PACT.REJECTED-GENERATION @ 2 = _pc-assert
     _pc-pact PACT-REJECTED-HEAD PHEAD.REVISION @ 2 = _pc-assert
     _pc-pact PACT-DEACTIVATE
+
+    \ A set whose home is unavailable activates in recovery with no head:
+    \ nothing falls back to another place.
+    _pc-avolume @ PVOL-DETACH
+    _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-RECOVERY = _pc-assert
+    _pc-pact PACT-RECOVERY? _pc-assert
+    _pc-pact PACT-READONLY? _pc-assert
+    _pc-pact PACT.CONTEXT @ CTX.PLACES @ _pc-aset @ = _pc-assert
+    _pc-pact PACT-DEACTIVATE
+    _pc-aset @ PLSET-FREE
     _pc-avfs @ VFS-DESTROY ;
 
 : _pc-persist-corrupt  ( path-a path-u -- )
@@ -10505,12 +10565,12 @@ VARIABLE _pc-no-effect
     77 CTX-NEW DUP 0= _pc-assert DROP DUP _pc-context ! DROP
     _pc-head _pc-context @ CTX.PRACTICE !
     9 _pc-context @ CTX.AUTHORITY !
-    10 _pc-context @ CTX.VFS !
+    10 _pc-context @ CTX.PLACES !
     CTX-F-READONLY _pc-context @ CTX.FLAGS !
     _pc-context @ CTX-CHILD-NEW DUP 0= _pc-assert DROP
         DUP _pc-child ! DROP
     _pc-child @ CTX.AUTHORITY @ 0= _pc-assert
-    _pc-child @ CTX.VFS @ 0= _pc-assert
+    _pc-child @ CTX.PLACES @ 0= _pc-assert
     _pc-child @ CTX-READONLY? _pc-assert
     _pc-stack
 
@@ -10871,12 +10931,35 @@ VARIABLE _rc-saw-running
     _rc-value _rc-ref2 IRES-RREF@ IRES-S-INVALID = _rc-assert
     _rc-ref2 RREF-VALID? 0= _rc-assert
     _rc-ref _rc-value IRES-RREF! IRES-S-OK = _rc-assert
-    S" /backing-only" _rc-value IRES-VFS! 0= _rc-assert
+    S" files" S" /backing-only" _rc-value IRES-VFS! 0= _rc-assert
+    _rc-value CV-DATA@ _rc-value CV-LEN@
+        S" vfs://files/backing-only" STR-STR= _rc-assert
     _rc-value _rc-ref2 IRES-RREF@ IRES-S-INVALID = _rc-assert
-    S" vfs:/backing-only" IRES-VFS-PATH _rc-assert 2DROP
-    0 5 IRES-VFS-PATH 0= _rc-assert 2DROP
-    0 1 _rc-value IRES-VFS! IRES-S-INVALID = _rc-assert
-    S" path" 0 IRES-VFS! IRES-S-INVALID = _rc-assert
+    \ The locator names a place and a path that starts at its folder.
+    S" vfs://files/backing-only" IRES-VFS-PARSE _rc-assert
+        S" /backing-only" STR-STR= _rc-assert S" files" STR-STR= _rc-assert
+    S" vfs://a-b.c_9/" IRES-VFS-PARSE _rc-assert
+        S" /" STR-STR= _rc-assert S" a-b.c_9" STR-STR= _rc-assert
+    \ A text that names no place is not a locator: the old form, a bare
+    \ name, an empty or ill-formed name.
+    S" vfs:/backing-only" IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    S" vfs://files" IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    S" vfs:///x" IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    S" vfs://Files/x" IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    S" vfs://../x" IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    S" file://files/x" IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    0 12 IRES-VFS-PARSE 0= _rc-assert 2DROP 2DROP
+    \ A path with no leading slash is given one.
+    S" files" S" notes.txt" _rc-value IRES-VFS! 0= _rc-assert
+    _rc-value CV-DATA@ _rc-value CV-LEN@
+        S" vfs://files/notes.txt" STR-STR= _rc-assert
+    S" files" S" x" DROP 0 _rc-value IRES-VFS! 0= _rc-assert
+    _rc-value CV-DATA@ _rc-value CV-LEN@
+        S" vfs://files/" STR-STR= _rc-assert
+    S" files" 0 1 _rc-value IRES-VFS! IRES-S-INVALID = _rc-assert
+    S" Files" S" /x" _rc-value IRES-VFS! IRES-S-INVALID = _rc-assert
+    S" files" S" /path" 0 IRES-VFS! IRES-S-INVALID = _rc-assert
+    IRES-VFS-URI-MAX 773 = _rc-assert
     0 IRES-RREF-URI-MIN _rc-ref2 IRES-RREF-PARSE
         IRES-S-INVALID = _rc-assert
     _rc-value CV-FREE
@@ -11554,11 +11637,12 @@ CREATE _ct-intent CINT-DESC-SIZE ALLOT
     _ct-map CV-FREE _ct-map _ct-good-map
     _ct-stack
 
-    S" vfs:/example.f" IRES-VFS-PATH _ct-assert
+    S" vfs://files/example.f" IRES-VFS-PARSE _ct-assert
     DUP 10 = _ct-assert
     DROP C@ [CHAR] / = _ct-assert
-    S" file:/example.f" IRES-VFS-PATH 0= _ct-assert 2DROP
-    S" vfs" IRES-VFS-PATH 0= _ct-assert 2DROP
+    S" files" STR-STR= _ct-assert
+    S" file://files/example.f" IRES-VFS-PARSE 0= _ct-assert 2DROP 2DROP
+    S" vfs" IRES-VFS-PARSE 0= _ct-assert 2DROP 2DROP
     _ct-stack
     _ct-comp-setup _ct-cap-setup _ct-intent-setup
     _ct-stack
@@ -12290,6 +12374,18 @@ CREATE _pc-desc APP-DESC ALLOT
 CREATE _pc-ops VFS-OPS-SIZE ALLOT
 CREATE _pc-binding VFS-BINDING-DESC-SIZE ALLOT
 VARIABLE _pc-vfs VARIABLE _pc-other-vfs VARIABLE _pc-screen VARIABLE _pc-rgn
+VARIABLE _pc-volume VARIABLE _pc-set VARIABLE _pc-place
+\ A place set over a volume: one writable place at its root, which is the
+\ set's home and origin, as a build with one volume declares.
+: _pc-places  ( vfs -- set )
+    S" pc-files" PLACES-VOLUME THROW _pc-volume !
+    _pc-volume @ PVOL-ATTACH THROW
+    S" pc-files" S" /" PLACE-WRITABLE _pc-volume @ PLACES-DECLARE THROW
+    PLSET-NEW THROW _pc-set !
+    PLACE-WRITABLE SWAP _pc-set @ PLSET-GRANT THROW _pc-place !
+    _pc-place @ _pc-set @ PLSET-HOME!
+    _pc-place @ _pc-set @ PLSET-ORIGIN!
+    _pc-set @ ;
 VARIABLE _pc-a VARIABLE _pc-u VARIABLE _pc-pa VARIABLE _pc-pu
 VARIABLE _pc-fd VARIABLE _pc-calls VARIABLE _pc-orig VARIABLE _pc-loaded
 VARIABLE _pc-fdfree VARIABLE _pc-heap VARIABLE _pc-xmem VARIABLE _pc-arena-used
@@ -12339,8 +12435,8 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _pc-use-calls @ _pc-use-throw-at @ = IF -93 THROW THEN ;
 
 : _pc-arm-marked-rollback  ( -- )
-    S" /recover.txt" _PAD-REPL VREPL-DERIVE-PATHS!
-        VREPL-S-OK = _pc-assert
+    _pc-place @ _PAD-IO-PLACE !
+    S" /recover.txt" 0 _PAD-DERIVE VREPL-S-OK = _pc-assert
     _PAD-REPL _VRO-R !
     S" candidate" _PAD-REPL VREPL-STAGE$ _VREPL-CREATE-WRITE
         VREPL-S-OK = _pc-assert
@@ -12359,8 +12455,7 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     VFS-RAM-BINDING _pc-binding VFS-BINDING-DESC-SIZE CMOVE
     _pc-ops _pc-binding VB.OPS !
     _pc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-vfs ! VFS-USE
-    _pc-vfs @ _PAD-VFS !
-    _pc-vfs @ _PAD-REPL VREPL-INIT VREPL-S-OK = _pc-assert
+    _pc-vfs @ _pc-places _PAD-PLACES!
     ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
     ['] VFS-USE _PAD-LOAD-USE-XT !
     _PAD-INIT-BUF-TABLE
@@ -12378,17 +12473,27 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     S" /note.txt" STR-STR= _pc-assert
     S" keep" _PAD-TXTA @ TXTA-SET-TEXT
     -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
-    S" ../escape" _PAD-DO-SAVE-TO 0<> _pc-assert
+    \ A path with a `..` in it is refused, never normalized.
+    S" ../escape" _PAD-SAVE-CURRENT-AS 0<> _pc-assert
+    S" sub/../escape" _PAD-CANON-PATH 0<> _pc-assert 2DROP
+    \ The full form names a place of the set; one it lacks is refused.
+    S" vfs://pc-files/full.txt" _PAD-CANON-PATH 0= _pc-assert
+        S" /full.txt" STR-STR= _pc-assert
+    _PAD-IO-PLACE @ _pc-place @ = _pc-assert
+    S" vfs://elsewhere/full.txt" _PAD-CANON-PATH 0<> _pc-assert 2DROP
     S" /escape" _pc-vfs @ VFS-RESOLVE 0= _pc-assert
 
     \ Open-buffer search reports every match and F3-style navigation walks
     \ active slots in order before wrapping to the first result.
     S" alpha needle omega" _PAD-TXTA @ TXTA-SET-TEXT
+    \ A named document has a place; Pad's own open and save give it one.
     S" /one.f" 0 _PAD-FILENAME!
+    _pc-place @ 0 _PAD-BUF-ENTRY _PBE-PLACE + !
     0 _PAD-CURSOR!
     _PAD-BUF-OPEN DUP 1 = _pc-assert DROP
     S" needle second needle" _PAD-TXTA @ TXTA-SET-TEXT
     S" /two.f" 1 _PAD-FILENAME!
+    _pc-place @ 1 _PAD-BUF-ENTRY _PBE-PLACE + !
     0 _PAD-BUF-SWITCH
     S" needle" _PAD-SEARCH-OPEN!
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-GB + @ >R
@@ -12401,16 +12506,16 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
         S" /one.f:1:7: alpha needle omega" STR-STR-CONTAINS _pc-assert
     _PAD-SEARCH-NEXT _pc-assert
     _PAD-ACTIVE @ 0= _pc-assert
-    _PAD-TXTA @ _PTO-CURSOR + @ 12 = _pc-assert
+    _PAD-TXTA @ TXTA-CURSOR@ 12 = _pc-assert
     _PAD-SEARCH-NEXT _pc-assert
     _PAD-ACTIVE @ 1 = _pc-assert
-    _PAD-TXTA @ _PTO-CURSOR + @ 6 = _pc-assert
+    _PAD-TXTA @ TXTA-CURSOR@ 6 = _pc-assert
     _PAD-SEARCH-NEXT _pc-assert
     _PAD-ACTIVE @ 1 = _pc-assert
-    _PAD-TXTA @ _PTO-CURSOR + @ 20 = _pc-assert
+    _PAD-TXTA @ TXTA-CURSOR@ 20 = _pc-assert
     _PAD-SEARCH-NEXT _pc-assert
     _PAD-ACTIVE @ 0= _pc-assert
-    _PAD-TXTA @ _PTO-CURSOR + @ 12 = _pc-assert
+    _PAD-TXTA @ TXTA-CURSOR@ 12 = _pc-assert
 
     \ Builder columns are zero-based.  The retained Pad diagnostic exposes
     \ a one-based coordinate and F4-style navigation opens the exact source.
@@ -12422,7 +12527,7 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _PAD-DIAG-COLUMN @ 7 = _pc-assert
     0 _PAD-DO-GOTO-BUILD-ERROR
     _PAD-ACTIVE @ 0= _pc-assert
-    _PAD-TXTA @ _PTO-CURSOR + @ 6 = _pc-assert
+    _PAD-TXTA @ TXTA-CURSOR@ 6 = _pc-assert
     1 _PAD-BUF-CLOSE
 
     \ Diagnostic navigation uses one-based line/column coordinates and
@@ -12432,7 +12537,7 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     10 _pc-io C! _pc-io 1 _PAD-TXTA @ TXTA-INS-STR
     S" second" _PAD-TXTA @ TXTA-INS-STR
     2 3 _PAD-GOTO-LINE-COLUMN _pc-assert
-    _PAD-TXTA @ _PTO-CURSOR + @ 8 = _pc-assert
+    _PAD-TXTA @ TXTA-CURSOR@ 8 = _pc-assert
     S" keep" _PAD-TXTA @ TXTA-SET-TEXT
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-FNAME-L + !
 
@@ -12776,10 +12881,22 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     DUP CV-DATA@ SWAP CV-LEN@
     S" # Daybook\n\n> 2026-07-13 | Daybook edit\n" STR-STR= _pr-assert ;
 
+VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
+\ A place set over a volume: one writable place at its root, which is the
+\ set's home and origin, as a build with one volume declares.
+: _pr-places  ( vfs -- set )
+    S" pr-files" PLACES-VOLUME THROW _pr-volume !
+    _pr-volume @ PVOL-ATTACH THROW
+    S" pr-files" S" /" PLACE-WRITABLE _pr-volume @ PLACES-DECLARE THROW
+    PLSET-NEW THROW _pr-set !
+    PLACE-WRITABLE SWAP _pr-set @ PLSET-GRANT THROW _pr-place !
+    _pr-place @ _pr-set @ PLSET-HOME!
+    _pr-place @ _pr-set @ PLSET-ORIGIN!
+    _pr-set @ ;
+
 : _pr-pad-storage-setup  ( -- )
     _pr-pad @ _PAD-ACTIVATE
-    _pr-vfs @ VFS-USE _pr-vfs @ _PAD-VFS !
-    _pr-vfs @ _PAD-REPL VREPL-INIT VREPL-S-OK = _pr-assert
+    _pr-vfs @ VFS-USE _pr-vfs @ _pr-places _PAD-PLACES!
     _PAD-INIT-BUF-TABLE
     _PAD-ARENA-SIZE A-XMEM ARENA-NEW
     DUP 0= _pr-assert DROP _PAD-ARENA !
@@ -12834,7 +12951,6 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     777 CTX-NEW DUP 0= _pr-assert DROP _pr-context !
     _pr-head _pr-context @ CTX.PRACTICE !
     CTX-F-ACTIVE _pr-context @ CTX.FLAGS !
-    _pr-vfs @ _pr-context @ CTX.VFS !
     CREG-NEW DUP 0= _pr-assert DROP _pr-creg !
     _pr-creg @ _pr-context @ RREG-NEW
         DUP 0= _pr-assert DROP _pr-rreg !
@@ -21589,6 +21705,18 @@ CREATE _aac-text _FEXP-CAP-TEXT-MAX 8 + ALLOT
 CREATE _aac-long-name _FEXP-PATH-CAP 8 + ALLOT
 CREATE _aac-ops VFS-OPS-SIZE ALLOT
 CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
+VARIABLE _aac-volume VARIABLE _aac-set VARIABLE _aac-place
+\ A place set over a volume: one writable place at its root, which is the
+\ set's home and origin, as a build with one volume declares.
+: _aac-places  ( vfs -- set )
+    S" aac-files" PLACES-VOLUME THROW _aac-volume !
+    _aac-volume @ PVOL-ATTACH THROW
+    S" aac-files" S" /" PLACE-WRITABLE _aac-volume @ PLACES-DECLARE THROW
+    PLSET-NEW THROW _aac-set !
+    PLACE-WRITABLE SWAP _aac-set @ PLSET-GRANT THROW _aac-place !
+    _aac-place @ _aac-set @ PLSET-HOME!
+    _aac-place @ _aac-set @ PLSET-ORIGIN!
+    _aac-set @ ;
 
 : _aac-assert  ( flag -- )
     1 _aac-checks +!
@@ -21717,8 +21845,7 @@ CREATE _aac-binding VFS-BINDING-DESC-SIZE ALLOT
     S" deep-file.txt" _aac-vfs @ VFS-MKFILE DUP 0<> _aac-assert
     S" /" _aac-vfs @ VFS-CD? 0= _aac-assert
     ?DUP IF
-        DUP _FEXP-BUILD-PATH-EXACT? 0= _aac-assert
-        _FEXP-SELECT-INODE 0= _aac-assert
+        _aac-place @ _FEXP-SELECT-INODE 0= _aac-assert
     THEN
     _FEXP-SEL-LEN @ 0= _aac-assert
     _aac-long-name _FEXP-PATH-CAP 1+ _FEXP-SEL-PATH! 0= _aac-assert
@@ -21808,8 +21935,8 @@ VARIABLE _aac-old-entry
     _aac-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _aac-vfs ! VFS-USE
     FEXP-COMP-DESC CINST-NEW
     DUP 0= _aac-assert DROP _aac-inst !
-    _aac-inst @ _FEXP-ACTIVATE _aac-vfs @ _FEXP-VFS !
-    _FEXP-VFS @ _FEXP-PREVIEW-SCOPE VFA-SCOPE-INIT 0= _aac-assert
+    _aac-inst @ _FEXP-ACTIVATE _aac-vfs @ _aac-places _FEXP-SET !
+    _aac-place @ DUP _FEXP-SEL-PLACE ! _FEXP-DIR-PLACE !
     CBR-NEW DUP 0= _aac-assert DROP _aac-request !
     _aac-null-results
     _aac-text-integrity
@@ -22414,17 +22541,17 @@ VARIABLE _dah-hrun
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" daybook.source" CAP-E-OBSERVE
-        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.active" CAP-E-OBSERVE
-        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.text" CAP-E-OBSERVE
         DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.resource.selected" CAP-E-OBSERVE
-        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.preview.text" CAP-E-OBSERVE
         DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
@@ -22438,7 +22565,7 @@ VARIABLE _dah-hrun
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.source" CAP-E-OBSERVE
-        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS IRES-VFS-URI-MAX _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" streams.source.query" CAP-E-OBSERVE
         DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
@@ -22469,10 +22596,10 @@ VARIABLE _dah-hrun
         DACAND-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.open" CAP-E-NAVIGATE
-        DACAND-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS IRES-VFS-URI-MAX _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.resource.reveal" CAP-E-NAVIGATE
-        DACAND-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS IRES-VFS-URI-MAX _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.cell.set-selected" CAP-E-MUTATE
         DACAND-REVIEW-FLAGS 40 _dah-eft @ _dah-entry-exact?
@@ -27209,9 +27336,19 @@ def _forth_line_contains_networking_load(
     return _forth_line_contains_module_load(tokens, command, "networking.f")
 
 
+def _without_places_boot_lines(lines: list[str]) -> list[str]:
+    """LINES without the places declaration, wherever it stands."""
+    block = list(PLACES_BOOT_LINES)
+    for index in range(len(lines) - len(block) + 1):
+        if lines[index:index + len(block)] == block:
+            return lines[:index] + lines[index + len(block):]
+    return lines
+
+
 def _with_mp64fs_vfs_platform(autoexec: str) -> str:
-    """Compose the eager MP64FS VFS before any applet module is loaded."""
-    lines = autoexec.splitlines()
+    """Compose the eager MP64FS VFS, and declare the build's places over
+    it, before any applet module is loaded."""
+    lines = _without_places_boot_lines(autoexec.splitlines())
     token_lines = [_forth_line_tokens(line) for line in lines]
     userland_lines = [
         index
@@ -27252,7 +27389,9 @@ def _with_mp64fs_vfs_platform(autoexec: str) -> str:
         and token_lines[insert_index][1].lower() == "networking.f"
     ):
         insert_index += 1
-    lines.insert(insert_index, MP64FS_VFS_PLATFORM_BOOT_LINE)
+    lines[insert_index:insert_index] = [
+        MP64FS_VFS_PLATFORM_BOOT_LINE, *PLACES_BOOT_LINES
+    ]
     suffix = "\n" if autoexec.endswith("\n") else ""
     return "\n".join(lines) + suffix
 
@@ -30770,7 +30909,8 @@ def smoke(
                     wall_timeout=25.0,
                 ):
                     source_result = wait_screen_any(
-                        ("vfs:/daybook.md", "akashic:resource:"),
+                        (f"vfs://{PLACES_BOOT_PLACE}/daybook.md",
+                         "akashic:resource:"),
                         "the Daybook source result was not delivered to Agent",
                         step_budget=1_000_000_000,
                         wall_timeout=25.0,

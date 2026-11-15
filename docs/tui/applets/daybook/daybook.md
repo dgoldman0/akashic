@@ -204,7 +204,8 @@ any shared-resource service or attachment is unavailable, Daybook enters
 `/daybook.md`.
 
 `Edit Source in Pad` (Ctrl+O) emits the semantic resource URI from the current
-binding in shared mode; standalone mode continues to emit `vfs:/daybook.md`.
+binding in shared mode; standalone mode emits the backing locator of
+`/daybook.md` in its home place, `vfs://<place>/daybook.md`.
 Task capture persists through the same owner. Because general derived authority
 does not yet exist, its nested replace is an explicitly approved, bounded
 implementation hop inside the already-authorized `daybook.task.capture`

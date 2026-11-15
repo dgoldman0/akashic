@@ -119,6 +119,8 @@ from akashic_tui import (  # noqa: E402
     MEGAPAD_ROOT,
     MACHINE_BACKENDS,
     MP64FS_VFS_PLATFORM_BOOT_LINE,
+    PLACES_BOOT_ENTRY,
+    PLACES_BOOT_LINES,
     MP64FS_VFS_PLATFORM_MODULE,
     PROFILES,
     PROVIDED_RE,
@@ -521,10 +523,12 @@ def test_app_shell_is_vfs_abstract_and_mp64fs_is_platform_composition() -> None:
 def test_mp64fs_platform_boot_load_is_early_and_idempotent() -> None:
     autoexec = "ENTER-USERLAND\nREQUIRE tui/applets/pad/pad.f\n"
     integrated = _with_mp64fs_vfs_platform(autoexec)
+    # The places declaration follows the module that reports the volume.
     assert integrated == (
         "ENTER-USERLAND\n"
         f"{MP64FS_VFS_PLATFORM_BOOT_LINE}\n"
-        "REQUIRE tui/applets/pad/pad.f\n"
+        + "".join(f"{line}\n" for line in PLACES_BOOT_LINES)
+        + "REQUIRE tui/applets/pad/pad.f\n"
     )
     assert _with_mp64fs_vfs_platform(integrated) == integrated
 
@@ -695,6 +699,7 @@ def test_every_app_shell_profile_composes_the_platform_provider() -> None:
         linked_profiles += int(profile.linked)
         autoexec = _with_mp64fs_vfs_platform(profile.autoexec)
         assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
+        assert autoexec.count(PLACES_BOOT_ENTRY) == 2
 
         composition_roots = (MP64FS_VFS_PLATFORM_MODULE,) + tuple(
             root

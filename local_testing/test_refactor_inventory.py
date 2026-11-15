@@ -124,9 +124,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 704,
-        "resolved_require_occurrence_count": 2608,
-        "unique_resolved_edge_count": 2608,
+        "module_count": 707,
+        "resolved_require_occurrence_count": 2626,
+        "unique_resolved_edge_count": 2626,
         "unresolved_require_count": 65,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -512,8 +512,11 @@ def test_l9_host_and_platform_dependency_boundaries_are_ratchets() -> None:
     report = _report()
     by_path = {module["path"]: module for module in report["modules"]}
     assert "utils/fs/vfs.f" in by_path["tui/app-shell.f"]["requires"]
+    # The platform module mounts the boot volume and reports it to the
+    # places registry.
     assert by_path["tui/platform/mp64fs-vfs.f"]["requires"] == [
-        "utils/fs/drivers/vfs-mp64fs.f"
+        "utils/fs/drivers/vfs-mp64fs.f",
+        "utils/fs/places.f",
     ]
     assert [
         (edge["from"], edge["to"])
@@ -568,6 +571,7 @@ def test_l9_desk_keeps_the_exact_service_namespace() -> None:
         "org.akashic.daybook.automations",
         "org.akashic.runtime.resource-owners",
         "org.akashic.interop.endpoint",
+        "org.akashic.fs.places",
     )
 
     host = (SOURCE_ROOT / "tui/applet-host/host.f").read_text(

@@ -159,7 +159,7 @@ external device use.
 | `soundlab.render` | mutate | Render current settings and return analysis |
 | `soundlab.analysis` | observe | Read settings, render state, metrics, and boundaries |
 | `soundlab.wav.save` | persist | Atomically publish the current WAV |
-| `soundlab.output` | observe | Return `vfs:/soundlab.wav` as a resource |
+| `soundlab.output` | observe | Return the locator of `/soundlab.wav` in its home place, `vfs://<place>/soundlab.wav`, as a resource |
 | `soundlab.playback.status` | observe | Read device mode, status, generation, and last result |
 | `soundlab.play` | external | Submit the current valid render to AudioOut |
 

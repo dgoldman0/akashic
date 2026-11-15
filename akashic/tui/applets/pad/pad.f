@@ -74,6 +74,8 @@ REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/resource.f
+REQUIRE ../../../interop/place-resource.f
+REQUIRE ../../../utils/fs/places.f
 REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource-session.f
 
@@ -111,6 +113,7 @@ _PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
 -9  CONSTANT _PAD-E-STALE
 -10 CONSTANT _PAD-E-SHARED-FAILED
 -11 CONSTANT _PAD-E-DAYBOOK-PROTECTED
+-12 CONSTANT _PAD-E-READ-ONLY-PLACE
 
 \ Buffer entry struct offsets (11 cells = 88 bytes)
  0 CONSTANT _PBE-FLAGS      \ 0=free, -1=in-use
@@ -124,7 +127,8 @@ _PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
 64 CONSTANT _PBE-SEL-ANC    \ saved selection anchor
 72 CONSTANT _PBE-INODE      \ VFS inode (0 = untitled)
 80 CONSTANT _PBE-RESERVED
-88 CONSTANT _PAD-BUF-ENTRY-SIZE
+88 CONSTANT _PBE-PLACE      \ the document's place (0 = untitled or shared)
+96 CONSTANT _PAD-BUF-ENTRY-SIZE
 
 \ =====================================================================
 \  S3 -- UIDL File Path
@@ -219,8 +223,16 @@ _PAD-CURRENT-STATE _PAD-DUMMY-CAP CMP-FIELD: _PAD-DUMMY-BUF
 _PAD-CURRENT-STATE _PAD-IO-CAP CMP-FIELD: _PAD-IO-BUF
 
 \ ---- VFS ----
-_PAD-CURRENT-STATE CMP-CELL: _PAD-VFS
+\ A document is a place of this instance's set and a path in it.  The
+\ replacement descriptor works on one volume at a time: it is pointed at
+\ a document's volume, with the document's path there, each time one is
+\ read or written (_PAD-DERIVE).
+_PAD-CURRENT-STATE CMP-CELL: _PAD-SET        \ the place set
+_PAD-CURRENT-STATE CMP-CELL: _PAD-IO-PLACE   \ place of the path in hand
+_PAD-CURRENT-STATE CMP-CELL: _PAD-IO-VFS     \ volume the descriptor is on
+_PAD-CURRENT-STATE CMP-CELL: _PAD-PATH-PLACE \ place the next path names
 _PAD-CURRENT-STATE VREPL-SIZE CMP-FIELD: _PAD-REPL
+_PAD-CURRENT-STATE VREPL-PATH-MAX 1+ CMP-FIELD: _PAD-VOL-BUF
 
 \ ---- Activation-local shared Daybook session ----
 \ Service pointers and capability descriptors are borrowed from Desk.  Stable
@@ -384,10 +396,10 @@ VARIABLE _PAD-SHARED-COMMIT-XT
     RSES-S-OK <> IF RSES-S-INVALID THROW THEN ;
 
 : _PAD-LOAD-CONFIG  ( -- )
-    VFS-CUR >R  _PAD-VFS @ VFS-USE
-    S" tui/applets/pad/pad.toml" VFS-OPEN
-    R> VFS-USE
-    DUP 0= IF DROP EXIT THEN
+    \ pad.toml is a shipped file, read from the set's origin.
+    S" tui/applets/pad/pad.toml" VFS-FF-READ
+        _PAD-SET @ PLSET-ORIGIN PLACE-OPEN
+    IF DROP EXIT THEN
     _PAD-CFG-FD !
     _PAD-CFG-BUF _PAD-CFG-CAP _PAD-CFG-FD @ VFS-READ
     DUP 0= IF DROP _PAD-CFG-FD @ VFS-CLOSE EXIT THEN
@@ -727,6 +739,7 @@ VARIABLE _PDT-RGN
     -1                     R@ _PAD-BUF-ENTRY _PBE-SEL-ANC + !
     0                      R@ _PAD-BUF-ENTRY _PBE-INODE + !
     0                      R@ _PAD-BUF-ENTRY _PBE-RESERVED + !
+    0                      R@ _PAD-BUF-ENTRY _PBE-PLACE + !
     1 _PAD-BUF-CNT +!
     R@ _PAD-TAB-ADD-SLOT
     \ Switch to the new buffer
@@ -775,6 +788,7 @@ VARIABLE _PDT-RGN
     -1 R@ _PBE-SEL-ANC + !
     0 R@ _PBE-INODE + !
     0 R@ _PBE-RESERVED + !
+    0 R@ _PBE-PLACE + !
     R> DROP
     -1 _PAD-BUF-CNT +!
     \ If we closed the active buffer, switch to another
@@ -858,59 +872,106 @@ VARIABLE _PAD-LOAD-USE-XT
 
 VARIABLE _PCA-A
 VARIABLE _PCA-U
-VARIABLE _PCA-CWD-U
-VARIABLE _PCA-IN
-VARIABLE _PCA-ORIG
-VARIABLE _PCA-DEPTH
-16 CONSTANT _PAD-CANON-DEPTH
+VARIABLE _PPP-START
 
-: _PAD-INODE-PATH-BODY  ( -- path-a path-u ior )
-    0 _PCA-DEPTH !
-    BEGIN _PCA-IN @ IN.PARENT @ 0<> WHILE
-        1 _PCA-DEPTH +!
-        _PCA-DEPTH @ _PAD-CANON-DEPTH > IF 0 0 -1 EXIT THEN
-        _PCA-IN @ IN.PARENT @ _PCA-IN !
-    REPEAT
-    _PCA-ORIG @ _PAD-PATH-BUF VREPL-PATH-MAX 1+ VFS-INODE-PATH
-    DUP VREPL-PATH-MAX > IF DROP 0 0 -1 EXIT THEN
-    _PAD-PATH-BUF SWAP 0 ;
-
-: _PAD-INODE-PATH-CHECKED  ( inode -- path-a path-u ior )
-    DUP _PCA-ORIG ! _PCA-IN !
-    ['] _PAD-INODE-PATH-BODY VFS-TRANSACTION ;
-
-\ Return a bounded absolute path without silently normalizing traversal.
-\ VREPL-DERIVE-PATHS! performs the final component and reserved-name checks
-\ before any mutation.
-: _PAD-CANON-PATH-BODY  ( -- canon-a canon-u ior )
-    _PCA-U @ 0= _PCA-U @ VREPL-PATH-MAX > OR IF 0 0 -1 EXIT THEN
-    _PCA-A @ C@ [CHAR] / = IF
-        _PCA-A @ _PAD-PATH-BUF _PCA-U @ CMOVE
-        _PAD-PATH-BUF _PCA-U @ 0 EXIT
+: _PAD-PLAIN-NAME?  ( a u -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    DUP 1 = IF DROP C@ [CHAR] . <> EXIT THEN
+    DUP 2 = IF
+        DROP DUP C@ [CHAR] . = SWAP 1+ C@ [CHAR] . = AND 0= EXIT
     THEN
-    _PAD-VFS @ V.CWD @ _PCA-IN ! 0 _PCA-DEPTH !
-    BEGIN _PCA-IN @ IN.PARENT @ 0<> WHILE
-        1 _PCA-DEPTH +!
-        _PCA-DEPTH @ _PAD-CANON-DEPTH > IF 0 0 -1 EXIT THEN
-        _PCA-IN @ IN.PARENT @ _PCA-IN !
-    REPEAT
-    _PAD-VFS @ V.CWD @ _PAD-PATH-BUF VREPL-PATH-MAX 1+
-    VFS-INODE-PATH DUP _PCA-CWD-U ! DROP
-    _PCA-CWD-U @ VREPL-PATH-MAX > IF 0 0 -1 EXIT THEN
-    _PCA-CWD-U @ 1 = _PAD-PATH-BUF C@ [CHAR] / = AND IF
-        1 _PCA-U @ + DUP VREPL-PATH-MAX > IF DROP 0 0 -1 EXIT THEN
-        _PCA-A @ _PAD-PATH-BUF 1+ _PCA-U @ CMOVE
-    ELSE
-        _PCA-CWD-U @ 1+ _PCA-U @ +
-        DUP VREPL-PATH-MAX > IF DROP 0 0 -1 EXIT THEN
-        [CHAR] / _PAD-PATH-BUF _PCA-CWD-U @ + C!
-        _PCA-A @ _PAD-PATH-BUF _PCA-CWD-U @ 1+ + _PCA-U @ CMOVE
-    THEN
-    _PAD-PATH-BUF SWAP 0 ;
+    2DROP -1 ;
 
+\ A document's path names plain entries only: it begins with a slash and
+\ has no empty, `.` or `..` component, so one file has one name.
+: _PAD-PLAIN-PATH?  ( a u -- flag )
+    DUP 2 < IF 2DROP 0 EXIT THEN
+    OVER C@ [CHAR] / <> IF 2DROP 0 EXIT THEN
+    1 _PPP-START !
+    DUP 1 DO
+        OVER I + C@ [CHAR] / = IF
+            OVER _PPP-START @ + I _PPP-START @ - _PAD-PLAIN-NAME? 0= IF
+                2DROP 0 UNLOOP EXIT
+            THEN
+            I 1+ _PPP-START !
+        THEN
+    LOOP
+    SWAP _PPP-START @ + SWAP _PPP-START @ - _PAD-PLAIN-NAME? ;
+
+\ _PAD-PLACES! ( set -- )
+\   The place set Pad works in.  The replacement descriptor is on no
+\   volume until a document is read or written.
+: _PAD-PLACES!  ( set -- )
+    _PAD-SET !  0 _PAD-IO-VFS !  0 _PAD-IO-PLACE !  0 _PAD-PATH-PLACE ! ;
+
+\ The place a path with none of its own is in: the active document's,
+\ or the set's home.
+: _PAD-DEFAULT-PLACE  ( -- place | 0 )
+    _PAD-ACTIVE @ 0< 0= IF
+        _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-PLACE + @ ?DUP IF EXIT THEN
+    THEN
+    _PAD-SET @ PLSET-HOME ;
+
+\ _PAD-CANON-PATH ( path-a path-u -- canon-a canon-u ior )
+\   A path as Pad keeps it, and its place in _PAD-IO-PLACE.  The place
+\   is the one a caller named (_PAD-OPEN-IN), the one a full
+\   vfs://<place>/<path> names in this instance's set, or the default.
+\   The path starts at the place's folder, so a path with no leading
+\   slash is given one.  Nothing is normalized: a path with an empty,
+\   `.` or `..` component is refused.
 : _PAD-CANON-PATH  ( path-a path-u -- canon-a canon-u ior )
     _PCA-U ! _PCA-A !
-    ['] _PAD-CANON-PATH-BODY VFS-TRANSACTION ;
+    _PAD-PATH-PLACE @ DUP _PAD-IO-PLACE !  0 _PAD-PATH-PLACE !
+    0= IF
+        _PCA-A @ _PCA-U @ _PAD-SET @ IRES-PLACE-PARSE     ( a u place status )
+        DUP IRES-S-OK = IF
+            DROP _PAD-IO-PLACE ! _PCA-U ! _PCA-A !
+        ELSE
+            >R DROP 2DROP R>
+            IRES-S-NO-PLACE = IF 0 0 -1 EXIT THEN
+            _PAD-DEFAULT-PLACE _PAD-IO-PLACE !
+        THEN
+    THEN
+    _PAD-IO-PLACE @ 0= IF 0 0 -1 EXIT THEN
+    _PCA-U @ 0= _PCA-U @ VREPL-PATH-MAX > OR IF 0 0 -1 EXIT THEN
+    _PCA-A @ C@ [CHAR] / = IF
+        _PCA-A @ _PAD-PATH-BUF _PCA-U @ MOVE
+        _PCA-U @
+    ELSE
+        _PCA-U @ 1+ VREPL-PATH-MAX > IF 0 0 -1 EXIT THEN
+        _PCA-A @ _PAD-PATH-BUF 1+ _PCA-U @ MOVE
+        [CHAR] / _PAD-PATH-BUF C!
+        _PCA-U @ 1+
+    THEN
+    _PAD-PATH-BUF OVER _PAD-PLAIN-PATH? 0= IF DROP 0 0 -1 EXIT THEN
+    _PAD-PATH-BUF SWAP 0 ;
+
+\ _PAD-DERIVE ( path-a path-u write? -- status )
+\   Point the replacement descriptor at the document PATH names in
+\   _PAD-IO-PLACE: bind the path to its volume, move the descriptor to
+\   that volume when it is on another, and derive the replacement's
+\   companion paths.  A document that is to be written needs a writable
+\   place.  Nonzero when the document cannot be used: -1 when its folder
+\   is not there, _PAD-E-READ-ONLY-PLACE when it would be written in a
+\   read-only place, -3 or the descriptor's status otherwise.
+: _PAD-DERIVE  ( path-a path-u write? -- status )
+    >R _PAD-IO-PLACE @ _PAD-VOL-BUF VREPL-PATH-MAX R> IF
+        PLACE-BIND-WRITE
+    ELSE
+        PLACE-BIND
+    THEN                                                ( vfs len ior )
+    ?DUP IF
+        NIP NIP VFS-IOR-REASON
+        DUP VFS-R-READONLY = IF DROP _PAD-E-READ-ONLY-PLACE EXIT THEN
+        DUP VFS-R-NOENT = SWAP VFS-R-NOTDIR = OR IF -1 ELSE -3 THEN EXIT
+    THEN
+    SWAP DUP _PAD-IO-VFS @ <> IF
+        DUP _PAD-REPL VREPL-INIT VREPL-S-OK <> IF 2DROP -3 EXIT THEN
+        _PAD-IO-VFS !
+    ELSE
+        DROP
+    THEN
+    _PAD-VOL-BUF SWAP _PAD-REPL VREPL-DERIVE-PATHS! ;
 
 : _PAD-VREPL-USABLE?  ( status -- flag )
     DUP VREPL-S-OK =
@@ -933,13 +994,21 @@ VARIABLE _PFN-I
     \ A new name can mean a new kind of text.
     _PFN-I @ _PAD-ACTIVE @ = IF _PAD-SYNC-STYLE THEN ;
 
+\ The document just read or written, as the active tab keeps it: its
+\ path in its place.
+: _PAD-NAME-ACTIVE!  ( -- )
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-ACTIVE @ _PAD-FILENAME!
+    _PAD-IO-PLACE @ _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-PLACE + ! ;
+
 VARIABLE _PFB-A
 VARIABLE _PFB-U
 
+\ The open document with this path in the place in hand (_PAD-IO-PLACE).
 : _PAD-FIND-BUFFER  ( fname-a fname-u -- index | -1 )
     _PFB-U ! _PFB-A !
     _PAD-MAX-BUFS 0 DO
-        I _PAD-BUF-ENTRY _PBE-FLAGS + @ IF
+        I _PAD-BUF-ENTRY _PBE-FLAGS + @
+        I _PAD-BUF-ENTRY _PBE-PLACE + @ _PAD-IO-PLACE @ = AND IF
             _PFB-A @ _PFB-U @
             I _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
             SWAP _PBE-FNAME-L + @
@@ -955,8 +1024,10 @@ VARIABLE _PFB-U
     LOOP
     -1 ;
 
+\ Daybook's document is /daybook.md in the home, where records go.
 : _PAD-DAYBOOK-PATH?  ( path-a path-u -- flag )
-    S" /daybook.md" STR-STR= ;
+    S" /daybook.md" STR-STR=
+    _PAD-IO-PLACE @ _PAD-SET @ PLSET-HOME = AND ;
 
 VARIABLE _PSRQ-BIND
 VARIABLE _PSRQ-CAP
@@ -1152,12 +1223,10 @@ VARIABLE _PSHO-NEW
     _PAD-UPDATE-STATUS
     0 ;
 
+\ The path is one _PAD-CANON-PATH gave, with its place in hand.
 : _PAD-DO-SAVE-TO  ( fname-a fname-u -- ior )
     _PIO-NAME-U ! _PIO-NAME-A !
-    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-CANON-PATH IF
-        2DROP -1 EXIT
-    THEN
-    _PAD-REPL VREPL-DERIVE-PATHS! DUP IF EXIT THEN DROP
+    _PIO-NAME-A @ _PIO-NAME-U @ -1 _PAD-DERIVE DUP IF EXIT THEN DROP
     0 _PIO-TEXT ! 0 _PIO-TEXT-U !
     ['] _PAD-CAPTURE-TEXT CATCH IF -3 EXIT THEN
     ['] _PAD-REPLACE-CAPTURED-TEXT CATCH
@@ -1177,7 +1246,7 @@ VARIABLE _PSHO-NEW
         \ Saving a shared buffer elsewhere is an explicit export.  Only after
         \ the VFS commit succeeds does it become an ordinary Pad buffer.
         _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
-        _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+        _PAD-NAME-ACTIVE!
         0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + !
         _PAD-SHARED-DETACH-BUFFER
     ELSE
@@ -1191,7 +1260,7 @@ VARIABLE _PSHO-NEW
             THEN
         THEN
         _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
-        _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+        _PAD-NAME-ACTIVE!
     THEN
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
@@ -1202,7 +1271,7 @@ VARIABLE _PSHO-NEW
 \ Cleanup still runs for every owned fd/buffer and restores the caller's
 \ active VFS; an ordinary short/zero transfer remains the more specific -5.
 : _PAD-LOAD-FILE-BODY  ( -- ior )
-    _PAD-VFS @ _PAD-LOAD-USE
+    _PAD-IO-VFS @ _PAD-LOAD-USE
     _PAD-REPL VREPL-TARGET$ VFS-OPEN
     DUP 0= IF
         DROP -1 EXIT
@@ -1222,7 +1291,7 @@ VARIABLE _PSHO-NEW
     _PIO-FD @ FD.INODE @ _PIO-ACT !
     _PAD-LOAD-CLOSE-FD
     _PIO-BUF @ _PIO-SIZE @ _PAD-TXTA @ TXTA-SET-TEXT
-    _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
+    _PAD-NAME-ACTIVE!
     _PIO-ACT @ _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-INODE + !
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-UPDATE-STATUS
@@ -1277,7 +1346,7 @@ VARIABLE _PSHO-NEW
 \ Load a file from path into the active buffer.
 : _PAD-LOAD-FILE  ( fname-a fname-u -- ior )
     _PIO-NAME-U ! _PIO-NAME-A !
-    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-REPL VREPL-DERIVE-PATHS!
+    _PIO-NAME-A @ _PIO-NAME-U @ 0 _PAD-DERIVE
     DUP IF EXIT THEN DROP
     _PAD-REPL VREPL-RECOVER DUP _PAD-VREPL-USABLE? 0= IF
         DROP -6 EXIT
@@ -1295,7 +1364,8 @@ VARIABLE _POP-ORIG
             _PAD-OPEN-SHARED-LATEST EXIT
         THEN
     THEN
-    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-REPL VREPL-DERIVE-PATHS!
+    _PIO-NAME-A @ _PIO-NAME-U @ 0 _PAD-DERIVE
+    DUP -1 = IF EXIT THEN
     IF -3 EXIT THEN
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-FIND-BUFFER DUP 0>= IF
         _PAD-BUF-SWITCH 0 EXIT
@@ -1320,6 +1390,11 @@ VARIABLE _POP-ORIG
             ELSE DROP THEN
         ELSE DROP THEN
     THEN ;
+
+\ _PAD-OPEN-IN ( fname-a fname-u place -- ior )
+\   Open the document at a path of a place of this instance's set.
+: _PAD-OPEN-IN  ( fname-a fname-u place -- ior )
+    _PAD-PATH-PLACE ! _PAD-OPEN-PATH ;
 
 : _PAD-REPORT-OPEN-RESULT  ( ior -- )
     DUP 0= IF DROP EXIT THEN
@@ -1393,6 +1468,9 @@ VARIABLE _POP-ORIG
         DROP S" Shared Daybook resource is unavailable"
         2400 ASHELL-TOAST-WARNING EXIT
     THEN
+    DUP _PAD-E-READ-ONLY-PLACE = IF
+        DROP S" This place is read-only" 2400 ASHELL-TOAST-WARNING EXIT
+    THEN
     DUP _PAD-E-DAYBOOK-PROTECTED = IF
         DROP S" /daybook.md is owned by the shared Daybook resource"
         2800 ASHELL-TOAST-WARNING EXIT
@@ -1403,14 +1481,15 @@ VARIABLE _POP-ORIG
 \  S12 -- Explorer Callback
 \ =====================================================================
 
-: _PAD-ON-EXPL-OPEN  ( inode explorer -- )
+: _PAD-ON-EXPL-OPEN  ( inode place explorer -- )
     DROP
-    DUP 0= IF DROP EXIT THEN
-    DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
-    _PAD-INODE-PATH-CHECKED IF
-        2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST-WARNING EXIT
+    OVER 0= IF 2DROP EXIT THEN
+    OVER IN.TYPE @ VFS-T-FILE <> IF 2DROP EXIT THEN
+    DUP >R _PAD-PATH-BUF VREPL-PATH-MAX PLACE-PATH IF
+        DROP R> DROP
+        S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
-    _PAD-OPEN-PATH
+    _PAD-PATH-BUF SWAP R> _PAD-OPEN-IN
     _PAD-REPORT-OPEN-RESULT ;
 
 \ =====================================================================
@@ -2349,11 +2428,10 @@ VARIABLE _PSW-BYTE
     ABORT" pad: arena alloc failed"
     _PAD-ARENA !
 
-    \ ---- VFS ----
-    VFS-CUR DUP 0= ABORT" pad: no VFS available"
-    _PAD-VFS !
-    _PAD-VFS @ _PAD-REPL VREPL-INIT
-    VREPL-S-OK <> ABORT" pad: replacement init failed"
+    \ ---- Places ----
+    _PAD-CURRENT-INSTANCE @ CINST-PLACES
+    DUP 0= ABORT" pad: no places available"
+    _PAD-PLACES!
     _PAD-SHARED-INIT
     \ ---- Find UIDL elements by ID ----
     S" mbar"           UTUI-BY-ID _PAD-E-MBAR !
@@ -2396,8 +2474,7 @@ VARIABLE _PSW-BYTE
     \ ---- Create explorer on sidebar ----
     _PAD-E-SIDEBAR @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW
-        _PAD-VFS @
-        _PAD-VFS @ V.ROOT @
+        _PAD-SET @
         EXPL-NEW _PAD-EXPL !
         ['] _PAD-ON-EXPL-OPEN _PAD-EXPL @ EXPL-ON-OPEN
         _PAD-EXPL @ _PAD-E-SIDEBAR @ UTUI-WIDGET-SET
@@ -2599,6 +2676,7 @@ CREATE PAD-INTENTS CINT-DESC-SIZE ALLOT
 
 VARIABLE _PCH-A
 VARIABLE _PCH-U
+VARIABLE _PCH-PLACE
 VARIABLE _PCH-REQ
 VARIABLE _PAR-V
 VARIABLE _PCT-REQ
@@ -2634,10 +2712,12 @@ VARIABLE _PCT-PREVIEW-U
         _PAD-SHARED-REF _PAR-V @ IRES-RREF!
         EXIT
     THEN
+    \ An untitled document has no place yet; it would be saved in the
+    \ home.
     DUP _PBE-FNAME-L + @ DUP 0= IF
-        2DROP S" /untitled" _PAR-V @ IRES-VFS!
+        2DROP S" /untitled" _PAD-SET @ PLSET-HOME _PAR-V @ IRES-PLACE!
     ELSE
-        >R _PBE-FNAME-A + @ R> _PAR-V @ IRES-VFS!
+        >R DUP _PBE-FNAME-A + @ R> ROT _PBE-PLACE + @ _PAR-V @ IRES-PLACE!
     THEN ;
 
 : _PAD-CAP-OPEN-STATUS  ( pad-status -- bus-status )
@@ -2651,7 +2731,7 @@ VARIABLE _PCT-PREVIEW-U
 : _PAD-CAP-OPEN-HANDLER  ( request instance -- status )
     _PAD-ACTIVATE
     DUP _PCH-REQ ! DROP
-    \ Semantic identity wins over the legacy backing locator.  The candidate
+    \ Semantic identity wins over the backing locator.  The candidate
     \ parse storage is distinct from the retained live binding so a stale or
     \ foreign request cannot disturb the document already open in Pad.
     _PCH-REQ @ CBR.ARGS _PAD-SHARED-CANDIDATE-REF IRES-RREF@
@@ -2665,13 +2745,12 @@ VARIABLE _PCT-PREVIEW-U
         THEN
         CBUS-S-OK EXIT
     THEN DROP
-    _PCH-REQ @ CBR.ARGS DUP CV-TYPE@ CV-T-RESOURCE <> IF
-        DROP CBUS-S-INVALID EXIT
+    \ The locator names a place of this instance's own set.
+    _PCH-REQ @ CBR.ARGS _PAD-SET @ IRES-PLACE@ IF
+        DROP 2DROP CBUS-S-INVALID EXIT
     THEN
-    DUP CV-DATA@ SWAP CV-LEN@
-    IRES-VFS-PATH 0= IF 2DROP CBUS-S-INVALID EXIT THEN
-    _PCH-U ! _PCH-A !
-    _PCH-A @ _PCH-U @ _PAD-OPEN-PATH
+    _PCH-PLACE ! _PCH-U ! _PCH-A !
+    _PCH-A @ _PCH-U @ _PCH-PLACE @ _PAD-OPEN-IN
     DUP 0= IF
         DROP
         _PCH-REQ @ CBR.RESULT _PAD-ACTIVE-RESOURCE! IF
@@ -2707,11 +2786,11 @@ VARIABLE _PCT-PREVIEW-U
 : _PAD-CAP-SETUP  ( -- )
     _PAD-RESOURCE-SCHEMA CS-INIT
     CV-T-RESOURCE _PAD-RESOURCE-SCHEMA CS-ALLOW!
-    516 _PAD-RESOURCE-SCHEMA CS-MAX-LEN!
+    IRES-VFS-URI-MAX _PAD-RESOURCE-SCHEMA CS-MAX-LEN!
     _PAD-ACTIVE-SCHEMA CS-INIT
     CV-T-NULL CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR
     _PAD-ACTIVE-SCHEMA CS-ALLOW-MASK!
-    516 _PAD-ACTIVE-SCHEMA CS-MAX-LEN!
+    IRES-VFS-URI-MAX _PAD-ACTIVE-SCHEMA CS-MAX-LEN!
     _PAD-TEXT-SCHEMA CS-INIT
     CV-T-NULL CS-TYPE-BIT CV-T-STRING CS-TYPE-BIT OR
     _PAD-TEXT-SCHEMA CS-ALLOW-MASK!

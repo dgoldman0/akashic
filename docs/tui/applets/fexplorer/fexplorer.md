@@ -169,6 +169,20 @@ while retaining the Explorer guard.
 
 ## Internals
 
+- File Explorer works in the place set it is given (`CINST-PLACES`,
+  `docs/utils/fs/places.md`) and names no place. The sidebar's top rows
+  are the set's places; the listed directory, the selection, a pending
+  delete and the clipboard's source are each a place and a path in it.
+  Every change goes through the `PLACE-` words, so a read-only place
+  refuses it and nothing reaches outside a place's folder. The status
+  bar shows the selection's path, after its place's label when the set
+  has several places. Go To takes a path in the listed directory's
+  place, or the full form `vfs://<place>/<path>`.
+- A paste still runs the transaction that copies between two paths of one
+  volume, so it is refused when the source and the destination are on
+  different volumes, and when the destination's place, or a cut's source
+  place, is read-only. Copy across volumes arrives with `PLACE-COPY`.
+- `fexplorer.toml` is read from the set's origin.
 - File Explorer never keeps a VFS entry between operations. Another applet
   may replace or remove an entry at any time; Daybook, for one, saves by
   renaming a new copy over its file, which frees the old entry for the next
@@ -186,13 +200,16 @@ while retaining the Explorer guard.
 - The rows are sorted in place by an exchange sort: by name, by size
   (smaller first), or by type (directories first, names ascending within
   each type).
-- The sidebar tree stays rooted at the VFS root and walks the VFS each time
-  it draws. Backspace and Go To change only the listed directory.
+- The sidebar tree stays rooted at the places and walks the VFS each time
+  it draws. Backspace and Go To change only the listed directory, and
+  Backspace stops at its place's folder.
 - Rows and tree entries are keyed by `EXPL-ENTRY-KEY`, a hash of the parent's
-  key and the name, so a rich renderer's item events name the entry it drew
+  key and the name, chained from the place's row; the listed directory's
+  key comes from its path (`EXPL-PATH-KEY`), so a rich renderer's item events name the entry it drew
   even after a refresh.
-- Selecting a file gives its path to the preview's media widget, which opens
-  it in File Explorer's VFS. A text file is read whole into a buffer sized to
+- Selecting a file gives its volume and its path there (`PLACE-BIND`) to
+  the preview's media widget, which opens it. A link in a previewed
+  document is followed only to a file in the same place. A text file is read whole into a buffer sized to
   it and closed; a picture keeps its file open while it shows and decodes
   only once the Preview tab draws it, a slice a pass from the shell's
   service. A file that cannot be read, or text the memory refuses, shows its
