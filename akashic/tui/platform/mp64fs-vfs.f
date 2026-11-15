@@ -16,6 +16,7 @@
 PROVIDED akashic-tui-mp64fs-vfs
 
 REQUIRE ../../utils/fs/drivers/vfs-mp64fs.f
+REQUIRE ../../utils/fs/places.f
 
 131072 CONSTANT _MP64VFS-ARENA-SIZE
 
@@ -25,13 +26,22 @@ VARIABLE _MP64VFS-VFS
 CREATE _MP64VFS-BLOCK-DEVICE /BLOCK-DEVICE ALLOT
 CREATE _MP64VFS-VOLUME /VOLUME ALLOT
 
+\ The instance this module owns or adopted is the volume `boot` of the
+\ places registry (utils/fs/places.f), which composition declares places
+\ over.
+: _MP64VFS-REPORT  ( -- )
+    S" boot" PLACES-VOLUME ABORT" mp64vfs: boot volume record failed"
+    _MP64VFS-VFS @ SWAP PVOL-ATTACH
+    ABORT" mp64vfs: boot volume is attached elsewhere" ;
+
 \ MP64VFS-ENSURE ( -- )
 \   Select the process VFS when already composed, adopt another active VFS,
-\   or mount the MegaPad-64 boot disk.  Repeated calls reselect the instance
-\   owned or adopted by this composition module.
+\   or mount the MegaPad-64 boot disk, and report it as the volume `boot`.
+\   Repeated calls reselect the instance owned or adopted by this
+\   composition module.
 : MP64VFS-ENSURE  ( -- )
     _MP64VFS-VFS @ ?DUP IF VFS-USE EXIT THEN
-    VFS-CUR ?DUP IF DUP _MP64VFS-VFS ! VFS-USE EXIT THEN
+    VFS-CUR ?DUP IF DUP _MP64VFS-VFS ! VFS-USE _MP64VFS-REPORT EXIT THEN
     0 _MP64VFS-BLOCK-DEVICE !
     _MP64VFS-BLOCK-DEVICE BD-OPEN
     ABORT" mp64vfs: block device open failed"
@@ -43,6 +53,7 @@ CREATE _MP64VFS-VOLUME /VOLUME ALLOT
     _MP64VFS-VOLUME VMP-NEW
     ABORT" mp64vfs: VMP mount failed"
     _MP64VFS-VFS !
+    _MP64VFS-REPORT
 ;
 
 \ Composition-time availability is part of this module's contract.

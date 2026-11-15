@@ -609,6 +609,32 @@ MEGAPAD_RICH_TERMINAL_CONSUMERS = frozenset(
 APP_SHELL_MODULE = "tui/app-shell.f"
 MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
 MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
+# The places this build declares (docs/utils/fs/places.md).  The platform
+# module reports the boot volume; composition declares one writable place
+# over its root and a default set in which that place is both the home,
+# where records are written, and the origin, where shipped files are read.
+# The origin is required, so a boot without it stops here with a message.
+# Applets ask the set for its home, its origin and its list, so the names
+# below appear nowhere else.
+PLACES_BOOT_ENTRY = "_boot-places-declare"
+PLACES_BOOT_LINES = (
+    "VARIABLE _boot-place  VARIABLE _boot-places",
+    f": {PLACES_BOOT_ENTRY}  ( -- )",
+    '    S" boot" PLACES-VOLUME ABORT" PLACES FAIL volume"',
+    '    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE',
+    '        ABORT" PLACES FAIL place"  _boot-place !',
+    '    S" Files" _boot-place @ PLACE-LABEL! ABORT" PLACES FAIL label"',
+    "    -1 _boot-place @ PLACE-REQUIRED!",
+    "    PLACES-CHECK ?DUP IF",
+    '        NIP ." PLACES FAIL origin ior=" . CR TX-FLUSH ABORT',
+    "    THEN DROP",
+    '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
+    "    PLACE-WRITABLE _boot-place @ _boot-places @ PLSET-GRANT",
+    '        ABORT" PLACES FAIL grant"',
+    "    DUP _boot-places @ PLSET-HOME!  _boot-places @ PLSET-ORIGIN!",
+    "    _boot-places @ PLACES-DEFAULT! ;",
+    PLACES_BOOT_ENTRY,
+)
 # With --system-volume a profile's modules are plain files on the system
 # volume, the ext4 volume on the machine's third storage unit.  The boot
 # volume then carries only the closure of the module that mounts it,
@@ -10203,6 +10229,9 @@ CREATE _pc-aout PHEAD-SIZE ALLOT
 CREATE _pc-arejected PHEAD-SIZE ALLOT
 CREATE _pc-pact PACT-SIZE ALLOT
 VARIABLE _pc-validator-reject
+VARIABLE _pc-avolume
+VARIABLE _pc-adecl
+VARIABLE _pc-aset
 VARIABLE _pc-first-epoch
 
 : _pc-semantic-validator  ( head data -- status )
@@ -10243,11 +10272,21 @@ VARIABLE _pc-first-epoch
     _pc-arejected PHEAD.REVISION @ 2 = _pc-assert
     _pc-arejected PHEAD.CURRENT-ROOT @ 42 = _pc-assert
 
+    \ The activation works over a place set whose home is the volume.
+    S" pc-volume" PLACES-VOLUME 0= _pc-assert _pc-avolume !
+    _pc-avfs @ _pc-avolume @ PVOL-ATTACH 0= _pc-assert
+    S" pc-home" S" /" PLACE-WRITABLE _pc-avolume @ PLACES-DECLARE
+        0= _pc-assert _pc-adecl !
+    PLSET-NEW 0= _pc-assert _pc-aset !
+    PLACE-WRITABLE _pc-adecl @ _pc-aset @ PLSET-GRANT 0= _pc-assert
+        _pc-aset @ PLSET-HOME!
     _pc-pact PACT-INIT
     ['] _pc-semantic-validator _pc-validator-reject
         PACT-TRUST-STRUCTURAL _pc-pact PACT-VALIDATOR!
         PACT-S-OK = _pc-assert
-    _pc-avfs @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    0 _pc-pact PACT-PLACES _pc-aset @ = _pc-assert
+    _pc-aset @ PLSET-HOME PLACE-WRITABLE? _pc-assert
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-FALLBACK? _pc-assert
     _pc-pact PACT-RECOVERY? 0= _pc-assert
@@ -10258,16 +10297,17 @@ VARIABLE _pc-first-epoch
     _pc-pact PACT.CONTEXT @ DUP CTX-VALID? _pc-assert
     DUP CTX.EPOCH @ _pc-pact PACT.EPOCH @ = _pc-assert
     DUP CTX.PRACTICE @ _pc-pact PACT-HEAD = _pc-assert
-    CTX.VFS @ _pc-avfs @ = _pc-assert
+    CTX.PLACES @ _pc-aset @ = _pc-assert
     _pc-pact PACT.EPOCH @ DUP 0> _pc-assert _pc-first-epoch !
     _pc-pact PACT-DEACTIVATE
-    _pc-avfs @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
+    0 _pc-pact PACT-PLACES 0= _pc-assert
+    _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
     _pc-pact PACT.EPOCH @ DUP 0> _pc-assert
     _pc-first-epoch @ <> _pc-assert
     _pc-pact PACT-DEACTIVATE
 
     -1 _pc-validator-reject !
-    _pc-avfs @ _pc-pact PACT-ACTIVATE
+    _pc-aset @ _pc-pact PACT-ACTIVATE
         PACT-S-RECOVERY = _pc-assert
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-RECOVERY? _pc-assert
@@ -10276,10 +10316,25 @@ VARIABLE _pc-first-epoch
     _pc-pact PACT-AUTHENTICATED? 0= _pc-assert
     _pc-pact PACT.CONTEXT @ CTX.FLAGS @
         CTX-F-ACTIVE CTX-F-READONLY OR CTX-F-RECOVERY OR = _pc-assert
+    \ Recovery narrows every place of the set, and its volume with it.
+    _pc-aset @ PLSET-HOME PLACE-WRITABLE? 0= _pc-assert
+    S" x" _pc-aset @ PLSET-HOME PLACE-CREATE
+        VFS-IOR-REASON VFS-R-READONLY = _pc-assert DROP
+    _pc-pact PACT.FLAGS @ PACT-F-PLACES-READONLY = _pc-assert
     _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0<> _pc-assert
     _pc-pact PACT.REJECTED-GENERATION @ 2 = _pc-assert
     _pc-pact PACT-REJECTED-HEAD PHEAD.REVISION @ 2 = _pc-assert
     _pc-pact PACT-DEACTIVATE
+
+    \ A set whose home is unavailable activates in recovery with no head:
+    \ nothing falls back to another place.
+    _pc-avolume @ PVOL-DETACH
+    _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-RECOVERY = _pc-assert
+    _pc-pact PACT-RECOVERY? _pc-assert
+    _pc-pact PACT-READONLY? _pc-assert
+    _pc-pact PACT.CONTEXT @ CTX.PLACES @ _pc-aset @ = _pc-assert
+    _pc-pact PACT-DEACTIVATE
+    _pc-aset @ PLSET-FREE
     _pc-avfs @ VFS-DESTROY ;
 
 : _pc-persist-corrupt  ( path-a path-u -- )
@@ -10505,12 +10560,12 @@ VARIABLE _pc-no-effect
     77 CTX-NEW DUP 0= _pc-assert DROP DUP _pc-context ! DROP
     _pc-head _pc-context @ CTX.PRACTICE !
     9 _pc-context @ CTX.AUTHORITY !
-    10 _pc-context @ CTX.VFS !
+    10 _pc-context @ CTX.PLACES !
     CTX-F-READONLY _pc-context @ CTX.FLAGS !
     _pc-context @ CTX-CHILD-NEW DUP 0= _pc-assert DROP
         DUP _pc-child ! DROP
     _pc-child @ CTX.AUTHORITY @ 0= _pc-assert
-    _pc-child @ CTX.VFS @ 0= _pc-assert
+    _pc-child @ CTX.PLACES @ 0= _pc-assert
     _pc-child @ CTX-READONLY? _pc-assert
     _pc-stack
 
@@ -12834,7 +12889,6 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     777 CTX-NEW DUP 0= _pr-assert DROP _pr-context !
     _pr-head _pr-context @ CTX.PRACTICE !
     CTX-F-ACTIVE _pr-context @ CTX.FLAGS !
-    _pr-vfs @ _pr-context @ CTX.VFS !
     CREG-NEW DUP 0= _pr-assert DROP _pr-creg !
     _pr-creg @ _pr-context @ RREG-NEW
         DUP 0= _pr-assert DROP _pr-rreg !
@@ -27209,9 +27263,19 @@ def _forth_line_contains_networking_load(
     return _forth_line_contains_module_load(tokens, command, "networking.f")
 
 
+def _without_places_boot_lines(lines: list[str]) -> list[str]:
+    """LINES without the places declaration, wherever it stands."""
+    block = list(PLACES_BOOT_LINES)
+    for index in range(len(lines) - len(block) + 1):
+        if lines[index:index + len(block)] == block:
+            return lines[:index] + lines[index + len(block):]
+    return lines
+
+
 def _with_mp64fs_vfs_platform(autoexec: str) -> str:
-    """Compose the eager MP64FS VFS before any applet module is loaded."""
-    lines = autoexec.splitlines()
+    """Compose the eager MP64FS VFS, and declare the build's places over
+    it, before any applet module is loaded."""
+    lines = _without_places_boot_lines(autoexec.splitlines())
     token_lines = [_forth_line_tokens(line) for line in lines]
     userland_lines = [
         index
@@ -27252,7 +27316,9 @@ def _with_mp64fs_vfs_platform(autoexec: str) -> str:
         and token_lines[insert_index][1].lower() == "networking.f"
     ):
         insert_index += 1
-    lines.insert(insert_index, MP64FS_VFS_PLATFORM_BOOT_LINE)
+    lines[insert_index:insert_index] = [
+        MP64FS_VFS_PLATFORM_BOOT_LINE, *PLACES_BOOT_LINES
+    ]
     suffix = "\n" if autoexec.endswith("\n") else ""
     return "\n".join(lines) + suffix
 

@@ -138,7 +138,6 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     77 CTX-NEW DUP 0= _dsl-assert DROP _dsl-context !
     _dsl-head _dsl-context @ CTX.PRACTICE !
     CTX-F-ACTIVE _dsl-context @ CTX.FLAGS !
-    _dsl-vfs @ _dsl-context @ CTX.VFS !
     CREG-NEW DUP 0= _dsl-assert DROP _dsl-creg !
     _dsl-creg @ _dsl-context @ RREG-NEW
         DUP RREG-S-OK = _dsl-assert DROP _dsl-rreg !

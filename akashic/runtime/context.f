@@ -45,7 +45,7 @@ REQUIRE identity.f
 128 CONSTANT _CTX-QUEUE
 136 CONSTANT _CTX-POLICY
 144 CONSTANT _CTX-WORDSET
-152 CONSTANT _CTX-VFS
+152 CONSTANT _CTX-PLACES
 160 CONSTANT _CTX-MEMORY-LIMIT
 168 CONSTANT _CTX-TIME-LIMIT-MS
 176 CONSTANT _CTX-OUTPUT-LIMIT
@@ -73,7 +73,7 @@ REQUIRE identity.f
 : CTX.QUEUE              ( ctx -- a ) _CTX-QUEUE + ;
 : CTX.POLICY             ( ctx -- a ) _CTX-POLICY + ;
 : CTX.WORDSET            ( ctx -- a ) _CTX-WORDSET + ;
-: CTX.VFS                ( ctx -- a ) _CTX-VFS + ;
+: CTX.PLACES             ( ctx -- a ) _CTX-PLACES + ;
 : CTX.MEMORY-LIMIT       ( ctx -- a ) _CTX-MEMORY-LIMIT + ;
 : CTX.TIME-LIMIT-MS      ( ctx -- a ) _CTX-TIME-LIMIT-MS + ;
 : CTX.OUTPUT-LIMIT       ( ctx -- a ) _CTX-OUTPUT-LIMIT + ;

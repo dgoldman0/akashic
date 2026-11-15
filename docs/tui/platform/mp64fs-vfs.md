@@ -3,7 +3,7 @@
 **Layer:** TUI platform composition
 **Prefix:** `MP64VFS-` (public), `_MP64VFS-` (internal)
 **Provider:** `akashic-tui-mp64fs-vfs`
-**Dependency:** `utils/fs/drivers/vfs-mp64fs.f`
+**Dependencies:** `utils/fs/drivers/vfs-mp64fs.f`, `utils/fs/places.f`
 
 This is the concrete storage choice for MegaPad-64 TUI product images.  It
 opens the boot block device, binds a raw volume, allocates the 128 KiB VFS
@@ -18,6 +18,11 @@ closure contains `tui/app-shell.f` and loads this module immediately after
 For linked profiles it is the first Akashic composition root in the linked
 source; unlinked profiles retain an explicit `REQUIRE tui/platform/mp64fs-vfs.f`.
 
+The module reports the instance it mounts or adopts to the places registry
+as the volume `boot` (`docs/utils/fs/places.md`). Composition declares
+places over that volume by name; the packager emits the declaration on the
+lines after this module's load.
+
 Shared code must depend on `utils/fs/vfs.f`, not this module.  Selecting a
 different storage backend is a product/platform decision and requires only
 providing an active abstract VFS before applet provisioning.
@@ -26,7 +31,7 @@ providing an active abstract VFS before applet provisioning.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `MP64VFS-ENSURE` | `( -- )` | Reselect the instance previously owned or adopted by this module, adopt an already active VFS, or mount and select the boot MP64FS volume. |
+| `MP64VFS-ENSURE` | `( -- )` | Reselect the instance previously owned or adopted by this module, adopt an already active VFS, or mount and select the boot MP64FS volume, and report it as the volume `boot`. |
 
 `PROVIDED akashic-tui-mp64fs-vfs` makes repeated `REQUIRE` operations safe.
 The explicit `MP64VFS-ENSURE` word is available to platform composition code;

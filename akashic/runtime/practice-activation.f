@@ -2,8 +2,16 @@
 \  practice-activation.f - Generic validated Practice activation
 \ =====================================================================
 \  PACT owns activation-local state around a durable Practice head.  It
-\  selects a semantically accepted VFS generation, creates a fresh epoch
-\  and root Context, and fails closed into a read-only recovery Context.
+\  selects a semantically accepted generation of the head, which lives in
+\  the home of the place set it is given, creates a fresh epoch and root
+\  Context, and fails closed into a read-only recovery Context.
+\
+\  The set is what the activation's components see of storage.  Recovery,
+\  a read-only Practice and a home that cannot be written narrow every
+\  place of it to read-only.  A set with no usable home starts in
+\  recovery: nothing falls back to another place.  PACT-PLACES answers
+\  the set a component works in, and is the one word a Practice's choice
+\  of places per component will replace.
 \
 \  The validator declares its trust level explicitly.  The built-in
 \  validator is structural only: CRC plus PHEAD-VALID? is not authentication.
@@ -18,6 +26,7 @@ PROVIDED akashic-runtime-pact
 
 REQUIRE context.f
 REQUIRE vfs-practice-head.f
+REQUIRE ../utils/fs/places.f
 
 1414548289 CONSTANT PACT-MAGIC       \ "AKPT"
 1          CONSTANT PACT-ABI-VERSION
@@ -35,7 +44,7 @@ REQUIRE vfs-practice-head.f
 1 CONSTANT PACT-TRUST-STRUCTURAL
 2 CONSTANT PACT-TRUST-AUTHENTICATED
 
-1 CONSTANT PACT-F-VFS-READONLY
+1 CONSTANT PACT-F-PLACES-READONLY
 
   0 CONSTANT _PACT-MAGIC
   8 CONSTANT _PACT-ABI
@@ -43,7 +52,7 @@ REQUIRE vfs-practice-head.f
  24 CONSTANT _PACT-MODE
  32 CONSTANT _PACT-STATUS
  40 CONSTANT _PACT-TRUST
- 48 CONSTANT _PACT-VFS
+ 48 CONSTANT _PACT-PLACES
  56 CONSTANT _PACT-EPOCH
  64 CONSTANT _PACT-OWNER-CORE
  72 CONSTANT _PACT-OWNER-TOKEN
@@ -64,7 +73,7 @@ _PACT-STORE PHEADVFS-SIZE + CONSTANT PACT-SIZE
 : PACT.MODE                 ( pact -- a ) _PACT-MODE + ;
 : PACT.STATUS               ( pact -- a ) _PACT-STATUS + ;
 : PACT.TRUST                ( pact -- a ) _PACT-TRUST + ;
-: PACT.VFS                  ( pact -- a ) _PACT-VFS + ;
+: PACT.PLACES               ( pact -- a ) _PACT-PLACES + ;
 : PACT.EPOCH                ( pact -- a ) _PACT-EPOCH + ;
 : PACT.OWNER-CORE           ( pact -- a ) _PACT-OWNER-CORE + ;
 : PACT.OWNER-TOKEN          ( pact -- a ) _PACT-OWNER-TOKEN + ;
@@ -148,7 +157,7 @@ VARIABLE _PACT-VS-PACT
     DUP 0= IF DROP EXIT THEN
     DUP PACT.CONTEXT @ ?DUP IF CTX-FREE THEN
     0 OVER PACT.CONTEXT !
-    0 OVER PACT.VFS !
+    0 OVER PACT.PLACES !
     0 OVER PACT.EPOCH !
     0 OVER PACT.OWNER-CORE !
     0 OVER PACT.OWNER-TOKEN !
@@ -164,19 +173,32 @@ VARIABLE _PACT-VS-PACT
 : _PACT-FRESH-OWNER-TOKEN  ( -- token )
     RANDOM 1 OR ;
 
-VARIABLE _PACT-A-VFS
+VARIABLE _PACT-A-SET
+VARIABLE _PACT-A-HOME
 VARIABLE _PACT-A-PACT
 VARIABLE _PACT-A-LOAD-STATUS
 VARIABLE _PACT-A-CONTEXT
 VARIABLE _PACT-A-CTX-FLAGS
+
+\ Narrow every place of the set to read-only.  Until each store takes a
+\ place (the second slice of docs/utils/fs/places.md), the stores write
+\ through the instance itself, so the volumes under the set's places are
+\ marked read-only as well.
+: _PACT-NARROW  ( -- )
+    _PACT-A-SET @ PLSET-READ-ONLY!
+    _PACT-A-SET @ PLSET-FIRST
+    BEGIN ?DUP WHILE
+        DUP PLACE-VFS ?DUP IF V.FLAGS DUP @ VFS-F-RO OR SWAP ! THEN
+        PLACE-NEXT
+    REPEAT
+    PACT-F-PLACES-READONLY _PACT-A-PACT @ PACT.FLAGS ! ;
 
 : _PACT-ENTER-RECOVERY  ( -- )
     PACT-M-RECOVERY _PACT-A-PACT @ PACT.MODE !
     PACT-S-RECOVERY _PACT-A-PACT @ PACT.STATUS !
     CTX-F-ACTIVE CTX-F-READONLY OR CTX-F-RECOVERY OR
         _PACT-A-CTX-FLAGS !
-    _PACT-A-VFS @ V.FLAGS DUP @ VFS-F-RO OR SWAP !
-    PACT-F-VFS-READONLY _PACT-A-PACT @ PACT.FLAGS ! ;
+    _PACT-NARROW ;
 
 : _PACT-ENTER-ACCEPTED  ( -- )
     _PACT-A-PACT @ PACT-STORE PHEADVFS-FALLBACK? IF
@@ -187,33 +209,45 @@ VARIABLE _PACT-A-CTX-FLAGS
     PACT-S-OK _PACT-A-PACT @ PACT.STATUS !
     CTX-F-ACTIVE _PACT-A-CTX-FLAGS !
     _PACT-A-PACT @ PACT-HEAD PHEAD-READONLY?
-    _PACT-A-VFS @ V.FLAGS @ VFS-F-RO AND 0<> OR IF
+    _PACT-A-HOME @ PLACE-WRITABLE? 0= OR IF
         _PACT-A-CTX-FLAGS @ CTX-F-READONLY OR _PACT-A-CTX-FLAGS !
-        _PACT-A-VFS @ V.FLAGS DUP @ VFS-F-RO OR SWAP !
-        PACT-F-VFS-READONLY _PACT-A-PACT @ PACT.FLAGS !
+        _PACT-NARROW
     THEN ;
 
-: PACT-ACTIVATE  ( vfs pact -- status )
-    _PACT-A-PACT ! _PACT-A-VFS !
-    _PACT-A-PACT @ PACT-VALID? 0= _PACT-A-VFS @ 0= OR IF
+\ The set's home when it can be used now, else 0.
+: _PACT-USABLE-HOME  ( set -- place | 0 )
+    PLSET-HOME DUP 0= IF EXIT THEN
+    DUP PLACE-STATUS IF DROP 0 THEN ;
+
+\ PACT-ACTIVATE ( set pact -- status )
+\   Activate over the place set SET.  The Practice head is read from the
+\   set's home.  A set whose home is absent or unavailable activates in
+\   recovery without a head.
+: PACT-ACTIVATE  ( set pact -- status )
+    _PACT-A-PACT ! _PACT-A-SET !
+    _PACT-A-PACT @ PACT-VALID? 0= _PACT-A-SET @ 0= OR IF
         PACT-S-INVALID EXIT
     THEN
     _PACT-A-PACT @ PACT-DEACTIVATE
-    _PACT-A-VFS @ _PACT-A-PACT @ PACT.VFS !
-    _PACT-A-VFS @ _PACT-A-PACT @ PACT-STORE PHEADVFS-INIT
-    PHEADVFS-S-OK <> IF
-        PACT-S-INVALID _PACT-A-PACT @ PACT.STATUS !
-        PACT-S-INVALID EXIT
-    THEN
-    _PACT-A-PACT @ PACT-HEAD
-    _PACT-A-PACT @ PACT-REJECTED-HEAD
-    _PACT-A-PACT @ PACT.VALIDATOR-XT @
-    _PACT-A-PACT @ PACT.VALIDATOR-DATA @
-    _PACT-A-PACT @ PACT-STORE PHEADVFS-LOAD-VALIDATED
-    DUP _PACT-A-LOAD-STATUS !
-    DUP PHEADVFS-S-OK <> SWAP PHEADVFS-S-RECOVERY <> AND IF
-        PACT-S-INVALID _PACT-A-PACT @ PACT.STATUS !
-        PACT-S-INVALID EXIT
+    _PACT-A-SET @ _PACT-A-PACT @ PACT.PLACES !
+    _PACT-A-SET @ _PACT-USABLE-HOME DUP _PACT-A-HOME ! IF
+        _PACT-A-HOME @ PLACE-VFS _PACT-A-PACT @ PACT-STORE PHEADVFS-INIT
+        PHEADVFS-S-OK <> IF
+            PACT-S-INVALID _PACT-A-PACT @ PACT.STATUS !
+            PACT-S-INVALID EXIT
+        THEN
+        _PACT-A-PACT @ PACT-HEAD
+        _PACT-A-PACT @ PACT-REJECTED-HEAD
+        _PACT-A-PACT @ PACT.VALIDATOR-XT @
+        _PACT-A-PACT @ PACT.VALIDATOR-DATA @
+        _PACT-A-PACT @ PACT-STORE PHEADVFS-LOAD-VALIDATED
+        DUP _PACT-A-LOAD-STATUS !
+        DUP PHEADVFS-S-OK <> SWAP PHEADVFS-S-RECOVERY <> AND IF
+            PACT-S-INVALID _PACT-A-PACT @ PACT.STATUS !
+            PACT-S-INVALID EXIT
+        THEN
+    ELSE
+        PHEADVFS-S-RECOVERY _PACT-A-LOAD-STATUS !
     THEN
 
     _PACT-FRESH-EPOCH DUP _PACT-A-PACT @ PACT.EPOCH !
@@ -227,11 +261,13 @@ VARIABLE _PACT-A-CTX-FLAGS
     _PACT-FRESH-OWNER-TOKEN DUP _PACT-A-PACT @ PACT.OWNER-TOKEN !
         _PACT-A-CONTEXT @ CTX.OWNER-TOKEN !
     _PACT-A-PACT @ PACT-HEAD _PACT-A-CONTEXT @ CTX.PRACTICE !
-    _PACT-A-VFS @ _PACT-A-CONTEXT @ CTX.VFS !
-    _PACT-A-PACT @ PACT-STORE PHEADVFS.GENERATION @
-        _PACT-A-PACT @ PACT.HEAD-GENERATION !
-    _PACT-A-PACT @ PACT-STORE PHEADVFS.REJECTED-GENERATION @
-        _PACT-A-PACT @ PACT.REJECTED-GENERATION !
+    _PACT-A-SET @ _PACT-A-CONTEXT @ CTX.PLACES !
+    _PACT-A-HOME @ IF
+        _PACT-A-PACT @ PACT-STORE PHEADVFS.GENERATION @
+            _PACT-A-PACT @ PACT.HEAD-GENERATION !
+        _PACT-A-PACT @ PACT-STORE PHEADVFS.REJECTED-GENERATION @
+            _PACT-A-PACT @ PACT.REJECTED-GENERATION !
+    THEN
 
     _PACT-A-LOAD-STATUS @ PHEADVFS-S-RECOVERY = IF
         _PACT-ENTER-RECOVERY
@@ -240,3 +276,11 @@ VARIABLE _PACT-A-CTX-FLAGS
     THEN
     _PACT-A-CTX-FLAGS @ _PACT-A-CONTEXT @ CTX.FLAGS !
     _PACT-A-PACT @ PACT.STATUS @ ;
+
+\ PACT-PLACES ( instance pact -- set | 0 )
+\   The place set the runtime instance INSTANCE works in under this
+\   activation: today the activation's set for every instance.  A
+\   Practice's choice of places for each component belongs here.
+: PACT-PLACES  ( instance pact -- set | 0 )
+    NIP DUP PACT-ACTIVE? 0= IF DROP 0 EXIT THEN
+    PACT.PLACES @ ;

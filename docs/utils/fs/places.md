@@ -292,7 +292,26 @@ runs once after slice 8.
 ## Status
 
 In the tree: `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
-`local_testing/test_places.py` on two RAM volumes. Nothing uses them yet.
+`local_testing/test_places.py` on two RAM volumes.
+
+The runtime works over a set. `tui/platform/mp64fs-vfs.f` reports the
+instance it mounts or adopts as the volume `boot`. The image builder
+follows that module's load with the declaration every build has today
+(`PLACES_BOOT_LINES` in `local_testing/akashic_tui.py`): one writable
+place over the boot volume's root, required, and a default set in which
+it is home and origin. `PACT-ACTIVATE` takes a set, reads the Practice
+head from its home, stores the set in `CTX.PLACES`, and narrows it in
+recovery; a set with no usable home activates in recovery with no head.
+`PACT-PLACES` answers the activation's set, and Desk lends it under
+`org.akashic.fs.places` through its service table, whose getters now
+receive the asking instance. The sandbox requires a context with no
+place set.
+
+Two bridges last until the second slice, when stores take places. Desk
+still hands the stores that take an instance the one under the home
+(`_DESK-HOME-VFS`), and the sandbox store, catalog and Agent store the
+selected instance. Because those stores write through the instance,
+narrowing a set also marks the volumes under its places read-only.
 
 ## Open
 
