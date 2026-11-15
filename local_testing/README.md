@@ -457,7 +457,19 @@ AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
 
 AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
   python3 -m pytest -q local_testing/test_vfs_ext4.py
+
+AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
+  python3 -m pytest -q local_testing/test_vfs_replace_ext4.py
 ```
+
+`test_vfs_replace_ext4.py` is a unit of its own that imports the ext4
+harness. It runs checked replacement (`vfs-replace.f`) on the 64 MiB image
+through the staged-write binding, where a save publishes by one rename. Its
+power-cut tests rebuild the medium as it stood after a write of one save,
+mount it, recover, and require the old file or the new one whole. An
+ordinary run cuts on either side of every commit block and after every
+eighth write, and the unit takes seven minutes; `AKASHIC_SAVE_CUT_STRIDE=1`
+cuts after every write, which takes seventeen minutes for those tests alone.
 
 The shared FAT/ext4 emulator snapshot uses 64 MiB of external memory: KDOS
 owns its established 32 MiB userland dictionary zone and the remainder holds

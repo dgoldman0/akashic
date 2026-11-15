@@ -9,16 +9,28 @@
 \      backup       old target while publication is in progress
 \      marker       fixed-size, checksummed rollback intent
 \
-\  VFS-SYNC barriers separate stage, intent, rotation, commit, and cleanup.
-\  A durable marker means recovery rolls back.  Marker removal followed by
-\  a successful sync is the commit point; an orphan backup after that point
-\  is cleanup state and the target wins.  Recover/replace hold one
-\  VFS-TRANSACTION across context switch, all phases, and context restore.
+\  Every replacement recovers, runs the precondition, writes the stage and
+\  reads it back.  The filesystem under the target then decides how the
+\  stage is published.
 \
+\  A binding with VFS-CAP-DURABLE-MUTATIONS and VFS-CAP-RENAME-REPLACE, as
+\  ext4's staged-write binding has, keeps each completed mutation across a
+\  power cut and renames over an existing file as one such mutation.  There
+\  the stage is renamed over the target.  That rename is the commit point,
+\  and the backup and the marker are never created.
+\
+\  Any other binding, as MP64FS and the RAM binding, publishes through the
+\  marker and the backup.  VFS-SYNC barriers separate stage, intent,
+\  rotation, commit, and cleanup.  A durable marker means recovery rolls
+\  back.  Marker removal followed by a successful sync is the commit point;
+\  an orphan backup after that point is cleanup state and the target wins.
 \  This is crash-recoverable ordering over the VFS contract, not a claim of
 \  sector-atomic power-loss behavior.  In particular, MP64FS writes cached
 \  bitmap and directory regions separately.  Torn/corrupt metadata below
 \  the VFS layer can still require filesystem repair.
+\
+\  One recovery serves both.  Recover/replace hold one VFS-TRANSACTION
+\  across context switch, all phases, and context restore.
 \
 \  Public API:
 \    VREPL-INIT              ( vfs replacement -- status )
@@ -477,6 +489,7 @@ VARIABLE _VRO-MUTATED
     _VRO-R @ VREPL.MARKER-LEN @ R> - ;
 
 VARIABLE _VRPL-RN-IN
+VARIABLE _VRPL-RN-FLAGS
 
 : _VRO-TARGET>BACKUP  ( -- ior )
     _VRO-TARGET? DUP 0= IF DROP -1 EXIT THEN _VRPL-RN-IN !
@@ -486,9 +499,20 @@ VARIABLE _VRPL-RN-IN
     _VRO-BACKUP? DUP 0= IF DROP -1 EXIT THEN _VRPL-RN-IN !
     _VRO-TARGET-NAME$ _VRPL-RN-IN @ _VRO-VFS VFS-RENAME ;
 
-: _VRO-STAGE>TARGET  ( -- ior )
+\ Give the stage the target's name.  Under VFS-RN-NOREPLACE a name that is
+\ still held refuses the rename; without the flag the rename takes the
+\ holder as its victim.
+: _VRO-STAGE-RENAME  ( flags -- ior )
+    _VRPL-RN-FLAGS !
     _VRO-STAGE? DUP 0= IF DROP -1 EXIT THEN _VRPL-RN-IN !
-    _VRO-TARGET-NAME$ _VRPL-RN-IN @ _VRO-VFS VFS-RENAME ;
+    _VRO-TARGET-NAME$ _VRPL-RN-IN @ DUP IN.PARENT @
+    _VRPL-RN-FLAGS @ _VRO-VFS VFS-RENAME-AT ;
+
+: _VRO-STAGE>TARGET  ( -- ior )
+    VFS-RN-NOREPLACE _VRO-STAGE-RENAME ;
+
+: _VRO-STAGE-OVER-TARGET  ( -- ior )
+    0 _VRO-STAGE-RENAME ;
 
 : _VRO-RM-TARGET  ( -- ior )
     _VRO-R @ VREPL-TARGET$ _VRO-VFS VFS-RM ;
@@ -664,7 +688,20 @@ VARIABLE _VRM-FD
 \  Recovery state machine
 \ =====================================================================
 
+\ What the filesystem under the target promises about a power cut.  With
+\ VFS-CAP-DURABLE-MUTATIONS each completed mutation is already on the
+\ medium, so the barrier between two steps stands without a VFS-SYNC.  With
+\ VFS-CAP-RENAME-REPLACE as well, a rename over the target is one such
+\ mutation and can publish the stage by itself.
+: _VRO-DURABLE?  ( -- flag )
+    _VRO-VFS VFS-CAPS@ VFS-CAP-DURABLE-MUTATIONS AND 0<> ;
+
+: _VRO-RENAME-PUBLISHES?  ( -- flag )
+    _VRO-DURABLE?
+    _VRO-VFS VFS-CAPS@ VFS-CAP-RENAME-REPLACE AND 0<> AND ;
+
 : _VRO-SYNC  ( -- status )
+    _VRO-DURABLE? IF VREPL-S-OK EXIT THEN
     _VRO-VFS VFS-SYNC IF VREPL-S-IO ELSE VREPL-S-OK THEN ;
 
 : _VRO-REMOVE-STAGE?  ( -- status )
@@ -747,6 +784,9 @@ VARIABLE _VRM-FD
         _VRO-SYNC IF VREPL-S-RECOVERY ELSE VREPL-S-ROLLED-BACK THEN
         EXIT
     THEN
+    \ Neither target nor backup.  A stage here was written for a target
+    \ that did not exist and was cut off before either publication moved
+    \ it, so the absence stands and the stage goes.
     _VRO-REMOVE-STAGE? DUP IF EXIT THEN DROP
     _VRO-MUTATED @ IF
         _VRO-SYNC IF VREPL-S-IO EXIT THEN
@@ -786,23 +826,18 @@ VARIABLE _VRM-FD
         DROP VREPL-S-RECOVERY
     THEN ;
 
-: _VREPL-REPLACE-BODY  ( -- status )
-    _VREPL-RECOVER-BODY DUP VREPL-S-OK <>
-    OVER VREPL-S-ROLLED-BACK <> AND IF EXIT THEN DROP
-    _VREPL-PRECHECK DUP IF EXIT THEN DROP
-    _VRO-TARGET? 0<> _VRO-ORIGINAL !
+\ Publish by one rename.  The rename of the verified stage over the target
+\ is the commit point: a power cut before it leaves the old target and a
+\ stage that recovery removes, and one after it leaves the new target and
+\ no companion.  A refused rename has changed nothing, so recovery removes
+\ the stage and the old target stands.
+: _VREPL-PUBLISH-RENAME  ( -- status )
+    _VRO-STAGE-OVER-TARGET IF _VREPL-ROLLBACK-IO EXIT THEN
+    VREPL-S-OK ;
 
-    \ Stage and verify every byte before the target can move.
-    _VRO-DATA @ _VRO-LEN @ _VRO-R @ VREPL-STAGE$
-    _VREPL-CREATE-WRITE DUP IF EXIT THEN DROP
-    _VRO-DATA @ _VRO-LEN @ _VRO-R @ VREPL-STAGE$
-    _VREPL-VERIFY-FILE DUP IF
-        DROP _VRO-RM-STAGE DROP _VRO-SYNC DROP VREPL-S-IO EXIT
-    THEN DROP
-    _VRO-SYNC IF
-        _VRO-RM-STAGE DROP _VRO-SYNC DROP VREPL-S-IO EXIT
-    THEN
-
+\ Publish through the marker and the backup, for a filesystem that does not
+\ keep a rename whole across a power cut.
+: _VREPL-PUBLISH-MARKED  ( -- status )
     \ A checksummed, synced marker makes all following states rollback
     \ states until marker removal itself has been synced.
     _VREPL-WRITE-MARKER DUP IF
@@ -830,6 +865,29 @@ VARIABLE _VRM-FD
         _VRO-SYNC IF VREPL-S-COMMITTED-CLEANUP EXIT THEN
     THEN
     VREPL-S-OK ;
+
+: _VREPL-REPLACE-BODY  ( -- status )
+    _VREPL-RECOVER-BODY DUP VREPL-S-OK <>
+    OVER VREPL-S-ROLLED-BACK <> AND IF EXIT THEN DROP
+    _VREPL-PRECHECK DUP IF EXIT THEN DROP
+    _VRO-TARGET? 0<> _VRO-ORIGINAL !
+
+    \ Stage and verify every byte before the target can move.
+    _VRO-DATA @ _VRO-LEN @ _VRO-R @ VREPL-STAGE$
+    _VREPL-CREATE-WRITE DUP IF EXIT THEN DROP
+    _VRO-DATA @ _VRO-LEN @ _VRO-R @ VREPL-STAGE$
+    _VREPL-VERIFY-FILE DUP IF
+        DROP _VRO-RM-STAGE DROP _VRO-SYNC DROP VREPL-S-IO EXIT
+    THEN DROP
+    _VRO-SYNC IF
+        _VRO-RM-STAGE DROP _VRO-SYNC DROP VREPL-S-IO EXIT
+    THEN
+
+    _VRO-RENAME-PUBLISHES? IF
+        _VREPL-PUBLISH-RENAME
+    ELSE
+        _VREPL-PUBLISH-MARKED
+    THEN ;
 
 \ =====================================================================
 \  Public guarded entry points and exception-safe VFS context restore

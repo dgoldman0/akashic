@@ -5,6 +5,13 @@ The tests use the supported sibling MegaPad checkout.  Each case restores a
 compiled Forth snapshot and uses a ram-backed VFS; phase tests materialize the
 same target/stage/backup/marker states a persistent binding exposes after a
 restart at each VFS-SYNC boundary.
+
+The RAM binding publishes through the marker and the backup.  The cases for
+publication by one rename run on the test's own copy of that binding, which
+T-DURABLE makes declare VFS-CAP-DURABLE-MUTATIONS as ext4's staged-write
+binding does.  T-TRACE records the order in which the binding's callbacks
+run, one letter each.  test_vfs_replace_ext4.py covers the same publication
+on an ext4 volume, power cuts included.
 """
 
 from __future__ import annotations
@@ -211,6 +218,35 @@ def build_snapshot() -> None:
         "_VRO-TARGET? 0<> _VRO-BACKUP? 0= AND "
         "_VRO-MARKER? 0= AND _VRO-STAGE? 0= AND "
         "IF -1 ELSE 0 THEN ;",
+        # The capability that selects publication by one rename, declared
+        # on the test's copy of the RAM binding.  T-VFS-NEW resets the copy,
+        # so these follow T-SETUP.
+        ": T-DURABLE _TV-BINDING VB.CAPS DUP @ "
+        "VFS-CAP-DURABLE-MUTATIONS OR SWAP ! ;",
+        ": T-NO-REPLACE _TV-BINDING VB.CAPS DUP @ "
+        "VFS-CAP-RENAME-REPLACE INVERT AND SWAP ! ;",
+        # One letter per binding callback, in the order they run: Create,
+        # Write, Read, reName, Unlink, Sync.
+        "CREATE _TTR 64 ALLOT VARIABLE _TTR-N",
+        ": T-NOTE _TTR-N @ 64 < IF _TTR _TTR-N @ + C! 1 _TTR-N +! "
+        "ELSE DROP THEN ;",
+        ": T-TR-CREATE 67 T-NOTE _VFS-RAM-CREATE ;",
+        ": T-TR-WRITE 87 T-NOTE _VFS-RAM-WRITE ;",
+        ": T-TR-READ 82 T-NOTE _VFS-RAM-READ ;",
+        ": T-TR-RENAME 78 T-NOTE _VFS-RAM-RENAME ;",
+        ": T-TR-UNLINK 85 T-NOTE _VFS-RAM-UNLINK ;",
+        ": T-TR-SYNC 83 T-NOTE _VFS-RAM-SYNCFS ;",
+        ": T-TRACE 0 _TTR-N ! "
+        "['] T-TR-CREATE _TV-OPS VFS-OP-CREATE CELLS + ! "
+        "['] T-TR-WRITE _TV-OPS VFS-OP-WRITE CELLS + ! "
+        "['] T-TR-READ _TV-OPS VFS-OP-READ CELLS + ! "
+        "['] T-TR-RENAME _TV-OPS VFS-OP-RENAME CELLS + ! "
+        "['] T-TR-UNLINK _TV-OPS VFS-OP-UNLINK CELLS + ! "
+        "['] T-TR-SYNC _TV-OPS VFS-OP-SYNCFS CELLS + ! ;",
+        ": T-TRACED _TTR-N @ IF _TTR _TTR-N @ TYPE ELSE .\" none\" THEN "
+        "SPACE ;",
+        ": T-REFUSE-RENAME 78 T-NOTE 2DROP 2DROP 2DROP DROP VFS-E-IO ;",
+        ": T-REFUSE-UNLINK 85 T-NOTE 2DROP VFS-E-IO ;",
     ]
     sources = [
         EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
@@ -866,6 +902,215 @@ def test_short_marker_read_has_distinct_fail_closed_status():
             "_TR VREPL-RECOVER . T-ARTIFACTS",
         ],
         "8 -1 -1 -1 ",
+    )
+
+
+def test_marked_publication_runs_its_steps_in_order_with_six_syncs():
+    # The protocol of a binding without the capability, as the RAM binding:
+    # stage, marker, target to backup, stage to target, marker removal and
+    # backup removal, each followed by its sync.
+    check(
+        "marked publication runs its steps in order with six syncs",
+        [
+            "T-SETUP T-OLD-TARGET DROP T-TRACE",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 CWRSCWRSNSNSUSUS new 0 0 0 ",
+    )
+
+
+def test_rename_publication_writes_reads_back_and_renames_without_sync():
+    check(
+        "rename publication writes, reads back and renames without sync",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-TRACE",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 CWRN new 0 0 0 ",
+    )
+
+
+def test_rename_publication_creates_an_absent_target():
+    check(
+        "rename publication creates an absent target",
+        [
+            "T-SETUP T-DURABLE T-TRACE",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 CWRN new 0 0 0 ",
+    )
+
+
+def test_rename_publication_never_consults_a_failing_sync():
+    check(
+        "rename publication never consults a failing sync",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP",
+            "' T-FAIL-ALL-SYNC _TV-OPS VFS-OP-SYNCFS CELLS + !",
+            'S" new" _TR VREPL-REPLACE .',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 new 0 0 0 ",
+    )
+
+
+def test_durable_binding_without_rename_replace_keeps_the_marker_protocol():
+    # Durable mutations alone drop the syncs; publication by one rename
+    # also needs a rename that can take the target as its victim.
+    check(
+        "durable binding without rename-replace keeps the marker protocol",
+        [
+            "T-SETUP T-DURABLE T-NO-REPLACE T-OLD-TARGET DROP T-TRACE",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 CWRCWRNNUU new 0 0 0 ",
+    )
+
+
+def test_rename_publication_failed_readback_leaves_target_and_removes_stage():
+    check(
+        "rename publication: failed readback leaves target, removes stage",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-TRACE",
+            "' T-LIE-WRITE _TV-OPS VFS-OP-WRITE CELLS + !",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            "' _VFS-RAM-WRITE _TV-OPS VFS-OP-WRITE CELLS + !",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "4 CRU old 0 0 0 ",
+    )
+
+
+def test_rename_publication_refused_rename_leaves_target_and_removes_stage():
+    check(
+        "rename publication: refused rename leaves target, removes stage",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-TRACE",
+            "' T-REFUSE-RENAME _TV-OPS VFS-OP-RENAME CELLS + !",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "4 CWRNU old 0 0 0 ",
+    )
+
+
+def test_rename_publication_refused_rename_keeps_an_absent_target_absent():
+    check(
+        "rename publication: refused rename keeps an absent target absent",
+        [
+            "T-SETUP T-DURABLE T-TRACE",
+            "' T-REFUSE-RENAME _TV-OPS VFS-OP-RENAME CELLS + !",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "4 CWRNU <absent> 0 0 0 ",
+    )
+
+
+def test_rename_publication_refused_rename_and_cleanup_reports_recovery():
+    # The rename and then the stage's removal are both refused, as on a
+    # volume that a fault has turned read-only.  The old target stands and
+    # the stage waits for VREPL-RECOVER.
+    check(
+        "rename publication: refused rename and cleanup reports recovery",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-TRACE",
+            "' T-REFUSE-RENAME _TV-OPS VFS-OP-RENAME CELLS + !",
+            "' T-REFUSE-UNLINK _TV-OPS VFS-OP-UNLINK CELLS + !",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+            "' _VFS-RAM-UNLINK _TV-OPS VFS-OP-UNLINK CELLS + !",
+            "_TR VREPL-RECOVER . S\" /doc.txt\" T-SHOW T-ARTIFACTS",
+        ],
+        "7 CWRNU old -1 0 0 0 old 0 0 0 ",
+    )
+
+
+def test_rename_publication_leaves_an_open_old_target_readable():
+    # The rename takes the open target as its victim: its name moves to
+    # the new file and the open descriptor keeps the old bytes.
+    check(
+        "rename publication leaves an open old target readable",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP",
+            'S" /doc.txt" VFS-OPEN CONSTANT _OFD',
+            'S" new" _TR VREPL-REPLACE .',
+            "_TOUT 3 _OFD VFS-READ . _TOUT 3 TYPE SPACE _OFD VFS-CLOSE",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 3 old new 0 0 0 ",
+    )
+
+
+def test_recover_durable_binding_removes_a_stage_beside_the_target():
+    # Power cut while the stage was being written, or before the rename.
+    check(
+        "recover on a durable binding removes a stage beside the target",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-NEW-STAGE DROP T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 U old 0 0 0 ",
+    )
+
+
+def test_recover_durable_binding_removes_a_stage_without_a_target():
+    # The same power cut during the first save of a file.
+    check(
+        "recover on a durable binding removes a stage without a target",
+        [
+            "T-SETUP T-DURABLE T-NEW-STAGE DROP T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 U <absent> 0 0 0 ",
+    )
+
+
+def test_recover_durable_binding_keeps_a_renamed_target():
+    # Power cut after the rename: the new target and no companion.
+    check(
+        "recover on a durable binding keeps a renamed target",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-NEW-STAGE DROP",
+            "_VRO-STAGE-OVER-TARGET . T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 0 none new 0 0 0 ",
+    )
+
+
+def test_recover_durable_binding_rolls_back_a_marked_state_without_sync():
+    # One recovery serves both publications: a marker and a backup found
+    # under a durable binding roll back as they do anywhere else.
+    check(
+        "recover on a durable binding rolls back a marked state",
+        [
+            "T-SETUP T-DURABLE T-OLD-TARGET DROP T-NEW-STAGE DROP",
+            "-1 T-MARK DROP _VRO-TARGET>BACKUP DROP T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "1 RNUU old 0 0 0 ",
+    )
+
+
+def test_recover_unmarked_stage_without_target_restores_absence():
+    # Crash after the stage sync of a first save, before its marker.
+    check(
+        "recover: unmarked stage without target restores absence",
+        [
+            "T-SETUP T-NEW-STAGE DROP T-SYNC T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 US <absent> 0 0 0 ",
     )
 
 

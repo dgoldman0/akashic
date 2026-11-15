@@ -20006,11 +20006,23 @@ EXT4-OPS ,
 \ before the first mutation.  Bind the trusted clock before that first
 \ mutation too if any later operation in the mounted session will derive time
 \ from it, because clock binding is admitted only at the clean endpoint.
+\
+\ VFS-CAP-DURABLE-MUTATIONS is set because every one of these callbacks
+\ emits its transaction and checkpoints it before it returns.  Emission
+\ writes a WRITE's data blocks to their homes and the journal body, flushes,
+\ then writes the commit block and flushes again; the checkpoint writes the
+\ journaled blocks home and flushes.  Mount recovery discards a transaction
+\ whose commit block a power cut kept from the medium and replays one whose
+\ commit block is there, so each namespace callback, a single transaction,
+\ is found entire or absent.  A rename's victim and a removed file give up
+\ their storage in later transactions that only free it, which mount
+\ recovery finishes from the orphan file.
 EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR VFS-CAP-MKDIR OR
 VFS-CAP-TRUNCATE OR VFS-CAP-SETATTR OR
 VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-LINK OR
 VFS-CAP-RENAME OR VFS-CAP-ATOMIC-RENAME OR
 VFS-CAP-CROSSDIR-RENAME OR VFS-CAP-RENAME-REPLACE OR
+VFS-CAP-DURABLE-MUTATIONS OR
 CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT

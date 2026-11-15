@@ -7963,7 +7963,7 @@ def test_binding_descriptors_are_valid_and_truthful(
             (
                 "_E4-STAGED-BASE-CAPS VFS-CAP-RENAME OR "
                 "VFS-CAP-ATOMIC-RENAME OR VFS-CAP-CROSSDIR-RENAME OR "
-                "VFS-CAP-RENAME-REPLACE OR "
+                "VFS-CAP-RENAME-REPLACE OR VFS-CAP-DURABLE-MUTATIONS OR "
                 "CONSTANT _EXPECTED-E4-STAGED-CAPS"
             ),
             (

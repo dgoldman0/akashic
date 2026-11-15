@@ -854,10 +854,41 @@ callback success, and preserve any binding-retained postcommit failure.
 
 Semantic caps are `VFS-CAP-ATOMIC-RENAME`,
 `VFS-CAP-CROSSDIR-RENAME`, `VFS-CAP-RENAME-REPLACE`,
-`VFS-CAP-SPARSE`, `VFS-CAP-DATA-ONLY-FSYNC`, and
-`VFS-CAP-STABLE-HANDLES`. For an ext4 binding, `VN.BID` should be the inode
+`VFS-CAP-SPARSE`, `VFS-CAP-DATA-ONLY-FSYNC`,
+`VFS-CAP-STABLE-HANDLES`, and `VFS-CAP-DURABLE-MUTATIONS`. For an ext4
+binding, `VN.BID` should be the inode
 number and `VN.GEN` the inode generation so cache reload and hard-link aliases
 retain one shared vnode identity.
+
+`VFS-CAP-DURABLE-MUTATIONS` (bit 38) states what a power cut leaves on the
+binding's medium. `VFS-CAP-ATOMIC-RENAME` and `VFS-CAP-RENAME-REPLACE`
+describe a rename while the machine runs, and MP64FS and the RAM binding set
+them as ext4 does, so they tell a caller nothing about a power cut. A binding
+that sets `DURABLE-MUTATIONS` makes two promises:
+
+1. A mutating callback that returns success has recorded its whole effect on
+   the medium behind a completed flush. The next mount has that effect with
+   no `SYNCFS` or `FSYNC` after the callback. This holds for `WRITE`,
+   `CREATE`, `MKDIR`, `LINK`, `SYMLINK`, `UNLINK`, `RMDIR`, `RENAME`,
+   `TRUNCATE`, `SETATTR`, `SETXATTR`, and `REMOVEXATTR`; the count `WRITE`
+   returns is the number of bytes recorded.
+2. A power cut during `CREATE`, `MKDIR`, `LINK`, `SYMLINK`, `UNLINK`,
+   `RMDIR`, or `RENAME` leaves the callback's whole effect or none of it,
+   once the next mount has recovered the volume. A `RENAME` over an existing
+   name therefore leaves that name on the old file or on the new one.
+
+The second promise covers names. A `WRITE` over existing bytes stays outside
+it: a power cut during one may leave some of its blocks new and the rest old.
+Storage that a removed file or a rename's victim still held at the cut is
+freed by the mount's recovery.
+
+A caller reads the bit with `VFS-CAPS@`. Where it is set, steps whose order
+must survive a power cut need no `VFS-SYNC` between them, and with
+`VFS-CAP-RENAME-REPLACE` a file can be replaced by renaming a finished copy
+over it; [`vfs-replace.f`](vfs-replace.md) publishes a save that way. Of the
+bindings in this tree only ext4's staged-write binding sets the bit, for the
+reason its [contract](drivers/vfs-ext4.md#current-staged-writes) gives.
+MP64FS, FAT, the read-only ext4 binding and the RAM binding leave it clear.
 
 `VFS-CAP-SPARSE` describes read and logical-mapping semantics: the binding can
 represent existing holes and return zeroes for unmapped ranges without treating
@@ -877,7 +908,9 @@ newly exposed truncate bytes are zeroed.
 The RAM binding supports mount/unmount, readdir, open/release, read/write,
 create/mkdir, unlink/rmdir, rename, truncate, getattr, hard link, syncfs, and
 fsync. It truthfully leaves lookup, setattr, symlink/readlink, xattrs, and
-statfs unadvertised. Operation-specific public calls return
+statfs unadvertised, and it leaves `VFS-CAP-DURABLE-MUTATIONS` clear because
+it has no medium for a power cut to spare. Operation-specific public calls
+return
 `VFS-E-UNSUPPORTED`; `VFS-LOOKUP` can still answer from the dentry cache or
 the advertised complete-directory `READDIR` fallback without pretending the
 binding has targeted lookup.

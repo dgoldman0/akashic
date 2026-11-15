@@ -1618,6 +1618,36 @@ implemented mutations. `Staged` distinguishes that operation set from complete
 separate write path: every operation admitted here uses the production driver,
 durability lifecycle, recovery machinery, and on-disk ext4 format.
 
+The staged descriptor sets `VFS-CAP-DURABLE-MUTATIONS`, whose two promises
+the [VFS contract](../vfs.md#operation-table) states. Both follow from one
+rule of this driver: a mutating callback emits its journal transaction and
+checkpoints it before it returns. Emission (`_EXT4-JTX-EMIT`) writes a
+write's data blocks to their homes and the journal body, flushes, then writes
+the commit block and flushes again. The checkpoint (`_EXT4-JTX-CHECKPOINT`)
+writes the journaled blocks home, flushes, and returns the journal to its
+empty write-active state. The write callback (`_XW-RUN`), the namespace
+callbacks `CREATE`, `MKDIR`, `LINK`, `UNLINK`, `RMDIR` and `RENAME`
+(`_XC-RUN`), `TRUNCATE` (`_XT-RUN`) and `SETATTR` (`_XS-RUN`) all run those
+two steps in that order, so `SYNCFS` adds nothing to what the medium already
+holds; it only returns the journal to its clean state. A namespace,
+truncate or attribute callback whose checkpoint fails after the commit block
+is durable still returns success, with the fault in `V.LAST-IOR` and the
+mount quarantined, because the next mount replays the committed transaction.
+A write in that position reports its bytes with a partial, read-only ior.
+
+Each namespace callback is one transaction. Mount recovery discards a
+transaction whose commit block a power cut kept from the medium and replays
+one whose commit block is there, so the next mount finds the callback's
+effect entire or absent. A `RENAME` over an existing regular file hands the
+victim's record to the source in that same transaction; the victim's
+storage, and a removed file's, is freed by later transactions that change no
+name, which mount recovery finishes from the orphan file after a cut.
+[`vfs-replace.f`](../vfs-replace.md) relies on this to publish a save by one
+rename. `local_testing/test_vfs_replace_ext4.py` rebuilds the medium as a
+power cut would leave it during such a save, on either side of every commit
+block and, with `AKASHIC_SAVE_CUT_STRIDE=1`, after every write, and requires
+the old file or the new one whole after the next mount.
+
 ### Block ownership
 
 Before a mount's first write, one walk proves that the block bitmaps hold
@@ -2670,8 +2700,10 @@ preserving the still-mounted instance's ready/current authority.
 `WRITE`, `CREATE`, `MKDIR`, `TRUNCATE`, `UNLINK`, `RMDIR`, and `LINK`
 capability bits and dispatch slots, and it keeps the ordinary binding's
 `LOOKUP`. It also wires `RENAME`, `ATOMIC-RENAME`, `CROSSDIR-RENAME`, and
-`RENAME-REPLACE` to the rename described above, and it advertises the
-focused-qualified linked-regular `SETATTR` slot described above. Its write
+`RENAME-REPLACE` to the rename described above, it advertises the
+focused-qualified linked-regular `SETATTR` slot described above, and it sets
+`DURABLE-MUTATIONS` as [Current staged writes](#current-staged-writes)
+explains. Its write
 slot is the general regular-file write described above, and `VFS-WRITE-EXACT`
 composes its transactions. Both bindings retain `VFS-CAP-SPARSE` for sparse
 mappings and zero-filled hole reads; the staged write leaves holes when it

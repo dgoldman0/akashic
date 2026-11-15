@@ -7,10 +7,12 @@ application file without truncating the live inode first.
 REQUIRE utils/fs/vfs-replace.f
 ```
 
-The module stages and verifies the candidate, records a durable rollback
-intent, rotates the old target to a backup, publishes the candidate, and only
-then removes the intent and backup. It is intended for owner-side persistence
-such as Desk applet text resources.
+The module writes the candidate beside the target and reads it back. It then
+publishes the candidate in the way the filesystem under the target allows:
+by one rename over the target where a rename survives a power cut whole, and
+otherwise through a durable rollback intent, a backup of the old target and
+a sync after each step. It is intended for owner-side persistence such as
+Desk applet text resources.
 
 ## Filesystem contract
 
@@ -20,8 +22,11 @@ Each descriptor owns four reserved absolute paths in one directory:
 |---|---|
 | target | Application-visible file |
 | stage | Candidate written and read back before mutation of the target |
-| backup | Old target during publication |
+| backup | Old target during publication through the marker |
 | marker | Fixed 64-byte, checksummed rollback intent |
+
+Publication by one rename creates neither the backup nor the marker. Their
+names stay reserved, since recovery inspects all four on every filesystem.
 
 Paths are copied into the descriptor, cannot contain empty, `.` or `..`
 components, and must be pairwise distinct. A path is at most 255 bytes and
@@ -56,7 +61,7 @@ artifact.
 
 ## Protocol and commit point
 
-`VREPL-REPLACE` performs these ordered steps:
+`VREPL-REPLACE` begins the same way on every filesystem:
 
 1. Recover any prior transaction.
 2. Run the optional owner-supplied precondition.
@@ -64,6 +69,54 @@ artifact.
    been accepted. A zero, negative, or overlong write fails.
 4. Reopen the stage and compare its exact length and every byte with the
    caller's source buffer.
+
+It then asks the filesystem under the target what a power cut leaves there,
+by reading the binding's capabilities, and publishes the stage in one of two
+ways. Both stay, because a writable place may sit on either kind of
+filesystem, and applets call the same word on both.
+
+### Publication by one rename
+
+A binding that sets `VFS-CAP-DURABLE-MUTATIONS` and `VFS-CAP-RENAME-REPLACE`
+keeps every completed mutation across a power cut and renames over an
+existing file as one such mutation; the [VFS contract](vfs.md#operation-table)
+states both promises. ext4's staged-write binding is the binding that sets
+them.
+
+5. Rename the stage over the target with `VFS-RENAME-AT`. The rename is the
+   commit point.
+
+The stage's bytes were on the medium when each write returned, so the save
+needs no `VFS-SYNC`, and the rename moves the name from the old file to the
+new one as one mutation, on ext4 one journal transaction, so it needs no
+marker and no backup. A power cut before the rename's commit block reaches
+the medium leaves the old target, or no target on a first save, and a stage
+that recovery removes. A power cut after it leaves the new target and no
+companion. The driver frees the old file's storage before the rename
+returns, and the next mount's recovery frees it when the power cut came
+first.
+
+A refused rename has changed nothing. The routine removes the stage and
+returns `VREPL-S-IO`, or `VREPL-S-RECOVERY` when the stage cannot be removed
+either, as on a volume that a fault has turned read-only. This publication
+never returns `VREPL-S-COMMITTED-CLEANUP` or `VREPL-S-UNCERTAIN`.
+
+The rename takes a target that another descriptor holds open as its victim,
+and that descriptor goes on reading the old bytes. On ext4 the old file then
+waits in the orphan file until the descriptor closes, and until then the
+driver refuses every create on the volume: a second save in that interval
+cannot create its stage, returns `VREPL-S-RECOVERY`, and leaves the target as
+the first save made it. `local_testing/test_vfs_replace_ext4.py` holds that
+behavior. The driver work that lets a sync land while a removed file is open,
+recorded in
+[`user-volume-20261115.md`](../../../local_testing/evidence/user-volume-20261115.md),
+ends the refusal.
+
+### Publication through the marker and the backup
+
+Every other binding, MP64FS and the RAM binding among them, publishes through
+the steps built for a filesystem without a journal:
+
 5. `VFS-SYNC` the stage.
 6. Create, read back, and `VFS-SYNC` the marker. It records whether the target
    existed, the new length and CRC-32, the first 128 bits of SHA3-256 over the
@@ -92,13 +145,22 @@ error propagation, and recovery decisions, not persistence across power loss.
 Above the binding-owned lower boundary, the primitive guarantees checked
 writes and a deterministic recovery policy for every state it publishes.
 
+A binding that sets `VFS-CAP-DURABLE-MUTATIONS` without
+`VFS-CAP-RENAME-REPLACE` has no rename that can take the target as its
+victim. It publishes through the marker and the backup, and the routine
+leaves out the syncs, since each step is on the medium when it returns.
+
 ## Recovery states
 
-`VREPL-RECOVER` is safe to run at activation before opening the target.
+`VREPL-RECOVER` is safe to run at activation before opening the target. One
+recovery serves both publications, because it decides by the files it finds
+and a volume shows which publication left them: a marker or a backup exists
+only where the marker protocol ran.
 
 | Durable state | Recovery decision |
 |---|---|
 | target + stage, no marker | Keep target; delete stale stage |
+| stage alone: no target, backup or marker | Delete the stage; the target stays absent |
 | target + stage + valid marker | Marker says old target is still live; delete stage and marker |
 | backup + stage + valid marker | Restore backup to target; delete stage and marker |
 | target + backup + valid marker | Publication was not committed; delete candidate target and restore backup |
@@ -109,6 +171,13 @@ writes and a deterministic recovery policy for every state it publishes.
 | valid marker claiming an old target, but no provable target or backup | Fail closed as recovery-required |
 
 Recovery never deletes a known backup in an ambiguous marked state.
+
+A power cut during publication by one rename leaves one of three states: the
+target as it was, with or without a stage beside it; a stage alone, when the
+save was the file's first; or the new target. The first two rows settle the
+states that hold a stage, and the others need nothing. On a binding with
+`VFS-CAP-DURABLE-MUTATIONS` recovery leaves out its syncs as the save does,
+since each removal and rename is on the medium when it returns.
 
 ## API
 
@@ -235,7 +304,8 @@ ordinary, status-failure, and exception paths before returning or rethrowing.
 `VREPL-S-COMMITTED-CLEANUP` is a committed save: the resource owner should
 advance its revision and schedule `VREPL-RECOVER` to remove the backup.
 `VREPL-S-UNCERTAIN` must not be silently treated as either old or new; reload
-the filesystem and recover before accepting another write.
+the filesystem and recover before accepting another write. Only publication
+through the marker returns these two.
 
 ## Concurrency boundary
 

@@ -68,6 +68,12 @@ the binding intentionally does **not** advertise `VFS-CAP-STABLE-HANDLES` or
 an open rename victim does the same before either cached directory entry is
 changed. This prevents an old FD from aliasing a newly reused slot or extent.
 
+MP64FS has no journal: it keeps its bitmap and directory in a cache and
+writes them back as separate regions. The binding therefore leaves
+`VFS-CAP-DURABLE-MUTATIONS` clear, and
+[checked replacement](../vfs-replace.md) publishes a save here through its
+marker, its backup and a sync after each step.
+
 `PROBE` has the ABI shape `( volume -- score ior )`. It reads sector zero only
 through that supplied volume, returns `VMP-PROBE-SCORE` (100) for `MP64`, zero
 for a clean nonmatch, and a structured volume-domain ior for checked I/O

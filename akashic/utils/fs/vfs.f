@@ -176,6 +176,17 @@ VFS-OP-COUNT CELLS CONSTANT VFS-OPS-SIZE
 1 35 LSHIFT CONSTANT VFS-CAP-SPARSE
 1 36 LSHIFT CONSTANT VFS-CAP-DATA-ONLY-FSYNC
 1 37 LSHIFT CONSTANT VFS-CAP-STABLE-HANDLES
+\ ATOMIC-RENAME and RENAME-REPLACE describe a rename while the machine
+\ runs.  DURABLE-MUTATIONS describes what a power cut leaves, in two parts.
+\ A mutating callback that returns success has recorded its whole effect
+\ on the medium behind a completed flush, so the next mount has it without
+\ a later SYNCFS or FSYNC; the count WRITE returns is the bytes kept.  And
+\ the mount after a power cut finds each CREATE, MKDIR, LINK, SYMLINK,
+\ UNLINK, RMDIR and RENAME entire or absent: a RENAME over an existing
+\ name leaves that name on the old file or on the new one, never on
+\ neither.  The claim does not make a WRITE over existing bytes
+\ all-or-nothing.
+1 38 LSHIFT CONSTANT VFS-CAP-DURABLE-MUTATIONS
 
 1 CONSTANT VFS-BF-NEEDS-VOLUME
 2 CONSTANT VFS-BF-CASE-INSENSITIVE
