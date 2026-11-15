@@ -124,6 +124,8 @@ PLACE-MKDIR  PLACE-RM   ( path-a path-u place -- ior )
 PLACE-RENAME    ( new-a new-u inode place -- ior )
 PLACE-SYNC      ( place -- ior )
 PLACE-BIND      ( path-a path-u place buf cap -- vfs len ior )
+PLACE-BIND-WRITE  ( path-a path-u place buf cap -- vfs len ior )
+PLACE-NAME-LIMIT  ( place -- n )
 ```
 
 A path inside a place starts at its folder, so `/` is that folder and a
@@ -152,8 +154,16 @@ parent would remove the bracket; it changes the driver and reruns its
 whole unit, and is recorded as later work.
 
 `PLACE-BIND` gives the instance and the volume path of an entry, or of a
-name in a folder of the place, to the replacement, fixed-snapshot and
-generation-pair libraries, which keep their own descriptors. `PLACE-VFS`
+new name in an existing folder of the place, to a library that keeps its
+own descriptor, as the replacement, fixed-snapshot and generation-pair
+libraries and the media widget do. The path it writes has no `..` and no
+symbolic link in it, and a name that is a link without its target is
+refused, since a write through it could leave the place. `PLACE-BIND`
+serves a library that reads; `PLACE-BIND-WRITE` is the same for one that
+will write, and a read-only place refuses it, so the place's access holds
+for those libraries too. `PLACE-NAME-LIMIT` is the longest entry name the
+place's volume takes, from the volume's own answer (`VSF.NAMEMAX`), or
+the VFS's 255 when the volume gives none. `PLACE-VFS`
 hands native code the instance, so the `PLACE-` words keep applets to
 their places and enforce read-only among components that share one
 address space; the sandbox, which requires a context with no place set,
@@ -163,7 +173,9 @@ stays the boundary against code that would reach around them.
 
 A file handed from one applet to another is `vfs://<place>/<path>`. The
 name is 1 to 255 bytes of lowercase letters, digits, `-`, `.` and `_`,
-and is neither `.` nor `..`. In `interop/resource.f`:
+and is neither `.` nor `..`; `utils/fs/place-name.f` holds that rule
+(`PLACE-NAME-VALID?`) for the registry and the form alike. In
+`interop/resource.f`:
 
 ```forth
 IRES-VFS!       ( place-a place-u path-a path-u value -- ior )
@@ -279,7 +291,8 @@ runs once after slice 8.
 
 ## Status
 
-Nothing of this design is in the tree yet.
+In the tree: `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
+`local_testing/test_places.py` on two RAM volumes. Nothing uses them yet.
 
 ## Open
 
