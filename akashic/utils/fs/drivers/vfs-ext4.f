@@ -23566,7 +23566,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
     TRUE 0 ;
 
 \ An INODE_UNINIT group has no inode in use.  Its descriptor counts every
-\ inode free, which the bounds its caller checked leave no directory, and
+\ inode free, so the bounds its caller checked leave it no directory, and
 \ nothing has written its bitmap block: the bitmap the group stands for has
 \ every inode clear, so the first eligible inode is the one to take.  The
 \ flag is corrupt on group 0, whose reserved inodes are always in use, as
@@ -23603,8 +23603,9 @@ VARIABLE _XC-NEW-DIR-IMAGE
 \ Look for a free inode in the scanned group.  A group still INODE_UNINIT
 \ is made ready by the inode it gives.  In a group whose table the builder
 \ did not zero, an inode whose table block holds no other inode in use is
-\ staged in a block of zeros, as the kernel's __ext4_get_inode_loc gives it,
-\ so that no byte the builder left reaches the table's used part; a zeroed
+\ staged in a block of zeros, as the kernel's __ext4_get_inode_loc gives
+\ it.  The kernel's lazy initializer later zeroes only the blocks past the
+\ used ones, so each block must be whole from its first inode on.  A zeroed
 \ table's block is kept as media holds it.
 : _XC-FI-SCAN-GROUP  ( -- found? ior )
     _XC-FI-GROUP @ _XC-CTX @ _EXT4-GROUP-INODE-COUNT

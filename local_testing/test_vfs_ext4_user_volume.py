@@ -1070,3 +1070,79 @@ def test_unzeroed_inode_table_blocks_are_staged_from_zeros(
         garbage[2 * _BLOCK :]
     )
 
+
+def test_create_refuses_an_uninit_group_that_counts_an_inode_in_use(
+    full_group_volumes: dict[str, Path],
+    jbd2_toolchain: dict[str, object],  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    """An INODE_UNINIT group has every inode free, or its counts are wrong.
+
+    Group 1's descriptor and the superblock each count one inode fewer
+    free, under valid checksums, so the mount's sums agree.  The pinned
+    e2fsck reports the group, and a create that reaches it refuses as
+    corrupt geometry before any write.
+    """
+    source = full_group_volumes["one"]
+    superblock = bytearray(_superblock(source))
+    descriptor = bytearray(_descriptor(source, 1))
+    struct.pack_into(
+        "<H", descriptor, 0x0E, struct.unpack_from("<H", descriptor, 0x0E)[0] - 1
+    )
+    descriptor = ext4._group_descriptor_with_checksum(
+        bytes(superblock), descriptor, 1
+    )
+    struct.pack_into(
+        "<I", superblock, 0x10, struct.unpack_from("<I", superblock, 0x10)[0] - 1
+    )
+    superblock = ext4._ext4_super_with_checksum(superblock)
+    damaged = tmp_path / "damaged.img"
+    ext4._copy_sparse_file(source, damaged)
+    with damaged.open("r+b") as image:
+        image.seek(1024)
+        image.write(superblock)
+        image.seek(2 * _BLOCK + 64)
+        image.write(descriptor)
+    checked = _run(
+        [jbd2_toolchain["e2fsck"], "-f", "-n", damaged], jbd2_toolchain["env"]
+    )
+    assert checked.returncode == 4, checked.stdout
+    assert "Free inodes count wrong for group #1 (511, counted=512)" in (
+        checked.stdout
+    )
+    backing = tmp_path / "refused.img"
+    output, trace, media_sha256 = ext4.run_recovery_forth(
+        damaged,
+        backing,
+        [
+            *_mount("_BU"),
+            (
+                'S" refused.txt" _BU-V VFS-MKFILE? '
+                "CONSTANT _BU-IOR CONSTANT _BU-D"
+            ),
+            (
+                'S" refused.txt" _BU-V V.ROOT @ _VFS-FIND-CHILD '
+                "CONSTANT _BU-CHILD"
+            ),
+            *_checked(
+                "_BU-OK",
+                "EXT4-UNINIT-GROUP-REFUSED",
+                [
+                    *_mounted("_BU"),
+                    "_BU-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                    "_BU-IOR VFS-IOR-DETAIL EXT4-D-GEOMETRY =",
+                    "_BU-D 0=",
+                    "_BU-CHILD 0=",
+                    "_XC-FI-GROUP @ 1 =",
+                    "_XC-GROUP-UNINIT @ -1 =",
+                    "_BU-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    *ext4._EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+                ],
+            ),
+        ],
+        capture_media=backing,
+    )
+    _emitted(output, "EXT4-UNINIT-GROUP-REFUSED")
+    assert trace == ()
+    assert media_sha256 == ext4._sha256(damaged)
+
