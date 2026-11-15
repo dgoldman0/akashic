@@ -68,6 +68,7 @@ from rich_terminal_applet_journeys import (
     DAYBOOK_REMINDER_NOTICE,
     DESK_PROMPT_OVER,
     DESK_PROMPT_TEXT,
+    FEXP_PLACE_LABEL,
     SMALL_TERMINAL_LARGE_LINE,
     SMALL_TERMINAL_LARGE_PATH,
     STREAMS_CARDS,
@@ -1952,7 +1953,8 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
                          ItemColumn(ItemColumnKind.TEXT, "Type")),
                         len(items), 0, len(items), items),
     )
-    root = ViewItem(1, 0, 0, 0, ItemState.EXPANDABLE, ItemRole.ITEM, (ItemField("/"),))
+    root = ViewItem(1, 0, 0, 0, ItemState.EXPANDABLE, ItemRole.ITEM,
+                    (ItemField(FEXP_PLACE_LABEL),))
     tree = acceptance_runner._SemanticItemViewClaim(
         ControlIdentity(1, 1, TREE_ID), 0, 2, 29, 60,
         ItemViewContent(1, ItemViewRole.TREE, ItemViewFlag(0),
