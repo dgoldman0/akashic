@@ -152,6 +152,11 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("_EXT4-DV-*", (VOLUME,), "the directory block checked last: its stored checksum and last record"),
     ("_EXT4-PS-*", (VOLUME,), "the driver's copies of the blocks it read last"),
     ("_EXT4-JMM-*", (VOLUME,), "the key of the journal snapshot: the volume's journal tuple and sizes"),
+    ("_EXT4-BKM-SPACE", (VOLUME,),
+     "the backup check's copy of the primary superblock's fixed fields: each volume's own"),
+    ("_EXT4-OV-CRC", (VOLUME,), "the checksum of the orphan file's inode record, validated last"),
+    ("_EXT4-OF-CRC", (VOLUME,), "the orphan watch's copy of that checksum"),
+    ("_EXT4-OC-CRC", (VOLUME,), "the orphan count's copy of that checksum"),
     # Akashic: the VFS over those volumes, and its MP64FS binding.
     ("_VR-PATH-A", (VOLUME,), "the path resolved last"),
     ("_VFC-H", BOTH, "the hash of the name looked up last"),
