@@ -1386,9 +1386,11 @@ reload with the union the mount retains admitted: an empty union, or the
 modern records of removed files still held open, with `ORPHAN_PRESENT` set
 exactly while it holds one. They change no record, so the union their home
 writes leave must equal the one their pre-home reload found, compared through
-the CRC32C of the plan table each reload builds; they gain no authority from
-a nonempty orphan plan. Sealed orphan `FINAL` and `MORE` modes instead use a
-private pre-home reload that performs the same super, group, backup,
+the union's identity (`_EXT4-ORPHAN-UNION-ID`): its record count and, for a
+union that holds records, the CRC32C of the plan table each reload builds.
+They gain no authority from a nonempty orphan plan. Sealed orphan `FINAL` and
+`MORE` modes instead use a private pre-home reload that performs the same
+super, group, backup,
 orphan-union, and journal authentication, or the journal's alone while the
 context's last complete reload stands (described below), but replaces the
 public policy with an exact writer-certificate comparison. It requires the
@@ -1473,6 +1475,63 @@ standing plan. Mount finish drops the record, because
 the orphan plan moves to its runtime table there without a write, so the
 first transaction after a mount reloads in full.
 
+Inside a complete reload, three validations stand on narrower terms than
+the epoch, because most writes that start a new epoch reach nothing they
+read. Each validation's result is a function of the blocks it reads and the
+fields it compares, so it stands while none of them has changed, and the
+driver proves that from the writes themselves: every write passes a write
+watch before it reaches the volume (see the
+[admission foundation](ext4/vfs-ext4-admission.md)), and nothing else
+writes a mounted volume.
+
+- The modern orphan count reads every block of the orphan file, and the
+  plan indexed from a union of modern records reads them again. Both depend
+  only on the orphan file's inode record and the blocks its map names. Each
+  preparation of the orphan file names the record by the CRC32C of its
+  bytes, and the orphan watch keeps the span of sectors a depth-zero map's
+  extents cover. The watch counts every write that meets the span, every
+  write to another volume or while it keeps no span, and every preparation
+  that finds another record. A count taken under the same record while the
+  watch's count has not moved stands (`_EXT4-OC-STANDS?`), and so does a
+  plan the context still names, with the same slots and union count and the
+  CRC32C its build left (`_EXT4-OPL-STANDS?`). Each record's inode is
+  validated again either way, and the legacy chain is walked every time.
+  A transaction that writes the orphan file, and the first reload of each
+  mount, count and index it in full. A count or index reads a block's entries
+  one by one only when the block holds a record: entries that are all zero,
+  tested a cell at a time, add nothing.
+- The backup validation reads only the backup superblocks and the backup
+  descriptor blocks, and compares them with the primary superblock's fixed
+  fields and the primary descriptors' block-bitmap, inode-bitmap and
+  inode-table locations. The driver never writes a backup. The write watch
+  counts every write that meets a backup superblock, its descriptor blocks
+  or their reserved successors, and every write to another volume
+  (`_EXT4-BK-NOTE`). The group validation that runs first in every complete
+  reload chains each group's three primary locations into a CRC32C. A
+  backup validation stands while the watch's count has not moved, that
+  chain in the same epoch equals the one the last full validation saw, and
+  the primary superblock's fixed fields equal the copy it compared with
+  (`_EXT4-BKM-STANDS?`); any change validates every copy again. A change to
+  a primary location or fixed field is therefore refused against the
+  backups exactly as before.
+- A lookup through an extent map proves the inline node it starts from. It
+  does so once per epoch for one node: a node that passed a plain proof in
+  the current epoch under the same validation limit is not proved again
+  (`_EXT4-MAP-INLINE-EXTENTS`), since that proof reads only the node's
+  bytes, the geometry and the descriptors and bitmaps of the groups its
+  blocks lie in, which no write keeping the epoch reaches. A scan of the
+  orphan file used to prove its whole extent's allocation once for every
+  block it read. Claim, release and audit scopes, the protocol scope, a
+  transaction's images and the read gate always prove it.
+
+None of these changes what a validation checks when its inputs have
+changed: a write that reaches the orphan file, a backup, a primary location
+or a fixed field of the primary superblock brings back the full validation,
+and every home a checkpoint writes is still read back and compared whole.
+The journal map's workspace CRC32C, which each journal validation computes
+over the whole per-block map and its uniqueness table, is a check of the
+driver's own memory rather than a read of the medium, and stays as it is.
+
 Journal release preserves the mounted write-active state. It reuses the active
 guard `G` as an `AKG1`-qualified `AKR1` reset anchor, publishes and flushes the
 empty witnessed primary, then removes the primary witness and flushes it while
@@ -1550,8 +1609,8 @@ capacity of them, and `ORPHAN_PRESENT` is set exactly while it holds one
 landing writes the same six blocks as any other, and its W4 superblock clears
 `RECOVER` but keeps `ORPHAN_PRESENT`, because the orphan file is in use. The
 reloads before W1 and after W6 admit the retained union and require the same
-union on both sides, compared through the CRC32C of the plan table each
-reload builds (`_EXT4-ORPHAN-UNION-CRC`).
+union on both sides, compared through its identity
+(`_EXT4-ORPHAN-UNION-ID`).
 
 That landed state is one the kernel and e2fsprogs both produce and take. At
 Linux v6.8, `ext4_freeze` (fs/ext4/super.c) flushes the journal with
@@ -2261,20 +2320,25 @@ keeps it when the mount already retains records of removed files held open.
 The cold plan qualifies the deletion that will end the record, admits the
 union the mount retains with room in its runtime plan for one more record
 (`_EXT4-JUA-REQUIRE-PRESTATE`), proves that the orphan file's slots and that
-plan agree record for record (`_EXT4-FIND-EMPTY-ORPHAN-SLOT`), requires
-mounted free counts equal to the bitmaps, and sizes the writer from the
-deletion's credits and the room one release pass needs. The live pass seals
-the unlink-ADD payload, and the checkpoint rebuilds every journaled image from
-the media and that payload before its home writes. The payload names the
-target's record and its predecessor: a splice names a predecessor at a lower
-offset, live or unused, and the blank form for a block's first record names a
-predecessor length of zero and a predecessor offset equal to the record's
-offset, zero, which no splice can name. A directory target's form follows from
-its inode type: the record's file type is 2, the target's links go from two to
-zero, and the parent's link count drops by one beside its times. The measuring
-pass stages the orphan record without sealing it, so an aborted measuring
-transaction leaves no sealed checkpoint state. Recovery replays these homes as
-it replays any transaction's.
+plan agree record for record and finds the first empty slot
+(`_EXT4-FIND-EMPTY-ORPHAN-SLOT`), requires mounted free counts equal to the
+bitmaps, and sizes the writer from the deletion's credits and the room one
+release pass needs. A union count that stands proves the slots as it counted
+them, and a standing plan was indexed from them (see
+[Private transaction staging](#private-transaction-staging-and-durable-emission)),
+so the search then reads only the chosen block: with no record the first
+slot is empty, and with records the plan names each record's slot. The live
+pass seals the unlink-ADD payload, and the checkpoint rebuilds every
+journaled image from the media and that payload before its home writes. The
+payload names the target's record and its predecessor: a splice names a
+predecessor at a lower offset, live or unused, and the blank form for a block's
+first record names a predecessor length of zero and a predecessor offset equal
+to the record's offset, zero, which no splice can name. A directory target's
+form follows from its inode type: the record's file type is 2, the target's
+links go from two to zero, and the parent's link count drops by one beside its
+times. The measuring pass stages the orphan record without sealing it, so an
+aborted measuring transaction leaves no sealed checkpoint state. Recovery
+replays these homes as it replays any transaction's.
 
 A target that nothing holds open then drains before the callback returns:
 release passes free its blocks from the end of its map, one transaction each,

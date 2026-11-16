@@ -582,6 +582,7 @@ VARIABLE _EXT4-VG-ADD
 : _EXT4-VALIDATE-GROUPS  ( ctx -- ior )
     _EXT4-VG-CTX !
     0 _EXT4-VG-FREE-BLOCKS ! 0 _EXT4-VG-FREE-INODES !
+    _EXT4-GL-BEGIN
     _EXT4-VG-CTX @ _EXT4-C.GROUPS + @ 0 DO
         I _EXT4-VG-CTX @ _EXT4-VALIDATE-BITMAPS ?DUP IF
             UNLOOP EXIT
@@ -589,6 +590,7 @@ VARIABLE _EXT4-VG-ADD
         \ Allocation ownership checks may load the descriptor for a different
         \ physical group under flex_bg; restore the counter source explicitly.
         I _EXT4-VG-CTX @ _EXT4-LOAD-DESC ?DUP IF UNLOOP EXIT THEN
+        _EXT4-VG-CTX @ _EXT4-GL-ADD ?DUP IF UNLOOP EXIT THEN
         _EXT4-VG-CTX @ _EXT4-C.DESC + DUP
         _EXT4-GD.FREE-BLOCKS-LO + W@
         SWAP _EXT4-GD.FREE-BLOCKS-HI + W@ 16 LSHIFT OR
@@ -608,6 +610,7 @@ VARIABLE _EXT4-VG-ADD
     _EXT4-VG-FREE-INODES @ _EXT4-VG-CTX @ _EXT4-C.FREE-INODES + @ <> OR IF
         EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
+    _EXT4-VG-CTX @ _EXT4-GL-RECORD
     0 ;
 
 \ =====================================================================
@@ -1220,6 +1223,46 @@ VARIABLE _EXT4-ET-ROOT-COUNT
 : _EXT4-VALIDATE-EXTENT-TREE  ( ctx -- ior )
     ['] _EXT4-WALK-EXTENT-TREE _EXT4-VM-VALIDATE ;
 
+\ A lookup proves the inline node it starts from, unless the same node
+\ passed a plain proof in this map epoch under the same validation limit.
+\ That proof reads only the node's bytes, the mount's geometry and the
+\ descriptors and block bitmaps of the groups its blocks lie in, which no
+\ write keeping the epoch reaches (see _EXT4-VM-VALIDATE), so it would pass
+\ again.  A scan of a file's blocks, such as the orphan file's, then proves
+\ the node once instead of once a block.  Claim, release and audit scopes,
+\ the protocol scope, a transaction's images and the read gate always prove
+\ it.
+VARIABLE _EXT4-MI-CTX
+0 _EXT4-MI-CTX !
+VARIABLE _EXT4-MI-EPOCH
+VARIABLE _EXT4-MI-LIMIT
+CREATE _EXT4-MI-SPACE 60 7 + ALLOT
+_EXT4-MI-SPACE 7 + -8 AND CONSTANT _EXT4-MI-ARRAY
+
+: _EXT4-MI-PLAIN?  ( -- flag )
+    _EXT4-OWN-MODE @ 0=
+    _EXT4-MUTATION-MAP-ACTIVE @ 0= AND
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= AND
+    _EXT4-EV-IMAGE-XT @ 0= AND
+    _EXT4-RG-ARMED @ 0= AND ;
+
+: _EXT4-MI-PASSED?  ( ctx -- flag )
+    _EXT4-MI-CTX @ <> IF FALSE EXIT THEN
+    _EXT4-MI-EPOCH @ _EXT4-MAP-EPOCH @ <> IF FALSE EXIT THEN
+    _EXT4-MI-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT @ <> IF FALSE EXIT THEN
+    _EXT4-MI-ARRAY _EXT4-MI-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK +
+    60 _EXT4-BYTES=? ;
+
+: _EXT4-MAP-INLINE-EXTENTS  ( ctx -- ior )
+    _EXT4-MI-PLAIN? 0= IF _EXT4-VALIDATE-INLINE-EXTENTS EXIT THEN
+    DUP _EXT4-MI-PASSED? IF DROP 0 EXIT THEN
+    0 _EXT4-MI-CTX !
+    DUP _EXT4-VALIDATE-INLINE-EXTENTS ?DUP IF NIP EXIT THEN
+    DUP _EXT4-C.INODE + _EXT4-I.BLOCK + _EXT4-MI-ARRAY 60 MOVE
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-MI-LIMIT !
+    _EXT4-MAP-EPOCH @ _EXT4-MI-EPOCH !
+    _EXT4-MI-CTX ! 0 ;
+
 VARIABLE _EXT4-MAP-LBLOCK
 VARIABLE _EXT4-MAP-CTX
 VARIABLE _EXT4-MAP-IN
@@ -1248,7 +1291,7 @@ VARIABLE _EXT4-MAP-CHILD
 
 : _EXT4-MAP-EXTENT  ( logical-block ctx -- physical present? ior )
     _EXT4-MAP-CTX ! _EXT4-MAP-LBLOCK !
-    _EXT4-MAP-CTX @ _EXT4-VALIDATE-INLINE-EXTENTS ?DUP IF
+    _EXT4-MAP-CTX @ _EXT4-MAP-INLINE-EXTENTS ?DUP IF
         0 FALSE ROT EXIT
     THEN
     _EXT4-MAP-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + DUP _EXT4-MAP-IN !
@@ -3000,11 +3043,60 @@ VARIABLE _EXT4-OV-PRESENT
 VARIABLE _EXT4-OV-IOR
 VARIABLE _EXT4-OV-HI
 VARIABLE _EXT4-OV-DEPTH
+VARIABLE _EXT4-OV-CRC
+
+\ The orphan watch.  A count of the orphan file's records, and the plan
+\ indexed from them, depend only on the orphan file's inode record and the
+\ blocks its map names.  Each preparation names the record by the CRC32C of
+\ its bytes, and the watch keeps the volume and the span of sectors the
+\ extents of a depth-zero map cover.  It counts every write that may change
+\ the file: one that meets the span, one to another volume, every write
+\ while it keeps no span, and a preparation that finds another record than
+\ the one whose span it keeps.  Nothing else writes a mounted volume, so a
+\ count or plan taken under a record stands while the record and the
+\ watch's count stay the same.
+VARIABLE _EXT4-OF-VOL
+0 _EXT4-OF-VOL !
+VARIABLE _EXT4-OF-FIRST
+VARIABLE _EXT4-OF-END
+VARIABLE _EXT4-OF-CRC
+VARIABLE _EXT4-OF-WRITES
+0 _EXT4-OF-WRITES !
+VARIABLE _EXT4-OVS-FIRST
+VARIABLE _EXT4-OVS-END
+
+: _EXT4-OF-NOTE  ( lba count -- )
+    _EXT4-OF-VOL @ 0= _EXT4-IO-VOL @ _EXT4-OF-VOL @ <> OR IF
+        2DROP 1 _EXT4-OF-WRITES +! EXIT
+    THEN
+    OVER + _EXT4-OF-FIRST @ U>
+    SWAP _EXT4-OF-END @ U< AND IF 1 _EXT4-OF-WRITES +! THEN ;
+
+: _EXT4-OF-WATCH  ( -- )
+    _EXT4-OV-CRC @ _EXT4-OF-CRC @ <>
+    _EXT4-IO-VOL @ _EXT4-OF-VOL @ <> OR IF 1 _EXT4-OF-WRITES +! THEN
+    _EXT4-OV-CRC @ _EXT4-OF-CRC !
+    0 _EXT4-OF-VOL !
+    _EXT4-OV-DEPTH @ IF EXIT THEN
+    -1 _EXT4-OVS-FIRST ! 0 _EXT4-OVS-END !
+    _EXT4-OV-IN @ _EXT4-I.BLOCK + DUP 2 + W@ 0 ?DO
+        DUP 12 + I 12 * + _EXT4-EXTENT-LEN@
+        OVER 12 + I 12 * + DUP 6 + W@ 32 LSHIFT SWAP 8 + L@ OR
+        DUP _EXT4-OVS-FIRST @ U< IF DUP _EXT4-OVS-FIRST ! THEN
+        + DUP _EXT4-OVS-END @ U> IF _EXT4-OVS-END ! ELSE DROP THEN
+    LOOP DROP
+    _EXT4-OVS-END @ 0= IF EXIT THEN
+    _EXT4-OVS-FIRST @ _EXT4-OV-CTX @ _EXT4-C.SPB + @ * _EXT4-OF-FIRST !
+    _EXT4-OVS-END @ _EXT4-OV-CTX @ _EXT4-C.SPB + @ * _EXT4-OF-END !
+    _EXT4-IO-VOL @ _EXT4-OF-VOL ! ;
 
 : _EXT4-PREPARE-ORPHAN-FILE  ( ctx -- ior )
     DUP _EXT4-OV-CTX ! _EXT4-C.ORPHAN-INO + @ DUP _EXT4-OV-INO !
     _EXT4-OV-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
     _EXT4-OV-CTX @ _EXT4-C.INODE + DUP _EXT4-OV-IN !
+    0xFFFFFFFF _EXT4-CRC-START
+    DUP _EXT4-OV-CTX @ _EXT4-C.ISIZE + @ _EXT4-CRC-ADD ?DUP IF NIP EXIT THEN
+    _EXT4-CRC@ _EXT4-OV-CRC !
     _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
@@ -3034,11 +3126,17 @@ VARIABLE _EXT4-OV-DEPTH
         _EXT4-OV-DEPTH @ 1 U> IF
             EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
         THEN
-        0
+        _EXT4-OF-WATCH 0
     ELSE
         _EXT4-OV-CTX @ _EXT4-VALIDATE-LEGACY-MAP ?DUP IF EXIT THEN
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED
     THEN ;
+
+\ The write watch (vfs-ext4-admission.f) counts writes for the orphan
+\ watch and the standing backup validation.
+: _EXT4-WRITE-WATCH  ( lba count -- )
+    2DUP _EXT4-OF-NOTE _EXT4-BK-NOTE ;
+' _EXT4-WRITE-WATCH _EXT4-WRITE-WATCH-XT !
 
 \ Read one mapped orphan-file block and authenticate its physical-location-
 \ bound tail.  The caller consumes entries before the next media read.
@@ -4937,16 +5035,22 @@ VARIABLE _EXT4-RU-PRESENT
     OVER _EXT4-C.O.ACTIVE + @ 0= IF 2DROP 0 EXIT THEN
     _EXT4-RETAINED-ORPHAN-UNION ;
 
-\ The identity of the authenticated union: the CRC32C of the plan table the
-\ last complete reload built.  A reload builds that table from the orphan file
+\ The identity of the authenticated union: its record count above bit 32
+\ and, when it holds records, the CRC32C of the plan table the last complete
+\ reload built below it.  A reload builds that table from the orphan file
 \ alone, in block and slot order, into a table of the mount's fixed size, so
-\ two reloads of one union leave equal tables.
-: _EXT4-ORPHAN-UNION-CRC  ( ctx -- crc ior )
+\ two reloads of one union leave equal tables; an empty union is told by its
+\ count alone.
+: _EXT4-ORPHAN-UNION-ID  ( ctx -- identity ior )
+    DUP _EXT4-C.O.ACTIVE + @ DUP 0= IF NIP 0 EXIT THEN
+    32 LSHIFT >R
     0xFFFFFFFF _EXT4-CRC-START
     DUP _EXT4-C.O.TABLE + @ SWAP _EXT4-C.O.SLOTS + @
-    _EXT4-ORPHAN-RECORD-SIZE * DUP 0= IF 2DROP _EXT4-CRC@ 0 EXIT THEN
-    _EXT4-CRC-ADD ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-CRC@ 0 ;
+    _EXT4-ORPHAN-RECORD-SIZE * DUP 0= IF
+        2DROP _EXT4-CRC@ R> OR 0 EXIT
+    THEN
+    _EXT4-CRC-ADD ?DUP IF R> DROP 0 SWAP EXIT THEN
+    _EXT4-CRC@ R> OR 0 ;
 
 VARIABLE _EXT4-JWM-META
 VARIABLE _EXT4-JWM-DATA
@@ -10188,6 +10292,11 @@ VARIABLE _EXT4-OPF-ENTRY
     _EXT4-C.O.LEGACY-ACTIVE + !
     0 ;
 
+\ Whether the entries of the orphan block in CTX's C.BLOCK are all zero; a
+\ block that holds no record needs no entry-by-entry pass.
+: _EXT4-ORPHAN-BLOCK-EMPTY?  ( ctx -- flag )
+    _EXT4-C.BLOCK + _EXT4-OP-ENTRIES @ 4 * _EXT4-BYTES-ZERO? ;
+
 : _EXT4-COUNT-ACTIVE-ORPHANS  ( ctx -- ior )
     DUP _EXT4-OP-CTX !
     _EXT4-C.BSIZE + @ 8 - 4 / _EXT4-OP-ENTRIES !
@@ -10196,15 +10305,17 @@ VARIABLE _EXT4-OPF-ENTRY
         I _EXT4-OP-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF
             UNLOOP EXIT
         THEN
-        _EXT4-OP-ENTRIES @ 0 ?DO
-            _EXT4-OP-CTX @ _EXT4-C.BLOCK + I 4 * + L@ ?DUP IF
-                _EXT4-OP-CTX @ _EXT4-ORPHAN-INODE-NUMBER? 0= IF
-                    EXT4-D-ORPHAN-FILE _EXT4-CORRUPT
-                    UNLOOP UNLOOP EXIT
+        _EXT4-OP-CTX @ _EXT4-ORPHAN-BLOCK-EMPTY? 0= IF
+            _EXT4-OP-ENTRIES @ 0 ?DO
+                _EXT4-OP-CTX @ _EXT4-C.BLOCK + I 4 * + L@ ?DUP IF
+                    _EXT4-OP-CTX @ _EXT4-ORPHAN-INODE-NUMBER? 0= IF
+                        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT
+                        UNLOOP UNLOOP EXIT
+                    THEN
+                    1 _EXT4-OP-COUNT +!
                 THEN
-                1 _EXT4-OP-COUNT +!
-            THEN
-        LOOP
+            LOOP
+        THEN
     LOOP
     _EXT4-OP-COUNT @ _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
     0 ;
@@ -10216,14 +10327,16 @@ VARIABLE _EXT4-OPF-ENTRY
         I _EXT4-OP-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF
             UNLOOP EXIT
         THEN
-        _EXT4-OP-ENTRIES @ 0 ?DO
-            _EXT4-OP-CTX @ _EXT4-C.BLOCK + I 4 * + L@ ?DUP IF
-                _EXT4-OK-MODERN J I _EXT4-OP-CTX @
-                _EXT4-ORPHAN-TABLE-PUT ?DUP IF
-                    UNLOOP UNLOOP EXIT
+        _EXT4-OP-CTX @ _EXT4-ORPHAN-BLOCK-EMPTY? 0= IF
+            _EXT4-OP-ENTRIES @ 0 ?DO
+                _EXT4-OP-CTX @ _EXT4-C.BLOCK + I 4 * + L@ ?DUP IF
+                    _EXT4-OK-MODERN J I _EXT4-OP-CTX @
+                    _EXT4-ORPHAN-TABLE-PUT ?DUP IF
+                        UNLOOP UNLOOP EXIT
+                    THEN
                 THEN
-            THEN
-        LOOP
+            LOOP
+        THEN
     LOOP
     0 ;
 
@@ -10495,14 +10608,30 @@ VARIABLE _EXT4-URR-IOR
 \ Authenticate and publish exact union counts without allocating the transient
 \ discovery plan.  Mount can therefore finish all persistent allocations
 \ before beginning its rollback-owned tail.
-\ Counts taken in the current map epoch stand: only a write changes the
-\ orphan file's blocks or a legacy chain's inodes.
+\ The modern count reads every block of the orphan file.  It is kept with
+\ the record it was taken under and the orphan watch's count, and stands
+\ while both stay the same; the legacy chain is counted every time.
 VARIABLE _EXT4-OC-CTX
-VARIABLE _EXT4-OC-EPOCH
+VARIABLE _EXT4-OC-WRITES
+VARIABLE _EXT4-OC-CRC
+VARIABLE _EXT4-OC-MODERN
 0 _EXT4-OC-CTX !
 
+\ Whether CTX's kept count stands; the orphan file was just prepared.
+: _EXT4-OC-STANDS?  ( ctx -- flag )
+    _EXT4-OC-CTX @ =
+    _EXT4-OF-VOL @ 0<> AND
+    _EXT4-OF-VOL @ _EXT4-IO-VOL @ = AND
+    _EXT4-OC-WRITES @ _EXT4-OF-WRITES @ = AND
+    _EXT4-OC-CRC @ _EXT4-OV-CRC @ = AND ;
+
+: _EXT4-OC-KEEP  ( ctx -- )
+    DUP _EXT4-C.O.MODERN-ACTIVE + @ _EXT4-OC-MODERN !
+    _EXT4-OF-WRITES @ _EXT4-OC-WRITES !
+    _EXT4-OV-CRC @ _EXT4-OC-CRC !
+    _EXT4-OC-CTX ! ;
+
 : _EXT4-AUTHENTICATE-ORPHAN-COUNTS  ( ctx -- ior )
-    0 _EXT4-OC-CTX !
     _EXT4-OP-CTX !
     0 _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
     0 _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
@@ -10512,7 +10641,11 @@ VARIABLE _EXT4-OC-EPOCH
     ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-COUNT-LEGACY-ORPHANS ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-OC-STANDS? 0 _EXT4-OC-CTX ! IF
+        _EXT4-OC-MODERN @ _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
+    ELSE
+        _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+    THEN
     _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ IF
         _EXT4-OP-CTX @ _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@
         _EXT4-RO-ORPHAN-PRESENT AND 0= IF
@@ -10528,34 +10661,94 @@ VARIABLE _EXT4-OC-EPOCH
         DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
     _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
-    _EXT4-OP-CTX @ _EXT4-OC-CTX ! _EXT4-MAP-EPOCH @ _EXT4-OC-EPOCH !
+    _EXT4-OP-CTX @ _EXT4-OC-KEEP
     0 ;
+
+\ A plan indexed from modern records alone stands on the same terms as its
+\ count, while the context still names the table it was built in, with the
+\ same slots and union count, and the table still holds exactly the bytes
+\ that build left, compared through their CRC32C.  Only a build writes the
+\ table.  Every record's inode is validated again either way.
+VARIABLE _EXT4-OPL-CTX
+0 _EXT4-OPL-CTX !
+VARIABLE _EXT4-OPL-WRITES
+VARIABLE _EXT4-OPL-CRC
+VARIABLE _EXT4-OPL-TABLE
+VARIABLE _EXT4-OPL-SLOTS
+VARIABLE _EXT4-OPL-ACTIVE
+VARIABLE _EXT4-OPL-TABLE-CRC
+
+: _EXT4-OPL-TABLE-CRC@  ( ctx -- crc ior )
+    0xFFFFFFFF _EXT4-CRC-START
+    DUP _EXT4-C.O.TABLE + @ SWAP _EXT4-C.O.SLOTS + @
+    _EXT4-ORPHAN-RECORD-SIZE * DUP 0= IF 2DROP _EXT4-CRC@ 0 EXIT THEN
+    _EXT4-CRC-ADD ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-CRC@ 0 ;
+
+\ Whether CTX's kept plan stands; the orphan file was just prepared.
+: _EXT4-OPL-STANDS?  ( ctx -- flag )
+    DUP _EXT4-OPL-CTX @ <> IF DROP FALSE EXIT THEN
+    _EXT4-OF-VOL @ 0= IF DROP FALSE EXIT THEN
+    _EXT4-OF-VOL @ _EXT4-IO-VOL @ <>
+    _EXT4-OPL-WRITES @ _EXT4-OF-WRITES @ <> OR
+    _EXT4-OPL-CRC @ _EXT4-OV-CRC @ <> OR IF DROP FALSE EXIT THEN
+    DUP _EXT4-C.O.LEGACY-ACTIVE + @ IF DROP FALSE EXIT THEN
+    DUP _EXT4-C.O.ACTIVE + @ _EXT4-OPL-ACTIVE @ <>
+    OVER _EXT4-C.O.TABLE + @ _EXT4-OPL-TABLE @ <> OR
+    OVER _EXT4-C.O.SLOTS + @ _EXT4-OPL-SLOTS @ <> OR IF
+        DROP FALSE EXIT
+    THEN
+    _EXT4-OPL-TABLE-CRC@ IF DROP FALSE EXIT THEN
+    _EXT4-OPL-TABLE-CRC @ = ;
+
+\ Keep a plan built from modern records alone.
+: _EXT4-OPL-KEEP  ( ctx -- )
+    0 _EXT4-OPL-CTX !
+    DUP _EXT4-C.O.LEGACY-ACTIVE + @
+    OVER _EXT4-C.O.MODERN-ACTIVE + @ 0= OR IF DROP EXIT THEN
+    DUP _EXT4-OPL-TABLE-CRC@ IF 2DROP EXIT THEN _EXT4-OPL-TABLE-CRC !
+    DUP _EXT4-C.O.ACTIVE + @ _EXT4-OPL-ACTIVE !
+    DUP _EXT4-C.O.TABLE + @ _EXT4-OPL-TABLE !
+    DUP _EXT4-C.O.SLOTS + @ _EXT4-OPL-SLOTS !
+    _EXT4-OF-WRITES @ _EXT4-OPL-WRITES !
+    _EXT4-OV-CRC @ _EXT4-OPL-CRC !
+    _EXT4-OPL-CTX ! ;
 
 \ Build the exact retained plan from authenticated counts.  Reprepare the
 \ modern file because intervening journal validation may replace the shared
-\ inode cache.  Counts from an earlier epoch are taken again, and a changed
-\ slot count cannot reuse their sizing; counts of the current epoch stand.
+\ inode cache.  A kept count that no longer stands is taken again, and a
+\ changed count cannot reuse the plan's sizing.  A kept plan that stands
+\ keeps its table.
 : _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN  ( ctx -- ior )
     DUP _EXT4-OP-CTX ! 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
     _EXT4-OW-COUNT !
     _EXT4-OP-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-OP-CTX @ _EXT4-OC-CTX @ =
-    _EXT4-OC-EPOCH @ _EXT4-MAP-EPOCH @ = AND 0= IF
+    _EXT4-OP-CTX @ _EXT4-OC-STANDS? IF
+        _EXT4-OC-MODERN @ _EXT4-OW-COUNT @ <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    ELSE
+        0 _EXT4-OC-CTX !
         _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
         _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
         _EXT4-OW-COUNT @ <> IF
             EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
         THEN
+        _EXT4-OP-CTX @ _EXT4-OC-KEEP
     THEN
-    _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @
-    _EXT4-OP-CTX @
-    _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE ?DUP IF EXIT THEN
-    _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ IF
-        _EXT4-OP-CTX @ _EXT4-INDEX-ACTIVE-ORPHANS ?DUP IF EXIT THEN
-    THEN
-    _EXT4-OP-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ IF
-        _EXT4-OP-CTX @ _EXT4-INDEX-LEGACY-ORPHANS ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-OPL-STANDS? 0= IF
+        0 _EXT4-OPL-CTX !
+        _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @
+        _EXT4-OP-CTX @
+        _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE ?DUP IF EXIT THEN
+        _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ IF
+            _EXT4-OP-CTX @ _EXT4-INDEX-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+        THEN
+        _EXT4-OP-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ IF
+            _EXT4-OP-CTX @ _EXT4-INDEX-LEGACY-ORPHANS ?DUP IF EXIT THEN
+        THEN
+        _EXT4-OP-CTX @ _EXT4-OPL-KEEP
     THEN
     _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @ IF
         _EXT4-OP-CTX @ _EXT4-VALIDATE-INDEXED-ORPHANS ?DUP IF EXIT THEN
@@ -13532,36 +13725,10 @@ VARIABLE _EXT4-FES-HOME
 VARIABLE _EXT4-FES-GEN
 VARIABLE _EXT4-FES-OINO
 
-\ Choose the first empty slot in orphan-file order for inode INO, after
-\ proving that the raw slots and the retained plan agree on the PRE records
-\ the union holds, each at its own locator, and that INO is not among them.
-\ The slot's block must be a valid mutation target and still empty when it
-\ is read again.
-: _EXT4-FIND-EMPTY-ORPHAN-SLOT  ( ino pre ctx -- ior )
-    _EXT4-FES-CTX ! _EXT4-FES-PRE ! _EXT4-FES-INO !
-    _EXT4-FES-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-FES-CTX @ _EXT4-C.BSIZE + @ 8 - 4 / _EXT4-FES-ENTRIES !
-    0 _EXT4-FES-FOUND ! 0 _EXT4-FES-RAW ! 0 _EXT4-FES-PLAN !
-    _EXT4-FES-CTX @ _EXT4-C.O.SLOTS + @ 0 ?DO
-        I _EXT4-FES-CTX @ _EXT4-ORPHAN-TABLE-ENTRY
-        DUP _EXT4-FES-SCAN-RECORD ! @ DUP _EXT4-FES-SCAN-INO ! IF
-            1 _EXT4-FES-PLAN +!
-            _EXT4-FES-SCAN-RECORD @ _EXT4-FES-CTX @
-            _EXT4-ORPHAN-RECORD? 0= IF
-                EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
-            THEN
-            _EXT4-FES-SCAN-RECORD @ _EXT4-OE.KIND + @
-            _EXT4-OK-MODERN <> IF
-                EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
-            THEN
-            _EXT4-FES-SCAN-INO @ _EXT4-FES-INO @ = IF
-                VFS-E-CONFLICT UNLOOP EXIT
-            THEN
-        THEN
-    LOOP
-    _EXT4-FES-PLAN @ _EXT4-FES-PRE @ <> IF
-        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
+\ Prove that the raw slots and the retained plan agree on the PRE records
+\ the union holds, each at its own locator, and that INO is not among them,
+\ and find the first empty slot in orphan-file order.
+: _EXT4-FES-SCAN  ( -- ior )
     _EXT4-OV-BLOCKS @ 0 ?DO
         I _EXT4-FES-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF
             UNLOOP EXIT
@@ -13601,6 +13768,87 @@ VARIABLE _EXT4-FES-OINO
             THEN
         LOOP
     LOOP
+    0 ;
+
+\ Whether the retained plan names a record at LOGICAL and SLOT.
+: _EXT4-FES-OCCUPIED?  ( logical slot -- flag )
+    _EXT4-FES-CTX @ _EXT4-C.O.SLOTS + @ 0 ?DO
+        I _EXT4-FES-CTX @ _EXT4-ORPHAN-TABLE-ENTRY DUP @ IF
+            DUP _EXT4-OE.LOCATOR-A + @ 3 PICK =
+            SWAP _EXT4-OE.LOCATOR-B + @ 2 PICK = AND IF
+                2DROP TRUE UNLOOP EXIT
+            THEN
+        ELSE
+            DROP
+        THEN
+    LOOP 2DROP FALSE ;
+
+\ The first slot in orphan-file order that a standing plan names no record
+\ at.  The plan holds every record the file holds, PRE of them, so one of
+\ the first PRE + 1 slots is empty.  The chosen block is read for its home.
+: _EXT4-FES-FROM-PLAN  ( -- ior )
+    0 _EXT4-FES-LOGICAL ! 0 _EXT4-FES-SLOT !
+    _EXT4-FES-PRE @ 0 ?DO
+        _EXT4-FES-LOGICAL @ _EXT4-FES-SLOT @ _EXT4-FES-OCCUPIED? 0= IF
+            LEAVE
+        THEN
+        1 _EXT4-FES-SLOT +!
+        _EXT4-FES-SLOT @ _EXT4-FES-ENTRIES @ = IF
+            0 _EXT4-FES-SLOT ! 1 _EXT4-FES-LOGICAL +!
+        THEN
+    LOOP
+    _EXT4-FES-LOGICAL @ _EXT4-FES-SLOT @ _EXT4-FES-OCCUPIED? IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-FES-LOGICAL @ _EXT4-OV-BLOCKS @ U< 0= IF VFS-E-NOSPC EXIT THEN
+    _EXT4-FES-LOGICAL @ _EXT4-FES-CTX @
+    _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+    _EXT4-OV-PHYS @ _EXT4-FES-HOME !
+    _EXT4-OV-GEN @ _EXT4-FES-GEN !
+    _EXT4-OV-INO @ _EXT4-FES-OINO !
+    -1 _EXT4-FES-FOUND !
+    _EXT4-FES-PRE @ _EXT4-FES-RAW ! 0 ;
+
+\ Choose the first empty slot in orphan-file order for inode INO, after
+\ proving that the raw slots and the retained plan agree on the PRE records
+\ the union holds, each at its own locator, and that INO is not among them.
+\ A count of PRE records that stands proves the raw slots as they were
+\ counted, and a plan that stands was indexed from them, so with no record
+\ the first slot is empty, and with records a standing plan names each
+\ record's slot; otherwise every block is scanned.  The slot's block must
+\ be a valid mutation target and still empty when it is read again.
+: _EXT4-FIND-EMPTY-ORPHAN-SLOT  ( ino pre ctx -- ior )
+    _EXT4-FES-CTX ! _EXT4-FES-PRE ! _EXT4-FES-INO !
+    _EXT4-FES-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-FES-CTX @ _EXT4-C.BSIZE + @ 8 - 4 / _EXT4-FES-ENTRIES !
+    0 _EXT4-FES-FOUND ! 0 _EXT4-FES-RAW ! 0 _EXT4-FES-PLAN !
+    _EXT4-FES-CTX @ _EXT4-C.O.SLOTS + @ 0 ?DO
+        I _EXT4-FES-CTX @ _EXT4-ORPHAN-TABLE-ENTRY
+        DUP _EXT4-FES-SCAN-RECORD ! @ DUP _EXT4-FES-SCAN-INO ! IF
+            1 _EXT4-FES-PLAN +!
+            _EXT4-FES-SCAN-RECORD @ _EXT4-FES-CTX @
+            _EXT4-ORPHAN-RECORD? 0= IF
+                EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+            _EXT4-FES-SCAN-RECORD @ _EXT4-OE.KIND + @
+            _EXT4-OK-MODERN <> IF
+                EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+            _EXT4-FES-SCAN-INO @ _EXT4-FES-INO @ = IF
+                VFS-E-CONFLICT UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    _EXT4-FES-PLAN @ _EXT4-FES-PRE @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-FES-CTX @ _EXT4-OC-STANDS?
+    _EXT4-OC-MODERN @ _EXT4-FES-PRE @ = AND
+    _EXT4-FES-PRE @ 0= _EXT4-FES-CTX @ _EXT4-OPL-STANDS? OR AND IF
+        _EXT4-FES-FROM-PLAN
+    ELSE
+        _EXT4-FES-SCAN
+    THEN ?DUP IF EXIT THEN
     _EXT4-FES-RAW @ _EXT4-FES-PRE @ <> IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
@@ -17479,15 +17727,15 @@ VARIABLE _EXT4-JCP-ENTRY-READY
 
 \ A generic transaction changes no orphan record: the union its home writes
 \ leave must be the union its pre-home reload found.
-VARIABLE _EXT4-JCP-UNION-CRC
+VARIABLE _EXT4-JCP-UNION-ID
 
 : _EXT4-JCP-RELOAD-PREFLIGHT  ( -- ior )
     _EXT4-JCP-WRITER @ _EXT4-JWR.CP-MODE + @ DUP
     _EXT4-JCPM-NONE = IF
         DROP _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-REAUTHENTICATE-RETAINED
         ?DUP IF EXIT THEN
-        _EXT4-JCP-CTX @ _EXT4-ORPHAN-UNION-CRC ?DUP IF NIP EXIT THEN
-        _EXT4-JCP-UNION-CRC ! 0 EXIT
+        _EXT4-JCP-CTX @ _EXT4-ORPHAN-UNION-ID ?DUP IF NIP EXIT THEN
+        _EXT4-JCP-UNION-ID ! 0 EXIT
     THEN
     DUP _EXT4-JCPM-ORPHAN-ADD? IF
         DROP
@@ -17874,8 +18122,8 @@ VARIABLE _EXT4-JCP-ADD-OFF
         THEN IF
             VFS-E-CORRUPT EXIT
         THEN
-        _EXT4-JCP-CTX @ _EXT4-ORPHAN-UNION-CRC ?DUP IF NIP EXIT THEN
-        _EXT4-JCP-UNION-CRC @ <> IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-JCP-CTX @ _EXT4-ORPHAN-UNION-ID ?DUP IF NIP EXIT THEN
+        _EXT4-JCP-UNION-ID @ <> IF VFS-E-CORRUPT EXIT THEN
         0 EXIT
     THEN
     DUP _EXT4-JCPM-ORPHAN-ADD? IF
@@ -18594,7 +18842,7 @@ VARIABLE _EXT4-EL-WRITER
 \ file is empty; a union the mount retains stays on the medium beside a set
 \ ORPHAN_PRESENT, as the kernel's ext4_freeze leaves it, and the reloads on
 \ either side of the landing must find the same union.
-VARIABLE _EXT4-EL-UNION-CRC
+VARIABLE _EXT4-EL-UNION-ID
 
 : _EXT4-LAND-EMPTY-JOURNAL  ( ctx vfs writer|0 -- ior )
     _EXT4-EL-WRITER ! _EXT4-EL-V ! _EXT4-EL-CTX !
@@ -18622,8 +18870,8 @@ VARIABLE _EXT4-EL-UNION-CRC
     _EXT4-FLUSH ?DUP IF EXIT THEN
     _EXT4-EL-CTX @ _EXT4-EL-V @ _EXT4-REAUTHENTICATE-RETAINED
     ?DUP IF EXIT THEN
-    _EXT4-EL-CTX @ _EXT4-ORPHAN-UNION-CRC ?DUP IF NIP EXIT THEN
-    _EXT4-EL-UNION-CRC !
+    _EXT4-EL-CTX @ _EXT4-ORPHAN-UNION-ID ?DUP IF NIP EXIT THEN
+    _EXT4-EL-UNION-ID !
     _EXT4-EL-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
     _EXT4-EL-CTX @ _EXT4-PREPARE-CLEAR ?DUP IF EXIT THEN
     _EXT4-JWP-DEACTIVATE-RESET _EXT4-EL-PHASE
@@ -18644,8 +18892,8 @@ VARIABLE _EXT4-EL-UNION-CRC
     _EXT4-FLUSH ?DUP IF EXIT THEN
     _EXT4-JWP-DEACTIVATE-FINAL-PROOF _EXT4-EL-PHASE
     _EXT4-EL-CTX @ _EXT4-EL-V @ _EXT4-RELOAD-RETAINED ?DUP IF EXIT THEN
-    _EXT4-EL-CTX @ _EXT4-ORPHAN-UNION-CRC ?DUP IF NIP EXIT THEN
-    _EXT4-EL-UNION-CRC @ <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-EL-CTX @ _EXT4-ORPHAN-UNION-ID ?DUP IF NIP EXIT THEN
+    _EXT4-EL-UNION-ID @ <> IF VFS-E-CORRUPT EXIT THEN
     _EXT4-EL-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
     0 _EXT4-EL-CTX @ _EXT4-C.RECOVERY + !
     -1 _EXT4-EL-CTX @ _EXT4-C.J.REPLAYED + !
@@ -19612,9 +19860,10 @@ VARIABLE _EXT4-XCP-END
         0 OVER _EXT4-C.OWNERSHIP + !
         0 SWAP _EXT4-C.J.PROTOCOL-OWNERS + !
     THEN
-    \ A mount reads its medium afresh, so it starts a new map epoch: nothing
-    \ an earlier mount validated stands for it.
-    1 _EXT4-MAP-EPOCH +!
+    \ A mount reads its medium afresh, so it starts a new map epoch and a new
+    \ orphan watch count and drops the standing backup validation: nothing
+    \ an earlier mount validated, counted or compared stands for it.
+    1 _EXT4-MAP-EPOCH +! 1 _EXT4-OF-WRITES +! _EXT4-BKM-DROP
     DUP _EXT4-ATTACHED? 0= IF DROP EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT THEN
     DROP
     _EXT4-M-V @ V.VOLUME @ DUP VOL.SECTOR-SIZE _EXT4-SECTOR <> IF

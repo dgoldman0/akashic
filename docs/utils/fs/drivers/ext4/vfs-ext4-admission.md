@@ -65,7 +65,13 @@ proof can read. The facade opens scopes around the owner scan and around each
 mount authentication. Every write through `_EXT4-WRITE-SECTORS` also adds one
 to `_EXT4-MAP-EPOCH`, which the facade's validated maps and standing reloads
 compare, so a map validation or reload that passed before a write is repeated
-after it.
+after it. Before the write reaches the volume, `_EXT4-WRITE-SECTORS` passes
+its first sector and sector count to the write watch whose execution token
+the facade stores in `_EXT4-WRITE-WATCH-XT`, `( lba count -- )`. The
+facade's watch counts the writes that meet the orphan file or a backup, so a
+validation of either that no counted write has followed stands across
+epochs (see
+[the facade's reload text](../vfs-ext4.md#private-transaction-staging-and-durable-emission)).
 `_EXT4-BYTES=?` and `_EXT4-BYTES-ZERO?` test whole aligned cells and use bytes
 only for an unaligned head, the tail, or two spans whose alignments differ.
 

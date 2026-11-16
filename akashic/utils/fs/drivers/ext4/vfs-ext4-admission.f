@@ -561,8 +561,15 @@ VARIABLE _EXT4-PS-GENERATION
 VARIABLE _EXT4-MAP-EPOCH
 1 _EXT4-MAP-EPOCH !
 
+\ Every write is shown first to the write watch, ( lba count -- ), whose
+\ execution token vfs-ext4.f stores here.  The watch counts the writes that
+\ meet a region whose validation the facade keeps between reloads.
+VARIABLE _EXT4-WRITE-WATCH-XT
+0 _EXT4-WRITE-WATCH-XT !
+
 : _EXT4-WRITE-SECTORS  ( dma lba count -- ior )
     1 _EXT4-MAP-EPOCH +!
+    _EXT4-WRITE-WATCH-XT @ ?DUP IF >R 2DUP R> EXECUTE THEN
     _EXT4-PS-CTX @ IF _EXT4-PS-DISCARD THEN
     DUP _EXT4-IO-EXPECTED !
     _EXT4-IO-VOL @ VOL-WRITE

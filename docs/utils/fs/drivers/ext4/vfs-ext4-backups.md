@@ -19,11 +19,28 @@ filesystem activity. The complete validator visits exactly the scheduled
 sparse groups and preserves the existing checksum, seed, immutable-field, and
 descriptor error order.
 
+A validation that passed stands while none of its inputs changes. The unit
+keeps the context, the volume, a copy of the primary superblock it compared
+with, the CRC32C of every group's three primary locations, and the count of
+writes that met a backup. `_EXT4-BK-NOTE ( lba count -- )`, which the
+facade's write watch calls for every write, counts a write to another volume
+and one whose blocks meet a sparse group's backup superblock, its descriptor
+blocks or their reserved successors. The facade's group validation, which
+precedes every backup validation, chains each group's locations through
+`_EXT4-GL-BEGIN`, `_EXT4-GL-ADD ( ctx -- ior )` and `_EXT4-GL-RECORD
+( ctx -- )`, recording the chain with its context and map epoch. A later
+validation of the same context stands when that count has not moved, the
+chain of the current epoch equals the kept one, and the primary superblock's
+fixed fields equal the copy's; anything else validates every copy, in the
+same order as before. A mount drops the kept validation through
+`_EXT4-BKM-DROP`.
+
 The module depends directly on
 [`vfs-ext4-admission.f`](vfs-ext4-admission.md) for authenticated superblock
 geometry, checked I/O, checksum helpers, and typed errors, and on
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) for descriptor parsing. It
-exports only three stack services used by later recovery and transaction
-policy: journal-tuple equality, immutable-super equality, and complete backup
-validation. All 13 scratch cells are private, so the split introduces no new
-mutable result or evidence seam and no callback into the facade.
+exports stack services used by later recovery and transaction policy:
+journal-tuple equality, immutable-super equality, complete backup
+validation, the backup write note, the location chain and the drop. Its
+scratch cells and the kept validation are private; the facade reaches them
+only through those services, and the unit calls nothing in the facade.

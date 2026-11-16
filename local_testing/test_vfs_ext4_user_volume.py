@@ -9,6 +9,7 @@ the driver on them through the helpers of test_vfs_ext4.py.
 
 from __future__ import annotations
 
+import collections
 import gc
 import random
 import re
@@ -19,7 +20,12 @@ from pathlib import Path
 import pytest
 
 import test_vfs_ext4 as ext4
-from test_vfs_ext4 import jbd2_toolchain  # noqa: F401  (session fixture)
+import test_vfs_replace_ext4 as rx
+from test_vfs_ext4 import (  # noqa: F401  (session fixtures)
+    canonical_images,
+    jbd2_toolchain,
+)
+from test_vfs_replace_ext4 import document_volume  # noqa: F401
 
 _ROW = ext4.IMAGE_ROWS["primary-1k-i256"]
 _BLOCK = 1024
@@ -1434,3 +1440,191 @@ def test_power_cut_while_readying_a_group_keeps_all_or_nothing(
     assert kept == sorted(kept), kept
     assert kept[0] is False and kept[-1] is True, kept
     assert len(continued) == 4, continued
+
+
+# ---------------------------------------------------------------------
+#  Reloads read what writes reached
+# ---------------------------------------------------------------------
+#
+# Every checkpoint authenticates the mount from the medium again.  Once a
+# mount has validated the backup copies and counted the orphan file, a
+# reload reads neither again until a write reaches it, and a write to the
+# orphan file brings its count back.  The case runs on the 64 MiB fixture
+# volume with a 2 KiB /doc.txt that test_vfs_replace_ext4.py builds, through
+# that file's machine, and records the sectors of every read the device
+# starts.
+
+_ORPHAN_FILE_INODE = 12
+
+# Words the case defines on its machine, one line each.
+_RELOAD_WORDS = (
+    "CREATE UV-BUF 128 ALLOT UV-BUF 128 65 FILL VARIABLE UV-FD VARIABLE UV-FD2",
+    (
+        ": UV-OPEN VFS-FF-READ VFS-FF-WRITE OR SVT-V @ VFS-OPEN? "
+        '." [open " . ." ]" ;'
+    ),
+    (
+        ": UV-WRITE 0 UV-FD @ VFS-SEEK? UV-BUF 100 UV-FD @ VFS-WRITE? "
+        '." [write " . . . ." ]" ;'
+    ),
+    ': UV-FILL2 UV-BUF 100 UV-FD2 @ VFS-WRITE? ." [fill " . . ." ]" ;',
+    ': UV-CLOSE UV-FD @ VFS-CLOSE? ." [close " . ." ]" ;',
+    ': UV-CLOSE2 UV-FD2 @ VFS-CLOSE? ." [close " . ." ]" ;',
+    ': UV-MK SVT-V @ VFS-MKFILE? ." [mk " . DROP ." ]" ;',
+    ': UV-RM SVT-V @ VFS-RM ." [rm " . ." ]" ;',
+)
+
+
+def _record_reads(machine: rx.Machine) -> list[tuple[int, int]]:
+    """Record the first sector and sector count of every read MACHINE's
+    device starts from now on."""
+    reads: list[tuple[int, int]] = []
+    storage = machine.system.storage
+    start_dma = storage._start_dma
+
+    def track(request, phase):
+        if phase == "read":
+            reads.append((request[1], request[3]))
+        return start_dma(request, phase)
+
+    storage._start_dma = track
+    return reads
+
+
+def _blocks_read(reads: list[tuple[int, int]]) -> collections.Counter:
+    """How many times READS read each block."""
+    per_block = _BLOCK // rx.SECTOR
+    counted: collections.Counter = collections.Counter()
+    for sector, sectors in reads:
+        first = sector // per_block
+        last = (sector + sectors - 1) // per_block
+        counted.update(range(first, last + 1))
+    return counted
+
+
+def _orphan_file_blocks(image: Path) -> set[int]:
+    """The blocks the orphan file's depth-zero extent map holds."""
+    _, record, _ = ext4._ext4_inode_record(image, _ORPHAN_FILE_INODE)
+    root = record[0x28 : 0x28 + 60]
+    magic, entries, _, depth = struct.unpack_from("<HHHH", root, 0)
+    assert magic == 0xF30A and depth == 0
+    blocks: set[int] = set()
+    for index in range(entries):
+        offset = 12 + 12 * index
+        length = struct.unpack_from("<H", root, offset + 4)[0]
+        if length > 0x8000:
+            length -= 0x8000
+        start = (struct.unpack_from("<H", root, offset + 6)[0] << 32) | (
+            struct.unpack_from("<I", root, offset + 8)[0]
+        )
+        blocks.update(range(start, start + length))
+    assert blocks
+    return blocks
+
+
+def _backup_blocks(media: bytes) -> tuple[set[int], set[int], set[int]]:
+    """The blocks of the backup copies: each sparse group's superblock and
+    descriptor blocks, which the backup validation reads; those blocks with
+    their reserved successors, less the two every journal validation reads
+    too; and those two.  The journal's witness is group 1's copy: its
+    superblock, for the journal tuple, and the descriptor block after it,
+    for group 0's descriptor, which locate the journal inode."""
+    superblock = media[1024:2048]
+    blocks_count = struct.unpack_from("<I", superblock, 0x04)[0]
+    first = struct.unpack_from("<I", superblock, 0x14)[0]
+    per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    reserved = struct.unpack_from("<H", superblock, 0xCE)[0]
+    groups = -(-(blocks_count - first) // per_group)
+    descriptor_blocks = -(-(groups * 64) // _BLOCK)
+    starts = [
+        first + group * per_group
+        for group in range(1, groups)
+        if ext4._ext4_sparse_group(group)
+    ]
+    copies: set[int] = set()
+    region: set[int] = set()
+    for start in starts:
+        copies.update(range(start, start + 1 + descriptor_blocks))
+        region.update(range(start, start + 1 + descriptor_blocks + reserved))
+    assert starts and starts[0] == first + per_group
+    witness = {starts[0], starts[0] + 1}
+    return copies, region - witness, witness
+
+
+def test_reloads_read_again_only_what_a_write_reached(
+    document_volume: bytes,  # noqa: F811
+    jbd2_toolchain: dict[str, object],  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    """After the mount's validation, a reload reads again only what a write
+    reached.
+
+    Mounting reads every orphan-file block once and every backup copy.  The
+    writes, syncs and creates that follow, the first write's ownership proof
+    included, read neither again, but for the two blocks of group 1's copy
+    that every journal validation reads as its witness.  Removing a file
+    with storage writes the orphan file, the reloads after that write count
+    it again, and the write after the removal reads it no more.
+    """
+    image = tmp_path / "volume.img"
+    ext4._write_sparse_bytes(image, document_volume)
+    orphan = _orphan_file_blocks(image)
+    image.unlink()
+    copies, backups, witness = _backup_blocks(document_volume)
+
+    machine = rx.Machine(bytearray(document_volume))
+    reads = _record_reads(machine)
+    assert machine.up() == [0, 0, 0]
+    mounted = _blocks_read(reads)
+    assert {block: mounted[block] for block in orphan} == dict.fromkeys(
+        orphan, 1
+    )
+    assert all(mounted[block] for block in copies), sorted(
+        block for block in copies if not mounted[block]
+    )
+    for line in _RELOAD_WORDS:
+        machine.line(line)
+    reads.clear()
+
+    steps = (
+        ('S" /doc.txt" UV-OPEN UV-FD !', "open", ["0"]),
+        ("UV-WRITE", "write", ["0", "100", "0"]),
+        ("UV-WRITE", "write", ["0", "100", "0"]),
+        ("SVT-SYNC", "sync", ["0"]),
+        ("UV-WRITE", "write", ["0", "100", "0"]),
+        ('S" new.bin" UV-MK', "mk", ["0"]),
+        ('S" /new.bin" UV-OPEN UV-FD2 !', "open", ["0"]),
+        ("UV-FILL2", "fill", ["0", "100"]),
+        ("UV-CLOSE2", "close", ["0"]),
+        ("SVT-SYNC", "sync", ["0"]),
+    )
+    for index, (text, tag, expected) in enumerate(steps):
+        assert machine.one(text, tag) == expected, text
+        touched = set(_blocks_read(reads))
+        assert not touched & orphan, (text, sorted(touched & orphan))
+        assert not touched & backups, (text, sorted(touched & backups))
+        if index == 1:
+            assert witness <= touched, sorted(witness - touched)
+        reads.clear()
+
+    assert machine.one('S" /new.bin" UV-RM', "rm") == ["0"]
+    touched = set(_blocks_read(reads))
+    assert orphan <= touched, sorted(orphan - touched)
+    assert not touched & backups, sorted(touched & backups)
+    reads.clear()
+    assert machine.one("UV-WRITE", "write") == ["0", "100", "0"]
+    touched = set(_blocks_read(reads))
+    assert not touched & (orphan | backups), sorted(
+        touched & (orphan | backups)
+    )
+
+    assert machine.one("UV-CLOSE", "close") == ["0"]
+    assert machine.one("SVT-SYNC", "sync") == ["0"]
+    assert machine.one("SVT-DOWN", "down") == ["0"]
+    left = tmp_path / "left.img"
+    ext4._write_sparse_bytes(left, bytes(machine.media))
+    machine.close()
+    ext4._assert_e2fsck_clean(left, jbd2_toolchain)
+    stat = ext4._general_write_debugfs(left, "stat /doc.txt", jbd2_toolchain)
+    assert re.search(r"Size: 2048\b", stat), stat
+    left.unlink()

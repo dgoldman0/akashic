@@ -160,13 +160,133 @@ VARIABLE _EXT4-JBT-B
     THEN
     _EXT4-BS-BLOCK @ 1+ _EXT4-BS-CTX @ _EXT4-VALIDATE-BACKUP-GDT ;
 
+\ ---------------------------------------------------------------------
+\  Standing backup validation
+\ ---------------------------------------------------------------------
+\
+\ A backup validation reads only the backup superblocks and the backup
+\ descriptor blocks after them, and compares them with the primary
+\ superblock's fixed fields and the primary descriptors' block-bitmap,
+\ inode-bitmap and inode-table locations.  Its result depends on nothing
+\ else, so it stands while none of those inputs changes.  The write watch
+\ counts every write that meets a backup's superblock, its descriptor blocks
+\ or their reserved successors, and every write to another volume
+\ (_EXT4-BK-NOTE).  The group validation that precedes each backup
+\ validation chains the three primary locations of every group into a
+\ CRC32C and records it with its context and map epoch.  A validation that
+\ passed keeps its context, its volume, the watch's count, that CRC and a
+\ copy of the primary superblock it compared with.  A later validation of
+\ the same context stands when the watch's count is unchanged, the group
+\ validation of the same epoch found the same locations, and the primary
+\ superblock's fixed fields equal the copy's.  Anything else validates
+\ every copy again.
+VARIABLE _EXT4-BK-WRITES
+0 _EXT4-BK-WRITES !
+VARIABLE _EXT4-BKM-CTX
+0 _EXT4-BKM-CTX !
+VARIABLE _EXT4-BKM-VOL
+VARIABLE _EXT4-BKM-WRITES
+VARIABLE _EXT4-BKM-LOCATIONS
+CREATE _EXT4-BKM-SPACE _EXT4-SB-SIZE 7 + ALLOT
+_EXT4-BKM-SPACE 7 + -8 AND CONSTANT _EXT4-BKM-SUPER
+VARIABLE _EXT4-GL-CTX
+0 _EXT4-GL-CTX !
+VARIABLE _EXT4-GL-EPOCH
+VARIABLE _EXT4-GL-CRC
+VARIABLE _EXT4-BKN-FIRST
+VARIABLE _EXT4-BKN-LAST
+
+\ The first block after a sparse group's backup superblock, its descriptor
+\ blocks and their reserved successors.
+: _EXT4-BACKUP-END  ( group ctx -- block )
+    >R R@ _EXT4-C.BPG + @ * R@ _EXT4-C.FIRST + @ + 1+
+    R@ _EXT4-C.GROUPS + @ _EXT4-DESC-SIZE *
+    R@ _EXT4-C.BSIZE + @ 1- + R@ _EXT4-C.BSIZE + @ / +
+    R> _EXT4-C.SB + _EXT4-SB.RESERVED-GDT + W@ + ;
+
+\ Count a write of COUNT sectors at LBA that may meet a backup.
+: _EXT4-BK-NOTE  ( lba count -- )
+    _EXT4-BKM-CTX @ 0= IF 2DROP EXIT THEN
+    _EXT4-IO-VOL @ _EXT4-BKM-VOL @ <>
+    _EXT4-BKM-CTX @ _EXT4-C.SPB + @ 0= OR
+    _EXT4-BKM-CTX @ _EXT4-C.BPG + @ 0= OR IF
+        2DROP 1 _EXT4-BK-WRITES +! EXIT
+    THEN
+    DUP 0= IF 2DROP EXIT THEN
+    OVER + 1- _EXT4-BKM-CTX @ _EXT4-C.SPB + @ / _EXT4-BKN-LAST !
+    _EXT4-BKM-CTX @ _EXT4-C.SPB + @ / _EXT4-BKN-FIRST !
+    _EXT4-BKN-LAST @ _EXT4-BKM-CTX @ _EXT4-C.FIRST + @ U< IF EXIT THEN
+    _EXT4-BKN-FIRST @ _EXT4-BKM-CTX @ _EXT4-C.FIRST + @ U< IF
+        _EXT4-BKM-CTX @ _EXT4-C.FIRST + @ _EXT4-BKN-FIRST !
+    THEN
+    _EXT4-BKN-LAST @ _EXT4-BKM-CTX @ _EXT4-C.FIRST + @ -
+    _EXT4-BKM-CTX @ _EXT4-C.BPG + @ / 1+
+    _EXT4-BKM-CTX @ _EXT4-C.GROUPS + @ MIN
+    _EXT4-BKN-FIRST @ _EXT4-BKM-CTX @ _EXT4-C.FIRST + @ -
+    _EXT4-BKM-CTX @ _EXT4-C.BPG + @ /
+    ?DO
+        I IF I _EXT4-SPARSE-GROUP? IF
+            I _EXT4-BKM-CTX @ _EXT4-C.BPG + @ *
+            _EXT4-BKM-CTX @ _EXT4-C.FIRST + @ +
+            _EXT4-BKN-LAST @ U> 0= IF
+                I _EXT4-BKM-CTX @ _EXT4-BACKUP-END
+                _EXT4-BKN-FIRST @ U> IF
+                    1 _EXT4-BK-WRITES +! UNLOOP EXIT
+                THEN
+            THEN
+        THEN THEN
+    LOOP ;
+
+\ Begin, extend and record the chain of primary locations the group
+\ validation of CTX builds, one group at a time, from each group's
+\ descriptor in C.DESC.
+VARIABLE _EXT4-GL-RUNNING
+
+: _EXT4-GL-BEGIN  ( -- )
+    0 _EXT4-GL-CTX ! 0xFFFFFFFF _EXT4-GL-RUNNING ! ;
+
+: _EXT4-GL-ADD  ( ctx -- ior )
+    _EXT4-GL-RUNNING @ _EXT4-CRC-START
+    _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + 12 _EXT4-CRC-ADD
+    ?DUP IF EXIT THEN
+    _EXT4-CRC@ _EXT4-GL-RUNNING ! 0 ;
+
+: _EXT4-GL-RECORD  ( ctx -- )
+    _EXT4-GL-CTX ! _EXT4-MAP-EPOCH @ _EXT4-GL-EPOCH !
+    _EXT4-GL-RUNNING @ _EXT4-GL-CRC ! ;
+
+: _EXT4-BKM-STANDS?  ( ctx -- flag )
+    DUP _EXT4-BKM-CTX @ <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-GL-CTX @ <> IF DROP FALSE EXIT THEN
+    _EXT4-GL-EPOCH @ _EXT4-MAP-EPOCH @ <>
+    _EXT4-GL-CRC @ _EXT4-BKM-LOCATIONS @ <> OR
+    _EXT4-BK-WRITES @ _EXT4-BKM-WRITES @ <> OR
+    _EXT4-IO-VOL @ _EXT4-BKM-VOL @ <> OR IF DROP FALSE EXIT THEN
+    _EXT4-C.SB + 0 _EXT4-BKM-SUPER _EXT4-SUPER-INVARIANTS? ;
+
+\ Drop the kept validation; a mount reads its medium afresh.
+: _EXT4-BKM-DROP  ( -- )  0 _EXT4-BKM-CTX ! ;
+
+: _EXT4-BKM-KEEP  ( ctx -- )
+    0 _EXT4-BKM-CTX !
+    DUP _EXT4-GL-CTX @ <>
+    _EXT4-GL-EPOCH @ _EXT4-MAP-EPOCH @ <> OR IF DROP EXIT THEN
+    DUP _EXT4-C.SB + _EXT4-BKM-SUPER _EXT4-SB-SIZE MOVE
+    _EXT4-GL-CRC @ _EXT4-BKM-LOCATIONS !
+    _EXT4-BK-WRITES @ _EXT4-BKM-WRITES !
+    _EXT4-IO-VOL @ _EXT4-BKM-VOL !
+    _EXT4-BKM-CTX ! ;
+
 VARIABLE _EXT4-VB-CTX
 : _EXT4-VALIDATE-BACKUPS  ( ctx -- ior )
     _EXT4-VB-CTX !
+    _EXT4-VB-CTX @ _EXT4-BKM-STANDS? IF 0 EXIT THEN
+    0 _EXT4-BKM-CTX !
     _EXT4-VB-CTX @ _EXT4-C.GROUPS + @ 1 ?DO
         I _EXT4-SPARSE-GROUP? IF
             I _EXT4-VB-CTX @ _EXT4-VALIDATE-BACKUP-SUPER ?DUP IF
                 UNLOOP EXIT
             THEN
         THEN
-    LOOP 0 ;
+    LOOP
+    _EXT4-VB-CTX @ _EXT4-BKM-KEEP 0 ;
