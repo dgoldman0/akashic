@@ -15,13 +15,22 @@ Either way a journey reports what each of its lines printed, without the
 BIOS's echo of the line or its prompt, so a test's checks read the same
 text from both machines.  Step budgets are written in emulator
 instructions; ``budget`` gives the simulator's share of one.
+
+A simulator journey runs on a clone of one loaded machine: the test process
+forks, and the child, which shares every page with its parent until one of
+them writes it, runs the journey on the machine the parent loaded once.
+``in_clone`` runs one piece of work that way and ``Clone`` serves an object
+for as many calls as a test makes.
 """
 
 from __future__ import annotations
 
 import math
 import os
+import pickle
 import re
+import struct
+import traceback
 
 BACKENDS = ("emulator", "simulator")
 BACKEND = os.environ.get("AKASHIC_EXT4_BACKEND", "emulator")
@@ -261,3 +270,133 @@ def simulator_journey(runtime, lines, max_steps: int) -> tuple[Printed, int]:
         if not ran:
             break
     return Printed(printed, complete), steps
+
+
+# ---------------------------------------------------------------------------
+#  Clones of this process
+# ---------------------------------------------------------------------------
+
+def _send(fd: int, message) -> None:
+    payload = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)
+    view = memoryview(struct.pack("<Q", len(payload)) + payload)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+def _receive(fd: int):
+    """The next message on FD, or None when the other end has closed it."""
+
+    header = _read_exactly(fd, 8)
+    if header is None:
+        return None
+    payload = _read_exactly(fd, struct.unpack("<Q", header)[0])
+    if payload is None:
+        raise EOFError("a clone's message ended early")
+    return pickle.loads(payload)
+
+
+def _read_exactly(fd: int, size: int) -> bytes | None:
+    chunks = []
+    left = size
+    while left:
+        chunk = os.read(fd, min(left, 1 << 20))
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks)
+
+
+def _answer(work) -> tuple[str, object]:
+    try:
+        return "returned", work()
+    except BaseException:  # noqa: BLE001 - the parent reports it
+        return "raised", traceback.format_exc()
+
+
+def _result(answer):
+    kind, value = answer
+    if kind == "raised":
+        raise AssertionError(f"the work failed in the clone:\n{value}")
+    return value
+
+
+def in_clone(work):
+    """Run WORK() in a copy-on-write clone of this process and return what
+    it returns.
+
+    WORK's result comes back pickled; what it raises comes back as an
+    AssertionError carrying the clone's traceback.  The clone leaves with
+    os._exit, so it runs none of the exit handlers this process set.
+    """
+
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_end)
+        _send(write_end, _answer(work))
+        os._exit(0)
+    os.close(write_end)
+    try:
+        answer = _receive(read_end)
+    finally:
+        os.close(read_end)
+        _, status = os.waitpid(pid, 0)
+    if answer is None:
+        raise AssertionError(f"the clone ended without an answer (status {status})")
+    return _result(answer)
+
+
+class Clone:
+    """A copy-on-write clone of this process serving one object.
+
+    The clone builds the object with FACTORY() and runs each ``call`` on it,
+    in order, until ``close``; the clone also ends when this process closes
+    its end of the pipe.
+    """
+
+    def __init__(self, factory) -> None:
+        command_read, command_write = os.pipe()
+        answer_read, answer_write = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(command_write)
+            os.close(answer_read)
+            built = _answer(factory)
+            _send(answer_write, ("returned", None) if built[0] == "returned" else built)
+            target = built[1]
+            while built[0] == "returned":
+                message = _receive(command_read)
+                if message is None:
+                    break
+                method, args = message
+                _send(answer_write, _answer(lambda: getattr(target, method)(*args)))
+            os._exit(0)
+        os.close(command_read)
+        os.close(answer_write)
+        self._pid = pid
+        self._commands = command_write
+        self._answers = answer_read
+        self._result_or_close(_receive(answer_read))
+
+    def _result_or_close(self, answer):
+        if answer is None:
+            self.close()
+            raise AssertionError("the clone ended without an answer")
+        try:
+            return _result(answer)
+        except AssertionError:
+            self.close()
+            raise
+
+    def call(self, method: str, *args):
+        _send(self._commands, (method, args))
+        return self._result_or_close(_receive(self._answers))
+
+    def close(self) -> None:
+        if self._pid is None:
+            return
+        os.close(self._commands)
+        os.close(self._answers)
+        os.waitpid(self._pid, 0)
+        self._pid = None

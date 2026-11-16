@@ -4658,14 +4658,32 @@ class EmulatorJourneys:
         self.storage.save_image = lambda: None
 
 
+# The simulator machines this process has loaded, by the names of the
+# sources beyond the ext4 snapshot's.
+_loaded_simulators: dict[tuple[str, ...], object] = {}
+
+
+def loaded_simulator(extra: tuple[tuple[str, bytes], ...] = ()):
+    """This process's simulator machine holding the ext4 snapshot's source
+    and EXTRA, loaded at its first use.  Journeys run on clones of it, which
+    leave it as it was loaded."""
+    key = tuple(name for name, _ in extra)
+    runtime = _loaded_simulators.get(key)
+    if runtime is None:
+        runtime = _loaded_simulators[key] = simulator_machine(extra)
+    return runtime
+
+
 class SimulatorJourneys:
-    """A simulator machine holding the ext4 snapshot's source, ready to run
-    journeys; ``attach`` and ``run`` as the emulator's."""
+    """The loaded simulator machine holding the ext4 snapshot's source and
+    EXTRA; ``attach`` and ``run`` as the emulator's.  It is this process's
+    loaded machine, so only a clone of the process may run a journey on it.
+    """
 
     backend = "simulator"
 
     def __init__(self, extra: tuple[tuple[str, bytes], ...] = ()) -> None:
-        self.runtime = simulator_machine(extra)
+        self.runtime = loaded_simulator(extra)
         self.storage = self.runtime.storage
 
     def attach(self, media, path: Path | None, *, write_protected=False,
@@ -4698,11 +4716,16 @@ def _described(backend: str) -> str:
     return backend
 
 
-def journey_machine(backend: str):
-    """A machine of BACKEND holding the ext4 snapshot."""
+def on_machine(backend: str, work, extra: tuple[tuple[str, bytes], ...] = ()):
+    """WORK(machine) on a fresh machine of BACKEND holding the ext4 snapshot
+    and EXTRA: an emulator restored from the snapshot, or a clone of this
+    process with its loaded simulator machine.  WORK's result crosses back
+    from a clone pickled, so it is plain data."""
     if backend == "emulator":
-        return EmulatorJourneys(build_snapshot())
-    return SimulatorJourneys()
+        assert not extra, "the emulator's extra sources are its own snapshots"
+        return work(EmulatorJourneys(build_snapshot()))
+    machine = SimulatorJourneys(extra)
+    return machine_backends.in_clone(lambda: work(machine))
 
 
 def run_forth(
@@ -4726,25 +4749,33 @@ def run_forth(
     backend the run chose.
     """
     backend = "emulator" if configure is not None else machine_backends.chosen(backend)
-    machine = journey_machine(backend)
-    if configure is not None:
-        configure(machine.system)
     budget = machine_backends.budget(max_steps, backend)
-    with image.open("rb") as source, mmap.mmap(
-        source.fileno(), 0, access=mmap.ACCESS_COPY
-    ) as mapped:
-        for offset, data in patches:
-            mapped[offset : offset + len(data)] = data
-        # The mapping is a private copy that may carry patches, so the file
-        # does not hold this media; this journey must never save it anyway.
-        machine.attach(mapped, None)
-        observer = machine.storage.observe()
-        for fault in storage_faults:
-            machine.storage.inject_fault(**fault)
-        output, journey_steps, finished = machine.run(
-            [*lines, STACK_CHECK], budget
+
+    def journey(machine):
+        if configure is not None:
+            configure(machine.system)
+        with image.open("rb") as source, mmap.mmap(
+            source.fileno(), 0, access=mmap.ACCESS_COPY
+        ) as mapped:
+            for offset, data in patches:
+                mapped[offset : offset + len(data)] = data
+            # The mapping is a private copy that may carry patches, so the
+            # file does not hold this media; this journey must never save it.
+            machine.attach(mapped, None)
+            observer = machine.storage.observe()
+            for fault in storage_faults:
+                machine.storage.inject_fault(**fault)
+            output, steps, finished = machine.run([*lines, STACK_CHECK], budget)
+            machine.release()
+        return (
+            (output.lines, output.complete), steps, finished,
+            (observer.reads, observer.writes, observer.flushes),
         )
-        machine.release()
+
+    printed, journey_steps, finished, (reads, writes, flushes) = on_machine(
+        backend, journey
+    )
+    output = Printed(*printed)
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
             f"[*] ext4 Forth journey on the {_described(backend)}: "
@@ -4756,10 +4787,10 @@ def run_forth(
             f"ext4 Forth journey on the {backend} did not run every line "
             f"in {journey_steps:,}/{budget:,} steps:\n" + output[-2000:]
         )
-    assert observer.writes == 0
-    assert observer.flushes == 0
+    assert writes == 0
+    assert flushes == 0
     if expected_read_requests is not None:
-        assert observer.reads == expected_read_requests
+        assert reads == expected_read_requests
     _assert_emitted(output, "EXT4-STACK-CLEAN")
     return output
 
@@ -4816,50 +4847,63 @@ def run_recovery_forth(
         assert len({path.resolve() for path in capture_paths}) == len(
             capture_paths
         ), "flush durability captures must use distinct paths"
-    machine = journey_machine(backend)
-
-    media = bytearray(image.read_bytes())
-    for offset, data in patches:
-        media[offset : offset + len(data)] = data
-    if capture_prior_flush_media is not None and 1 in flush_faults:
-        _write_sparse_bytes(capture_prior_flush_media, media, durable=True)
-    # A flush makes the medium durable in BACKING, so the file starts out
-    # holding it; a write-protected medium is never saved.
-    durable = not write_protected
-    if durable and (patches or image.resolve() != backing.resolve()):
-        _write_sparse_bytes(backing, media, durable=True)
-    machine.attach(media, backing, write_protected=write_protected,
-                   durable=durable)
-    storage = machine.storage
-    observer = None
-
-    def admitted(command: int, lba: int, count: int) -> None:
-        # The durable medium as the faulting flush finds it.
-        ordinal = observer.flushes
-        if command == STORAGE_CMD_FLUSH and ordinal in flush_faults and ordinal > 1:
-            assert backing.is_file(), (
-                "a prior successful flush did not publish backing media"
-            )
-            _copy_sparse_file(backing, capture_prior_flush_media)
-
-    observer = storage.observe(
-        admitted if capture_prior_flush_media is not None else None
-    )
-    for ordinal, fault in (write_faults_by_ordinal or {}).items():
-        storage.plan_fault(STORAGE_CMD_WRITE, ordinal, **fault)
-    for ordinal, fault in flush_faults.items():
-        storage.plan_fault(STORAGE_CMD_FLUSH, ordinal, **fault)
-    for (writes, ordinal), fault in (
-        read_faults_by_write_and_ordinal or {}
-    ).items():
-        storage.plan_fault(
-            STORAGE_CMD_READ, ordinal, after_writes=writes, **fault
-        )
-    for fault in storage_faults:
-        storage.inject_fault(**fault)
     budget = machine_backends.budget(max_steps, backend)
-    output, journey_steps, finished = machine.run([*lines, STACK_CHECK], budget)
-    machine.release()
+
+    def journey(machine):
+        media = bytearray(image.read_bytes())
+        for offset, data in patches:
+            media[offset : offset + len(data)] = data
+        if capture_prior_flush_media is not None and 1 in flush_faults:
+            _write_sparse_bytes(capture_prior_flush_media, media, durable=True)
+        # A flush makes the medium durable in BACKING, so the file starts
+        # out holding it; a write-protected medium is never saved.
+        durable = not write_protected
+        if durable and (patches or image.resolve() != backing.resolve()):
+            _write_sparse_bytes(backing, media, durable=True)
+        machine.attach(media, backing, write_protected=write_protected,
+                       durable=durable)
+        storage = machine.storage
+        observer = None
+
+        def admitted(command: int, lba: int, count: int) -> None:
+            # The durable medium as the faulting flush finds it.
+            ordinal = observer.flushes
+            if (command == STORAGE_CMD_FLUSH and ordinal in flush_faults
+                    and ordinal > 1):
+                assert backing.is_file(), (
+                    "a prior successful flush did not publish backing media"
+                )
+                _copy_sparse_file(backing, capture_prior_flush_media)
+
+        observer = storage.observe(
+            admitted if capture_prior_flush_media is not None else None
+        )
+        for ordinal, fault in (write_faults_by_ordinal or {}).items():
+            storage.plan_fault(STORAGE_CMD_WRITE, ordinal, **fault)
+        for ordinal, fault in flush_faults.items():
+            storage.plan_fault(STORAGE_CMD_FLUSH, ordinal, **fault)
+        for (writes, ordinal), fault in (
+            read_faults_by_write_and_ordinal or {}
+        ).items():
+            storage.plan_fault(
+                STORAGE_CMD_READ, ordinal, after_writes=writes, **fault
+            )
+        for fault in storage_faults:
+            storage.inject_fault(**fault)
+        output, steps, finished = machine.run([*lines, STACK_CHECK], budget)
+        machine.release()
+        if capture_media is not None:
+            _write_sparse_bytes(capture_media, media)
+        return (
+            (output.lines, output.complete), steps, finished,
+            observer.requests, observer.flushes,
+            hashlib.sha256(media).hexdigest(),
+        )
+
+    printed, journey_steps, finished, requests, flushes, sha256 = on_machine(
+        backend, journey
+    )
+    output = Printed(*printed)
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
             f"[*] ext4 recovery journey on the {_described(backend)}: "
@@ -4873,21 +4917,17 @@ def run_recovery_forth(
             f"in {journey_steps:,}/{budget:,} steps:\n" + output[-2000:]
         )
     _assert_emitted(output, "EXT4-STACK-CLEAN")
-    if capture_media is not None:
-        _write_sparse_bytes(capture_media, media)
     if capture_prior_flush_media is not None:
         assert capture_prior_flush_media.is_file()
-    unreached = sorted(
-        ordinal for ordinal in flush_faults if ordinal > observer.flushes
-    )
+    unreached = sorted(ordinal for ordinal in flush_faults if ordinal > flushes)
     assert not unreached, f"unreached ordinal flush faults: {unreached}"
     trace = tuple(
         ("write", lba, count) if command == STORAGE_CMD_WRITE
         else ("flush", 0, 0)
-        for command, lba, count in observer.requests
+        for command, lba, count in requests
         if command != STORAGE_CMD_READ
     )
-    return output, trace, hashlib.sha256(media).hexdigest()
+    return output, trace, sha256
 
 
 def _assert_emitted(output: Printed, marker: str) -> None:

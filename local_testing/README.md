@@ -507,6 +507,16 @@ semantic steps and takes a quarter of each budget, since its journeys took
 0.12 to 0.21 of the emulator's steps for the same work on the standing
 sample; a budget therefore keeps the same margin on both.
 
+The simulator's machine is loaded once per test process and each journey
+runs on a clone of it: the process forks, and the clone, which shares
+every page with its parent until one of them writes it, attaches the
+medium, runs the lines and sends back what they printed, the request
+record and the final medium's hash.  Loading the machine took 0.84 to
+0.90 s on 2026-11-16 and an empty clone 3 ms, so a test file pays the load
+once rather than once a journey.  The save tests' `Machine` keeps its
+clone for the whole test and reaches it through a pipe; its medium is
+then a shared mapping, so the test reads the guest's writes as before.
+
 A recovery journey's backing file starts as its patched medium, and each
 successful flush writes into it the sectors changed since the last flush,
 on both machines; a write-protected medium is never saved.

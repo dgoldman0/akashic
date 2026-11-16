@@ -32,6 +32,7 @@ of test_vfs_ext4.py by import and adds nothing to that unit.
 from __future__ import annotations
 
 import gc
+import mmap
 import os
 import re
 import subprocess
@@ -49,6 +50,7 @@ import machine_backends  # noqa: E402
 import test_vfs_ext4 as ext4  # noqa: E402
 from devices import STORAGE_CMD_FLUSH, STORAGE_CMD_WRITE  # noqa: E402
 from forth_dependencies import dependency_order  # noqa: E402
+from machine_backends import Printed  # noqa: E402
 from native_forth import module_source  # noqa: E402
 from test_vfs_ext4 import (  # noqa: E402,F401  (pytest fixtures)
     canonical_images,
@@ -205,14 +207,82 @@ def save_sources() -> tuple[tuple[str, bytes], ...]:
     ) + (("save words", ("\n".join(_GUEST_WORDS) + "\n").encode()),)
 
 
+class _Recorder:
+    """What the device under a Machine did, recorded where the machine runs:
+    every write with the bytes it replaced and the bytes it left, the
+    flushes, and every request admitted."""
+
+    def __init__(self, media, misread: bytes | None) -> None:
+        self.media = media
+        self.misread = misread
+        self.writes: list[tuple[int, bytes, bytes]] = []
+        self.flushes = 0
+        self.requests: list[tuple[int, int, int]] = []
+        self._pending: tuple[int, bytes] | None = None
+
+    def admitted(self, command: int, lba: int, count: int) -> None:
+        self.settle()
+        if command == STORAGE_CMD_WRITE:
+            offset, size = lba * SECTOR, count * SECTOR
+            self._pending = (offset, bytes(self.media[offset : offset + size]))
+        elif command == STORAGE_CMD_FLUSH:
+            self.flushes += 1
+        self.requests.append((command, lba, count))
+
+    def settle(self) -> None:
+        """Log the write the device has finished since the last command."""
+        if self._pending is None:
+            return
+        offset, old = self._pending
+        self._pending = None
+        new = bytes(self.media[offset : offset + len(old)])
+        self.writes.append((offset, old, new))
+        # A medium that hands back another byte than the one written to it.
+        if self.misread is not None and new == self.misread:
+            self.media[offset] ^= 0x01
+
+
+class _MachineSide:
+    """A save-test machine and its recorder, in the process that runs it:
+    this one for the emulator, a clone of it for the simulator."""
+
+    def __init__(self, backend: str, media, misread: bytes | None) -> None:
+        if backend == "emulator":
+            self.machine = ext4.EmulatorJourneys(build_snapshot())
+        else:
+            self.machine = ext4.SimulatorJourneys(save_sources())
+        self.recorder = _Recorder(media, misread)
+        self.machine.attach(media, None)
+        self.machine.storage.observe(self.recorder.admitted)
+        self._reported = (0, 0)
+
+    def line(self, text: str, budget: int):
+        """Run TEXT; return what it printed, the steps, and the writes,
+        flush count and requests since the last line."""
+        output, steps = self.machine.feed([text], budget)
+        self.recorder.settle()
+        writes, requests = self._reported
+        recorder = self.recorder
+        self._reported = (len(recorder.writes), len(recorder.requests))
+        return (
+            (output.lines, output.complete), steps,
+            recorder.writes[writes:], recorder.flushes,
+            recorder.requests[requests:],
+        )
+
+    def release(self) -> None:
+        self.machine.release()
+
+
 class Machine:
     """One machine on private media that records each block it writes.
 
     ``writes`` holds, in device order, the byte offset of every write with
     the bytes it replaced and the bytes it left.  A guest flush writes no
-    host file: the medium is the ``media`` bytearray alone.  The machine is
-    the backend the run chose, an emulator restored from the save snapshot
-    or a simulator holding the same source.
+    host file: the medium is ``media`` alone.  On the emulator that is the
+    caller's bytearray; the simulator runs on a clone of this process, so
+    its medium is a shared mapping that both processes see, holding the
+    caller's bytes.
     """
 
     def __init__(
@@ -223,54 +293,45 @@ class Machine:
         backend: str | None = None,
     ):
         self.backend = machine_backends.chosen(backend)
-        if self.backend == "emulator":
-            self.machine = ext4.EmulatorJourneys(build_snapshot())
-        else:
-            self.machine = ext4.SimulatorJourneys(save_sources())
-        self.media = media
         self.writes: list[tuple[int, bytes, bytes]] = []
         self.flushes = 0
         self.steps = 0
-        self._pending: tuple[int, bytes] | None = None
-        self._misread = misread
         self._watchers = []
-        self.machine.attach(media, None)
-        self.observer = self.machine.storage.observe(self._admitted)
+        if self.backend == "emulator":
+            self.media = media
+            self._side = _MachineSide("emulator", media, misread)
+            self._clone = None
+        else:
+            # The clone starts from the machine this process loaded.
+            ext4.loaded_simulator(save_sources())
+            shared = mmap.mmap(-1, len(media))
+            shared[:] = media
+            self.media = shared
+            self._side = None
+            self._clone = machine_backends.Clone(
+                lambda: _MachineSide("simulator", shared, misread)
+            )
 
     def watch(self, watcher) -> None:
         """Call WATCHER with the command, LBA and count of every request
-        the device admits from now on."""
+        the device admits from now on, after the line that made it."""
         self._watchers.append(watcher)
-
-    def _admitted(self, command: int, lba: int, count: int) -> None:
-        self._settle()
-        if command == STORAGE_CMD_WRITE:
-            offset, size = lba * SECTOR, count * SECTOR
-            self._pending = (offset, bytes(self.media[offset : offset + size]))
-        elif command == STORAGE_CMD_FLUSH:
-            self.flushes += 1
-        for watcher in self._watchers:
-            watcher(command, lba, count)
-
-    def _settle(self) -> None:
-        """Log the write the device has finished since the last command."""
-        if self._pending is None:
-            return
-        offset, old = self._pending
-        self._pending = None
-        new = bytes(self.media[offset : offset + len(old)])
-        self.writes.append((offset, old, new))
-        # A medium that hands back another byte than the one written to it.
-        if self._misread is not None and new == self._misread:
-            self.media[offset] ^= 0x01
 
     def line(self, text: str) -> dict[str, list[list[str]]]:
         """Run one interpreted line and return the records it printed."""
-        output, steps = self.machine.feed(
-            [text], machine_backends.budget(LINE_MAX_STEPS, self.backend)
-        )
+        budget = machine_backends.budget(LINE_MAX_STEPS, self.backend)
+        if self._clone is None:
+            answer = self._side.line(text, budget)
+        else:
+            answer = self._clone.call("line", text, budget)
+        printed, steps, writes, flushes, requests = answer
+        output = Printed(*printed)
         self.steps += steps
-        self._settle()
+        self.writes.extend(writes)
+        self.flushes = flushes
+        for request in requests:
+            for watcher in self._watchers:
+                watcher(*request)
         ext4._assert_no_forth_diagnostics(output)
         assert output.complete and output.complete[-1], (
             f"line {text!r} did not run to its end:\n{output[-2000:]}"
@@ -282,10 +343,15 @@ class Machine:
 
     def close(self) -> None:
         """Let go of the machine.  Its device hooks and the machine refer to
-        each other, so the memory it holds waits for a collection."""
-        self.machine.release()
-        self.machine = self.observer = None
-        gc.collect()
+        each other, so on the emulator the memory it holds waits for a
+        collection; the simulator's clone ends."""
+        if self._clone is not None:
+            self._clone.close()
+            self._clone = None
+        if self._side is not None:
+            self._side.release()
+            self._side = None
+            gc.collect()
 
     def one(self, text: str, tag: str) -> list[str]:
         """The single TAG record that line TEXT prints."""
