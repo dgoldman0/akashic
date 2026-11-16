@@ -504,7 +504,7 @@ ends the journey, and the test fails with the error's message.
 
 Step budgets are written in emulator instructions.  The simulator counts
 semantic steps and takes a quarter of each budget, since its journeys took
-0.12 to 0.21 of the emulator's steps for the same work on the standing
+0.19 to 0.21 of the emulator's steps for the same work on the standing
 sample; a budget therefore keeps the same margin on both.
 
 The simulator's machine is loaded once per test process and each journey
@@ -524,7 +524,9 @@ on both machines; a write-protected medium is never saved.
 Two tests read the emulator processor's CRC registers through `configure`,
 and two print the device's cycle count for a listing.  These run on the
 emulator whichever backend is chosen.  The simulator cannot hold a storage
-request stalled, and no ext4 test plants a stall.
+request stalled, and no ext4 test plants a stall.  The four files take
+about a fifteenth of the emulator's time on the simulator
+([`evidence/ext4-on-simulator-20261116.md`](evidence/ext4-on-simulator-20261116.md)).
 
 The shared FAT/ext4 emulator snapshot uses 64 MiB of external memory: KDOS
 owns its established 32 MiB userland dictionary zone and the remainder holds

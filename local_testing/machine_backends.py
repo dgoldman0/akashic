@@ -41,7 +41,7 @@ if BACKEND not in BACKENDS:
     )
 
 # The simulator counts semantic steps, the emulator instructions.  On the
-# standing ext4 sample the simulator's journeys took 0.12 to 0.21 of the
+# standing ext4 sample the simulator's journeys took 0.19 to 0.21 of the
 # emulator's steps for the same work, so a budget keeps the same margin on
 # both when the simulator's is a quarter of the emulator's.
 SIMULATOR_STEPS_PER_INSTRUCTION = 0.25
