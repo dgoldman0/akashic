@@ -324,8 +324,22 @@ checkout read-only; the table names the commit each used.
 
 No run skipped a case.
 
-## Not run
+## The checks before the merge
 
-The whole `test_vfs_ext4` unit, the physical Desktop journey, the test tool's
-wide run and the emulator Desktop smokes were not run in this round; they run
-before the branch merges.
+These ran one at a time on `efddbd54` with MegaPad `977ef95e`, and the last
+on `0ad9e8a7`.
+
+- The physical Desktop journey passed as the default linked build (158 s) and
+  with `--system-volume --token-modules` (171 s).
+- The test tool's wide run took 310 units from the main record, the whole
+  ext4 unit apart, and 309 passed. `test_token_equivalence.py` failed on
+  eight bytes of four words that the reload work added: `_EXT4-BKM-SPACE`,
+  `_EXT4-OV-CRC`, `_EXT4-OF-CRC` and `_EXT4-OC-CRC` keep each mounted
+  volume's own superblock fields and orphan checksums, and the two boots
+  that test compares mount different volumes. `0ad9e8a7` adds the four words
+  to the test's list of such state by their exact names, and the test then
+  passed in 191 s.
+- The whole `test_vfs_ext4` unit passed in 5,164 s (86 minutes), at a peak
+  of 5.4 GiB.
+
+The emulator Desktop smokes were not run; they stay deferred.
