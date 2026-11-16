@@ -25,7 +25,11 @@ if str(LOCAL_TESTING) not in sys.path:
 
 import test_vfs_fat as fat_harness  # noqa: E402
 import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
+import machine_backends  # noqa: E402
 from forth_dependencies import dependency_order  # noqa: E402
+from machine_backends import Printed  # noqa: E402
+from native_forth import load_sources, module_source  # noqa: E402
+from system import HBW_SIZE as EMULATOR_HBW_SIZE  # noqa: E402
 from devices import (  # noqa: E402
     STORAGE_CMD_FLUSH,
     STORAGE_CMD_READ,
@@ -4526,6 +4530,181 @@ def build_snapshot():
     return _snapshot
 
 
+STACK_CHECK = (
+    'DEPTH DUP 0= IF DROP ." EXT4-STACK-CLEAN" '
+    'ELSE ." EXT4-STACK-LEAK " . THEN'
+)
+
+# What the simulator's machines evaluate before a journey, in semantic
+# steps: the emulator snapshots' load budgets, for KDOS and the FAT
+# closure, CRC, bitset, ext4 and the save words, at the simulator's rate.
+SIMULATOR_LOAD_STEPS = machine_backends.budget(
+    800_000_000 + 150_000_000 + 150_000_000 + 1_600_000_000 + 400_000_000,
+    "simulator",
+)
+
+
+def simulator_sources(
+    extra: tuple[tuple[str, bytes], ...] = (),
+) -> list[tuple[str, bytes]]:
+    """What the ext4 snapshot holds, as sources in the emulator's load order:
+    KDOS, the FAT harness's closure and test words, CRC, bitset and the ext4
+    driver, then EXTRA."""
+    sources = [
+        ("kdos.f", Path(fat_harness.KDOS_PATH).read_bytes()),
+        ("userland", b"ENTER-USERLAND\n"),
+    ]
+    sources += [
+        (Path(path).name, module_source(Path(path)))
+        for path in fat_harness.SNAPSHOT_MODULES
+    ]
+    sources.append(
+        ("test words", ("\n".join(fat_harness.TEST_WORDS) + "\n").encode())
+    )
+    sources += [
+        (module, module_source(AKASHIC_ROOT / module))
+        for module in (CRC_MODULE, BITSET_MODULE, *_ext4_source_stage_modules())
+    ]
+    return sources + list(extra)
+
+
+def simulator_machine(extra: tuple[tuple[str, bytes], ...] = ()):
+    """A simulator machine holding what the emulator's ext4 snapshot holds,
+    and EXTRA, on the same memory and with the same boot disk."""
+    from simulator.platform import create_one_core_address_space
+    from simulator.runtime import MegaForthRuntime
+    from simulator.storage import HostedStorageService
+
+    runtime = MegaForthRuntime(
+        memory=create_one_core_address_space(
+            external_size=fat_harness.VFS_EXT_MEM_SIZE,
+            hbw_size=EMULATOR_HBW_SIZE,
+        ),
+        execution_backend="native",
+        storage=HostedStorageService(fat_harness._build_mp64fs_boot_image()),
+    )
+    steps = load_sources(runtime, simulator_sources(extra), SIMULATOR_LOAD_STEPS)
+    if os.environ.get("EXT4_REPORT_STEPS"):
+        print(f"[*] simulator machine loaded in {steps:,} steps")
+    return runtime
+
+
+class EmulatorJourneys:
+    """An emulator restored from SNAPSHOT, ready to run journeys.
+
+    The emulator is the reference.  ``attach`` gives it a medium, ``run``
+    feeds journey lines to its BIOS and ends each journey with BYE.
+    """
+
+    backend = "emulator"
+
+    def __init__(self, snapshot) -> None:
+        bios, memory, cpu_state, ext_memory = snapshot
+        system = fat_harness.MegapadSystem(
+            ram_size=1024 * 1024,
+            ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
+            storage_image=fat_harness._boot_img_path,
+        )
+        self.sent = fat_harness.capture_uart(system)
+        system.load_binary(0, bios)
+        system.boot()
+        for _ in range(5_000_000):
+            if system.cpu.idle and not system.uart.has_rx_data:
+                break
+            system.run_batch(10_000)
+        system.cpu.mem[: len(memory)] = memory
+        system._ext_mem[: len(ext_memory)] = ext_memory
+        fat_harness.restore_cpu_state(system.cpu, cpu_state)
+        self.sent.clear()
+        self.system = system
+        self.storage = system.storage
+
+    def attach(self, media, path: Path | None, *, write_protected=False,
+               durable=False) -> None:
+        """Make MEDIA, the caller's buffer, the medium.  With DURABLE the
+        file at PATH holds it, and each successful flush writes the
+        sectors changed since the last; otherwise nothing is saved."""
+        self.storage._replace_media(
+            media, str(path) if path is not None else "unsaved-media",
+            file_holds_media=durable,
+        )
+        self.storage.write_protected = write_protected
+        if not durable:
+            self.storage.save_image = lambda: None
+
+    def feed(self, lines: list[str], max_steps: int) -> tuple[Printed, int]:
+        """Run LINES; return what each printed and the instructions run."""
+        return machine_backends.emulator_journey(
+            self.system, self.sent, lines, max_steps
+        )
+
+    def run(self, lines: list[str], max_steps: int) -> tuple[Printed, int, bool]:
+        """Run LINES and BYE.  Returns what each line printed, the
+        instructions run, and whether every line ran and BYE halted."""
+        printed, steps = self.feed([*lines, "BYE"], max_steps)
+        finished = (
+            self.system.cpu.halted
+            and len(printed.lines) == len(lines) + 1
+            and printed.lines[-1] == "Bye!\r\n"
+        )
+        count = min(len(lines), len(printed.lines))
+        return (
+            Printed(printed.lines[:count], printed.complete[:count]),
+            steps,
+            finished,
+        )
+
+    def release(self) -> None:
+        self.storage.save_image = lambda: None
+
+
+class SimulatorJourneys:
+    """A simulator machine holding the ext4 snapshot's source, ready to run
+    journeys; ``attach`` and ``run`` as the emulator's."""
+
+    backend = "simulator"
+
+    def __init__(self, extra: tuple[tuple[str, bytes], ...] = ()) -> None:
+        self.runtime = simulator_machine(extra)
+        self.storage = self.runtime.storage
+
+    def attach(self, media, path: Path | None, *, write_protected=False,
+               durable=False) -> None:
+        self.storage.attach(
+            media,
+            image_path=path if durable else None,
+            write_protected=write_protected,
+            file_holds_media=durable,
+            adopt=True,
+        )
+
+    def feed(self, lines: list[str], max_steps: int) -> tuple[Printed, int]:
+        return machine_backends.simulator_journey(
+            self.runtime, lines, max_steps
+        )
+
+    def run(self, lines: list[str], max_steps: int) -> tuple[Printed, int, bool]:
+        printed, steps = self.feed(lines, max_steps)
+        finished = len(printed.lines) == len(lines) and all(printed.complete)
+        return printed, steps, finished
+
+    def release(self) -> None:
+        self.storage.detach()
+
+
+def _described(backend: str) -> str:
+    if backend == "emulator":
+        return f"emulator (Akashic source JIT={fat_harness.AKASHIC_SOURCE_JIT})"
+    return backend
+
+
+def journey_machine(backend: str):
+    """A machine of BACKEND holding the ext4 snapshot."""
+    if backend == "emulator":
+        return EmulatorJourneys(build_snapshot())
+    return SimulatorJourneys()
+
+
 def run_forth(
     image: Path,
     lines: list[str],
@@ -4535,27 +4714,22 @@ def run_forth(
     max_steps: int = 800_000_000,
     configure=None,
     expected_read_requests: int | None = None,
-) -> str:
-    """Run against a COW mapping so even the 512 MiB fixture stays bounded."""
-    bios, memory, cpu_state, ext_memory = build_snapshot()
-    system = fat_harness.MegapadSystem(
-        ram_size=1024 * 1024,
-        ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
-        storage_image=fat_harness._boot_img_path,
-    )
-    uart = fat_harness.capture_uart(system)
-    system.load_binary(0, bios)
-    system.boot()
-    for _ in range(5_000_000):
-        if system.cpu.idle and not system.uart.has_rx_data:
-            break
-        system.run_batch(10_000)
-    system.cpu.mem[: len(memory)] = memory
-    system._ext_mem[: len(ext_memory)] = ext_memory
-    fat_harness.restore_cpu_state(system.cpu, cpu_state)
-    if configure is not None:
-        configure(system)
+    backend: str | None = None,
+) -> Printed:
+    """Run LINES against a read-only journey on IMAGE and return what they
+    printed.
 
+    The medium is a copy-on-write mapping of IMAGE, so even the 512 MiB
+    fixture stays bounded, and the journey may not write or flush it.
+    MAX_STEPS is in emulator instructions.  CONFIGURE, which is given the
+    emulator's system before the journey, runs it on the emulator whichever
+    backend the run chose.
+    """
+    backend = "emulator" if configure is not None else machine_backends.chosen(backend)
+    machine = journey_machine(backend)
+    if configure is not None:
+        configure(machine.system)
+    budget = machine_backends.budget(max_steps, backend)
     with image.open("rb") as source, mmap.mmap(
         source.fileno(), 0, access=mmap.ACCESS_COPY
     ) as mapped:
@@ -4563,60 +4737,31 @@ def run_forth(
             mapped[offset : offset + len(data)] = data
         # The mapping is a private copy that may carry patches, so the file
         # does not hold this media; this journey must never save it anyway.
-        system.storage._replace_media(
-            mapped, str(image), file_holds_media=False
-        )
-        system.storage.write_protected = False
-        read_requests = 0
-        write_requests = 0
-        flush_requests = 0
-        start_dma = system.storage._start_dma
-        run_flush = system.storage._run_flush
-
-        def track_dma(request, phase):
-            nonlocal read_requests, write_requests
-            if phase == "write":
-                write_requests += 1
-            elif phase == "read":
-                read_requests += 1
-            return start_dma(request, phase)
-
-        def track_flush(request):
-            nonlocal flush_requests
-            flush_requests += 1
-            return run_flush(request)
-
-        system.storage._start_dma = track_dma
-        system.storage._run_flush = track_flush
+        machine.attach(mapped, None)
+        observer = machine.storage.observe()
         for fault in storage_faults:
-            system.storage.inject_fault(**fault)
-        uart.clear()
-        stack_check = (
-            'DEPTH DUP 0= IF DROP ." EXT4-STACK-CLEAN" '
-            'ELSE ." EXT4-STACK-LEAK " . THEN'
+            machine.storage.inject_fault(**fault)
+        output, journey_steps, finished = machine.run(
+            [*lines, STACK_CHECK], budget
         )
-        payload = ("\n".join((*lines, stack_check, "BYE")) + "\n").encode()
-        journey_steps = _feed_until_idle(system, payload, max_steps)
-        if os.environ.get("EXT4_REPORT_STEPS"):
-            print(
-                "[*] ext4 Forth journey "
-                f"(Akashic source JIT={fat_harness.AKASHIC_SOURCE_JIT}): "
-                f"{journey_steps:,}/{max_steps:,} steps ({image.name})"
-            )
-        output = fat_harness.uart_text(uart)
-        _assert_no_forth_diagnostics(output)
-        if not system.cpu.halted or not output.endswith("Bye!\r\n"):
-            raise AssertionError(
-                "ext4 Forth journey did not consume BYE and halt "
-                f"after {journey_steps:,}/{max_steps:,} steps:\n"
-                + output[-2000:]
-            )
-        assert write_requests == 0
-        assert flush_requests == 0
-        if expected_read_requests is not None:
-            assert read_requests == expected_read_requests
-        _assert_emitted(output, "EXT4-STACK-CLEAN")
-        return output
+        machine.release()
+    if os.environ.get("EXT4_REPORT_STEPS"):
+        print(
+            f"[*] ext4 Forth journey on the {_described(backend)}: "
+            f"{journey_steps:,}/{budget:,} steps ({image.name})"
+        )
+    _assert_no_forth_diagnostics(output)
+    if not finished:
+        raise AssertionError(
+            f"ext4 Forth journey on the {backend} did not run every line "
+            f"in {journey_steps:,}/{budget:,} steps:\n" + output[-2000:]
+        )
+    assert observer.writes == 0
+    assert observer.flushes == 0
+    if expected_read_requests is not None:
+        assert observer.reads == expected_read_requests
+    _assert_emitted(output, "EXT4-STACK-CLEAN")
+    return output
 
 
 def run_recovery_forth(
@@ -4635,14 +4780,23 @@ def run_recovery_forth(
     capture_media: Path | None = None,
     capture_prior_flush_media: Path | None = None,
     max_steps: int = 1_200_000_000,
-) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
-    """Run recovery on private mutable media and return its ordered I/O trace."""
+    backend: str | None = None,
+) -> tuple[Printed, tuple[tuple[str, int, int], ...], str]:
+    """Run recovery on private mutable media and return its ordered I/O trace.
+
+    BACKING is the durable medium: it starts as the patched IMAGE and each
+    successful flush writes into it what the medium changed.  Faults keyed
+    by ordinal are planted when that write, flush, or read after a given
+    number of writes is admitted.  Returns what the lines printed, the
+    writes and flushes in order, and the final medium's SHA-256.
+    """
+    backend = machine_backends.chosen(backend)
+    flush_faults = dict(flush_faults_by_ordinal or {})
     assert (
-        capture_prior_flush_media is None or flush_faults_by_ordinal
+        capture_prior_flush_media is None or flush_faults
     ), "prior-fence capture requires an ordinal flush fault"
-    pending_flush_faults = dict(flush_faults_by_ordinal or {})
-    assert all(ordinal > 0 for ordinal in pending_flush_faults)
-    for target_fault in pending_flush_faults.values():
+    assert all(ordinal > 0 for ordinal in flush_faults)
+    for target_fault in flush_faults.values():
         assert target_fault.get("stage") == "flush"
         assert (
             target_fault.get("command", STORAGE_CMD_FLUSH)
@@ -4650,141 +4804,95 @@ def run_recovery_forth(
         )
         assert target_fault.get("action", "fail") == "fail"
         assert target_fault.get("result", 0) != STORAGE_RESULT_OK
-    if pending_flush_faults:
+    if flush_faults:
         assert not any(
             fault.get("stage") == "flush" for fault in storage_faults
         )
     if capture_prior_flush_media is not None:
-        assert len(pending_flush_faults) == 1
+        assert len(flush_faults) == 1
         capture_paths = [image, backing, capture_prior_flush_media]
         if capture_media is not None:
             capture_paths.append(capture_media)
         assert len({path.resolve() for path in capture_paths}) == len(
             capture_paths
         ), "flush durability captures must use distinct paths"
-    bios, memory, cpu_state, ext_memory = build_snapshot()
-    system = fat_harness.MegapadSystem(
-        ram_size=1024 * 1024,
-        ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
-        storage_image=fat_harness._boot_img_path,
-    )
-    uart = fat_harness.capture_uart(system)
-    system.load_binary(0, bios)
-    system.boot()
-    for _ in range(5_000_000):
-        if system.cpu.idle and not system.uart.has_rx_data:
-            break
-        system.run_batch(10_000)
-    system.cpu.mem[: len(memory)] = memory
-    system._ext_mem[: len(ext_memory)] = ext_memory
-    fat_harness.restore_cpu_state(system.cpu, cpu_state)
+    machine = journey_machine(backend)
 
     media = bytearray(image.read_bytes())
     for offset, data in patches:
         media[offset : offset + len(data)] = data
-    if capture_prior_flush_media is not None and 1 in pending_flush_faults:
+    if capture_prior_flush_media is not None and 1 in flush_faults:
         _write_sparse_bytes(capture_prior_flush_media, media, durable=True)
-    # The backing file is written only by save_sparse_media below, so it does
-    # not yet hold this patched media.
-    system.storage._replace_media(media, str(backing), file_holds_media=False)
-    system.storage.write_protected = write_protected
+    # A flush makes the medium durable in BACKING, so the file starts out
+    # holding it; a write-protected medium is never saved.
+    durable = not write_protected
+    if durable and (patches or image.resolve() != backing.resolve()):
+        _write_sparse_bytes(backing, media, durable=True)
+    machine.attach(media, backing, write_protected=write_protected,
+                   durable=durable)
+    storage = machine.storage
+    observer = None
 
-    def save_sparse_media() -> None:
-        if (
-            system.storage.image_path is not None
-            and system.storage.status & STORAGE_STATUS_PRESENT
-        ):
-            _write_sparse_bytes(
-                Path(system.storage.image_path),
-                system.storage._image_data,
-                durable=True,
+    def admitted(command: int, lba: int, count: int) -> None:
+        # The durable medium as the faulting flush finds it.
+        ordinal = observer.flushes
+        if command == STORAGE_CMD_FLUSH and ordinal in flush_faults and ordinal > 1:
+            assert backing.is_file(), (
+                "a prior successful flush did not publish backing media"
             )
+            _copy_sparse_file(backing, capture_prior_flush_media)
 
-    system.storage.save_image = save_sparse_media
-    trace: list[tuple[str, int, int]] = []
-    start_dma = system.storage._start_dma
-    run_flush = system.storage._run_flush
-    write_ordinal = 0
-    flush_ordinal = 0
-    pending_read_faults = dict(read_faults_by_write_and_ordinal or {})
-    read_ordinals: dict[int, int] = {}
-
-    def track_dma(request, phase):
-        nonlocal write_ordinal
-        if phase == "write":
-            write_ordinal += 1
-            trace.append(("write", request[1], request[3]))
-            if write_faults_by_ordinal and write_ordinal in write_faults_by_ordinal:
-                system.storage.inject_fault(
-                    **write_faults_by_ordinal[write_ordinal]
-                )
-        elif phase == "read":
-            read_ordinal = read_ordinals.get(write_ordinal, 0) + 1
-            read_ordinals[write_ordinal] = read_ordinal
-            fault = pending_read_faults.pop(
-                (write_ordinal, read_ordinal), None
-            )
-            if fault is not None:
-                system.storage.inject_fault(**fault)
-        return start_dma(request, phase)
-
-    def track_flush(request):
-        nonlocal flush_ordinal
-        flush_ordinal += 1
-        trace.append(("flush", 0, 0))
-        fault = pending_flush_faults.pop(flush_ordinal, None)
-        if fault is not None:
-            if capture_prior_flush_media is not None:
-                if flush_ordinal > 1:
-                    assert system.storage.image_path is not None
-                    durable_path = Path(system.storage.image_path)
-                    assert durable_path.is_file(), (
-                        "a prior successful flush did not publish backing media"
-                    )
-                    _copy_sparse_file(durable_path, capture_prior_flush_media)
-            system.storage.inject_fault(**fault)
-        return run_flush(request)
-
-    system.storage._start_dma = track_dma
-    system.storage._run_flush = track_flush
-    for fault in storage_faults:
-        system.storage.inject_fault(**fault)
-    uart.clear()
-    stack_check = (
-        'DEPTH DUP 0= IF DROP ." EXT4-STACK-CLEAN" '
-        'ELSE ." EXT4-STACK-LEAK " . THEN'
+    observer = storage.observe(
+        admitted if capture_prior_flush_media is not None else None
     )
-    payload = ("\n".join((*lines, stack_check, "BYE")) + "\n").encode()
-    journey_steps = _feed_until_idle(system, payload, max_steps)
+    for ordinal, fault in (write_faults_by_ordinal or {}).items():
+        storage.plan_fault(STORAGE_CMD_WRITE, ordinal, **fault)
+    for ordinal, fault in flush_faults.items():
+        storage.plan_fault(STORAGE_CMD_FLUSH, ordinal, **fault)
+    for (writes, ordinal), fault in (
+        read_faults_by_write_and_ordinal or {}
+    ).items():
+        storage.plan_fault(
+            STORAGE_CMD_READ, ordinal, after_writes=writes, **fault
+        )
+    for fault in storage_faults:
+        storage.inject_fault(**fault)
+    budget = machine_backends.budget(max_steps, backend)
+    output, journey_steps, finished = machine.run([*lines, STACK_CHECK], budget)
+    machine.release()
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
-            "[*] ext4 recovery journey "
-            f"(Akashic source JIT={fat_harness.AKASHIC_SOURCE_JIT}): "
-            f"{journey_steps:,}/{max_steps:,} steps "
+            f"[*] ext4 recovery journey on the {_described(backend)}: "
+            f"{journey_steps:,}/{budget:,} steps "
             f"({image.name} -> {backing.name})"
         )
-    output = fat_harness.uart_text(uart)
     _assert_no_forth_diagnostics(output)
-    if not system.cpu.halted or not output.endswith("Bye!\r\n"):
+    if not finished:
         raise AssertionError(
-            "ext4 recovery journey did not consume BYE and halt "
-            f"after {journey_steps:,}/{max_steps:,} steps:\n"
-            + output[-2000:]
+            f"ext4 recovery journey on the {backend} did not run every line "
+            f"in {journey_steps:,}/{budget:,} steps:\n" + output[-2000:]
         )
     _assert_emitted(output, "EXT4-STACK-CLEAN")
     if capture_media is not None:
         _write_sparse_bytes(capture_media, media)
     if capture_prior_flush_media is not None:
         assert capture_prior_flush_media.is_file()
-    assert not pending_flush_faults, (
-        f"unreached ordinal flush faults: {sorted(pending_flush_faults)}"
+    unreached = sorted(
+        ordinal for ordinal in flush_faults if ordinal > observer.flushes
     )
-    return output, tuple(trace), hashlib.sha256(media).hexdigest()
+    assert not unreached, f"unreached ordinal flush faults: {unreached}"
+    trace = tuple(
+        ("write", lba, count) if command == STORAGE_CMD_WRITE
+        else ("flush", 0, 0)
+        for command, lba, count in observer.requests
+        if command != STORAGE_CMD_READ
+    )
+    return output, trace, hashlib.sha256(media).hexdigest()
 
 
-def _assert_emitted(output: str, marker: str) -> None:
-    """Require executed output, not the marker text echoed in Forth source."""
-    assert f"\r\n{marker} ok\r\n" in output, output[-4000:]
+def _assert_emitted(output: Printed, marker: str) -> None:
+    """Require a line to have printed MARKER as its whole output."""
+    assert output.emitted(marker), output[-4000:]
 
 
 def _forth_conjunction(checks: list[str]) -> str:
@@ -15940,6 +16048,8 @@ def test_lookup_listing_beyond_the_old_string_pool_loads_every_name(
             ),
             "CR _LKL-CYCLES .",
         ],
+        # The cycle count is the emulator's, the device's own.
+        backend="emulator",
     )
     _assert_emitted(output, "EXT4-LOOKUP-LISTING-COMPLETE")
 
@@ -16002,6 +16112,8 @@ def test_lookup_listing_of_two_thousand_names_takes_linear_time(
             ),
             "CR _LKB-CYCLES .",
         ],
+        # The cycle count is the emulator's, the device's own.
+        backend="emulator",
     )
     _assert_emitted(output, "EXT4-LOOKUP-BIG-LISTING-COMPLETE")
 
@@ -29371,9 +29483,7 @@ def _assert_singleton_cleanup_media_converges(
     # interrupted cleanup left it something to write.  Once the landing has
     # cleared its witness the volume is clean, and the last write, which
     # retires the guard, can tear or be lost without leaving a repair.
-    assert (f"\r\n{owners_marker} ok\r\n" in remount_output) == bool(
-        remount_trace
-    )
+    assert remount_output.emitted(owners_marker) == bool(remount_trace)
     assert repaired.is_file()
     assert _sha256(repaired) == repaired_sha256
 
@@ -49951,7 +50061,7 @@ def test_general_write_split_tear_replays_the_committed_tree(
         # The torn run measured 476,690,215 steps.
         max_steps=800_000_000,
     )
-    assert "\r\nEXT4-UNREACHED ok\r\n" not in output
+    assert not output.emitted("EXT4-UNREACHED")
     recovered = tmp_path / "general-write-split-recovered.img"
     output, recovery_trace, _ = run_recovery_forth(
         torn,
@@ -50515,7 +50625,7 @@ def test_general_truncate_crash_cuts_keep_old_or_committed_state(
         capture_media=torn,
         max_steps=600_000_000,
     )
-    assert "\r\nEXT4-UNREACHED ok\r\n" not in output
+    assert not output.emitted("EXT4-UNREACHED")
     recovered = tmp_path / f"general-truncate-{case}-recovered.img"
     output, _, _ = run_recovery_forth(
         torn,
@@ -50725,7 +50835,7 @@ def test_general_truncate_across_transactions_crash_cuts_recover(
         capture_media=torn,
         max_steps=1_200_000_000,
     )
-    assert "\r\nEXT4-UNREACHED ok\r\n" not in output
+    assert not output.emitted("EXT4-UNREACHED")
     recovered = tmp_path / f"general-truncate-orphan-{case}-recovered.img"
     output, _, _ = run_recovery_forth(
         torn,
@@ -50987,7 +51097,7 @@ def test_general_unlink_across_transactions_crash_cuts_recover(
         capture_media=torn,
         max_steps=1_200_000_000,
     )
-    assert "\r\nEXT4-UNREACHED ok\r\n" not in output
+    assert not output.emitted("EXT4-UNREACHED")
     recovered = tmp_path / f"general-unlink-{case}-recovered.img"
     output, _, _ = run_recovery_forth(
         torn,

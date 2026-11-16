@@ -471,6 +471,51 @@ ordinary run cuts on either side of every commit block and after every
 eighth write, and the unit takes seven minutes; `AKASHIC_SAVE_CUT_STRIDE=1`
 cuts after every write, which takes seventeen minutes for those tests alone.
 
+### On the emulator or the simulator
+
+The ext4 tests run their journeys on MegaPad's emulator unless
+`AKASHIC_EXT4_BACKEND=simulator` chooses MegaPad's simulator.  The four
+files that use the ext4 harness, `test_vfs_ext4.py`,
+`test_vfs_ext4_user_volume.py`, `test_vfs_ext4_retained_orphan.py` and
+`test_vfs_replace_ext4.py`, take their machines from the harness in
+`test_vfs_ext4.py` and from `machine_backends.py`.  The simulator needs its
+native extension built in the MegaPad that `MEGAPAD_ROOT` names (`make
+build` there).
+
+The emulator runs the BIOS, KDOS and the driver instruction by instruction
+and moves every storage request one byte at a time; it is the
+device-faithful reference.  The simulator evaluates the same source
+semantically, loaded in the emulator snapshot's order: KDOS, the FAT
+harness's closure and test words, CRC, bitset and the ext4 driver, and for
+the save tests `vfs-replace.f` and their words.  Both machines' storage
+controllers take the same planted faults and record the same admitted
+requests, from one definition in MegaPad (`docs/storage-faults.md`), so a
+test plants a fault for the Nth write, flush or read and reads the request
+trace the same way on either.
+
+A journey reports what each of its lines printed, without the BIOS's echo
+of the line or its prompt, and a marker counts as emitted when a line
+printed it as the whole of its output, as the old check of the emulator's
+transcript required.  The BIOS reads its terminal a line at a time and
+carries an open definition or interpreted `IF` from one line to the next;
+the simulator evaluates complete source, so lines that leave one open are
+evaluated together with the lines that close it.  An error on the simulator
+ends the journey, and the test fails with the error's message.
+
+Step budgets are written in emulator instructions.  The simulator counts
+semantic steps and takes a quarter of each budget, since its journeys took
+0.12 to 0.21 of the emulator's steps for the same work on the standing
+sample; a budget therefore keeps the same margin on both.
+
+A recovery journey's backing file starts as its patched medium, and each
+successful flush writes into it the sectors changed since the last flush,
+on both machines; a write-protected medium is never saved.
+
+Two tests read the emulator processor's CRC registers through `configure`,
+and two print the device's cycle count for a listing.  These run on the
+emulator whichever backend is chosen.  The simulator cannot hold a storage
+request stalled, and no ext4 test plants a stall.
+
 The shared FAT/ext4 emulator snapshot uses 64 MiB of external memory: KDOS
 owns its established 32 MiB userland dictionary zone and the remainder holds
 the VFS test arena and loader allocations. Snapshot construction requires an

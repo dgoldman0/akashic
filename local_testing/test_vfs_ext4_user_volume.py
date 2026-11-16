@@ -21,6 +21,7 @@ import pytest
 
 import test_vfs_ext4 as ext4
 import test_vfs_replace_ext4 as rx
+from devices import STORAGE_CMD_READ
 from test_vfs_ext4 import (  # noqa: F401  (session fixtures)
     canonical_images,
     jbd2_toolchain,
@@ -307,7 +308,13 @@ def _emitted(output: str, marker: str) -> None:
 
 def _numbers(output: str, tag: str) -> list[int]:
     """Return the numbers a guest line printed as `[TAG n n ...]`."""
-    found = re.findall(rf"\r\n\[{re.escape(tag)} ((?:-?\d+ )+)\]", output)
+    found = [
+        values
+        for line in output.lines
+        for values in re.findall(
+            rf"(?:^|\r\n)\[{re.escape(tag)} ((?:-?\d+ )+)\]", line
+        )
+    ]
     assert len(found) == 1, (tag, output[-2000:])
     return [int(number) for number in found[0].split()]
 
@@ -390,7 +397,11 @@ def test_sort_cells_orders_any_count(fresh_volumes: dict[str, Path]) -> None:
     output = ext4.run_forth(
         fresh_volumes["empty"], lines, max_steps=60_000_000
     )
-    shown = re.findall(r"\r\n\[SORTED ((?:\d+ )+)\]", output)
+    shown = [
+        values
+        for line in output.lines
+        for values in re.findall(r"(?:^|\r\n)\[SORTED ((?:\d+ )+)\]", line)
+    ]
     assert [[int(cell) for cell in row.split()] for row in shown] == expected
 
 
@@ -1479,15 +1490,12 @@ def _record_reads(machine: rx.Machine) -> list[tuple[int, int]]:
     """Record the first sector and sector count of every read MACHINE's
     device starts from now on."""
     reads: list[tuple[int, int]] = []
-    storage = machine.system.storage
-    start_dma = storage._start_dma
 
-    def track(request, phase):
-        if phase == "read":
-            reads.append((request[1], request[3]))
-        return start_dma(request, phase)
+    def track(command: int, lba: int, count: int) -> None:
+        if command == STORAGE_CMD_READ:
+            reads.append((lba, count))
 
-    storage._start_dma = track
+    machine.watch(track)
     return reads
 
 

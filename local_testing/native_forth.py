@@ -44,6 +44,31 @@ def module_source(path: Path) -> bytes:
     return ("\n".join(kept) + "\n").encode()
 
 
+def load_sources(
+    runtime: MegaForthRuntime,
+    sources: list[tuple[str, bytes]],
+    steps: int,
+) -> int:
+    """Evaluate SOURCES, pairs of a name and its text, on RUNTIME in order
+    within STEPS, and return the steps they took.
+
+    A source that fails ends the load with its name, the error and the
+    output so far.  What the sources printed is discarded.
+    """
+
+    remaining = steps
+    for name, source in sources:
+        try:
+            result = runtime.evaluate(source, source_name=name,
+                                      step_budget=remaining)
+        except (SimulatorError, StackError) as error:
+            tail = runtime.uart_output.decode("utf-8", errors="replace")[-2000:]
+            raise AssertionError(f"loading {name} failed: {error}\n{tail}") from error
+        remaining -= result.semantic_steps
+    runtime.drain_uart_output()
+    return steps - remaining
+
+
 def _evaluate_program(runtime: MegaForthRuntime, lines: list[str], max_steps: int) -> bytes:
     """Run ``lines`` and return the bytes printed, then any error's message.
 
@@ -122,16 +147,7 @@ class NativeForth:
             sources.append((module, source))
         if self.prelude:
             sources.append(("prelude", ("\n".join(self.prelude) + "\n").encode()))
-        remaining = self.load_steps
-        for name, source in sources:
-            try:
-                result = runtime.evaluate(source, source_name=name,
-                                          step_budget=remaining)
-            except (SimulatorError, StackError) as error:
-                tail = runtime.uart_output.decode("utf-8", errors="replace")[-2000:]
-                raise AssertionError(f"loading {name} failed: {error}\n{tail}") from error
-            remaining -= result.semantic_steps
-        runtime.drain_uart_output()
+        load_sources(runtime, sources, self.load_steps)
         return runtime
 
     def run(

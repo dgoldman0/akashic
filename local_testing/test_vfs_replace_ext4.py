@@ -45,8 +45,11 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
+import machine_backends  # noqa: E402
 import test_vfs_ext4 as ext4  # noqa: E402
+from devices import STORAGE_CMD_FLUSH, STORAGE_CMD_WRITE  # noqa: E402
 from forth_dependencies import dependency_order  # noqa: E402
+from native_forth import module_source  # noqa: E402
 from test_vfs_ext4 import (  # noqa: E402,F401  (pytest fixtures)
     canonical_images,
     jbd2_toolchain,
@@ -141,28 +144,6 @@ _GUEST_WORDS = (
 _snapshot = None
 
 
-def _restored_system(snapshot):
-    """A machine holding SNAPSHOT's compiled state, and its UART capture."""
-    bios, memory, cpu_state, ext_memory = snapshot
-    system = fat.MegapadSystem(
-        ram_size=1024 * 1024,
-        ext_mem_size=fat.VFS_EXT_MEM_SIZE,
-        storage_image=fat._boot_img_path,
-    )
-    uart = fat.capture_uart(system)
-    system.load_binary(0, bios)
-    system.boot()
-    for _ in range(5_000_000):
-        if system.cpu.idle and not system.uart.has_rx_data:
-            break
-        system.run_batch(10_000)
-    system.cpu.mem[: len(memory)] = memory
-    system._ext_mem[: len(ext_memory)] = ext_memory
-    fat.restore_cpu_state(system.cpu, cpu_state)
-    uart.clear()
-    return system, uart
-
-
 def _replace_stage_modules() -> tuple[str, ...]:
     """vfs-replace.f and what it requires beyond the ext4 snapshot."""
     staged = set(dependency_order(ext4.AKASHIC_ROOT, (ext4.EXT4_MODULE,)))
@@ -186,7 +167,8 @@ def build_snapshot():
     if _snapshot is not None:
         return _snapshot
     base = ext4.build_snapshot()
-    system, uart = _restored_system(base)
+    restored = ext4.EmulatorJourneys(base)
+    system, uart = restored.system, restored.sent
     lines = [*ext4._EXT4_SOURCE_JIT_BEGIN]
     for module in _replace_stage_modules():
         lines += fat._load_forth_lines(str(ext4.AKASHIC_ROOT / module))
@@ -214,43 +196,61 @@ def build_snapshot():
 _RECORD = re.compile(r"\[(\w+)((?: [-\w]+)*) \]")
 
 
+def save_sources() -> tuple[tuple[str, bytes], ...]:
+    """What the save snapshot adds to the ext4 snapshot, as sources the
+    simulator evaluates: vfs-replace.f's closure and the journey words."""
+    return tuple(
+        (module, module_source(ext4.AKASHIC_ROOT / module))
+        for module in _replace_stage_modules()
+    ) + (("save words", ("\n".join(_GUEST_WORDS) + "\n").encode()),)
+
+
 class Machine:
     """One machine on private media that records each block it writes.
 
     ``writes`` holds, in device order, the byte offset of every write with
     the bytes it replaced and the bytes it left.  A guest flush writes no
-    host file: the medium is the ``media`` bytearray alone.
+    host file: the medium is the ``media`` bytearray alone.  The machine is
+    the backend the run chose, an emulator restored from the save snapshot
+    or a simulator holding the same source.
     """
 
-    def __init__(self, media: bytearray, *, misread: bytes | None = None):
-        self.system, self.uart = _restored_system(build_snapshot())
+    def __init__(
+        self,
+        media: bytearray,
+        *,
+        misread: bytes | None = None,
+        backend: str | None = None,
+    ):
+        self.backend = machine_backends.chosen(backend)
+        if self.backend == "emulator":
+            self.machine = ext4.EmulatorJourneys(build_snapshot())
+        else:
+            self.machine = ext4.SimulatorJourneys(save_sources())
         self.media = media
         self.writes: list[tuple[int, bytes, bytes]] = []
         self.flushes = 0
         self.steps = 0
         self._pending: tuple[int, bytes] | None = None
         self._misread = misread
-        storage = self.system.storage
-        storage._replace_media(
-            media, "private-save-media", file_holds_media=False
-        )
-        storage.write_protected = False
-        storage.save_image = lambda: None
-        start_dma, run_flush = storage._start_dma, storage._run_flush
+        self._watchers = []
+        self.machine.attach(media, None)
+        self.observer = self.machine.storage.observe(self._admitted)
 
-        def track_dma(request, phase):
-            self._settle()
-            if phase == "write":
-                offset, size = request[1] * SECTOR, request[3] * SECTOR
-                self._pending = (offset, bytes(media[offset : offset + size]))
-            return start_dma(request, phase)
+    def watch(self, watcher) -> None:
+        """Call WATCHER with the command, LBA and count of every request
+        the device admits from now on."""
+        self._watchers.append(watcher)
 
-        def track_flush(request):
-            self._settle()
+    def _admitted(self, command: int, lba: int, count: int) -> None:
+        self._settle()
+        if command == STORAGE_CMD_WRITE:
+            offset, size = lba * SECTOR, count * SECTOR
+            self._pending = (offset, bytes(self.media[offset : offset + size]))
+        elif command == STORAGE_CMD_FLUSH:
             self.flushes += 1
-            return run_flush(request)
-
-        storage._start_dma, storage._run_flush = track_dma, track_flush
+        for watcher in self._watchers:
+            watcher(command, lba, count)
 
     def _settle(self) -> None:
         """Log the write the device has finished since the last command."""
@@ -266,15 +266,14 @@ class Machine:
 
     def line(self, text: str) -> dict[str, list[list[str]]]:
         """Run one interpreted line and return the records it printed."""
-        start = len(self.uart)
-        self.steps += ext4._feed_until_idle(
-            self.system, (text + "\n").encode(), LINE_MAX_STEPS
+        output, steps = self.machine.feed(
+            [text], machine_backends.budget(LINE_MAX_STEPS, self.backend)
         )
+        self.steps += steps
         self._settle()
-        output = fat.uart_text(self.uart[start:])
         ext4._assert_no_forth_diagnostics(output)
-        assert output.endswith(" ok\r\n> "), (
-            f"line {text!r} did not return to the prompt:\n{output[-2000:]}"
+        assert output.complete and output.complete[-1], (
+            f"line {text!r} did not run to its end:\n{output[-2000:]}"
         )
         records: dict[str, list[list[str]]] = {}
         for tag, values in _RECORD.findall(output):
@@ -283,8 +282,9 @@ class Machine:
 
     def close(self) -> None:
         """Let go of the machine.  Its device hooks and the machine refer to
-        each other, so the 130 MiB it holds waits for a collection."""
-        self.system = self.uart = None
+        each other, so the memory it holds waits for a collection."""
+        self.machine.release()
+        self.machine = self.observer = None
         gc.collect()
 
     def one(self, text: str, tag: str) -> list[str]:

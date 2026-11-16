@@ -491,6 +491,34 @@ def _build_mp64fs_boot_image(total_sectors=2048):
 
 _snapshot = None
 _boot_img_path = None     # MP64FS boot image (for snapshot build)
+
+# What the snapshot loads after KDOS: the VFS and FAT binding's closure in
+# load order, then the words the tests use.  The ext4 tests' machines on
+# either of MegaPad's backends start from the same.
+SNAPSHOT_MODULES = (
+    EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
+    VFS_F, VFS_MNT_F, VFS_FAT_F,
+)
+TEST_WORDS = (
+    'CREATE _RB 4096 ALLOT',
+    'CREATE _WB 4096 ALLOT',
+    'CREATE _TBD /BLOCK-DEVICE ALLOT',
+    'CREATE _TVOL /VOLUME ALLOT',
+    'VARIABLE _TVOL-READY',
+    'VARIABLE _TARN',
+    ': T-VOLUME  ( -- volume )',
+    '    _TVOL-READY @ 0= IF',
+    '        _TBD BD-OPEN THROW',
+    '        _TBD _TVOL VOL-RAW THROW',
+    '        -1 _TVOL-READY !',
+    '    THEN',
+    '    _TVOL ;',
+    ': T-ARENA  ( -- arena )',
+    '    524288 A-XMEM ARENA-NEW THROW ;',
+    ': T-VFAT-NEW  ( -- vfs )',
+    '    T-ARENA _TARN !',
+    '    _TARN @ T-VOLUME VFAT-NEW THROW ;',
+)
 _default_fat_img = None   # Default FAT16 test image (bytes)
 
 def _remove_image(path):
@@ -537,32 +565,9 @@ def build_snapshot():
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
     dep_lines = []
-    for path in [
-        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
-        VFS_F, VFS_MNT_F, VFS_FAT_F,
-    ]:
+    for path in SNAPSHOT_MODULES:
         dep_lines += _load_forth_lines(path)
-
-    helpers = [
-        'CREATE _RB 4096 ALLOT',
-        'CREATE _WB 4096 ALLOT',
-        'CREATE _TBD /BLOCK-DEVICE ALLOT',
-        'CREATE _TVOL /VOLUME ALLOT',
-        'VARIABLE _TVOL-READY',
-        'VARIABLE _TARN',
-        ': T-VOLUME  ( -- volume )',
-        '    _TVOL-READY @ 0= IF',
-        '        _TBD BD-OPEN THROW',
-        '        _TBD _TVOL VOL-RAW THROW',
-        '        -1 _TVOL-READY !',
-        '    THEN',
-        '    _TVOL ;',
-        ': T-ARENA  ( -- arena )',
-        '    524288 A-XMEM ARENA-NEW THROW ;',
-        ': T-VFAT-NEW  ( -- vfs )',
-        '    T-ARENA _TARN !',
-        '    _TARN @ T-VOLUME VFAT-NEW THROW ;',
-    ]
+    helpers = list(TEST_WORDS)
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=VFS_EXT_MEM_SIZE,
                             storage_image=_boot_img_path)
