@@ -103,14 +103,12 @@ never returns `VREPL-S-COMMITTED-CLEANUP` or `VREPL-S-UNCERTAIN`.
 
 The rename takes a target that another descriptor holds open as its victim,
 and that descriptor goes on reading the old bytes. On ext4 the old file then
-waits in the orphan file until the descriptor closes, and until then the
-driver refuses every create on the volume: a second save in that interval
-cannot create its stage, returns `VREPL-S-RECOVERY`, and leaves the target as
-the first save made it. `local_testing/test_vfs_replace_ext4.py` holds that
-behavior. The driver work that lets a sync land while a removed file is open,
-recorded in
-[`user-volume-20261115.md`](../../../local_testing/evidence/user-volume-20261115.md),
-ends the refusal.
+waits in the orphan file until the descriptor closes, and the volume takes
+every other write meanwhile. A second save in that interval writes its stage
+and renames it over the first save's file, which nothing holds, so that victim
+drains at once beside the record the open file keeps; a sync lands the journal
+with the record in place, and the descriptor's close drains it.
+`local_testing/test_vfs_replace_ext4.py` holds that behavior.
 
 ### Publication through the marker and the backup
 

@@ -297,9 +297,11 @@ which nothing requires, is deleted with its document and test.
 4. The user volume attaches: the builder's user image on the machine's
    fourth storage unit, `user-volume.f`, the shipping form's places, and
    a boot without the user image.
-5. The ext4 driver makes an inode group ready on first use.
-6. File Explorer across volumes, opening with the run that confirms
-   whether a sync is refused while a removed file is open.
+5. Done: the ext4 driver makes an inode group ready on first use.
+6. File Explorer across volumes. Done ahead of it: the run confirmed
+   that a sync was refused while a removed file was open, and the driver
+   now lands that sync and takes other writes, keeping the file's record
+   until its last close.
 7. The other writers on ext4: Daybook, Grid, the Agent, Streams, the
    catalogs, the sandbox store, the head.
 8. The killed run: the simulator killed at chosen flushes during a save

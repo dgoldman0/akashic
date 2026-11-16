@@ -7979,9 +7979,6 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "ELSE I VFS-OP-RELEASE = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "['] _EXT4-STAGED-RELEASE <> "
-                "ELSE I VFS-OP-SYNCFS = IF "
-                "EXT4-STAGED-WRITE-OPS I CELLS + @ "
-                "['] _EXT4-STAGED-SYNCFS <> "
                 "ELSE I VFS-OP-WRITE = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-WRITE <> "
                 "ELSE I VFS-OP-CREATE = IF "
@@ -8003,7 +8000,7 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "ELSE "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "EXT4-OPS I CELLS + @ <> "
-                "THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN "
+                "THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN "
                 "IF FALSE UNLOOP EXIT THEN "
                 "LOOP TRUE ;"
             ),
@@ -49357,7 +49354,7 @@ def test_general_write_map_check_refuses_a_misdirected_extent(
         ),
         "' _MC-NOW 0 _MC-V EXT4-BIND-WRITE-CLOCK? CONSTANT _MC-CLOCK-IOR",
         *_ext4_dedicated_writer_profile_forth("_MC-PROFILE", "_MC-V", 8, 4, 0),
-        "_MC-V _EXT4-MOW-V ! 0 _EXT4-MOW-ENTRY CONSTANT _MC-ENTRY-IOR",
+        "_MC-V _EXT4-MOW-V ! _EXT4-MOW-ENTRY CONSTANT _MC-ENTRY-IOR",
         (
             "_MC-V _XW-V ! 0 _XW-VN ! _MC-BUF _XW-SOURCE ! "
             "1024 _XW-COUNT ! 1024 _XW-OFFSET !"
@@ -51060,7 +51057,7 @@ def test_transaction_map_check_balances_each_record_kind(
         ),
         "' _NC-NOW 0 _NC-V EXT4-BIND-WRITE-CLOCK? CONSTANT _NC-CLOCK-IOR",
         *_ext4_dedicated_writer_profile_forth("_NC-PROFILE", "_NC-V", 8, 4, 0),
-        "_NC-V _EXT4-MOW-V ! 0 _EXT4-MOW-ENTRY CONSTANT _NC-ENTRY-IOR",
+        "_NC-V _EXT4-MOW-V ! _EXT4-MOW-ENTRY CONSTANT _NC-ENTRY-IOR",
         "_EXT4-MOW-CTX @ CONSTANT _NC-CTX",
         (
             "1 1 0 _NC-CTX _EXT4-JWR-ENSURE "
@@ -66948,7 +66945,7 @@ def test_staged_vfs_rmdir_directory_home_tear_replays_and_drains(
                         "_RDT-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
                         (
                             "_RDT-WRITER _EXT4-JWR.CP-MODE + @ "
-                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD-FIRST ="
+                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD ="
                         ),
                         "_RDT-HOME-WRITES 2 =",
                         "_RDT-CTX _EXT4-C.J.COMMITTED + @ 1 =",
@@ -68336,7 +68333,7 @@ def test_staged_vfs_unlink_first_leaf_record_home_tear_replays_and_drains(
                         ),
                         (
                             f"{p}-WRITER _EXT4-JWR.CP-MODE + @ "
-                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD-FIRST ="
+                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD ="
                         ),
                         f"{p}-HOMES {homes_before_leaf} =",
                         f"{p}-CTX _EXT4-C.J.COMMITTED + @ 1 =",
@@ -74916,7 +74913,14 @@ def staged_public_final_unlink_open_retained_fixture(
     jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Crash with one of two descriptors retaining a deleted final link."""
+    """Crash with one of two descriptors retaining a deleted final link.
+
+    The removal leaves the file's record in the orphan file while a
+    descriptor holds it.  The sync that follows lands the journal: the
+    superblock goes clean with ORPHAN_PRESENT still set, as the kernel's
+    ext4_freeze leaves a volume whose orphan file is in use.  A fresh mount
+    then drains the record.
+    """
     case = staged_public_final_unlink_closed_fixture
     path = case["source"]
     source_patches = case["source_patches"]
@@ -75051,8 +75055,8 @@ def staged_public_final_unlink_open_retained_fixture(
                         "_UFR-AFTER-IOR VFS-IOR-REASON "
                         "VFS-R-NOENT ="
                     ),
-                    "_UFR-SYNC-IOR VFS-E-BUSY =",
-                    "_UFR-SYNC-LAST-IOR _UFR-SYNC-IOR =",
+                    "_UFR-SYNC-IOR 0=",
+                    "_UFR-SYNC-LAST-IOR 0=",
                     "_UFR-CLOSE1-IOR 0=",
                     "_UFR-D D.FLAGS @ VFS-DF-UNLINKED AND 0<>",
                     "_UFR-D D.VNODE @ _UFR-VN =",
@@ -75094,7 +75098,9 @@ def staged_public_final_unlink_open_retained_fixture(
                         "_EXT4-SB.RO-COMPAT + L@ "
                         "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
                     ),
-                    "_UFR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_UFR-CTX _EXT4-C.RECOVERY + @ 0=",
+                    "_UFR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    "_UFR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                     "_UFR-V V.FLAGS @ VFS-F-RO AND 0=",
                     *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
@@ -75124,6 +75130,8 @@ def staged_public_final_unlink_open_retained_fixture(
         free_inodes_before
     )
     assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000
+    assert not struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x4
+    assert struct.unpack_from("<H", final_superblock, 0x3A)[0] == 1
     assert struct.unpack_from("<H", final_inode, 0x1A)[0] == 0
     assert struct.unpack_from("<I", final_inode, 0x04)[0] == old_size
     assert struct.unpack_from("<I", final_inode, 0x1C)[0] == old_blocks
@@ -75834,8 +75842,7 @@ def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
                         ),
                         (
                             "_FAH-WRITER _EXT4-JWR.CP-MODE + @ "
-                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-"
-                            "ADD-FIRST ="
+                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD ="
                         ),
                         "_FAH-ADD-HOMES 2 =",
                         "_FAH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
@@ -91762,7 +91769,7 @@ def test_ext4_jbd2_map_service_is_private_acyclic_unit() -> None:
         "_EXT4-JOURNAL-MAP@": 3,
         "_EXT4-JOURNAL-MAP-UNIQUE?": 1,
         "_EXT4-JOURNAL-DATA?": 6,
-        "_EXT4-READ-JBLOCK": 26,
+        "_EXT4-READ-JBLOCK": 27,
         "_EXT4-WRITE-JBLOCK": 21,
         "_EXT4-JOURNAL-NEXT": 7,
         "_EXT4-JOURNAL-ADVANCE": 3,

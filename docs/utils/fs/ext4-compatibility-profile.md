@@ -181,8 +181,10 @@ accounts atomically in at most six homes without an orphan interval. Any other
 last link enters the modern orphan file in its exact `4/0/0` or `5/0/0`
 removal, which publishes link zero while retaining the complete
 map/allocation state. Closed targets drain immediately; descriptor-retained
-targets remain readable and drain on the last staged `RELEASE`. Staged
-`SYNCFS` returns `BUSY` while that orphan is live. The first
+targets remain readable and drain on the last staged `RELEASE`. While that
+orphan is live the volume takes other writes, and staged `SYNCFS` lands the
+journal with the orphan kept and `ORPHAN_PRESENT` set, as the kernel's
+`ext4_freeze` leaves a volume whose orphan file is in use. The first
 bounded `MKDIR`
 slice is now public too. It allocates one inode and one data block, constructs a
 checksummed one-block `.`/`..` directory, and inserts its typed name in an
@@ -2184,7 +2186,8 @@ removal requires link count one, no open references, zero size and
 `i_blocks`, an empty map, no external xattr or project ID, and exactly one
 authenticated directory reference. Orphan-backed final removal instead
 requires a regular inode inside the complete inode-directed JFI cleanup
-envelope and an authenticated empty orphan union. It may retain open
+envelope, and an authenticated orphan union that holds only the records of
+removed files still open, with room for one more. It may retain open
 references. Cross-parent remaining-link proof, directories through `UNLINK`,
 non-regular targets, and multi-block linear parents remain refused rather than
 approximated. Empty directories use the `RMDIR` contract below, and RENAME
@@ -2258,14 +2261,16 @@ then-checked-in 1.10-billion-step watchdog.
 Orphan-backed final removal reauthenticates the prospective link-one inode and
 complete future cleanup topology before it begins. Its exact `4/0/0` or
 `5/0/0` ADD changes target link/ctime, parent mtime/ctime, the record's block,
-modern-orphan slot zero, and the primary-super `ORPHAN_PRESENT` feature as one
+the first empty modern-orphan slot, and the primary-super `ORPHAN_PRESENT`
+feature, which stays set while the mount retains other records, as one
 namespace boundary. The allocation map, `i_blocks`, size, data, allocation
 bitmaps, and free counters remain unchanged at that boundary. A closed target
-immediately runs topology-derived cleanup and exact `1/0/0` transient-feature
-retirement. An open target remains readable through detached descriptors;
+immediately runs topology-derived cleanup and, once no other record remains,
+exact `1/0/0` transient-feature retirement. An open target remains readable through detached descriptors;
 non-last closes emit no ext4 transaction, while the last staged `RELEASE`
-reauthenticates the inode/generation singleton and drains it. `SYNCFS` refuses
-with `BUSY` while the live orphan exists. A release error consumes the file
+reauthenticates the inode/generation record and drains it beside any other
+retained record. `SYNCFS` lands the journal while the live orphan exists. A
+release error consumes the file
 descriptor, marks the mount read-only and dirty, and leaves the durable orphan
 for mount-time cleanup.
 

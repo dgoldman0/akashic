@@ -59,7 +59,11 @@ and a last link of an empty file loses its inode in the removal's transaction.
 A last link with storage, and every removed directory, enters the modern
 orphan file in that transaction with no links; release passes and the deletion
 then free it, at once when nothing holds it open and otherwise on its last
-staged `RELEASE`, and mount recovery finishes the work after a crash. `RMDIR`
+staged `RELEASE`, and mount recovery finishes the work after a crash. While a
+removed file stays open, the volume takes every other write, the records of
+other removals join and drain beside its own, and `VFS-SYNC` lands the journal
+with the record kept in the orphan file and `ORPHAN_PRESENT` set, as the
+kernel's `ext4_freeze` leaves a volume whose orphan file is in use. `RMDIR`
 removes any empty directory: of any mode, linear or indexed, of any number of
 blocks, with an extent map of any depth. `RENAME` runs the same removal and
 insert: it moves a regular file or a directory within one parent or across
@@ -811,13 +815,16 @@ current filesystem.
 Recovery requires a physically writable, flush-capable volume. Home writes are
 flushed and the resulting filesystem is strictly revalidated, including the
 authoritative orphan scan, while `RECOVER` remains set. Only an authenticated
-empty orphan result reaches the recovered-super endpoint. At the first
-noncommitted journal slot, the driver first
+empty orphan result reaches the recovered-super endpoint, apart from a landing
+that a mount began beside retained records, which recovery completes as it
+began before it drains them (see
+[Landing beside a removed file held open](#landing-beside-a-removed-file-held-open)).
+At the first noncommitted journal slot, the driver first
 writes and flushes the complete intended reset image with byte zero invalid.
 It then restores byte zero, writes and flushes the valid recovery anchor, resets
 the primary journal superblock and flushes again, and finally clears ext4
-`RECOVER` and `ORPHAN_PRESENT` together and flushes the primary ext4
-superblock. The preseed and valid anchor
+`RECOVER`, and `ORPHAN_PRESENT` with it when the orphan file is empty, and
+flushes the primary ext4 superblock. The preseed and valid anchor
 differ in only byte zero, so a prefix tear cannot combine a new JBD2 header
 with stale cursor contents. Once the ext4 clear is durable, the driver removes
 the private witness from journal block 0, flushes, zeros the anchor slot, and
@@ -1374,14 +1381,17 @@ metadata, data, and revoke entries and their after-images remain owned by the
 writer; retry, abort, and a new transaction remain busy until checkpoint
 finishes. Checkpoint first revalidates the complete workspace, performs a
 complete on-media JBD2 log scan, and then repeats that scan in lockstep with the
-retained emitter order before issuing a home write. Generic transactions use
-the ordinary strict reload and require an authenticated empty orphan union
-both before and after their home writes; they therefore gain no authority from
+retained emitter order before issuing a home write. Generic transactions
+reload with the union the mount retains admitted: an empty union, or the
+modern records of removed files still held open, with `ORPHAN_PRESENT` set
+exactly while it holds one. They change no record, so the union their home
+writes leave must equal the one their pre-home reload found, compared through
+the CRC32C of the plan table each reload builds; they gain no authority from
 a nonempty orphan plan. Sealed orphan `FINAL` and `MORE` modes instead use a
 private pre-home reload that performs the same super, group, backup,
 orphan-union, and journal authentication, or the journal's alone while the
 context's last complete reload stands (described below), but replaces the
-public nonempty-policy refusal with an exact writer-certificate comparison. It requires the
+public policy with an exact writer-certificate comparison. It requires the
 selected record to remain in the completely rebuilt plan, the plan's total and
 per-protocol counts to equal the certified prestate, the raw target identity
 and table location, the selected protocol's raw locator and authority, and the
@@ -1500,12 +1510,13 @@ Public unmount applies the writer state rather than silently discarding it:
 not bypass a checkpoint, a busy writer state, clean landing, final proof, or
 failure quarantine.
 
-Dirty-empty `IDLE` deactivation begins with a flush, a strict reload that
+Dirty-empty `IDLE` deactivation begins with a flush, a reload that
 authenticates only the journal while the last checkpoint's reload stands, and
 a root proof. It then uses the existing `AKR1` protocol: W1 installs an invalid-byte
 reset-anchor preseed; W2 installs the exact valid `AKE1`-qualified anchor; W3
 installs the witnessed empty primary; W4 writes the checksummed clean ext4
-superblock with `RECOVER` and `ORPHAN_PRESENT` clear; W5 installs the standard
+superblock with `RECOVER` clear, and `ORPHAN_PRESENT` clear unless the mount
+retains orphan records; W5 installs the standard
 witness-free primary; and W6 retires the anchor. The protocol has six writes
 and seven flush barriers, including the initial preflight flush. `AKE1`
 authenticates the old empty primary across any W3 sequential-prefix tear.
@@ -1527,6 +1538,52 @@ successful clean-unmount endpoint remounts without recovery writes. Once the
 clean ext4 superblock and standard witness-free primary are authoritative,
 leftover anchor bytes from a late failed landing are non-authoritative and a
 fresh mount need not read or zero that old slot.
+
+### Landing beside a removed file held open
+
+A file or folder whose last link goes while a descriptor holds it keeps its
+record in the orphan file until its last `RELEASE` (see
+[Directory removal](#directory-removal)). The mount retains such records
+between operations: the union holds modern records only, at most the runtime
+capacity of them, and `ORPHAN_PRESENT` is set exactly while it holds one
+(`_EXT4-RETAINED-ORPHAN-UNION`). `VFS-SYNC` lands the journal beside them. The
+landing writes the same six blocks as any other, and its W4 superblock clears
+`RECOVER` but keeps `ORPHAN_PRESENT`, because the orphan file is in use. The
+reloads before W1 and after W6 admit the retained union and require the same
+union on both sides, compared through the CRC32C of the plan table each
+reload builds (`_EXT4-ORPHAN-UNION-CRC`).
+
+That landed state is one the kernel and e2fsprogs both produce and take. At
+Linux v6.8, `ext4_freeze` (fs/ext4/super.c) flushes the journal with
+`jbd2_journal_flush`, which marks it empty with `s_start` zero
+(fs/jbd2/journal.c), clears `needs_recovery`, and clears `orphan_present` only
+when `ext4_orphan_file_empty` holds; `ext4_unfreeze` sets both bits again. Every
+read-write mount runs `ext4_orphan_cleanup` (fs/ext4/orphan.c) over every slot
+of the orphan file, whatever the journal state, and processes each record it
+finds. e2fsprogs 1.47.4 never skips such a volume as clean: `check_if_skip`
+(e2fsck/unix.c) returns early while `orphan_file` and `orphan_present` are both
+set, and `release_orphan_inodes` (e2fsck/super.c) releases each orphan-file
+record before pass 1 unless the check is read-only. Under `-n` the release does
+not run, so e2fsck reports the record's inode as deleted with a zero dtime, the
+bitmaps that still count its storage, and the orphan block as not clean, as it
+does for any ext4 volume with a removed file still open. The pinned
+`e2fsck -f -n` is therefore clean on a landed volume once its orphan file is
+empty, and `e2fsck -f -p` releases a retained record exactly as the next mount
+does.
+
+The `AKR1` witness binds the superblock image with both bits clear. A clean
+image that keeps `ORPHAN_PRESENT`, and the dirty image it came from, differ from
+it only in `RECOVER`, the state field, `ORPHAN_PRESENT` and the checksum, so the
+witness check at mount accepts every one of them, as it accepted the dirty and
+landed images before. What the mount writes to finish a landing follows the
+union it authenticates: a landing interrupted beside records is completed with
+`ORPHAN_PRESENT` kept (`_EXT4-PREPARE-CLEAR`), and mount recovery then drains
+the records. On a clean superblock, a recovery witness, a torn primary, a
+pending cleanup or a torn superblock beside records is such a landing
+(`_EXT4-FINISH-RECOVERY-LANDING`). On a dirty superblock over an empty
+journal, a reset whose anchor does not name an active predecessor, or a torn
+superblock, is one too (`_EXT4-LANDING-INTERRUPTED?`), while a checkpoint's
+reset keeps converging as before.
 
 The bounded 1 KiB qualification uses 63 metadata after-images and 126 revokes,
 the first counts that require two descriptor batches and two revoke batches
@@ -2199,10 +2256,14 @@ no revoke.
 A last link with storage, a last link held open, and every directory enter the
 modern orphan file in the removal's transaction: the target keeps its map and
 allocation with no links and a new change time, the orphan file gains its
-record, and the superblock gains `ORPHAN_PRESENT`. The cold plan qualifies the
-deletion that will end the record, requires an empty orphan union with a free
-slot and mounted free counts equal to the bitmaps, and sizes the writer from
-the deletion's credits and the room one release pass needs. The live pass seals
+record in the first empty slot, and the superblock gains `ORPHAN_PRESENT`, or
+keeps it when the mount already retains records of removed files held open.
+The cold plan qualifies the deletion that will end the record, admits the
+union the mount retains with room in its runtime plan for one more record
+(`_EXT4-JUA-REQUIRE-PRESTATE`), proves that the orphan file's slots and that
+plan agree record for record (`_EXT4-FIND-EMPTY-ORPHAN-SLOT`), requires
+mounted free counts equal to the bitmaps, and sizes the writer from the
+deletion's credits and the room one release pass needs. The live pass seals
 the unlink-ADD payload, and the checkpoint rebuilds every journaled image from
 the media and that payload before its home writes. The payload names the
 target's record and its predecessor: a splice names a predecessor at a lower
@@ -2218,10 +2279,17 @@ it replays any transaction's.
 A target that nothing holds open then drains before the callback returns:
 release passes free its blocks from the end of its map, one transaction each,
 the last pass also deletes the inode and removes its orphan record, and a
-final transaction clears `ORPHAN_PRESENT`. A target held open stays readable
-through its descriptors and drains on its last staged `RELEASE`, and while its
-record is live staged `SYNCFS` returns `BUSY`. After a crash, mount recovery
-drains it.
+final transaction clears `ORPHAN_PRESENT` once no other record remains. A
+target held open stays readable through its descriptors and drains on its last
+staged `RELEASE`. Meanwhile the volume takes every other write, and a sync
+lands with the record in place (see
+[Landing beside a removed file held open](#landing-beside-a-removed-file-held-open)).
+A drain names its record by inode (`_EXT4-DRAIN-TARGET`), so one file's
+release passes and deletion proceed while records of other open files remain;
+mount recovery, which drains every record, takes them in locator order
+instead. A `RELEASE` that finds the journal landed stages its first
+transaction dry, so that a refusal leaves the medium as it was, and then
+activates the journal. After a crash, mount recovery drains every record.
 
 After commit, the callback publishes the target's change time, or for a freed
 empty file the mount's free inode count; a removed directory's one link, which
@@ -2600,8 +2668,9 @@ transaction follows how many groups the released blocks span and how
 scattered they are rather than the file's size. A shrink that does not fit
 runs across transactions, as the kernel's ext4 truncates. The first commits
 the new size and trusted-clock times together with one modern orphan-file
-slot and the primary `ORPHAN_PRESENT` bit, leaving the map and `i_blocks`
-unchanged. Release passes then free the blocks past the new EOF from the end
+slot, the first empty one beside any records the mount retains, and the
+primary `ORPHAN_PRESENT` bit, which stands already while such records remain,
+leaving the map and `i_blocks` unchanged. Release passes then free the blocks past the new EOF from the end
 of the file. A pass takes a removal step only while the step's worst case
 still fits the profile: its run can add a group's bitmap and descriptor page,
 and the superblock until an earlier run of the pass has counted it, and every
@@ -2613,9 +2682,10 @@ block that holds it, when any of them is not zero, and clears the slot. The
 pass that ends the release carries the final cleanup too when its homes
 still fit, as the kernel's last truncate handle removes the orphan; otherwise
 the final cleanup is a transaction of its own. A last transaction retires
-`ORPHAN_PRESENT`. Every refusal comes before the first commit: the profile
-must hold the three-home insertion, the volume must have an orphan file with
-room in its runtime plan, and a probe pass staged before any media I/O must
+`ORPHAN_PRESENT` unless the mount retains other records. Every refusal comes
+before the first commit: the profile must hold the three-home insertion, the
+volume must have an orphan file with room in its runtime plan for one more
+record, and a probe pass staged before any media I/O must
 be able to take one removal step, so a profile whose revokes cannot cover the
 tree's depth refuses with `VFS-E-NOSPC`. After the insertion commits, a
 failure returns success with the diagnostic in `V.LAST-IOR`, republishes the
@@ -3014,7 +3084,8 @@ allocation while publishing no links, the times, the record's removal, the
 orphan record, and `ORPHAN_PRESENT`. Closed targets drain immediately through
 release passes and the deletion; open targets remain readable until the last
 staged `RELEASE`, which reauthenticates and drains that same inode and
-generation, and staged `SYNCFS` returns `BUSY` while the record is live. A
+generation. While the record is live the volume takes other writes, and
+`SYNCFS` lands the journal with the record kept. A
 directory's deletion lowers its group's `used_dirs` count, and its blocks
 release without revokes. LINK
 into slack uses exact deduplicated `2/0/0` or `3/0/0` credit to add one

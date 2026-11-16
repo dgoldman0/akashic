@@ -78,10 +78,6 @@ RENAME_TRANSACTION = 2
 
 VREPL_S_OK = 0
 VREPL_S_IO = 4
-VREPL_S_RECOVERY = 7
-VFS_R_UNSUPPORTED = 11
-VFS_R_BUSY = 14
-EXT4_D_RECOVERY = 5
 
 
 def pattern(seed: int, length: int) -> bytes:
@@ -307,12 +303,6 @@ def _file_record(content: bytes | None) -> list[str]:
     if content is None:
         return ["absent"]
     return [str(len(content)), str(zlib.crc32(content))]
-
-
-def _ior(value: str) -> tuple[int, int]:
-    """The reason and the detail of a printed ior."""
-    ior = int(value) & 0xFFFF_FFFF_FFFF_FFFF
-    return ior & 0xFFFF, ior >> 32
 
 
 def _host_view(
@@ -631,17 +621,18 @@ def test_save_over_a_target_held_open_elsewhere(
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """What the driver does today while another descriptor holds the target.
+    """Saves go on while another descriptor holds an old target open.
 
-    The save itself lands: the rename takes the open file as its victim,
-    whose storage waits in the orphan file for the descriptor to close.
-    Until then the driver refuses every create on the volume and answers
-    VFS-SYNC with busy, so the next save cannot write its stage.  The driver
-    round that lets a sync land with a removed file open changes the middle
-    of this test; the first save and the state after the close stay.
+    Each save lands, and the descriptor keeps reading the bytes it opened.
+    The first save's rename takes the open file as its victim, whose storage
+    waits in the orphan file until the descriptor closes.  The second save
+    renames over the first one's file, which nothing holds, so that victim
+    drains at once beside the record the open file keeps.  A sync lands the
+    journal with the record in place, and the close drains it.
     """
     first = pattern(NEW_SEED, 2048)
     second = pattern(NEW_SEED + 1, 2048)
+    third = pattern(NEW_SEED + 2, 2048)
     machine = Machine(bytearray(document_volume))
     assert machine.up() == [0, 0, 0]
     assert machine.one('S" /doc.txt" SVT-HOLD', "hold") == ["-1"]
@@ -652,27 +643,23 @@ def test_save_over_a_target_held_open_elsewhere(
     assert machine.one("SVT-HELD-READ", "held") == _file_record(OLD_DOC)
     assert machine.one("SVT-ORPHANS", "orphans") == ["1"]
 
-    # Today: the stage cannot be created while the orphan is active.  The
-    # refusal is a throw out of VFS-MKFILE, which the save reports as
-    # recovery-required, and the target keeps the first save's bytes.
     machine.line(f"{NEW_SEED + 1} 2048 SVT-FILL")
-    assert machine.one("2048 SVT-DOC SVT-SAVE", "save") == [
-        str(VREPL_S_RECOVERY)
-    ]
-    assert _ior(machine.one("SVT-LAST", "last")[0]) == (
-        VFS_R_UNSUPPORTED, EXT4_D_RECOVERY
-    )
-    assert _ior(machine.one("SVT-SYNC", "sync")[0])[0] == VFS_R_BUSY
-    assert machine.one('S" /doc.txt" SVT-FILE', "file") == _file_record(first)
-    assert machine.one("SVT-DOC SVT-COMPANIONS", "companions") == ["0"] * 3
-
-    # The close drains the orphan, and the save goes through.
-    assert machine.one("SVT-RELEASE", "release") == ["0"]
-    assert machine.one("SVT-ORPHANS", "orphans") == ["0"]
     assert machine.one("2048 SVT-DOC SVT-SAVE", "save") == [str(VREPL_S_OK)]
     assert machine.one('S" /doc.txt" SVT-FILE', "file") == _file_record(second)
     assert machine.one("SVT-DOC SVT-COMPANIONS", "companions") == ["0"] * 3
+    assert machine.one("SVT-HELD-READ", "held") == _file_record(OLD_DOC)
+    assert machine.one("SVT-ORPHANS", "orphans") == ["1"]
+    assert machine.one("SVT-SYNC", "sync") == ["0"]
+    assert machine.one("SVT-ORPHANS", "orphans") == ["1"]
+
+    # The close drains the record, and the next save goes on as before.
+    assert machine.one("SVT-RELEASE", "release") == ["0"]
+    assert machine.one("SVT-ORPHANS", "orphans") == ["0"]
+    machine.line(f"{NEW_SEED + 2} 2048 SVT-FILL")
+    assert machine.one("2048 SVT-DOC SVT-SAVE", "save") == [str(VREPL_S_OK)]
+    assert machine.one('S" /doc.txt" SVT-FILE', "file") == _file_record(third)
+    assert machine.one("SVT-DOC SVT-COMPANIONS", "companions") == ["0"] * 3
     assert machine.one("SVT-DOWN", "down") == ["0"]
     assert _host_view(machine.media, tmp_path, jbd2_toolchain) == {
-        "doc.txt": second
+        "doc.txt": third
     }
