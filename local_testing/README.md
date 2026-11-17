@@ -473,8 +473,8 @@ cuts after every write, which takes seventeen minutes for those tests alone.
 
 ### On the emulator or the simulator
 
-The ext4 tests run their journeys on MegaPad's emulator unless
-`AKASHIC_EXT4_BACKEND=simulator` chooses MegaPad's simulator.  The four
+The ext4 tests run their journeys on MegaPad's simulator unless
+`AKASHIC_EXT4_BACKEND=emulator` chooses MegaPad's emulator.  The four
 files that use the ext4 harness, `test_vfs_ext4.py`,
 `test_vfs_ext4_user_volume.py`, `test_vfs_ext4_retained_orphan.py` and
 `test_vfs_replace_ext4.py`, take their machines from the harness in
@@ -526,7 +526,15 @@ and two print the device's cycle count for a listing.  These run on the
 emulator whichever backend is chosen.  The simulator cannot hold a storage
 request stalled, and no ext4 test plants a stall.  The four files take
 about a fifteenth of the emulator's time on the simulator
-([`evidence/ext4-on-simulator-20261116.md`](evidence/ext4-on-simulator-20261116.md)).
+([`evidence/ext4-on-simulator-20261116.md`](evidence/ext4-on-simulator-20261116.md)),
+which is why it is the default.
+
+The emulator stays the reference.  An ext4 slice ends with the standing
+sample run on it by node id, and the four files run whole on it at the end
+of each step of the release plan and in the release's final run.
+fantasy-engine's test tool keeps those whole runs as units of their own,
+`akashic:local_testing/test_vfs_ext4.py@emulator` and the like, in its
+`final` set, so their record stands apart from the simulator's.
 
 The shared FAT/ext4 emulator snapshot uses 64 MiB of external memory: KDOS
 owns its established 32 MiB userland dictionary zone and the remainder holds

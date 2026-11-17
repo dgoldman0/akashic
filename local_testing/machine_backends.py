@@ -7,9 +7,10 @@ simulator runs the same BIOS words, KDOS and Akashic source semantically,
 in native code, and its storage service takes the same test faults and
 records the same requests as the emulator's controller (MegaPad
 docs/storage-faults.md).  ``AKASHIC_EXT4_BACKEND`` chooses where the ext4
-tests run their journeys: ``emulator``, the default, or ``simulator``.  A
-test that reads the emulator's processor state or its cycle counter runs on
-the emulator whichever is chosen.
+tests run their journeys: ``simulator``, the default, which runs them about
+fifteen times faster, or ``emulator``.  A test that reads the emulator's
+processor state or its cycle counter runs on the emulator whichever is
+chosen.
 
 Either way a journey reports what each of its lines printed, without the
 BIOS's echo of the line or its prompt, so a test's checks read the same
@@ -33,7 +34,7 @@ import struct
 import traceback
 
 BACKENDS = ("emulator", "simulator")
-BACKEND = os.environ.get("AKASHIC_EXT4_BACKEND", "emulator")
+BACKEND = os.environ.get("AKASHIC_EXT4_BACKEND", "simulator")
 if BACKEND not in BACKENDS:
     raise RuntimeError(
         f"AKASHIC_EXT4_BACKEND must be one of {', '.join(BACKENDS)}, "
