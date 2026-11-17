@@ -90,6 +90,7 @@ REQUIRE widgets/prompt.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
 REQUIRE widgets/media.f
+REQUIRE ../utils/fs/places.f
 REQUIRE widgets/document.f
 REQUIRE widgets/text-grid.f
 REQUIRE widgets/tabs.f
@@ -3665,8 +3666,23 @@ VARIABLE _USH-H    VARIABLE _USH-W
     R> DROP ;
 
 \ --- Media materialization helper ---
-\ An authored visual <rep src=...> shows that file from the current VFS,
-\ with the rep's text, when it has one, as the picture's text alternative.
+\ An authored visual <rep src=...> shows that file from the place the
+\ document is read from (UTUI-FILES!), with the rep's text, when it has
+\ one, as the picture's text alternative.  A document loaded with no place
+\ opens no file.
+VARIABLE _UTUI-FILES   0 _UTUI-FILES !
+
+\ UTUI-FILES! ( place | 0 -- )
+\   The place the documents loaded from now on read their files from.
+: UTUI-FILES!  ( place -- )  _UTUI-FILES ! ;
+
+: _UTUI-MAT-MEDIA-OPEN  ( src-a src-u -- )
+    VFS-PATH-MAX ALLOCATE IF DROP 2DROP EXIT THEN >R
+    _UTUI-FILES @ R@ VFS-PATH-MAX PLACE-BIND        ( vfs len ior )
+    IF 2DROP R> FREE EXIT THEN
+    R@ SWAP ROT _UTUI-MAT-W @ MEDIA-OPEN-VFS DROP
+    R> FREE ;
+
 : _UTUI-MAT-MEDIA  ( elem -- )
     >R
     R@ _UTUI-SIDECAR _UTUI-SYNC-PROXY
@@ -3678,8 +3694,7 @@ VARIABLE _USH-H    VARIABLE _USH-W
         _UTUI-MAT-W @ MEDIA-ALT!
     ELSE 2DROP THEN
     S" src" UIDL-ATTR 0= IF 2DROP EXIT THEN
-    VFS-CUR ?DUP 0= IF 2DROP EXIT THEN
-    _UTUI-MAT-W @ MEDIA-OPEN-VFS DROP ;
+    _UTUI-MAT-MEDIA-OPEN ;
 
 : _UTUI-MATERIALIZE  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN

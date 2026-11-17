@@ -31,6 +31,7 @@ REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/request-bus.f
 REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../interop/place-resource.f
 REQUIRE ../../../interop/resource.f
 REQUIRE ../../../interop/schema-common.f
 REQUIRE ../../../net/external-io.f
@@ -288,8 +289,14 @@ VARIABLE _STM-DSI-U
 VARIABLE _STM-DSI-REV
 VARIABLE _STM-DSI-STATUS
 
+\ The volume under this instance's home.  Streams' stores keep a layout
+\ of their own from that volume's root (docs/utils/fs/places.md, "What
+\ slice 2 leaves").
+: _STM-HOME-VFS  ( -- vfs | 0 )
+    _STM-CURRENT-INSTANCE @ CINST-HOME DUP IF PLACE-VFS THEN ;
+
 : _STM-DRAFT-STORAGE-INIT-BODY  ( -- )
-    VFS-CUR DUP 0= IF
+    _STM-HOME-VFS DUP 0= IF
         DROP SDSTORE-S-INVALID _STM-DRAFT-BLOCK! EXIT
     THEN
     _STM-DRAFT-STORE STREAMS-DRAFT-STORE-INIT _STM-DSI-STATUS !
@@ -348,7 +355,7 @@ VARIABLE _STM-DSI-STATUS
 VARIABLE _STM-SSI-STATUS
 
 : _STM-SOURCE-STORAGE-INIT-BODY  ( -- )
-    VFS-CUR DUP 0= IF
+    _STM-HOME-VFS DUP 0= IF
         DROP SSSTORE-S-INVALID _STM-SOURCE-BLOCK! EXIT
     THEN
     _STM-SOURCE-STORE STREAMS-SOURCE-STORE-INIT
@@ -3147,7 +3154,7 @@ VARIABLE _STM-CONFIGURED-INIT-SERVICE
     S" org.akashic.net.external-io"
         _STM-CURRENT-INSTANCE @ CINST-SERVICE
         _STM-CONFIGURED-INIT-SERVICE !
-    VFS-CUR _STM-CONFIGURED-INIT-SERVICE @
+    _STM-HOME-VFS _STM-CONFIGURED-INIT-SERVICE @
         _STM-CONFIGURED-FACTORY-XT @ _STM-CONFIGURED-REFRESH
         STREAMS-REFRESH-OWNER-INIT
     DUP _STM-CONFIGURED-INIT-STATUS ! ;
@@ -3168,7 +3175,7 @@ VARIABLE _STM-AUTH-QUIESCE-STATUS
     _STM-AUTH-FACTORY-XT @ DUP 0= IF
         DROP _STM-AUTH-INIT-STATUS @ EXIT
     THEN DROP
-    VFS-CUR
+    _STM-HOME-VFS
     _STM-XIO-SERVICE @ DUP 0= IF
         DROP S" org.akashic.net.external-io"
             _STM-CURRENT-INSTANCE @ CINST-SERVICE

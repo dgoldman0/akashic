@@ -282,8 +282,8 @@ before its children. The product Desktop names every full core but Desk's,
 which is none on a one-core machine. With worker cores, jobs run on them while
 Desk's core sleeps; Desk's per-pass service (`APP.SERVICE-XT`) polls the
 capability, so when a worker's IPI wakes Desk the next pass takes the job back
-and completes its run without waiting for the tick. Desk gives it module storage on the current filesystem,
-in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
+and completes its run without waiting for the tick. Desk gives it module storage in the home of the
+Practice's places, in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
 Practice; when that store cannot open, the sandbox still runs without
 installed modules. Callers reach it only through ordinary capability
 requests: Desk registers its intents, so an applet posts `sandbox.invoke`,
@@ -434,8 +434,8 @@ and routes that owner but does not acquire its data or semantic authority.
 
 Daybook owns reminders; Desk only runs them. On activation, after the
 Daybook document owner, Desk opens one
-[reminder service](../daybook/automations.md) in its component state over
-the Practice filesystem, at `/daybook-automations.bin`. A store Desk cannot
+[reminder service](../daybook/automations.md) in its component state, in
+the home of the Practice's places, at `/daybook-automations.bin`. A store Desk cannot
 use still yields a service, which tells Daybook why.
 
 Each Desk tick calls `DBSVC-TICK` before the applet host ticks. An idle
@@ -452,8 +452,8 @@ dispatch-quiesced teardown, after the Daybook document owner.
 ## Desk-hosted scheduled runs
 
 A Daybook schedule may run the Agent. Desk hosts the two pieces that do
-it, in its component state over the Practice filesystem, once the Agent
-runtime exists:
+it, in its component state and the home of the Practice's places, once the
+Agent runtime exists:
 - the Agent's [dispatcher](../agent/dispatch.md), over that runtime, with
   its run store at `/agent-dispatch.bin`;
 - the [schedule broker](schedule-broker.md), over the Practice's

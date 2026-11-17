@@ -95,6 +95,7 @@ REQUIRE dialog-model.f
 REQUIRE ../utils/term.f
 REQUIRE app-desc.f
 REQUIRE ../utils/fs/vfs.f
+REQUIRE ../interop/place-resource.f
 
 CREATE _ASHELL-OWNED-START
 VARIABLE _ASHELL-OWNED-LIMIT
@@ -703,6 +704,7 @@ VARIABLE _ASHELL-CLOSE-REASON
     ?DUP IF _ASHELL-UIDL-FILE-MAX XMEM-FREE-BLOCK THEN ;
 
 VARIABLE _ALUF-RGN
+VARIABLE _ALUF-PLACE
 VARIABLE _ALUF-FD
 VARIABLE _ALUF-BUF
 VARIABLE _ALUF-DMA
@@ -730,12 +732,15 @@ VARIABLE _ALUF-TOTAL
     REPEAT
     0 ;
 
+\ The document reads its own files, its media, from the place it was read
+\ from, for the length of the load.
 : _ALUF-PARSE  ( -- flag )
+    _ALUF-PLACE @ UTUI-FILES!
     _ALUF-BUF @ _ALUF-TOTAL @ _ALUF-RGN @ UTUI-LOAD ;
 
-: ASHELL-LOAD-UIDL  ( path-a path-u rgn -- buf | 0 )
-    _ALUF-RGN !
-    VFS-CUR VFS-OPEN DUP 0= IF EXIT THEN _ALUF-FD !
+: ASHELL-LOAD-UIDL  ( path-a path-u place rgn -- buf | 0 )
+    _ALUF-RGN ! _ALUF-PLACE !
+    VFS-FF-READ _ALUF-PLACE @ PLACE-OPEN IF DROP 0 EXIT THEN _ALUF-FD !
     _ASHELL-UIDL-FILE-MAX XMEM-ALLOT? IF
         DROP _ALUF-FD @ VFS-CLOSE? DROP 0 EXIT
     THEN
@@ -747,7 +752,7 @@ VARIABLE _ALUF-TOTAL
     _ALUF-READ _ALUF-FD @ VFS-CLOSE? OR
     _ALUF-DMA @ DMA-FREE
     IF _ALUF-FREE-BUF EXIT THEN
-    ['] _ALUF-PARSE CATCH ?DUP IF
+    ['] _ALUF-PARSE CATCH  0 UTUI-FILES!  ?DUP IF
         DROP _ALUF-REJECT-THROW EXIT
     THEN
     IF _ALUF-BUF @ ELSE _ALUF-REJECT-PARSE THEN ;
@@ -1401,7 +1406,7 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
 \   Thin wrapper around ASHELL-LOAD-UIDL that uses the shell's root
 \   region and stashes the buffer for _ASHELL-TEARDOWN to FREE.
 : _ASHELL-LOAD-UIDL-FILE  ( path-a path-u -- flag )
-    _ASHELL-RGN @ ASHELL-LOAD-UIDL    ( buf | 0 )
+    _ASHELL-INST @ CINST-ORIGIN _ASHELL-RGN @ ASHELL-LOAD-UIDL    ( buf | 0 )
     DUP _ASHELL-UIDL-BUF !
     0<> ;
 

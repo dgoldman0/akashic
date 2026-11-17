@@ -27,6 +27,7 @@ REQUIRE ../../../utils/string.f
 REQUIRE projection-adapter.f
 REQUIRE ../../../interop/resource-owners.f
 REQUIRE ../../../interop/service-endpoint.f
+REQUIRE ../../../interop/place-resource.f
 
 1 CONSTANT _LAPP-V-ACTIVE
 2 CONSTANT _LAPP-V-ARCHIVED
@@ -464,7 +465,8 @@ VARIABLE _LPO-CREG  VARIABLE _LPO-RREG  VARIABLE _LPO-BUS
     \ decoded request or transactional result builder.  That separately
     \ initialized workspace occupies the tail of the activation allocation.
     _LAPP-RUNTIME@ _LAPP-OWNER-RUNTIME-SIZE 0 FILL
-    VFS-CUR DUP 0= IF
+    \ The repository keeps its own layout on the volume under the home.
+    _LAPP-CURRENT-INSTANCE @ CINST-HOME DUP IF PLACE-VFS THEN DUP 0= IF
         DROP LIBRARY-SERVICE-S-IO _LAPP-SET-STATUS EXIT
     THEN
     _LAPP-VFS !

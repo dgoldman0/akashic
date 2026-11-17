@@ -25,6 +25,7 @@ REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-access.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/buffer-writer.f
 REQUIRE ../../../text/utf8.f
@@ -114,7 +115,6 @@ _GRID-CURRENT-STATE CMP-CELL: _GRID-DIRTY
 \ Set when the user agreed to discard unsaved changes and close, so the
 \ close Grid then asks for goes ahead.
 _GRID-CURRENT-STATE CMP-CELL: _GRID-DISCARD-ARMED
-_GRID-CURRENT-STATE CMP-CELL: _GRID-VFS
 _GRID-CURRENT-STATE VFA-SCOPE-SIZE CMP-FIELD: _GRID-LOAD-SCOPE
 _GRID-CURRENT-STATE VREPL-SIZE CMP-FIELD: _GRID-REPLACE
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SOURCE-BLOCKED
@@ -318,7 +318,7 @@ VARIABLE _GCSV-STATUS
 VARIABLE _GRID-LOAD-STATUS
 
 : _GRID-READ-FILE-BODY  ( -- )
-    S" /grid.csv" VFS-FF-READ _GRID-LOAD-SCOPE VFA-SCOPE-OPEN?
+    _GRID-REPLACE VREPL-TARGET$ VFS-FF-READ _GRID-LOAD-SCOPE VFA-SCOPE-OPEN?
     DUP IF
         VFS-IOR-REASON VFS-R-NOENT = IF
             _GRID-L-S-MISSING
@@ -1379,13 +1379,12 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     0 _GRID-SCROLL-ROW ! 0 _GRID-SCROLL-COL ! 0 _GRID-DIRTY !
     0 _GRID-SOURCE-BLOCKED ! 0 _GRID-IO-U !
     1 _GRID-VIS-COLS ! 1 _GRID-VIS-ROWS !
-    VFS-CUR DUP 0= ABORT" grid: no VFS available" _GRID-VFS !
-    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT
+    \ Grid keeps /grid.csv in its home.
+    S" /grid.csv" _GRID-CURRENT-INSTANCE @ CINST-HOME DUP PLACE-WRITABLE?
+        _GRID-REPLACE PLACE-VREPL!
+    0<> ABORT" grid: its home cannot keep /grid.csv"
+    _GRID-REPLACE VREPL.VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT
     0<> ABORT" grid: access scope initialization failed"
-    _GRID-VFS @ _GRID-REPLACE VREPL-INIT
-    0<> ABORT" grid: replacement initialization failed"
-    S" /grid.csv" _GRID-REPLACE VREPL-DERIVE-PATHS!
-    0<> ABORT" grid: replacement path setup failed"
     _GRID-CLEAR-MODEL
     S" grid-body" UTUI-BY-ID _GRID-E-BODY !
     S" sbar" UTUI-BY-ID _GRID-E-SBAR !

@@ -24,6 +24,7 @@ REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/capability.f
@@ -186,7 +187,6 @@ _SL-CURRENT-STATE CMP-CELL: _SL-M-CLIPS
 _SL-CURRENT-STATE CMP-CELL: _SL-M-PITCH
 _SL-CURRENT-STATE CMP-CELL: _SL-M-CENTROID
 
-_SL-CURRENT-STATE CMP-CELL: _SL-VFS
 _SL-CURRENT-STATE VREPL-SIZE CMP-FIELD: _SL-REPLACE
 _SL-CURRENT-STATE CMP-CELL: _SL-OUTPUT-BLOCKED
 _SL-CURRENT-STATE CMP-CELL: _SL-SAVED-ONCE
@@ -1259,13 +1259,14 @@ VARIABLE _SL-INIT-RENDER-IOR
     0 _SL-PLAY-OWNED ! 0 _SL-OWNED-GENERATION !
     0 _SL-OUTPUT-BLOCKED ! 0 _SL-SAVED-ONCE ! 0 _SL-WAV-BUF !
 
-    VFS-CUR DUP 0= ABORT" soundlab: no VFS available" _SL-VFS !
-    _SL-VFS @ _SL-REPLACE VREPL-INIT
-    0<> ABORT" soundlab: replacement initialization failed"
-    S" /soundlab.wav" _SL-REPLACE VREPL-DERIVE-PATHS!
-    0<> ABORT" soundlab: replacement path setup failed"
+    \ Sound Lab keeps /soundlab.wav in its home.
+    S" /soundlab.wav" _SL-CURRENT-INSTANCE @ CINST-HOME DUP PLACE-WRITABLE?
+        _SL-REPLACE PLACE-VREPL!
+    0<> ABORT" soundlab: its home cannot keep /soundlab.wav"
     _SL-RECOVER-OUTPUT IF -1 _SL-OUTPUT-BLOCKED ! THEN
-    S" /soundlab.wav" _SL-VFS @ VFS-RESOLVE 0<> IF -1 _SL-SAVED-ONCE ! THEN
+    S" /soundlab.wav" _SL-CURRENT-INSTANCE @ CINST-HOME PLACE-RESOLVE NIP 0= IF
+        -1 _SL-SAVED-ONCE !
+    THEN
     _SL-WAV-CAP ALLOCATE
     0<> ABORT" soundlab: WAV scratch allocation failed" _SL-WAV-BUF !
 

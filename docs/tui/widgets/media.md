@@ -146,6 +146,7 @@ only once the picture has been drawn.
 UIDL-TUI makes the widget when the document loads. An app gives an empty
 element a file with `S" preview" UTUI-BY-ID UTUI-WIDGET@ MEDIA-OPEN-VFS`
 and marks the element dirty. An authored visual `<rep>` with a `src` shows
-that file from the current VFS, with the rep's `text` as the pictures' text
+that file from the place the document is read from, an app's origin when
+the shell loads its UIDL file, with the rep's `text` as the pictures' text
 alternative. There is no read-only text area yet, so the text view's text
 can be edited in place, though nothing writes the file.

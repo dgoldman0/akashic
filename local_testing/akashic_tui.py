@@ -13214,12 +13214,10 @@ VARIABLE _dt-checks
 VARIABLE _dt-depth
 VARIABLE _dt-inst
 VARIABLE _dt-vfs
-VARIABLE _dt-old-vfs
 VARIABLE _dt-fd
 VARIABLE _dt-old-binding
 VARIABLE _dt-read-calls
 VARIABLE _dt-close-calls
-VARIABLE _dt-use-calls
 VARIABLE _dt-fd-head
 VARIABLE _dt-fd-next
 VARIABLE _dt-agenda-request
@@ -13264,30 +13262,24 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     1 _dt-read-calls +!
     _dt-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN 0 ;
 : _dt-short-reads-on  ( -- )
-    _DB-VFS @ V.BINDING @ DUP _dt-old-binding !
+    _dt-vfs @ V.BINDING @ DUP _dt-old-binding !
     DUP VB.OPS @ _dt-ops VFS-OPS-SIZE CMOVE
     _dt-binding VFS-BINDING-DESC-SIZE CMOVE
     _dt-ops _dt-binding VB.OPS !
     ['] _dt-short-read _dt-ops VFS-OP-READ CELLS + !
-    _dt-binding _DB-VFS @ V.BINDING ! ;
+    _dt-binding _dt-vfs @ V.BINDING ! ;
 : _dt-short-reads-off  ( -- )
-    _dt-old-binding @ _DB-VFS @ V.BINDING ! ;
+    _dt-old-binding @ _dt-vfs @ V.BINDING ! ;
 : _dt-after-close  ( fd -- ior )
     1 _dt-close-calls +! VFS-CLOSE -801 THROW ;
-: _dt-after-restore  ( vfs -- )
-    1 _dt-use-calls +!
-    DUP VFS-USE
-    _dt-use-calls @ 2 = IF DROP -802 THROW THEN
-    DROP ;
 : _dt-fd-snapshot  ( -- )
-    _DB-VFS @ V.FDFREE @ DUP _dt-fd-head !
+    _dt-vfs @ V.FDFREE @ DUP _dt-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _dt-fd-next ! ;
 : _dt-load-failure-clean?  ( cleanup-x -- )
-    VFS-CUR 0= _dt-assert
     _DB-LOAD-SCOPE VFA-SCOPE-FD@ 0= _dt-assert
     _DB-LOAD-SCOPE VFA-SCOPE-PRIMARY@ 0= _dt-assert
     _DB-LOAD-SCOPE VFA-SCOPE-CLEANUP@ = _dt-assert
-    _DB-VFS @ V.FDFREE @ DUP _dt-fd-head @ = _dt-assert
+    _dt-vfs @ V.FDFREE @ DUP _dt-fd-head @ = _dt-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN _dt-fd-next @ = _dt-assert
     _DB-COUNT @ 1 = _dt-assert
     0 _DB-ENTRY _DB-E-TEXT + 8 S" sentinel" STR-STR= _dt-assert
@@ -13341,9 +13333,9 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 
 : _dt-write-oversize  ( -- )
     _dt-big _DB-IO-CAP 1+ [CHAR] z FILL
-    S" /daybook.md" _DB-VFS @ VFS-OPEN DUP 0= IF
-        DROP S" /daybook.md" _DB-VFS @ VFS-CREATE DROP
-        S" /daybook.md" _DB-VFS @ VFS-OPEN
+    S" /daybook.md" _dt-vfs @ VFS-OPEN DUP 0= IF
+        DROP S" /daybook.md" _dt-vfs @ VFS-CREATE DROP
+        S" /daybook.md" _dt-vfs @ VFS-OPEN
     THEN
     DUP 0<> _dt-assert _dt-fd !
     0 _dt-fd @ VFS-TRUNCATE 0= _dt-assert
@@ -13370,9 +13362,9 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     _DB-CLEAR _DB-COUNT @ 0= _dt-assert
     _DB-LOAD _DB-L-S-OK = _dt-assert
     _dt-model-canonical? _dt-assert
-    _DB-REPLACE VREPL-STAGE$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
-    _DB-REPLACE VREPL-BACKUP$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
-    _DB-REPLACE VREPL-MARKER$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+    _DB-REPLACE VREPL-STAGE$ _dt-vfs @ VFS-RESOLVE 0= _dt-assert
+    _DB-REPLACE VREPL-BACKUP$ _dt-vfs @ VFS-RESOLVE 0= _dt-assert
+    _DB-REPLACE VREPL-MARKER$ _dt-vfs @ VFS-RESOLVE 0= _dt-assert
 
     -1 _DB-DIRTY ! 0 _dt-read-calls ! _dt-short-reads-on
     _DB-LOAD _DB-L-S-IO = _dt-assert
@@ -13385,12 +13377,12 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 
     _DB-REPLACE _VRO-R !
     _VRO-TARGET>BACKUP 0= _dt-assert
-    _DB-VFS @ VFS-SYNC 0= _dt-assert
-    _DB-REPLACE VREPL-TARGET$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+    _dt-vfs @ VFS-SYNC 0= _dt-assert
+    _DB-REPLACE VREPL-TARGET$ _dt-vfs @ VFS-RESOLVE 0= _dt-assert
     _DB-LOAD _DB-L-S-OK = _dt-assert
     _dt-model-canonical? _dt-assert
-    _DB-REPLACE VREPL-TARGET$ _DB-VFS @ VFS-RESOLVE 0<> _dt-assert
-    _DB-REPLACE VREPL-BACKUP$ _DB-VFS @ VFS-RESOLVE 0= _dt-assert
+    _DB-REPLACE VREPL-TARGET$ _dt-vfs @ VFS-RESOLVE 0<> _dt-assert
+    _DB-REPLACE VREPL-BACKUP$ _dt-vfs @ VFS-RESOLVE 0= _dt-assert
 
     _DB-REPLACE _VRO-R !
     S" bad" _DB-REPLACE VREPL-MARKER$ _VREPL-CREATE-WRITE
@@ -13399,30 +13391,21 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     _DB-LOAD _DB-L-S-RECOVERY = _dt-assert
     _dt-model-canonical? _dt-assert _DB-DIRTY @ _dt-assert
     _DB-SOURCE-BLOCKED @ _dt-assert
-    _DB-REPLACE VREPL-MARKER$ _DB-VFS @ VFS-RM 0= _dt-assert
-    _DB-VFS @ VFS-SYNC 0= _dt-assert
+    _DB-REPLACE VREPL-MARKER$ _dt-vfs @ VFS-RM 0= _dt-assert
+    _dt-vfs @ VFS-SYNC 0= _dt-assert
     _dt-stack ;
 
 : _dt-test-load-cleanup-faults  ( -- )
     _dt-seed 0 _DB-SOURCE-BLOCKED ! _dt-fd-snapshot
-    0 _dt-close-calls ! 0 VFS-USE
+    0 _dt-close-calls !
     ['] _dt-after-close _DB-LOAD-SCOPE VFA-SCOPE-CLOSE-XT!
     0= _dt-assert
     _DB-LOAD _DB-L-S-IO = _dt-assert
     _dt-close-calls @ 1 = _dt-assert
     -801 _dt-load-failure-clean? _dt-stack
-    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
-    _DB-VFS @ VFS-USE
+    _dt-vfs @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
 
-    _dt-seed 0 _DB-SOURCE-BLOCKED ! _dt-fd-snapshot
-    0 _dt-use-calls ! 0 VFS-USE
-    ['] _dt-after-restore _DB-LOAD-SCOPE VFA-SCOPE-USE-XT!
-    0= _dt-assert
-    _DB-LOAD _DB-L-S-IO = _dt-assert
-    _dt-use-calls @ 2 = _dt-assert
-    -802 _dt-load-failure-clean? _dt-stack
-    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
-    _DB-VFS @ VFS-USE
+    _dt-seed 0 _DB-SOURCE-BLOCKED !
     _DB-LOAD _DB-L-S-OK = _dt-assert
     _DB-SOURCE-BLOCKED @ 0= _dt-assert ;
 
@@ -13543,16 +13526,14 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 
 : _dt-run  ( -- )
     0 _dt-fails ! 0 _dt-checks ! DEPTH _dt-depth !
-    VFS-CUR _dt-old-vfs !
     524288 A-XMEM ARENA-NEW IF -1 THROW THEN
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _dt-vfs ! VFS-USE
+        _dt-vfs !
     _DAYBOOK-COMP-SETUP
     DAYBOOK-COMP-DESC CINST-NEW DUP 0= _dt-assert DROP _dt-inst !
     _dt-inst @ _DB-ACTIVATE
-    VFS-CUR DUP 0<> _dt-assert _DB-VFS !
-    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
-    _DB-VFS @ _DB-REPLACE VREPL-INIT VREPL-S-OK = _dt-assert
+    _dt-vfs @ _DB-LOAD-SCOPE VFA-SCOPE-INIT 0= _dt-assert
+    _dt-vfs @ _DB-REPLACE VREPL-INIT VREPL-S-OK = _dt-assert
     S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
     VREPL-S-OK = _dt-assert
     _dt-test-strict-import
@@ -13561,7 +13542,7 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     _dt-test-capability-failure-edges
     _dt-test-close
     _dt-inst @ CINST-FREE
-    _dt-old-vfs @ VFS-USE _dt-vfs @ VFS-DESTROY
+    _dt-vfs @ VFS-DESTROY
     _dt-stack
     _dt-fails @ 0= IF
         ." DAYBOOK CONTRACTS PASS " _dt-checks @ .
@@ -13731,7 +13712,6 @@ VARIABLE _gcx-checks
 VARIABLE _gcx-depth
 VARIABLE _gcx-inst
 VARIABLE _gcx-vfs
-VARIABLE _gcx-old-vfs
 VARIABLE _gcx-fd
 VARIABLE _gcx-a
 VARIABLE _gcx-u
@@ -13740,7 +13720,6 @@ VARIABLE _gcx-c
 VARIABLE _gcx-old-binding
 VARIABLE _gcx-read-calls
 VARIABLE _gcx-close-calls
-VARIABLE _gcx-use-calls
 VARIABLE _gcx-fd-head
 VARIABLE _gcx-fd-next
 CREATE _gcx-ops VFS-OPS-SIZE ALLOT
@@ -13842,19 +13821,19 @@ CREATE _gcx-desc APP-DESC ALLOT
 
 : _gcx-put  ( a u -- )
     _gcx-u ! _gcx-a !
-    S" /grid.csv" _GRID-VFS @ VFS-OPEN DUP 0= IF
-        DROP S" /grid.csv" _GRID-VFS @ VFS-CREATE 0<> _gcx-assert
-        S" /grid.csv" _GRID-VFS @ VFS-OPEN
+    S" /grid.csv" _gcx-vfs @ VFS-OPEN DUP 0= IF
+        DROP S" /grid.csv" _gcx-vfs @ VFS-CREATE 0<> _gcx-assert
+        S" /grid.csv" _gcx-vfs @ VFS-OPEN
     THEN
     DUP 0<> _gcx-assert _gcx-fd !
     0 _gcx-fd @ VFS-TRUNCATE 0= _gcx-assert
     _gcx-a @ _gcx-u @ _gcx-fd @ VFS-WRITE-EXACT 0= _gcx-assert
     _gcx-fd @ VFS-CLOSE
-    _GRID-VFS @ VFS-SYNC 0= _gcx-assert ;
+    _gcx-vfs @ VFS-SYNC 0= _gcx-assert ;
 
 : _gcx-file=  ( a u -- flag )
     _gcx-u ! _gcx-a !
-    S" /grid.csv" _GRID-VFS @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _gcx-fd !
+    S" /grid.csv" _gcx-vfs @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _gcx-fd !
     _gcx-fd @ VFS-SIZE _gcx-u @ <> IF
         _gcx-fd @ VFS-CLOSE 0 EXIT
     THEN
@@ -13871,36 +13850,30 @@ CREATE _gcx-desc APP-DESC ALLOT
     _gcx-read-calls @ 1 = IF 1- 0 MAX ELSE DROP 0 THEN 0 ;
 : _gcx-fail-sync  ( vfs -- ior ) DROP -1 ;
 : _gcx-binding-save  ( -- )
-    _GRID-VFS @ V.BINDING @ DUP _gcx-old-binding !
+    _gcx-vfs @ V.BINDING @ DUP _gcx-old-binding !
     DUP VB.OPS @ _gcx-ops VFS-OPS-SIZE CMOVE
     _gcx-binding VFS-BINDING-DESC-SIZE CMOVE
     _gcx-ops _gcx-binding VB.OPS ! ;
 : _gcx-binding-restore  ( -- )
-    _gcx-old-binding @ _GRID-VFS @ V.BINDING ! ;
+    _gcx-old-binding @ _gcx-vfs @ V.BINDING ! ;
 : _gcx-short-reads-on  ( -- )
     _gcx-binding-save
     ['] _gcx-short-read _gcx-ops VFS-OP-READ CELLS + !
-    _gcx-binding _GRID-VFS @ V.BINDING ! ;
+    _gcx-binding _gcx-vfs @ V.BINDING ! ;
 : _gcx-sync-fails-on  ( -- )
     _gcx-binding-save
     ['] _gcx-fail-sync _gcx-ops VFS-OP-SYNCFS CELLS + !
-    _gcx-binding _GRID-VFS @ V.BINDING ! ;
+    _gcx-binding _gcx-vfs @ V.BINDING ! ;
 : _gcx-after-close  ( fd -- ior )
     1 _gcx-close-calls +! VFS-CLOSE -811 THROW ;
-: _gcx-after-restore  ( vfs -- )
-    1 _gcx-use-calls +!
-    DUP VFS-USE
-    _gcx-use-calls @ 2 = IF DROP -812 THROW THEN
-    DROP ;
 : _gcx-fd-snapshot  ( -- )
-    _GRID-VFS @ V.FDFREE @ DUP _gcx-fd-head !
+    _gcx-vfs @ V.FDFREE @ DUP _gcx-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _gcx-fd-next ! ;
 : _gcx-load-failure-clean?  ( cleanup-x -- )
-    VFS-CUR 0= _gcx-assert
     _GRID-LOAD-SCOPE VFA-SCOPE-FD@ 0= _gcx-assert
     _GRID-LOAD-SCOPE VFA-SCOPE-PRIMARY@ 0= _gcx-assert
     _GRID-LOAD-SCOPE VFA-SCOPE-CLEANUP@ = _gcx-assert
-    _GRID-VFS @ V.FDFREE @ DUP _gcx-fd-head @ = _gcx-assert
+    _gcx-vfs @ V.FDFREE @ DUP _gcx-fd-head @ = _gcx-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN _gcx-fd-next @ = _gcx-assert
     S" sentinel" 0 0 _gcx-cell= _gcx-assert
     _GRID-DIRTY @ _gcx-assert _GRID-SOURCE-BLOCKED @ _gcx-assert ;
@@ -14009,41 +13982,31 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-SAVE 0= _gcx-assert
     _gcx-saved 4 _gcx-file= _gcx-assert
     _GRID-DIRTY @ 0= _gcx-assert _GRID-SOURCE-BLOCKED @ 0= _gcx-assert
-    _GRID-REPLACE VREPL-STAGE$ _GRID-VFS @ VFS-RESOLVE 0= _gcx-assert
-    _GRID-REPLACE VREPL-BACKUP$ _GRID-VFS @ VFS-RESOLVE 0= _gcx-assert
-    _GRID-REPLACE VREPL-MARKER$ _GRID-VFS @ VFS-RESOLVE 0= _gcx-assert
+    _GRID-REPLACE VREPL-STAGE$ _gcx-vfs @ VFS-RESOLVE 0= _gcx-assert
+    _GRID-REPLACE VREPL-BACKUP$ _gcx-vfs @ VFS-RESOLVE 0= _gcx-assert
+    _GRID-REPLACE VREPL-MARKER$ _gcx-vfs @ VFS-RESOLVE 0= _gcx-assert
     _gcx-stack ;
 
 : _gcx-test-load-cleanup-faults  ( -- )
     _gcx-seed _gcx-fd-snapshot
-    0 _gcx-close-calls ! 0 VFS-USE
+    0 _gcx-close-calls !
     ['] _gcx-after-close _GRID-LOAD-SCOPE VFA-SCOPE-CLOSE-XT!
     0= _gcx-assert
     _GRID-LOAD _GRID-L-S-IO = _gcx-assert
     _gcx-close-calls @ 1 = _gcx-assert
     -811 _gcx-load-failure-clean? _gcx-stack
-    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
-    _GRID-VFS @ VFS-USE
+    _gcx-vfs @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
 
-    _gcx-seed _gcx-fd-snapshot
-    0 _gcx-use-calls ! 0 VFS-USE
-    ['] _gcx-after-restore _GRID-LOAD-SCOPE VFA-SCOPE-USE-XT!
-    0= _gcx-assert
-    _GRID-LOAD _GRID-L-S-IO = _gcx-assert
-    _gcx-use-calls @ 2 = _gcx-assert
-    -812 _gcx-load-failure-clean? _gcx-stack
-    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
-    _GRID-VFS @ VFS-USE
+    _gcx-seed
     _GRID-LOAD _GRID-L-S-OK = _gcx-assert
     _GRID-SOURCE-BLOCKED @ 0= _gcx-assert ;
 
 : _gcx-run  ( -- )
     0 _gcx-fails ! 0 _gcx-checks ! DEPTH _gcx-depth !
     _gcx-artifacts-init
-    VFS-CUR _gcx-old-vfs !
     524288 A-XMEM ARENA-NEW IF -1 THROW THEN
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _gcx-vfs ! VFS-USE
+        _gcx-vfs !
     _GRID-COMP-SETUP
     GRID-COMP-DESC CINST-NEW DUP 0= _gcx-assert DROP _gcx-inst !
     _gcx-inst @ _GRID-ACTIVATE
@@ -14052,9 +14015,8 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-IO-CAP ALLOCATE IF -2 THROW THEN _GRID-IO-BUF !
     _GRID-IO-BUF @ _GRID-IO-CAP _GRID-IO-WRITER CBW-INIT
     CBW-S-OK = _gcx-assert
-    VFS-CUR DUP 0<> _gcx-assert _GRID-VFS !
-    _GRID-VFS @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
-    _GRID-VFS @ _GRID-REPLACE VREPL-INIT VREPL-S-OK = _gcx-assert
+    _gcx-vfs @ _GRID-LOAD-SCOPE VFA-SCOPE-INIT 0= _gcx-assert
+    _gcx-vfs @ _GRID-REPLACE VREPL-INIT VREPL-S-OK = _gcx-assert
     S" /grid.csv" _GRID-REPLACE VREPL-DERIVE-PATHS!
     VREPL-S-OK = _gcx-assert
     _GRID-CLEAR-MODEL 0 _GRID-DIRTY ! 0 _GRID-SOURCE-BLOCKED !
@@ -14074,7 +14036,7 @@ CREATE _gcx-desc APP-DESC ALLOT
     _GRID-CELLS @ FREE 0 _GRID-CELLS !
     _GRID-IO-BUF @ FREE 0 _GRID-IO-BUF !
     _gcx-inst @ CINST-FREE
-    _gcx-old-vfs @ VFS-USE _gcx-vfs @ VFS-DESTROY
+    _gcx-vfs @ VFS-DESTROY
     _gcx-stack
     _gcx-fails @ 0= IF
         ." GRID CONTRACTS PASS " _gcx-checks @ .

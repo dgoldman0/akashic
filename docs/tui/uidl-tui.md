@@ -269,7 +269,7 @@ Materialize a single element by type dispatch.  Used by both the bulk
 | tree | Sync proxy region, `TREE-NEW` with 5 UIDL callbacks, store at wptr |
 | input | Allocate 256-byte buffer, `INP-NEW`, set text=/placeholder= attrs |
 | textarea | Allocate 4096-byte buffer, `TXTA-NEW`, set text= attr |
-| media | `MEDIA-NEW` on the proxy region with `MEDIA-HEAP`; a visual `<rep>` with `src=` opens that file from `VFS-CUR`, its `text=` the pictures' text alternative |
+| media | `MEDIA-NEW` on the proxy region with `MEDIA-HEAP`; a visual `<rep>` with `src=` opens that file from the place given by `UTUI-FILES!`, its `text=` the pictures' text alternative |
 | tabs | Allocate 8 bytes, zero (active = 0) |
 | other | No-op |
 
@@ -304,9 +304,13 @@ DFS walk of the UIDL tree after layout.  For each element:
   `text=` from UIDL attributes.
 - **media:** `_UTUI-MAT-MEDIA` creates the media widget
   ([media.md](widgets/media.md)).  An authored visual `<rep src=...>` shows
-  that file from the current VFS, with the rep's `text=` as the pictures'
-  text alternative; otherwise the app gives it a file with `MEDIA-OPEN-VFS`
-  through `UTUI-WIDGET@`.
+  that file from the place the document's files are read from, with the
+  rep's `text=` as the pictures' text alternative; otherwise the app gives
+  it a file with `MEDIA-OPEN-VFS` through `UTUI-WIDGET@`.  `UTUI-FILES!
+  ( place | 0 -- )` names that place for the documents loaded after it.
+  `ASHELL-LOAD-UIDL` names the place it read the document from for the
+  length of the load, which for an app is its origin; a document loaded
+  with no place opens no `src` file.
 
 Called by `UTUI-LOAD` after `UTUI-RELAYOUT`.
 
@@ -350,6 +354,10 @@ Parse a UIDL XML document and prepare the TUI backend:
 8. Set initial focus via `UTUI-FOCUS-NEXT`
 
 Returns `-1` on success, `0` on parse failure.
+
+A document's media read the files their `src` names from the place
+`UTUI-FILES! ( place | 0 -- )` last named; `ASHELL-LOAD-UIDL` names the
+place it read the document from for the length of its load.
 
 A successful load establishes only the authoritative UIDL document. An outer
 composition may then call the private `_UTUI-PROJECTION-ATTACH` with a

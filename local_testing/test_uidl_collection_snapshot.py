@@ -1086,8 +1086,12 @@ def _media_collection_program() -> list[str]:
         '_UM-BIN 4 S" /data.bin" _UM-PUT',
         '_UM-QOI _UM-QOI-U S" /logo.qoi" _UM-PUT',
         '_UM-MD _UM-MD-U S" /notes.md" _UM-PUT',
-        # An authored visual rep shows its file from the current VFS.
-        "_UM-V @ VFS-USE",
+        # An authored visual rep shows its file from the place the document
+        # is read from: here a writable place over the volume's root.
+        ': _UM-PLACE ( vfs -- place ) S" um" PLACES-VOLUME THROW TUCK PVOL-ATTACH THROW',
+        '  >R S" um" S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW',
+        "  PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;",
+        "_UM-V @ _UM-PLACE UTUI-FILES!",
         'S" <uidl><region arrange=flex><media id=m/><textarea id=t/>'
         "<media id=logo><rep modality=visual src='/logo.qoi' text=Logo/></media>"
         '</region></uidl>" _UM-RGN @ UTUI-LOAD _UM-ASSERT',

@@ -29,10 +29,11 @@ shell state in quarantine and skips all later destructors.
 
 Not reentrant.  One app at a time.
 
-The shell consumes the abstract `utils/fs/vfs.f` interface for UIDL file
-loading.  It does not choose or mount a storage driver.  MegaPad-64 product
-images compose [`platform/mp64fs-vfs.f`](platform/mp64fs-vfs.md) before
-loading applet modules; other hosts may supply a different active VFS.
+The shell reads an app's UIDL file from the app's origin, the place its
+shipped files are read from (`CINST-ORIGIN`, [places](../utils/fs/places.md)).
+It does not choose or mount a storage driver.  MegaPad-64 product images
+compose [`platform/mp64fs-vfs.f`](platform/mp64fs-vfs.md) and declare their
+places before loading applet modules.
 
 > **Standalone vs Applet.**  Standalone TUI apps use [`app.f`](app.md)
 > directly (they own the event loop via `APP-RUN`).  Applets are hosted
@@ -118,7 +119,7 @@ limit the supported Desk child UCTX scope above.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a file through the active VFS, read it through a 512-byte DMA-safe bounce buffer, and parse it as UIDL into `rgn`. Returns retained XMEM or 0. |
+| `ASHELL-LOAD-UIDL` | `( path-a path-u place rgn -- buf \| 0 )` | Open the file at the path in the place, read it through a 512-byte DMA-safe bounce buffer, and parse it as UIDL into `rgn`. Returns retained XMEM or 0. |
 | `ASHELL-FREE-UIDL-BUF` | `( buf -- )` | Release retained storage returned by `ASHELL-LOAD-UIDL`; 0 is a no-op. Callers do not depend on the shell's private allocation size. |
 
 ### Notices

@@ -857,7 +857,8 @@ VARIABLE _AHL-MINIMIZED
         ELSE
             _AHL-DESC @ APP.UIDL-FILE-A @ IF
                 _AHL-DESC @ APP.UIDL-FILE-A @
-                _AHL-DESC @ APP.UIDL-FILE-U @ _AHL-SLOT @ AHS.RGN @
+                _AHL-DESC @ APP.UIDL-FILE-U @
+                _AHL-INST @ CINST-ORIGIN _AHL-SLOT @ AHS.RGN @
                 ASHELL-LOAD-UIDL DUP 0= IF
                     DROP AHOST-LAUNCH-E-UIDL THROW
                 THEN

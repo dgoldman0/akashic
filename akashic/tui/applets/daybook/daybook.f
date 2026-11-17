@@ -30,6 +30,7 @@ REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-access.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/datetime.f
 REQUIRE ../../../text/utf8.f
@@ -130,7 +131,6 @@ _DB-CURRENT-STATE CMP-CELL: _DB-TODAY-CACHE
 _DB-CURRENT-STATE CMP-CELL: _DB-SELECTED
 _DB-CURRENT-STATE CMP-CELL: _DB-DIRTY
 _DB-CURRENT-STATE CMP-CELL: _DB-VIEW-DIRTY
-_DB-CURRENT-STATE CMP-CELL: _DB-VFS
 _DB-CURRENT-STATE VFA-SCOPE-SIZE CMP-FIELD: _DB-LOAD-SCOPE
 _DB-CURRENT-STATE VREPL-SIZE CMP-FIELD: _DB-REPLACE
 _DB-CURRENT-STATE CMP-CELL: _DB-DISCARD-ARMED
@@ -523,7 +523,7 @@ VARIABLE _DB-LOAD-START
 VARIABLE _DB-LOAD-STATUS
 
 : _DB-READ-FILE-BODY  ( -- )
-    S" /daybook.md" VFS-FF-READ _DB-LOAD-SCOPE VFA-SCOPE-OPEN?
+    _DB-REPLACE VREPL-TARGET$ VFS-FF-READ _DB-LOAD-SCOPE VFA-SCOPE-OPEN?
     DUP IF
         VFS-IOR-REASON VFS-R-NOENT = IF
             _DB-L-S-MISSING
@@ -2140,18 +2140,17 @@ VARIABLE _DB-SOURCE-VALUE
     0 _DB-DIRTY ! 0 _DB-DISCARD-ARMED ! 0 _DB-SOURCE-BLOCKED !
     0 _DB-SAVE-STALE !
     _DB-NOW-DAY DUP _DB-TODAY-CACHE ! _DB-SELECTED-DATE !
-    VFS-CUR DUP 0= ABORT" daybook: no VFS available" _DB-VFS !
-    _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT
-    0<> ABORT" daybook: access scope initialization failed"
     _DB-SHARED-INIT
     \ Inside Desk the reminders are Desk's to run and Daybook's to show.
     S" org.akashic.daybook.automations" _DB-CURRENT-INSTANCE @ CINST-SERVICE
         _DB-AV DBAV-INIT
+    \ On its own, Daybook keeps /daybook.md in its home.
     _DB-RESOURCE-MODE @ RSES-M-DIRECT = IF
-        _DB-VFS @ _DB-REPLACE VREPL-INIT
-        0<> ABORT" daybook: replacement initialization failed"
-        S" /daybook.md" _DB-REPLACE VREPL-DERIVE-PATHS!
-        0<> ABORT" daybook: replacement path setup failed"
+        S" /daybook.md" _DB-CURRENT-INSTANCE @ CINST-HOME DUP PLACE-WRITABLE?
+            _DB-REPLACE PLACE-VREPL!
+        0<> ABORT" daybook: its home cannot keep /daybook.md"
+        _DB-REPLACE VREPL.VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT
+        0<> ABORT" daybook: access scope initialization failed"
     THEN
     S" daybook-body" UTUI-BY-ID _DB-E-BODY !
     S" sbar" UTUI-BY-ID _DB-E-SBAR !
