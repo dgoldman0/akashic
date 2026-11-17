@@ -309,9 +309,11 @@ which nothing requires, is deleted with its document and test.
    machine's own remount and the host tools' recovery, then `e2fsck`.
 9. Both journeys, linked and shipping form.
 
-Slices 2, 5 and 6 change files the `test_vfs_ext4` unit reads; they end
-on patterns with a sample of every ext4 operation, and the whole unit
-runs once after slice 8.
+Slices 2, 5 and 6 change files the ext4 tests read. Those tests run on
+MegaPad's simulator, so each of these slices runs them whole and ends
+with the standing sample on the emulator; the four ext4 files run whole
+on the emulator once after slice 8 (`local_testing/README.md`, "On the
+emulator or the simulator").
 
 ## Status
 
