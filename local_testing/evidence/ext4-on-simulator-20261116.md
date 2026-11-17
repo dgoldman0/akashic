@@ -122,8 +122,21 @@ guest makes it, so it cannot hold one stalled; no ext4 test plants a stall.
 A transfer or flush returns to Python when a test's admission hook must run,
 as in the save tests' `Machine`, or when the filesystem lock is held.
 
-## Not run
+## The checks before the merge
 
-The physical Desktop journey, the test tool's wide run, the emulator's
-Desktop smokes and the whole of `test_vfs_ext4.py` on the emulator were not
-run for this work.
+Both branches merged into the local mains on 2026-11-16 after three
+checks. The first two ran with MegaPad at `adcbd59e`, the third at
+`232c3a4e`, which adds only a document.
+
+- The physical Desktop journey passed in three forms on the branch's
+  simulator: linked in 143 s, from the system volume with token files in
+  135 s, and in hybrid mode with token files in 153 s.
+- The test tool ran every recorded unit except the whole ext4 unit: 304
+  ran and passed in 3,983 s, and 6 were skipped as unchanged.
+- `test_vfs_ext4.py` ran whole on the emulator, still these branches'
+  default machine, through the test tool. It passed in 5,554 s, with a
+  peak of 4,795 MiB.
+
+The emulator's Desktop smokes were not run. After the merge the simulator
+became the default machine for the four files, and the emulator stays
+their reference, as `local_testing/README.md` describes.
