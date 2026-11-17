@@ -58,7 +58,13 @@ def _profile(autoexec: str, marker: str) -> harness.Profile:
             "? (not found)",
         ),
         initial_files=(
-            ("local_testing/lib-cap-l1.f", FIXTURE.read_bytes()),
+            (
+                "local_testing/lib-cap-l1.f",
+                (
+                    harness.TEST_ROOT_PLACE
+                    + FIXTURE.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
         ),
         linked=True,
         include_large_sample=False,

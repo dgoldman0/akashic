@@ -10,7 +10,6 @@ VARIABLE _vfac-fails
 VARIABLE _vfac-checks
 VARIABLE _vfac-depth
 VARIABLE _vfac-byte
-VARIABLE _vfac-old-vfs
 VARIABLE _vfac-arena-a
 VARIABLE _vfac-arena-b
 VARIABLE _vfac-vfs-a
@@ -53,8 +52,6 @@ VARIABLE _vfac-read-fault-at
 VARIABLE _vfac-read-calls
 
 VARIABLE _vfac-close-calls
-VARIABLE _vfac-use-calls
-VARIABLE _vfac-use-fault-at
 
 VARIABLE _vfac-cb-stream
 VARIABLE _vfac-cb-a
@@ -120,12 +117,6 @@ VARIABLE _vfac-cb-reinit
     VFS-CLOSE? DUP IF EXIT THEN DROP
     1 _vfac-close-calls +! -7921 THROW ;
 
-: _vfac-use-after  ( vfs -- )
-    VFS-USE
-    1 _vfac-use-calls +!
-    _vfac-use-fault-at @ 0<>
-    _vfac-use-calls @ _vfac-use-fault-at @ = AND IF -7922 THROW THEN ;
-
 : _vfac-body-ok  ( -- ) ;
 : _vfac-body-throw  ( -- )  -7931 THROW ;
 : _vfac-body-reopen  ( -- )
@@ -185,7 +176,6 @@ VARIABLE _vfac-cb-reinit
     _vfac-ior @ 0= _vfac-assert DUP 0<> _vfac-assert ;
 
 : _vfac-put-a  ( -- )
-    _vfac-vfs-a @ VFS-USE
     S" alpha" _vfac-vfs-a @ VFS-MKDIR 0= _vfac-assert
     S" /alpha" _vfac-vfs-a @ VFS-CD? 0= _vfac-assert
     S" data.bin" _vfac-vfs-a @ VFS-MKFILE 0<> _vfac-assert
@@ -197,7 +187,6 @@ VARIABLE _vfac-cb-reinit
     _vfac-vfs-a @ V.CWD @ _vfac-cwd-a ! ;
 
 : _vfac-put-b  ( -- )
-    _vfac-vfs-b @ VFS-USE
     S" beta" _vfac-vfs-b @ VFS-MKDIR 0= _vfac-assert
     S" /beta" _vfac-vfs-b @ VFS-CD? 0= _vfac-assert
     S" data.bin" _vfac-vfs-b @ VFS-MKFILE 0<> _vfac-assert
@@ -209,10 +198,8 @@ VARIABLE _vfac-cb-reinit
     _vfac-vfs-b @ V.CWD @ _vfac-cwd-b ! ;
 
 : _vfac-range-contracts  ( -- )
-    0 VFS-USE
     _vfac-scope-a _vfac-scope-init-a
     _vfac-scope-a _vfac-open-a _vfac-fd !
-    VFS-CUR _vfac-vfs-a @ = _vfac-assert
 
     _vfac-buffer 128 [CHAR] ? FILL
     _vfac-buffer 5 3 _vfac-fd @ VFA-READ-RANGE? 0= _vfac-assert
@@ -242,11 +229,9 @@ VARIABLE _vfac-cb-reinit
     _vfac-buffer 128 [CHAR] ? _vfac-filled? _vfac-assert
 
     _vfac-scope-a VFA-SCOPE-CLOSE? 0= _vfac-assert
-    VFS-CUR 0= _vfac-assert
     _vfac-stack ;
 
 : _vfac-file-contracts  ( -- )
-    0 VFS-USE
     _vfac-scope-a _vfac-scope-init-a
     _vfac-scope-a _vfac-open-a _vfac-fd !
     _vfac-fd @ VFA-FILE-SIZE? _vfac-ior ! _vfac-total !
@@ -308,17 +293,14 @@ VARIABLE _vfac-cb-reinit
     _vfac-buffer 128 [CHAR] ? _vfac-filled? _vfac-assert
     0 _vfac-read-fault-at !
     _vfac-scope-a VFA-SCOPE-CLOSE? 0= _vfac-assert
-    VFS-CUR 0= _vfac-assert
     _vfac-stack ;
 
 : _vfac-stream-open  ( -- )
-    0 VFS-USE
     _vfac-scope-c _vfac-scope-init-a
     _vfac-scope-c _vfac-open-a _vfac-fd ! ;
 
 : _vfac-stream-close  ( -- )
-    _vfac-scope-c VFA-SCOPE-CLOSE? 0= _vfac-assert
-    VFS-CUR 0= _vfac-assert ;
+    _vfac-scope-c VFA-SCOPE-CLOSE? 0= _vfac-assert ;
 
 : _vfac-stream-contracts  ( -- )
     \ Exact chunks carry borrowed bytes, absolute offsets, and caller context.
@@ -403,7 +385,6 @@ VARIABLE _vfac-cb-reinit
     \ run only on bindings with targeted reload, so expose it while this
     \ dentry is evicted directly; once another CWD is active, the same
     \ otherwise eligible dentry is reclaimed.
-    _vfac-vfs-b @ VFS-USE
     S" evict-cwd" _vfac-vfs-b @ VFS-MKDIR 0= _vfac-assert
     S" evict-cwd" _vfac-vfs-b @ VFS-CD? 0= _vfac-assert
     _vfac-vfs-b @ V.CWD @ DUP 0<> _vfac-assert _vfac-evict-cwd !
@@ -414,41 +395,34 @@ VARIABLE _vfac-cb-reinit
     _vfac-evict-cwd @ _vfac-vfs-b @ _VFS-EVICT-INODE _vfac-assert
     _vfac-binding-b VB.CAPS DUP @ VFS-CAP-LOOKUP INVERT AND SWAP !
 
-    \ One scope restores both the prior selector and its target's prior CWD.
-    \ Clear the RAM binding's ordinary pin so this also proves the scope's
-    \ temporary CWD eviction hold and exact release of that hold.
+    \ One scope restores its target's prior CWD.  Clear the RAM binding's
+    \ ordinary pin so this also proves the scope's temporary CWD eviction
+    \ hold and exact release of that hold.
     _vfac-cwd-b @ IN.FLAGS DUP @ VFS-IF-PINNED INVERT AND SWAP !
     _vfac-cwd-b @ IN.FLAGS @ VFS-IF-PINNED AND 0= _vfac-assert
-    0 VFS-USE
     _vfac-scope-b _vfac-scope-init-b
     _vfac-scope-b _vfac-open-b _vfac-fd !
-    VFS-CUR _vfac-vfs-b @ = _vfac-assert
     _vfac-cwd-b @ IN.FLAGS @ VFS-IF-PINNED AND _vfac-assert
     S" /" _vfac-vfs-b @ VFS-CD? 0= _vfac-assert
     _vfac-vfs-b @ V.CWD @ _vfac-cwd-b @ <> _vfac-assert
     _vfac-scope-b VFA-SCOPE-CLOSE? 0= _vfac-assert
-    VFS-CUR 0= _vfac-assert
     _vfac-vfs-b @ V.CWD @ _vfac-cwd-b @ = _vfac-assert
     _vfac-cwd-b @ IN.FLAGS @ VFS-IF-PINNED AND 0= _vfac-assert
     _vfac-vfs-a @ V.CWD @ _vfac-cwd-a @ = _vfac-assert
 
     \ Two caller-owned scopes nest without sharing descriptors.  Explicit-FD
-    \ access to the outer scope remains correct while the inner VFS is current.
-    0 VFS-USE
+    \ access to the outer scope stays correct while the inner one is open.
     _vfac-scope-a _vfac-scope-init-a
     _vfac-scope-b _vfac-scope-init-b
     _vfac-scope-a _vfac-open-a _vfac-fd-a !
     _vfac-scope-b _vfac-open-b _vfac-fd-b !
     _vfac-fd-a @ _vfac-fd-b @ <> _vfac-assert
-    VFS-CUR _vfac-vfs-b @ = _vfac-assert
     _vfac-buffer 4 0 _vfac-fd-a @ VFA-READ-RANGE? 0= _vfac-assert
     _vfac-buffer 4 S" abcd" COMPARE 0= _vfac-assert
     _vfac-buffer 4 0 _vfac-fd-b @ VFA-READ-RANGE? 0= _vfac-assert
     _vfac-buffer 4 S" ABCD" COMPARE 0= _vfac-assert
     _vfac-scope-b VFA-SCOPE-CLOSE? 0= _vfac-assert
-    VFS-CUR _vfac-vfs-a @ = _vfac-assert
     _vfac-scope-a VFA-SCOPE-CLOSE? 0= _vfac-assert
-    VFS-CUR 0= _vfac-assert
     _vfac-vfs-a @ V.OPEN-COUNT @ 0= _vfac-assert
     _vfac-vfs-b @ V.OPEN-COUNT @ 0= _vfac-assert
 
@@ -473,7 +447,6 @@ VARIABLE _vfac-cb-reinit
 : _vfac-cleanup-fault-contracts  ( -- )
     \ Close-after-success is attempted once.  Ambiguous cleanup is retained,
     \ while the core FD has already been released and cannot be retried.
-    0 VFS-USE
     _vfac-scope-a _vfac-scope-init-a
     0 _vfac-close-calls !
     ['] _vfac-close-after _vfac-scope-a VFA-SCOPE-CLOSE-XT!
@@ -487,20 +460,6 @@ VARIABLE _vfac-cb-reinit
     _vfac-vfs-a @ V.OPEN-COUNT @ 0= _vfac-assert
     _vfac-scope-a VFA-SCOPE-CLOSE? DROP
     _vfac-close-calls @ 1 = _vfac-assert
-
-    \ Restore-after-success leaves the prior selector installed, is attempted
-    \ once, and remains visible as cleanup uncertainty.
-    _vfac-scope-a _vfac-scope-init-a
-    0 _vfac-use-calls ! 2 _vfac-use-fault-at !
-    ['] _vfac-use-after _vfac-scope-a VFA-SCOPE-USE-XT!
-        0= _vfac-assert
-    _vfac-scope-a _vfac-open-a DROP
-    _vfac-scope-a VFA-SCOPE-CLOSE? _vfac-ior !
-    _vfac-ior @ 0<> _vfac-assert _vfac-use-calls @ 2 = _vfac-assert
-    VFS-CUR 0= _vfac-assert
-    _vfac-vfs-a @ V.CWD @ _vfac-cwd-a @ = _vfac-assert
-    _vfac-scope-a VFA-SCOPE-FD@ 0= _vfac-assert
-    0 _vfac-use-fault-at !
 
     \ CALL never lets cleanup replace the primary exception.
     _vfac-scope-a _vfac-scope-init-a
@@ -534,8 +493,7 @@ VARIABLE _vfac-cb-reinit
     _vfac-stack ;
 
 : _vfac-core-throw-contracts  ( -- )
-    \ Binding OPEN exceptions must not consume a core FD or leave a selector.
-    0 VFS-USE
+    \ Binding OPEN exceptions must not consume a core FD.
     _vfac-vfs-a @ V.FDFREE @ _vfac-free-before !
     0 _vfac-open-calls ! 2 _vfac-open-mode !
     _vfac-scope-a _vfac-scope-init-a
@@ -547,7 +505,6 @@ VARIABLE _vfac-cb-reinit
     _vfac-vfs-a @ V.FDFREE @ _vfac-free-before @ = _vfac-assert
     _vfac-scope-a VFA-SCOPE-FD@ 0= _vfac-assert
     _vfac-scope-a VFA-SCOPE-PRIMARY@ -7902 = _vfac-assert
-    VFS-CUR 0= _vfac-assert
     0 _vfac-open-mode !
 
     \ The before-effect OPEN throw is also returned exactly and releases the
@@ -563,7 +520,6 @@ VARIABLE _vfac-cb-reinit
     _vfac-vfs-a @ V.FDFREE @ _vfac-free-before @ = _vfac-assert
     _vfac-scope-a VFA-SCOPE-FD@ 0= _vfac-assert
     _vfac-scope-a VFA-SCOPE-PRIMARY@ -7901 = _vfac-assert
-    VFS-CUR 0= _vfac-assert
     0 _vfac-open-mode !
 
     \ Binding RELEASE exceptions are returned only after core ownership is
@@ -595,30 +551,27 @@ VARIABLE _vfac-cb-reinit
     _vfac-scope-a VFA-SCOPE-CLOSE? DROP
     _vfac-release-calls @ 1 = _vfac-assert
     0 _vfac-release-mode !
-    VFS-CUR 0= _vfac-assert
     _vfac-stack ;
 
 : _vfac-target-contracts  ( -- )
     \ A dentry owned by another VFS is not a valid target CWD even though it
     \ is otherwise a well-formed directory.
-    0 VFS-USE
     _vfac-cwd-b @ _vfac-vfs-a @ V.CWD !
     _vfac-scope-a _vfac-scope-init-a
     ['] _vfac-body-ok _vfac-scope-a VFA-SCOPE-CALL
     _vfac-ior ! _vfac-length !
     _vfac-length @ VFS-E-CORRUPT = _vfac-assert
-    _vfac-ior @ 0= _vfac-assert VFS-CUR 0= _vfac-assert
+    _vfac-ior @ 0= _vfac-assert
     _vfac-cwd-a @ _vfac-vfs-a @ V.CWD !
 
     \ A mounted descriptor with a null CWD is corrupt, but cannot trigger a
-    \ null-dentry read or alter the ambient selector.
-    0 VFS-USE
+    \ null-dentry read.
     0 _vfac-vfs-a @ V.CWD !
     _vfac-scope-a _vfac-scope-init-a
     ['] _vfac-body-ok _vfac-scope-a VFA-SCOPE-CALL
     _vfac-ior ! _vfac-length !
     _vfac-length @ VFS-E-CORRUPT = _vfac-assert
-    _vfac-ior @ 0= _vfac-assert VFS-CUR 0= _vfac-assert
+    _vfac-ior @ 0= _vfac-assert
     _vfac-cwd-a @ _vfac-vfs-a @ V.CWD !
 
     \ A reused direct scope must clear prior cleanup uncertainty before a new
@@ -636,11 +589,9 @@ VARIABLE _vfac-cb-reinit
     _vfac-fd @ 0= _vfac-assert _vfac-ior @ _vfac-busy? _vfac-assert
     _vfac-scope-b VFA-SCOPE-PRIMARY@ _vfac-busy? _vfac-assert
     _vfac-scope-b VFA-SCOPE-CLEANUP@ 0= _vfac-assert
-    VFS-CUR 0= _vfac-assert
     _vfac-stack ;
 
 : _vfac-setup  ( -- )
-    VFS-CUR _vfac-old-vfs !
     0 _vfac-open-mode ! 0 _vfac-open-calls !
     0 _vfac-release-mode ! 0 _vfac-release-calls !
     0 _vfac-read-fault-at ! 0 _vfac-read-calls !
@@ -669,12 +620,11 @@ VARIABLE _vfac-cb-reinit
     _vfac-ior ! _vfac-vfs-b !
     _vfac-ior @ 0= _vfac-assert _vfac-vfs-b @ 0<> _vfac-assert
 
-    _vfac-put-a _vfac-put-b 0 VFS-USE
+    _vfac-put-a _vfac-put-b
     _vfac-stack ;
 
 : _vfac-cleanup  ( -- )
     0 _vfac-open-mode ! 0 _vfac-release-mode ! 0 _vfac-read-fault-at !
-    _vfac-old-vfs @ VFS-USE
     _vfac-vfs-b @ ?DUP IF VFS-DESTROY 0 _vfac-vfs-b ! THEN
     _vfac-vfs-a @ ?DUP IF VFS-DESTROY 0 _vfac-vfs-a ! THEN ;
 

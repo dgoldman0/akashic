@@ -91,9 +91,8 @@ marker companions.
 `LOAD` is transactional with respect to caller memory. Only a fully read,
 bounded, integrity-checked, valid-UTF-8 record is copied into the destination.
 Absent, corrupt, unsupported, capacity, recovery, and I/O outcomes return zero
-length and revision and leave the destination unchanged. File descriptors and
-the caller's previous VFS context are restored on ordinary and exception
-paths. `ABSENT` means path resolution proved that no target exists; an existing
+length and revision and leave the destination unchanged. File descriptors are
+released on ordinary and exception paths. `ABSENT` means path resolution proved that no target exists; an existing
 target that cannot acquire a file descriptor is `IO`, not absence.
 
 The shared record scratch is wiped across its full capacity before every

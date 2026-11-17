@@ -9,7 +9,6 @@ VARIABLE _PBTC-phase
 VARIABLE _PBTC-arena
 VARIABLE _PBTC-vfs
 VARIABLE _PBTC-ior
-VARIABLE _PBTC-old-vfs
 VARIABLE _PBTC-page-id
 VARIABLE _PBTC-old-height
 VARIABLE _PBTC-old-generation
@@ -145,7 +144,6 @@ GUARD _PBTC-i3-guard
     ['] _PBTC-store-fault 0 _PBTC-store PSTORE-INIT ;
 
 : _PBTC-setup  ( -- )
-    VFS-CUR _PBTC-old-vfs !
     VFS-RAM-OPS _PBTC-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _PBTC-binding VFS-BINDING-DESC-SIZE MOVE
     _PBTC-ops _PBTC-binding VB.OPS !
@@ -1430,7 +1428,6 @@ GUARD _PBTC-i3-guard
     21 _PBTC-phase ! _PBTC-generation-capacity
     22 _PBTC-phase ! _PBTC-alias-boundaries
     23 _PBTC-phase ! _PBTC-four-store-isolation
-    _PBTC-old-vfs @ VFS-USE
     _PBTC-vfs @ VFS-DESTROY
     _PBTC-stack
     _PBTC-fails @ 0= IF

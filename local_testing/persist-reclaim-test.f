@@ -2033,7 +2033,6 @@ GUARD _RB-audit-shape-guard
     _RB-four-store
     _RB-cold-authority-audit
     _RB-stack
-    _PSTC-old-vfs @ VFS-USE
     _PSTC-vfs @ VFS-DESTROY
     _RB-fails @ 0= IF
         ." PERSISTENCE RECLAIM PASS " _RB-checks @ . CR

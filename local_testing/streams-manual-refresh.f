@@ -15,8 +15,8 @@ PROVIDED streams-manual-refresh-tests
 VARIABLE _smrc-fails
 VARIABLE _smrc-checks
 VARIABLE _smrc-depth
-VARIABLE _smrc-old-vfs
 VARIABLE _smrc-vfs
+VARIABLE _smrc-places
 VARIABLE _smrc-desk
 VARIABLE _smrc-inst
 VARIABLE _smrc-offline
@@ -261,6 +261,16 @@ VARIABLE _smrc-provider-operation
 \ Component, source, request, and fixture helpers
 \ ---------------------------------------------------------------------
 
+\ Streams asks Desk's endpoint for its places, and Desk answers with its
+\ Practice activation's set.  This check runs no Practice, so for that
+\ one service its endpoint answers the check's own set, over its RAM
+\ volume, and it asks Desk for every other.
+: _smrc-endpoint-service  ( id-a id-u caller desk -- service | 0 )
+    2OVER S" org.akashic.fs.places" STR-STR= IF
+        2DROP 2DROP _smrc-places @ EXIT
+    THEN
+    _DESK-ENDPOINT-SERVICE ;
+
 : _smrc-desk-init  ( -- )
     _DESK-FILL-DESC
     DESK-COMP-DESC CINST-NEW DUP IF
@@ -271,7 +281,7 @@ VARIABLE _smrc-provider-operation
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _smrc-assert
     _DESK-ENDPOINT IENDPOINT-INIT
     _smrc-desk @ _DESK-ENDPOINT IEND.CONTEXT !
-    ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
+    ['] _smrc-endpoint-service _DESK-ENDPOINT IEND.SERVICE-XT !
     _DESK-ENDPOINT _smrc-desk @ CINST.ENDPOINT !
     S" org.akashic.net.external-io" _smrc-desk @ CINST-SERVICE
         _DESK-EXTERNAL-IO = _smrc-assert ;
@@ -791,10 +801,10 @@ VARIABLE _smrc-args-expected
     _smrc-load-fixture _smrc-plan-defaults
     STREAMS-OBSERVATION-CHECKPOINT-SIZE ALLOCATE
         DUP 0= _smrc-assert DROP _smrc-durable-a !
-    VFS-CUR _smrc-old-vfs !
     8388608 A-XMEM ARENA-NEW DUP 0= _smrc-assert DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP 0<> _smrc-assert DUP _smrc-vfs ! VFS-USE
+        DUP 0<> _smrc-assert _smrc-vfs !
+    _smrc-vfs @ S" smrc" _t-root-set _smrc-places !
     _smrc-desk-init
     _STREAMS-COMP-SETUP
     -1 _smrc-instance-new DUP 0<> _smrc-assert DUP _smrc-inst !
@@ -830,7 +840,7 @@ VARIABLE _smrc-args-expected
     _smrc-desk @ CINST-FREE 0 _smrc-desk !
     _smrc-plan _SMRF-FACTORY-COUNT + @ 3 = _smrc-assert
     _smrc-plan _SMRF-RELEASE-COUNT + @ 3 = _smrc-assert
-    _smrc-old-vfs @ VFS-USE
+    _smrc-places @ S" smrc" _t-root-set-free 0 _smrc-places !
     _smrc-vfs @ VFS-DESTROY 0 _smrc-vfs !
     _smrc-durable-a @ ?DUP IF
         DUP STREAMS-OBSERVATION-CHECKPOINT-SIZE 0 FILL FREE

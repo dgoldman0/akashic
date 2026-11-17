@@ -9,7 +9,6 @@ VARIABLE _PSTC-depth
 VARIABLE _PSTC-arena
 VARIABLE _PSTC-vfs
 VARIABLE _PSTC-ior
-VARIABLE _PSTC-old-vfs
 VARIABLE _PSTC-page-id
 VARIABLE _PSTC-fault-at
 VARIABLE _PSTC-old-generation
@@ -189,7 +188,6 @@ GUARD _PSTC-guard-i3
     DROP -912 ;
 
 : _PSTC-setup  ( -- )
-    VFS-CUR _PSTC-old-vfs !
     VFS-RAM-OPS _PSTC-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _PSTC-binding VFS-BINDING-DESC-SIZE MOVE
     _PSTC-ops _PSTC-binding VB.OPS !
@@ -998,7 +996,6 @@ GUARD _PSTC-guard-i3
     _PSTC-four-store-interleave
     _PSTC-layer-uncertain
     _PSTC-cleanup-uncertain
-    _PSTC-old-vfs @ VFS-USE
     _PSTC-vfs @ VFS-DESTROY
     _PSTC-stack
     _PSTC-fails @ 0= IF

@@ -90,56 +90,53 @@ decoded conversation that is returned to the caller or freed after selection.
 
 Slot reads and writes are exact: a zero-progress or short transfer is an I/O
 failure, never a shorter valid snapshot. Each slot operation holds one VFS
-transaction across active-VFS selection, open/create, transfer, close, and
-sync. A dedicated recursive store guard covers allocation, codec scratch,
-generation selection, publication, construction, and destruction as well, so
-owner-core callers cannot interleave through the module-global working state.
-The adapter remains core-affine because allocation and the active-VFS selector
-are not worker-safe. The runtime must also linearize store lifetime: no caller
-may race `AVFSSTORE-FREE` or use the store after ownership is released. Within
-that lifetime contract, the guard provides scratch-state safety and coherent
-generation publication; it does not provide conflicting-edit resolution or
-turn a borrowed store pointer into a concurrent ownership mechanism.
+transaction across open/create, transfer, close, and sync. A dedicated
+recursive store guard covers allocation, codec scratch, generation selection,
+publication, construction, and destruction as well, so owner-core callers
+cannot interleave through the module-global working state. The adapter remains
+core-affine because allocation is not worker-safe. The runtime must also
+linearize store lifetime: no caller may race `AVFSSTORE-FREE` or use the store
+after ownership is released. Within that lifetime contract, the guard provides
+scratch-state safety and coherent generation publication; it does not provide
+conflicting-edit resolution or turn a borrowed store pointer into a concurrent
+ownership mechanism.
 
 The store callback ABI remains status-based even when a VFS binding or codec
 unexpectedly `THROW`s. The adapter catches the fault only after independently
-attempting descriptor close, active-VFS restoration, candidate-conversation
-release, and buffer release. The original fault takes precedence over a
-cleanup fault internally; the public load/save callback then reports
-`ACSTORE-S-IO` rather than exposing an exception or misclassifying an
-invariant failure as corrupt snapshot data. Ordinary returned codec statuses
-retain their existing `INVALID`, `CAPACITY`, and `NOMEM` meanings.
+attempting descriptor close, candidate-conversation release, and buffer
+release. The original fault takes precedence over a cleanup fault internally;
+the public load/save callback then reports `ACSTORE-S-IO` rather than exposing
+an exception or misclassifying an invariant failure as corrupt snapshot data.
+Ordinary returned codec statuses retain their existing `INVALID`, `CAPACITY`,
+and `NOMEM` meanings.
 
 Save has one additional result, `ACSTORE-S-UNCERTAIN`. It is returned when an
-unexpected fault occurs after writing may have begun, or when close/sync or
-the final selector restore cannot prove the effect, including a nonzero sync
-result after a complete write. Creating an absent inactive path is already an
-external effect, so a fault at that boundary is conservatively uncertain even
-before a complete snapshot exists. Faults before the durability boundary do
-not advance the in-memory generation. Once sync succeeds, the pair adopts the
-durable generation even if restoring the prior selector or releasing the store
-guard then throws; the result remains uncertain rather than attempting a false
-rollback. A pre-sync uncertain slot may nevertheless contain a complete,
-valid newer generation, so a later load validates both slots normally and may
-adopt it. This is deliberately not reported as a clean failure or silently
-rolled back.
+unexpected fault occurs after writing may have begun, or when close or sync
+cannot prove the effect, including a nonzero sync result after a complete
+write. Creating an absent inactive path is already an external effect, so a
+fault at that boundary is conservatively uncertain even before a complete
+snapshot exists. Faults before the durability boundary do not advance the
+in-memory generation. Once sync succeeds, the pair adopts the durable
+generation even if releasing the store guard then throws; the result remains
+uncertain rather than attempting a false rollback. A pre-sync uncertain slot
+may nevertheless contain a complete, valid newer generation, so a later load
+validates both slots normally and may adopt it. This is deliberately not
+reported as a clean failure or silently rolled back.
 
-Descriptor and selector ownership markers are cleared before close/restore is
-called. This prevents an operation that completed and then threw from being
-retried as a double-close or double-restore during outer cleanup. A binding
-that throws before performing such a void operation can therefore strand the
-resource; that is an invariant violation in the binding, not a recoverable
-storage result. Every load attempt first revokes prior RAM authority. Only a
-successful pair selection republishes it; split-brain, corrupt, absent, read,
-decode, cleanup, and post-body guard-release failures therefore leave
-generation zero and no active slot instead of restoring history-dependent
-authority. Deterministic tests cover after-effect close/sync faults, free-list
-integrity, selector restoration, allocation recovery, unchanged RAM
-publication before durability, durable adoption before selector restoration,
-equal-byte and divergent equal-generation classification, second-slot
-read/decode revocation, post-body guard-release faults, returned-conversation
-cleanup, stable published candidate identity, and later acceptance of a valid
-uncertain generation.
+The descriptor's ownership marker is cleared before close is called. This
+prevents a close that completed and then threw from being retried as a double
+close during outer cleanup. A binding that throws before closing can therefore
+strand the descriptor; that is an invariant violation in the binding, not a
+recoverable storage result. Every load attempt first revokes prior RAM
+authority. Only a successful pair selection republishes it; split-brain,
+corrupt, absent, read, decode, cleanup, and post-body guard-release failures
+therefore leave generation zero and no active slot instead of restoring
+history-dependent authority. Deterministic tests cover after-effect close/sync
+faults, free-list integrity, allocation recovery, unchanged RAM publication
+before durability, equal-byte and divergent equal-generation classification,
+second-slot read/decode revocation, post-body guard-release faults,
+returned-conversation cleanup, stable published candidate identity, and later
+acceptance of a valid uncertain generation.
 
 Messages stored as streaming, pending, or awaiting approval cannot honestly be
 resumed without provider and tool execution state. Decode therefore marks them

@@ -66,6 +66,9 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
 
 : _laf-phase  ( address length -- )
     ." LIBRARY APPLET FUNCTIONAL PHASE " TYPE CR ;
+\ The Library keeps its repository on the volume under its home: here the
+\ build's one place, over the boot volume's root.
+: _laf-vfs  ( -- vfs )  PLACES-DEFAULT PLSET-HOME PLACE-VFS ;
 
 : _laf-zero?  ( address length -- flag )
     0 ?DO
@@ -80,7 +83,7 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
 : _laf-read-file  ( destination expected-u path-a path-u -- flag )
     _laf-path-u ! _laf-path-a !
     _laf-file-u ! _laf-file-a !
-    _laf-path-a @ _laf-path-u @ VFS-FF-READ VFS-CUR VFS-OPEN?
+    _laf-path-a @ _laf-path-u @ VFS-FF-READ _laf-vfs VFS-OPEN?
     _laf-ior ! _laf-fd !
     _laf-ior @ IF 0 EXIT THEN
     _laf-fd @ 0= IF 0 EXIT THEN
@@ -94,7 +97,7 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
     _laf-path-u ! _laf-path-a !
     _laf-file-u ! _laf-file-a !
     _laf-path-a @ _laf-path-u @
-        VFS-FF-READ VFS-FF-WRITE OR VFS-CUR VFS-OPEN?
+        VFS-FF-READ VFS-FF-WRITE OR _laf-vfs VFS-OPEN?
     _laf-ior ! _laf-fd !
     _laf-ior @ 0= _laf-assert
     _laf-fd @ 0<> _laf-assert
@@ -104,7 +107,7 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
     _laf-file-a @ _laf-file-u @ _laf-fd @ VFS-WRITE-EXACT
         0= _laf-assert
     _laf-fd @ VFS-CLOSE? 0= _laf-assert
-    VFS-CUR VFS-SYNC 0= _laf-assert ;
+    _laf-vfs VFS-SYNC 0= _laf-assert ;
 
 : _laf-copy-corrupt  ( source destination -- )
     >R

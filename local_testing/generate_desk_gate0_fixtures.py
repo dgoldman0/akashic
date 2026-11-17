@@ -57,6 +57,7 @@ VARIABLE _g0-path-u
 VARIABLE _g0-record-u
 VARIABLE _g0-status
 VARIABLE _g0-check
+VARIABLE _g0-vfs
 CREATE _g0-bd /BLOCK-DEVICE ALLOT
 CREATE _g0-volume /VOLUME ALLOT
 
@@ -74,12 +75,12 @@ CREATE _g0-volume /VOLUME ALLOT
 
 : _g0-put  ( data-a data-u path-a path-u -- )
     _g0-path-u ! _g0-path-a ! _g0-data-u ! _g0-data-a !
-    _g0-path-a @ _g0-path-u @ VFS-CUR VFS-CREATE
+    _g0-path-a @ _g0-path-u @ _g0-vfs @ VFS-CREATE
         DUP 0<> _g0-assert DROP
-    _g0-path-a @ _g0-path-u @ VFS-CUR VFS-OPEN DUP _g0-fd ! 0<> _g0-assert
+    _g0-path-a @ _g0-path-u @ _g0-vfs @ VFS-OPEN DUP _g0-fd ! 0<> _g0-assert
     _g0-data-a @ _g0-data-u @ _g0-fd @ VFS-WRITE-EXACT 0= _g0-assert
     _g0-fd @ VFS-CLOSE 0 _g0-fd !
-    VFS-CUR VFS-SYNC 0= _g0-assert ;
+    _g0-vfs @ VFS-SYNC 0= _g0-assert ;
 
 : _g0-source!  ( -- )
     _g0-source-rid RID-CLEAR 0x101 _g0-source-rid !
@@ -98,7 +99,7 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-source! _g0-registry STREAMS-SOURCE-REGISTRY-INIT
     _g0-source _g0-registry STREAMS-SOURCE-CREATE
         SSREG-S-OK = _g0-assert
-    S" /s-valid.bin" VFS-CUR _g0-source-store
+    S" /s-valid.bin" _g0-vfs @ _g0-source-store
         STREAMS-SOURCE-STORE-INIT-AT SSSTORE-S-OK = _g0-assert
     _g0-registry 0 _g0-source-store STREAMS-SOURCE-STORE-SAVE
         SSSTORE-S-OK = _g0-assert
@@ -152,7 +153,7 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-source-rid 1 _g0-namespace SSOURCE-KIND-SYNDICATION
         S" https://example.test/gate0.json" _g0-checkpoint @ OCHK-BEGIN
         OCHK-S-OK = _g0-assert
-    S" /o-valid.bin" VFS-CUR _g0-observation-store
+    S" /o-valid.bin" _g0-vfs @ _g0-observation-store
         STREAMS-OBSERVATION-STORE-INIT-AT OSTORE-S-OK = _g0-assert
     _g0-checkpoint @ 0 _g0-observation-store
         STREAMS-OBSERVATION-STORE-SAVE OSTORE-S-OK = _g0-assert
@@ -194,7 +195,7 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-checkpoint @ FREE ;
 
 : _g0-draft-fixture  ( -- )
-    S" /d-legacy.bin" VFS-CUR _g0-draft-store
+    S" /d-legacy.bin" _g0-vfs @ _g0-draft-store
         STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-OK = _g0-assert
     S" exact ☂ café" 7 _g0-draft-store STREAMS-DRAFT-STORE-SAVE
         SDSTORE-S-OK = _g0-assert ;
@@ -205,8 +206,7 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-bd _g0-volume VOL-RAW THROW
     1048576 A-XMEM ARENA-NEW DUP 0= _g0-assert DROP
     _g0-volume VMP-NEW ?DUP IF THROW THEN
-    DUP 0<> _g0-assert VFS-USE
-    VFS-CUR 0<> _g0-assert
+    DUP 0<> _g0-assert _g0-vfs !
     ." [gate0] source fixtures" CR
     _g0-source-fixtures
     ." [gate0] observation fixtures" CR

@@ -8,7 +8,6 @@ VARIABLE _SL13R-depth
 VARIABLE _SL13R-arena
 VARIABLE _SL13R-vfs
 VARIABLE _SL13R-ior
-VARIABLE _SL13R-old-vfs
 VARIABLE _SL13R-owner-calls
 VARIABLE _SL13R-expected-generation
 VARIABLE _SL13R-stage-sink-bytes
@@ -90,7 +89,6 @@ STREAMS-QUERY-WORK-SIZE XBUF _SL13R-query-work
         PERSIST-S-OK _SL13R-status ;
 
 : _SL13R-runtime-init  ( -- )
-    VFS-CUR _SL13R-old-vfs !
     VFS-RAM-OPS _SL13R-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _SL13R-binding VFS-BINDING-DESC-SIZE MOVE
     _SL13R-ops _SL13R-binding VB.OPS !
@@ -583,7 +581,6 @@ STREAMS-QUERY-WORK-SIZE XBUF _SL13R-query-work
         STREAMS-REPOSITORY-S-OK _SL13R-status
     0 _SL13R-vfs @ VFS-UNMOUNT 0= _SL13R-assert
     _SL13R-vfs @ VFS-DESTROY
-    _SL13R-old-vfs @ VFS-USE
     _SL13R-arena @ ARENA-DESTROY
     _SL13R-stack ;
 

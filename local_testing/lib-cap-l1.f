@@ -90,9 +90,9 @@ CREATE _LC1-large-digest
 
 VARIABLE _LC1-owner-adapter
 VARIABLE _LC1-owner-index
-VARIABLE _LC1-boundary-old-vfs
 VARIABLE _LC1-boundary-arena
 VARIABLE _LC1-boundary-vfs
+VARIABLE _LC1-boundary-prior-places
 VARIABLE _LC1-boundary-ior
 
 : _LC1-assert  ( flag -- )
@@ -1565,23 +1565,23 @@ _LC1-wb-decoded CV-INIT
     \ storage-heavy semantic profile on the same 32 MiB RAM-VFS contract used
     \ by Library's retained-restore qualification, while the core/UI profiles
     \ continue to exercise the platform VFS.
-    VFS-CUR _LC1-boundary-old-vfs !
     33554432 A-XMEM ARENA-NEW
     DUP 0= _LC1-assert DROP _LC1-boundary-arena !
     _LC1-boundary-arena @ VFS-RAM-BINDING 0 VFS-NEW
         _LC1-boundary-ior ! _LC1-boundary-vfs !
     _LC1-boundary-ior @ 0= _LC1-assert
     _LC1-boundary-vfs @ 0<> _LC1-assert
-    _LC1-boundary-vfs @ VFS-USE
+    _LC1-boundary-vfs @ S" lc1" _t-default-home _LC1-boundary-prior-places !
     _LC1-desc LIBRARY-APPLET-ENTRY
     ['] _LC1-boundary-shell-init _LC1-desc APP.INIT-XT !
     \ The boundary runner does not exercise rendering.  Avoid asking the RAM
-    \ VFS for the UIDL resource that was already source-packaged on MP64FS.
+    \ volume, this run's origin, for the UIDL resource that was
+    \ source-packaged on MP64FS.
     0 _LC1-desc APP.UIDL-FILE-A !
     0 _LC1-desc APP.UIDL-FILE-U !
     _LC1-desc ASHELL-RUN
     _LAPP-LIVE-INSTANCE @ 0= _LC1-assert
-    _LC1-boundary-old-vfs @ VFS-USE
+    _LC1-boundary-prior-places @ S" lc1" _t-default-restore
     _LC1-boundary-vfs @ VFS-DESTROY
     _LC1-boundary-arena @ ARENA-DESTROY
     0 _LC1-boundary-vfs ! 0 _LC1-boundary-arena !

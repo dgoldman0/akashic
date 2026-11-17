@@ -275,21 +275,19 @@ URI, equal to ext4's file-name limit, so any folder name can be a place
 name. Labels and folders are stored at their length, a folder within
 `VFS-PATH-MAX`.
 
-## The selector goes
+## Every word names its instance
 
-The VFS library keeps one process-wide current instance, and `VFS-OPEN`
-opens on it while every other word takes its instance, so each caller
-brackets its work. `VFS-OPEN` will take its instance, `VFS-NEW` will stop
-selecting, and `VFS-USE`, `VFS-CUR` and `_VFS-CUR` will be deleted, so no
-code can depend on them. Every site that brackets, restores or adopts the
-selector passes an instance or a place instead: the replacement, access
-and fixed-snapshot libraries (whose private-range check also starts at
-the selector cell), the system-volume and settings mounts, the MP64FS
-platform module, the Practice head, the credential vault, the catalog,
-builder and loader, the shell's UIDL load, UIDL media sources, Desk's
-hand-offs and every applet store. Stores take their set's home, shipped
-files are read from the origin, and the prefix router `vfs-mount.f`,
-which nothing requires, is deleted with its document and test.
+Every VFS word takes the instance it works on, and the library keeps no
+current instance, so no code reaches files through an instance another
+module chose. Code that mounts an instance keeps it and passes it on;
+code that works in a holder's files passes a place, which answers its
+instance. The replacement, access and fixed-snapshot libraries, the
+system-volume and settings mounts, the MP64FS platform module, the
+Practice head, the credential vault, the catalog, builder and loader, the
+shell's UIDL load, UIDL media and every applet store work this way:
+stores take their set's home, and shipped files are read from the
+origin. A source rule, `local_testing/test_vfs_named_instances.py`, holds
+every file under `akashic/` to it.
 
 ## Order of work
 
@@ -297,9 +295,9 @@ which nothing requires, is deleted with its document and test.
    form with every producer and reader, the explorer widget, File
    Explorer and Pad on a set, the service, `CTX.PLACES`, the boot
    fragment. `vfs.f` is untouched.
-2. The selector goes and each writer gets its home. Stores take places;
-   shipped files read from the origin. A source rule forbids the selector
-   under `akashic/`.
+2. Done: every VFS word names its instance and each writer gets its
+   home. Stores take places; shipped files read from the origin. A
+   source rule holds `akashic/` to it.
 3. Copy and move: `vfs-copy.f`, `PLACE-COPY`, File Explorer's paste.
 4. The user volume attaches: the builder's user image on the machine's
    fourth storage unit, `user-volume.f`, the shipping form's places, and
@@ -324,8 +322,8 @@ emulator or the simulator").
 
 ## Status
 
-Slice 1 is in the tree. The linked build declares one place and everything
-below runs on it.
+Slices 1 and 2 are in the tree. The linked build declares one place and
+everything below runs on it.
 
 - `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
   `local_testing/test_places.py` on two RAM volumes.
@@ -349,19 +347,48 @@ below runs on it.
 - File Explorer and Pad obtain their set through `CINST-PLACES` and work
   through the `PLACE-` words. Each reads its configuration from the
   origin.
+- Every VFS word takes its instance: `VFS-OPEN` is
+  `( c-addr u vfs -- fd|0 )`, and `VFS-NEW` answers the instance it
+  mounts to its caller alone. `tui/platform/mp64fs-vfs.f` adopts the
+  instance attached as `boot`, the settings disk and the system volume
+  mount without changing anything else, and the credential vault saves
+  and restores only its own instance's current directory.
+- `utils/fs/place-replace.f` gives `PLACE-VREPL!`, which binds a path in a
+  place and points a replacement descriptor at the instance the binding
+  answers. Pad binds each document through it, and so do the stores that
+  keep one file through a replacement.
+- Desk hands each store it opens its activation's home (`_DESK-HOME`):
+  the sandbox store and its catalog, the Agent's run store, Daybook's
+  automation store and owner, the dispatch store, the schedule
+  permissions and the broker. The Practice head and the Agent's
+  conversation store work through `PLACE-OPEN`, `PLACE-CREATE` and
+  `PLACE-SYNC` in the home. The builder publishes in its catalog's place
+  and the loader reads in the place it is given.
+- Daybook, Grid and Sound Lab keep their file in their home. Streams and
+  Library open their repositories on the volume under their home.
+- The shell and the applet host read an applet's UIDL file from its
+  origin, and a document's media read their file from the place the
+  document came from (`UTUI-FILES!`).
 
-What slice 1 leaves as it found it, for the slices named:
+What slice 2 leaves:
 
-- Desk still hands the stores that take an instance the one under the
-  home (`_DESK-HOME-VFS`), and the sandbox store, catalog and Agent store
-  the selected instance. Because those stores write through the instance,
-  narrowing a set also marks the volumes under its places read-only.
-  Slice 2 gives each store a place and removes both.
+- Narrowing a set still marks the volumes under its places read-only.
+  Each store binds its file through its place when it opens, for writing
+  only when the place is writable, but a store bound for reading still
+  writes through its instance if asked, so the mark is what refuses that
+  write. The mark goes when each store refuses a change on a read-only
+  place itself; whether such a store opens read-only and refuses each
+  change, or answers as a service that says why, is still to be decided.
+- Streams and Library keep repositories with fixed layouts from the
+  volume's root (`/streams/...`, `/library/...`, `/streams-*.bin`) whose
+  paths their persistence layer and their own checks compare literally,
+  and they open them on the volume under their home. In every build so
+  far the home's folder is that volume's root, so their files stay where
+  they were. How such a layout moves inside a place's folder (each path
+  bound at open, the folder bound and the paths composed under it, or a
+  place form of the persistence layer) is still to be decided.
 - File Explorer's paste runs its transaction on one volume and refuses a
   source on another. Slice 3 replaces it with `PLACE-COPY`.
-- Pad keeps one replacement descriptor and points it at a document's
-  volume for each read and write, through the selector the load
-  transaction still brackets. Slice 2 removes the selector.
 - `PLACE-NAME-LIMIT` asks the volume, and the MP64FS binding gives no
   answer yet, so the limit there is the VFS's 255 and the binding's own
   refusal of a name over 23 bytes stands.

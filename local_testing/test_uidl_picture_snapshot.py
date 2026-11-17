@@ -107,7 +107,6 @@ SETUP = [
     "VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _UP-V !",
     '_UP-QOI _UP-QOI-U S" /logo.qoi" _UP-PUT',
     '_UP-BIN 4 S" /data.bin" _UP-PUT',
-    "_UP-V @ VFS-USE",
     'S" <uidl><region arrange=flex><media id=m/></region></uidl>" _UP-RGN @ UTUI-LOAD DROP',
     'S" m" UTUI-BY-ID DUP _UP-EM ! UTUI-WIDGET@ _UP-WM !',
     '." INDEX=" _UP-EM @ UIDL-ELEM-INDEX? DROP . CR',

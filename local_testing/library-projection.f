@@ -6,10 +6,7 @@ VARIABLE _lpo-fails
 VARIABLE _lpo-checks
 VARIABLE _lpo-depth
 VARIABLE _lpo-vfs
-VARIABLE _lpo-other-vfs
-VARIABLE _lpo-old-vfs
 VARIABLE _lpo-arena
-VARIABLE _lpo-other-arena
 VARIABLE _lpo-ior
 VARIABLE _lpo-context
 VARIABLE _lpo-cold-context
@@ -517,7 +514,6 @@ VARIABLE _lpo-exact-locator
         LIBRARY-SERVICE-S-OK _lpo-status ;
 
 : _lpo-repository-setup  ( -- )
-    VFS-CUR _lpo-old-vfs !
     _lpo-arena-id LIB-DIGEST-SIZE 0xB4 FILL
     _lpo-unknown-rid LIB-DIGEST-SIZE 0xEE FILL
     VFS-RAM-OPS _lpo-vfs-ops VFS-OPS-SIZE MOVE
@@ -529,7 +525,6 @@ VARIABLE _lpo-exact-locator
         _lpo-ior ! _lpo-vfs !
     _lpo-ior @ 0= _lpo-assert
     _lpo-vfs @ 0<> _lpo-assert
-    _lpo-vfs @ VFS-USE
     _lpo-repository-init
     _lpo-repository _lpo-repository-work
         LIBRARY-REPOSITORY-PROVISION
@@ -546,15 +541,6 @@ VARIABLE _lpo-exact-locator
     _lpo-seed-lifecycle
     _lpo-create-documents-rest
     _lpo-create-capture
-
-    \ The unrelated empty VFS is selected only by the ambient-fallback test.
-    4194304 A-XMEM ARENA-NEW DUP 0= _lpo-assert DROP
-        _lpo-other-arena !
-    _lpo-other-arena @ _lpo-vfs-binding 0 VFS-NEW
-        _lpo-ior ! _lpo-other-vfs !
-    _lpo-ior @ 0= _lpo-assert
-    _lpo-other-vfs @ 0<> _lpo-assert
-    _lpo-vfs @ VFS-USE
     _lpo-stack ;
 
 : _lpo-runtime-setup  ( -- )
@@ -870,7 +856,7 @@ VARIABLE _lpo-exact-locator
     _lpo-root LIBRARY-PROJECTION-ROOT-LEASES@ 0= _lpo-assert
     _lpo-stack ;
 
-: _lpo-archived-ambient  ( -- )
+: _lpo-archived-exact  ( -- )
     1 _lpo-read-identity LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.LIFECYCLE @ LIB-LIFECYCLE-ARCHIVED = _lpo-assert
     _lpo-entry LIBE.DOMAIN-REVISION @ 2 = _lpo-assert
@@ -880,11 +866,8 @@ VARIABLE _lpo-exact-locator
     1 _lpo-rid 2 _lpo-digest-a _lpo-loc-b _lpo-exact-loc!
         QLOC-S-OK = _lpo-assert
 
-    \ The root remains bound to its configured service when an unrelated empty
-    \ VFS becomes ambient.  Archived identity is unavailable because identity
-    \ means active-current; the exact archived state remains readable.
-    _lpo-other-vfs @ VFS-USE
-    VFS-CUR _lpo-other-vfs @ = _lpo-assert
+    \ Archived identity is unavailable because identity means active-current;
+    \ the exact archived state remains readable.
     _lpo-bind-fail LBIND-INIT
     _lpo-result-fail RACQ-RESULT-INIT
     _lpo-loc-a _lpo-bind-fail _lpo-result-fail _lpo-attach
@@ -895,10 +878,8 @@ VARIABLE _lpo-exact-locator
         0= _lpo-assert
     _lpo-root LIBRARY-PROJECTION-ROOT-LIVE@ 0= _lpo-assert
     _lpo-root LIBRARY-PROJECTION-ROOT-LEASES@ 0= _lpo-assert
-    VFS-CUR _lpo-other-vfs @ = _lpo-assert
     _lpo-loc-b _lpo-bind-a _lpo-result-a _lpo-attach
         RACQ-S-OK = _lpo-assert
-    VFS-CUR _lpo-other-vfs @ = _lpo-assert
     _lpo-result-a _lpo-bind-a _lpo-client-init
         CBUS-S-OK = _lpo-assert
     _lpo-client _lpo-managed-client? _lpo-assert
@@ -943,10 +924,8 @@ VARIABLE _lpo-exact-locator
     _lpo-entry LIBE.CONTENT-DIGEST _lpo-digest-a
         SHA3-256-COMPARE _lpo-assert
     _lpo-loc-b S" managed-1" _lpo-snapshot
-    VFS-CUR _lpo-other-vfs @ = _lpo-assert
     _lpo-client RCLI-FINI CBUS-S-OK = _lpo-assert
     _lpo-bind-a LBIND-CLEAR
-    _lpo-vfs @ VFS-USE
     _lpo-root LIBRARY-PROJECTION-ROOT-LIVE@ 0= _lpo-assert
     _lpo-stack ;
 
@@ -1355,13 +1334,10 @@ VARIABLE _lpo-exact-locator
     _lpo-creg @ CREG-FREE
     _lpo-cold-context @ CTX-FREE
     _lpo-context @ CTX-FREE
-    _lpo-vfs @ VFS-USE
     _lpo-service _lpo-service-work LIBRARY-SERVICE-FINI
         LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-repository _lpo-repository-work LIBRARY-REPOSITORY-FINI
         LIBRARY-REPOSITORY-S-OK = _lpo-assert
-    _lpo-old-vfs @ VFS-USE
-    _lpo-other-vfs @ VFS-DESTROY
     _lpo-vfs @ VFS-DESTROY
     _lpo-capacity-buffers-free
     _lpo-stack ;
@@ -1375,7 +1351,7 @@ VARIABLE _lpo-exact-locator
     _lpo-attach-alias-contract
     _lpo-sharing-release
     _lpo-current-retained-replace
-    _lpo-archived-ambient
+    _lpo-archived-exact
     _lpo-capture-snapshot
     _lpo-published-tombstone
     _lpo-acquire-failures

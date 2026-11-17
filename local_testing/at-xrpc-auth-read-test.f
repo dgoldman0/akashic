@@ -42,7 +42,6 @@ VARIABLE _atxr-depth
 VARIABLE _atxr-key-generation
 VARIABLE _atxr-session-generation
 VARIABLE _atxr-resolver-calls
-VARIABLE _atxr-old-vfs
 VARIABLE _atxr-arena
 VARIABLE _atxr-vfs
 
@@ -465,7 +464,6 @@ VARIABLE _atxr-r-resolver-context
     0 _atxr-response-pos !
     0 _atxr-sent-u !
 
-    VFS-CUR _atxr-old-vfs !
     1048576 A-XMEM ARENA-NEW
     DUP 0= _atxr-assert
     DROP _atxr-arena !
@@ -478,7 +476,6 @@ VARIABLE _atxr-r-resolver-context
     DROP
     DUP 0<> _atxr-assert
     _atxr-vfs !
-    _atxr-vfs @ VFS-USE
     S" vault" _atxr-vfs @ VFS-MKDIR
     0 _atxr-status
 
@@ -895,7 +892,6 @@ VARIABLE _atxr-io-n
     _atxr-root-key SEALED-RECORD-ROOT-KEY-SIZE 0 FILL
 
     _atxr-vfs @ ?DUP IF
-        _atxr-old-vfs @ VFS-USE
         VFS-DESTROY
         0 _atxr-vfs !
     THEN

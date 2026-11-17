@@ -7,7 +7,6 @@ VARIABLE _SL13E-fails
 VARIABLE _SL13E-depth
 VARIABLE _SL13E-arena
 VARIABLE _SL13E-vfs
-VARIABLE _SL13E-old-vfs
 VARIABLE _SL13E-ior
 VARIABLE _SL13E-record-u
 VARIABLE _SL13E-generation
@@ -84,7 +83,6 @@ STREAMS-OBSERVATION-STORE-RECORD-MAX XBUF _SL13E-observation-raw
     0 _SL13E-fd ! ;
 
 : _SL13E-setup  ( -- )
-    VFS-CUR _SL13E-old-vfs !
     VFS-RAM-OPS _SL13E-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _SL13E-binding VFS-BINDING-DESC-SIZE MOVE
     _SL13E-ops _SL13E-binding VB.OPS !
@@ -94,7 +92,6 @@ STREAMS-OBSERVATION-STORE-RECORD-MAX XBUF _SL13E-observation-raw
     _SL13E-ior ! _SL13E-vfs !
     _SL13E-ior @ 0= _SL13E-assert
     _SL13E-vfs @ 0<> _SL13E-assert
-    _SL13E-vfs @ VFS-USE
     _SL13E-vfs @ _SL13E-source-store STREAMS-SOURCE-STORE-INIT
         SSSTORE-S-OK _SL13E-status
     _SL13E-vfs @ _SL13E-observation-store
@@ -236,7 +233,6 @@ STREAMS-OBSERVATION-STORE-RECORD-MAX XBUF _SL13E-observation-raw
     _SL13E-stack ;
 
 : _SL13E-finish  ( -- )
-    _SL13E-old-vfs @ VFS-USE
     _SL13E-vfs @ VFS-DESTROY
     0 _SL13E-vfs !
     _SL13E-arena @ ARENA-DESTROY

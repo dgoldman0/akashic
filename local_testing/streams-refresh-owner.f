@@ -17,7 +17,6 @@ VARIABLE _srtc-fails
 VARIABLE _srtc-checks
 VARIABLE _srtc-depth
 VARIABLE _srtc-vfs
-VARIABLE _srtc-old-vfs
 VARIABLE _srtc-context
 VARIABLE _srtc-durable-a
 VARIABLE _srtc-snapshot-a
@@ -349,11 +348,9 @@ VARIABLE _srtc-factory-context
     0 _srtc-context ! 0 _srtc-document-a ! 0 _srtc-document-u !
     STREAMS-OBSERVATION-CHECKPOINT-SIZE _srtc-durable-a _srtc-allocate
     STREAMS-OBSERVATION-CHECKPOINT-SIZE _srtc-snapshot-a _srtc-allocate
-    VFS-CUR _srtc-old-vfs !
     8388608 A-XMEM ARENA-NEW DUP 0= _srtc-assert DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _srtc-vfs ! 0<> _srtc-assert
-    _srtc-vfs @ VFS-USE
     _srtc-service XIO-SERVICE-INIT XIO-S-OK = _srtc-assert
     _srtc-source-init
     DEPTH _srtc-depth ! _srtc-stack ;
@@ -845,7 +842,6 @@ VARIABLE _srtc-factory-context
 
 : _srtc-finish  ( -- )
     _srtc-service XIO-SERVICE-FINI XIO-S-OK = _srtc-assert
-    _srtc-old-vfs @ VFS-USE
     _srtc-vfs @ VFS-DESTROY
     0 _srtc-vfs !
     _srtc-snapshot-a _srtc-free _srtc-durable-a _srtc-free

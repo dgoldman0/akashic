@@ -58,8 +58,7 @@ The volume is mounted once and stays mounted; a second `SYSVOL-MOUNT` answers
 | another `VFS-E-` code | the volume is not an ext4 volume the driver reads |
 
 A failed mount gives the unit back, so a later call can mount it, and it
-leaves the module source and the current VFS as they were. A successful mount
-also leaves the current VFS as it found it.
+leaves the module source as it was.
 
 `SYSVOL-SOURCE` throws `VFS-E-NOVOLUME` before a mount. A boot that went on
 after a failed mount therefore stops at that word and never selects a source

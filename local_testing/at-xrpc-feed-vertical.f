@@ -44,7 +44,6 @@ VARIABLE _atfv-readback-a
 VARIABLE _atfv-xrpc-exchange
 VARIABLE _atfv-generation
 VARIABLE _atfv-instance
-VARIABLE _atfv-applet-vfs
 
 VARIABLE _atfv-open-count
 VARIABLE _atfv-close-count
@@ -462,14 +461,12 @@ VARIABLE _atfv-io-n
     STREAMS-DESC APP.COMP-DESC @ CINST-NEW
     DUP 0= _atxr-assert DROP
     DUP _atfv-instance !
-    \ This witness supplies its own authenticated connector.  Keep the
-    \ unrelated configured-source repository and legacy public refresher in
-    \ their supported offline mode instead of attaching them to the auth
-    \ fixture's private vault VFS.
-    VFS-CUR _atfv-applet-vfs !
-    0 VFS-USE
+    \ This witness supplies its own authenticated connector.  The vertical
+    \ declares no places, so the instance has no home and the unrelated
+    \ configured-source repository and legacy public refresher stay in
+    \ their supported offline mode instead of opening on the auth fixture's
+    \ private vault VFS.
     STREAMS-DESC APP.INIT-XT @ EXECUTE
-    _atfv-applet-vfs @ VFS-USE
     _atfv-instance @ CINST-STATE 0<> _atxr-assert
     _atfv-instance @ _STM-ACTIVATE
     _atfv-instance @ STREAMS-SOURCE-STORAGE-READY? 0= _atxr-assert
@@ -769,7 +766,6 @@ VARIABLE _atfv-io-n
     STREAMS-COMP-DESC COMP.STATE-FINI-XT @
         ['] _STM-STATE-FINI = _atxr-assert
     _atfv-instance @ STREAMS-SHUTDOWN-CB
-    VFS-CUR _atfv-applet-vfs @ = _atxr-assert
     _atxr-active-vault @ CVAULT-VALID? _atxr-assert
     _atxr-active-session @ O2SESSION-VALID? _atxr-assert
     _atxr-stack ;
@@ -779,7 +775,6 @@ VARIABLE _atfv-io-n
         CINST-FREE
         0 _atfv-instance !
     THEN
-    VFS-CUR _atfv-applet-vfs @ = _atxr-assert
     _atxr-active-vault @ CVAULT-VALID? _atxr-assert
     _atxr-active-session @ O2SESSION-VALID? _atxr-assert
     _atxr-stack ;
@@ -848,7 +843,6 @@ VARIABLE _atfv-io-n
     0 _atfv-xrpc-exchange !
     0 _atfv-generation !
     0 _atfv-instance !
-    0 _atfv-applet-vfs !
     _atxr-stack ;
 
 : _ATFV-FINISH  ( -- )

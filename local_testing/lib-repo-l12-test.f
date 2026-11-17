@@ -8,7 +8,6 @@ VARIABLE _LR12-depth
 VARIABLE _LR12-arena
 VARIABLE _LR12-vfs
 VARIABLE _LR12-ior
-VARIABLE _LR12-old-vfs
 VARIABLE _LR12-fault-at
 VARIABLE _LR12-cwd
 VARIABLE _LR12-owner-calls
@@ -100,7 +99,6 @@ CREATE _LR12-raw 64 ALLOT
         PERSIST-S-OK _LR12-status ;
 
 : _LR12-runtime-init  ( -- )
-    VFS-CUR _LR12-old-vfs !
     VFS-RAM-OPS _LR12-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _LR12-binding VFS-BINDING-DESC-SIZE MOVE
     _LR12-ops _LR12-binding VB.OPS !
@@ -357,7 +355,6 @@ CREATE _LR12-raw 64 ALLOT
     DEPTH 0= _LR12-assert
     0 _LR12-vfs @ VFS-UNMOUNT 0= _LR12-assert
     _LR12-vfs @ VFS-DESTROY
-    _LR12-old-vfs @ VFS-USE
     _LR12-arena @ ARENA-DESTROY
     _LR12-stack ;
 

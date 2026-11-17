@@ -8,7 +8,6 @@ VARIABLE _SL13P-depth
 VARIABLE _SL13P-arena
 VARIABLE _SL13P-vfs
 VARIABLE _SL13P-ior
-VARIABLE _SL13P-old-vfs
 VARIABLE _SL13P-fault-point
 VARIABLE _SL13P-fault-fired
 VARIABLE _SL13P-fault-require-terminal
@@ -168,7 +167,6 @@ SPREC-OBSERVATION-SIZE XBUF _SL13P-readback-record
     _SL13P-output OCHK-SOURCE-SIZE _SL13P-sentinel! ;
 
 : _SL13P-runtime-init  ( -- )
-    VFS-CUR _SL13P-old-vfs !
     VFS-RAM-OPS _SL13P-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _SL13P-binding VFS-BINDING-DESC-SIZE MOVE
     _SL13P-ops _SL13P-binding VB.OPS !
@@ -1043,7 +1041,6 @@ SPREC-OBSERVATION-SIZE XBUF _SL13P-readback-record
         STREAMS-REPOSITORY-S-OK _SL13P-status
     0 _SL13P-vfs @ VFS-UNMOUNT 0= _SL13P-assert
     _SL13P-vfs @ VFS-DESTROY
-    _SL13P-old-vfs @ VFS-USE
     _SL13P-arena @ ARENA-DESTROY
     _SL13P-stack ;
 

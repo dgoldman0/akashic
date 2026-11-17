@@ -434,7 +434,6 @@ CREATE _PBTSA-marks _PBTSA-MARK-CAPACITY ALLOT
     _PBTC-store _PBTC-pstore-work PSTORE-ABORT
         PERSIST-S-OK _PBTC-status
 
-    _PBTC-old-vfs @ VFS-USE
     _PBTC-vfs @ VFS-DESTROY
     _PBTC-stack
     _PBTC-fails @ 0= IF

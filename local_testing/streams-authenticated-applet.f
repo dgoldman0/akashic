@@ -17,8 +17,8 @@ PROVIDED streams-auth-app-test
 VARIABLE _satc-fails
 VARIABLE _satc-checks
 VARIABLE _satc-depth
-VARIABLE _satc-old-vfs
 VARIABLE _satc-vfs
+VARIABLE _satc-prior-places
 VARIABLE _satc-instance
 VARIABLE _satc-account-element
 VARIABLE _satc-document-a
@@ -510,13 +510,13 @@ VARIABLE _satc-factory-status
 \ ---------------------------------------------------------------------
 
 : _SATC-SETUP  ( -- )
-    VFS-CUR _satc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0<>
         ABORT" STREAMS AUTH APPLET arena allocation failed"
     DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
     DUP 0= ABORT" STREAMS AUTH APPLET VFS allocation failed"
-    DUP _satc-vfs ! VFS-USE
+    _satc-vfs !
+    _satc-vfs @ S" satc" _t-default-home _satc-prior-places !
     S" <uidl><label id=sbar-account text=Unset/></uidl>"
         UIDL-PARSE _satc-assert
     S" sbar-account" UIDL-BY-ID
@@ -781,7 +781,7 @@ VARIABLE _satc-source-b
     _satc-live-contexts @ 0= _satc-assert
     _satc-factory-count @ _satc-release-count @ = _satc-assert
     UIDL-RESET
-    _satc-old-vfs @ VFS-USE
+    _satc-prior-places @ S" satc" _t-default-restore
     _satc-vfs @ VFS-DESTROY 0 _satc-vfs !
     _satc-document-a @ ?DUP IF
         DUP _satc-document-u @ 0 FILL FREE

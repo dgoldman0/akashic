@@ -9,8 +9,8 @@ until explicit recovery succeeds.
 The library owns no OAuth, AT Protocol, PDS, Streams, account, prompt, UI, or
 credential interpretation. `kind` is an application-defined positive cell and
 the secret is an opaque nonempty byte string. The caller owns RID retention,
-root-key policy, the optional anti-rollback service, VFS selection and
-lifecycle, directory access policy, and every application-level association.
+root-key policy, the optional anti-rollback service, the choice of VFS and
+its lifecycle, directory access policy, and every application-level association.
 
 ```forth
 REQUIRE security/credential-vault.f
@@ -124,7 +124,7 @@ The public geometry words are:
 
 ```forth
 CVAULT-CONFIG-SIZE             ( -- 104 )
-CVAULT-SIZE                    ( -- 3480 )
+CVAULT-SIZE                    ( -- 3472 )
 CVAULT-PLAINTEXT-HEADER-SIZE   ( -- 128 )
 CVAULT-SECRET-CAPACITY-MAX     ( -- 65408 )
 CVAULT-ROOT-MAX                ( -- 187 )
@@ -482,8 +482,8 @@ format/storage corruption. They do not reveal root-key bytes or plaintext.
 
 ## Durability and ownership boundary
 
-Credential publication inherits the selected VFS binding's durability
-contract through `vfs-fixed-snapshot.f` and `vfs-replace.f`. A persistent
+Credential publication inherits the durability contract of the vault's VFS
+binding through `vfs-fixed-snapshot.f` and `vfs-replace.f`. A persistent
 binding must implement its file, directory, volume-flush, and `SYNCFS`
 barriers correctly. `VFS-RAM-BINDING` exercises operation ordering and
 recovery mechanics but does not survive power loss.
@@ -500,9 +500,9 @@ The caller must keep the VFS mounted and the resolver/floor context objects
 valid while the vault is initialized. Public caller spans are physically
 qualified and hostile overlap with vault, backing, VFS, or registered private
 state is rejected. Source bytes remain caller-owned and must stay stable until
-the synchronous call returns. Namespace operations also keep the selected VFS
-and saved current-directory state in module-private storage, and restore the
-prior selector before returning.
+the synchronous call returns. Namespace operations also keep the vault's VFS
+and its saved current directory in module-private storage, and restore that
+directory before returning.
 
 ## Deliberate limitations
 

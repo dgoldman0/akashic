@@ -8,7 +8,7 @@
 \
 \  The root borrows one exact Library service, Context, CREG, RREG, and request
 \  bus for its complete lifetime, and owns the service workspace used by its
-\  synchronous projection operations.  No operation consults VFS-CUR or
+\  synchronous projection operations.  No operation opens a filesystem or
 \  discovers storage by path.  Library domain revisions remain separate from
 \  CINST revisions.
 \

@@ -12,7 +12,7 @@ REQUIRE utils/fs/vfs.f
 The module provides `akashic-vfs`. ABI 1 is the only binding ABI: the former
 raw ten-XT table is not accepted.
 
-Callers that need exact selector/CWD/FD cleanup plus complete, prefix, ranged,
+Callers that need exact CWD/FD cleanup plus complete, prefix, ranged,
 or callback-streamed reads should use the policy-neutral
 [`vfs-access.f` layer](vfs-access.md). Replacement protocols, fixed record
 envelopes, and domain stores remain separate higher-level concerns.
@@ -336,9 +336,12 @@ VFS-PROBE     ( binding volume -- score ior )
 VFS-NEW       ( arena binding volume -- vfs ior )
 VFS-UNMOUNT   ( flags vfs -- ior )
 VFS-DESTROY   ( vfs -- )
-VFS-USE       ( vfs -- )
-VFS-CUR       ( -- vfs )
 ```
+
+Every word takes the instance it works on, and there is no current
+instance: the caller keeps the instance `VFS-NEW` answers and hands it to
+the code that needs it. Code that works in an applet's files names a
+[place](places.md) instead, and the place answers its instance.
 
 `VFS-NEW` validates the descriptor before allocating. A binding must advertise
 `MOUNT` and `UNMOUNT`. If it sets `VFS-BF-NEEDS-VOLUME`, `volume` must pass
@@ -378,8 +381,7 @@ stale without issuing I/O through a closed or rebound volume.
 
 `VFS-DESTROY` force-unmounts and destroys the arena. It cannot report the
 unmount result; callers needing a reportable durability boundary must call
-`VFS-SYNC` and `VFS-UNMOUNT` first. Destroying the current VFS also clears
-`VFS-CUR`, so no global handle points into the reclaimed arena.
+`VFS-SYNC` and `VFS-UNMOUNT` first.
 
 Lifecycle values are `VFS-L-NEW`, `VFS-L-MOUNTED`,
 `VFS-L-UNMOUNTING`, `VFS-L-UNMOUNTED`, and `VFS-L-STALE`.
@@ -499,7 +501,7 @@ open reference is published. `VFS-CLOSE?` likewise catches a binding
 `RELEASE` exception, retires the open reference, returns the FD to the pool,
 and then reports the exact code. A release exception may have happened after
 the backend took effect, so callers must not retry the same FD. The scoped
-access layer applies that exact-once rule across selector and CWD restoration.
+access layer applies that exact-once rule across CWD restoration.
 
 Positions and logical sizes are currently restricted to nonnegative one-cell
 values (`0 .. 2^63-1`). `VFS-SEEK?`, truncate, checked I/O, and append reject a

@@ -126,7 +126,8 @@ state, while a non-absence terminal lookup error or open failure remains I/O.
 
 ## Durability boundary
 
-Snapshot publication inherits the selected VFS binding's durability contract.
+Snapshot publication inherits the durability contract of the binding under
+the store's VFS.
 `VFS-SYNC` dispatches `SYNCFS`; a disk-backed binding owns `SYNCFS`, per-file
 `FSYNC`, and lifecycle `UNMOUNT`, and each successful durability path must end
 at a successful `VOL-FLUSH`. A write or flush failure remains a failed snapshot
@@ -157,9 +158,9 @@ Checked-record checksum and structural-corruption statuses map to
 `VFSNAP-S-UNSUPPORTED`; capacity, invalid, and busy retain their VFSNAP
 counterparts. Typed callback returns are restored exactly as described above.
 
-Open descriptors and the process VFS selector are restored exactly once on
-normal, status-failure, and caught-exception paths. Actual VREPL/VFS activity
-retains the process-wide serialization already required by those libraries.
+Open descriptors are released exactly once on normal, status-failure, and
+caught-exception paths. Actual VREPL/VFS activity retains the process-wide
+serialization already required by those libraries.
 Distinct store instances nevertheless own disjoint paths, lifecycle state, and
 scratch. Recursive entry while any callback is active returns `VFSNAP-S-BUSY`
 before callback-visible scratch is touched.

@@ -120,7 +120,7 @@ def _source_fragments() -> tuple[SourceFragment, ...]:
     fragments: list[SourceFragment] = []
     current = bytearray()
     origins: list[str] = []
-    for path in (*MODULE_PATHS, CONTRACT):
+    for path in (*MODULE_PATHS, harness.TEST_ROOT_PLACE_F, CONTRACT):
         relative = path.relative_to(ROOT).as_posix()
         for source_unit in _top_level_units(_prepared_source(path), relative):
             if len(source_unit) > COMPILE_CHECKPOINT_BYTES:

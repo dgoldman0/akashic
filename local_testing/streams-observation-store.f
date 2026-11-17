@@ -8,7 +8,6 @@ VARIABLE _ostc-fails
 VARIABLE _ostc-checks
 VARIABLE _ostc-depth
 VARIABLE _ostc-vfs
-VARIABLE _ostc-old-vfs
 VARIABLE _ostc-candidate-a
 VARIABLE _ostc-loaded-a
 VARIABLE _ostc-live-a
@@ -332,11 +331,9 @@ VARIABLE _ostc-store-case-a
     STREAMS-OBSERVATION-STORE-SIZE _ostc-store-main-a _ostc-allocate
     STREAMS-OBSERVATION-STORE-SIZE _ostc-store-cold-a _ostc-allocate
     STREAMS-OBSERVATION-STORE-SIZE _ostc-store-case-a _ostc-allocate
-    VFS-CUR _ostc-old-vfs !
     2097152 A-XMEM ARENA-NEW DUP 0= _ostc-assert DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _ostc-vfs ! 0<> _ostc-assert
-    _ostc-vfs @ VFS-USE
 
     _ostc-test-absent
     _ostc-test-generation-one
@@ -346,7 +343,7 @@ VARIABLE _ostc-store-case-a
     _ostc-test-cold-recovery
     _ostc-test-ambiguous-recovery
 
-    _ostc-old-vfs @ VFS-USE _ostc-vfs @ VFS-DESTROY
+    _ostc-vfs @ VFS-DESTROY
     _ostc-store-case-a _ostc-free _ostc-store-cold-a _ostc-free
     _ostc-store-main-a _ostc-free
     _ostc-raw-after-a _ostc-free _ostc-raw-before-a _ostc-free

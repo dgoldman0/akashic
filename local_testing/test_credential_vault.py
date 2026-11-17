@@ -117,10 +117,9 @@ def _assert_dependencies_and_boundary(source: str, doc: str) -> None:
         "_CV-FRAME-VAULT",
         "_CV-FRAME-ACTIVE",
         "_CV-CALLBACK-DEPTH",
-        "_CV-VFS-OLD",
         "_CV-VFS-TARGET",
         "_CV-VFS-OLD-CWD",
-        "_CV-VFS-SELECTED",
+        "_CV-VFS-ENTERED",
         "_CV-DIR-ROOT-INODE",
         "_CV-DIR-SHARD1-INODE",
         "_CV-DIR-SHARD2-INODE",
@@ -521,7 +520,7 @@ def _assert_geometry(
         vfs_spec_offset,
         vfs_store_offset,
         vault_size,
-    ) == (768, 1024, 1280, 1536, 1616, 2056, 3480)
+    ) == (768, 1024, 1280, 1536, 1616, 2056, 3472)
 
     layout = _flat(source)
     for expression in (

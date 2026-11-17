@@ -10,7 +10,7 @@
 \
 \  Loading is intentionally eager.  Desk provisions Practice resources
 \  before ASHELL-RUN, so deferring the mount to the shell lifecycle would
-\  leave that composition-time work without an active VFS.
+\  leave that composition-time work without the boot volume.
 \ =====================================================================
 
 PROVIDED akashic-tui-mp64fs-vfs
@@ -35,13 +35,14 @@ CREATE _MP64VFS-VOLUME /VOLUME ALLOT
     ABORT" mp64vfs: boot volume is attached elsewhere" ;
 
 \ MP64VFS-ENSURE ( -- )
-\   Select the process VFS when already composed, adopt another active VFS,
-\   or mount the MegaPad-64 boot disk, and report it as the volume `boot`.
-\   Repeated calls reselect the instance owned or adopted by this
-\   composition module.
+\   Mount the MegaPad-64 boot disk and report it as the volume `boot`.  A
+\   composition that attached an instance as `boot` before this module
+\   loaded has that instance adopted instead.  Repeated calls change
+\   nothing.
 : MP64VFS-ENSURE  ( -- )
-    _MP64VFS-VFS @ ?DUP IF VFS-USE EXIT THEN
-    VFS-CUR ?DUP IF DUP _MP64VFS-VFS ! VFS-USE _MP64VFS-REPORT EXIT THEN
+    _MP64VFS-VFS @ IF EXIT THEN
+    S" boot" PLACES-VOLUME ABORT" mp64vfs: boot volume record failed"
+    PVOL-VFS ?DUP IF _MP64VFS-VFS ! EXIT THEN
     0 _MP64VFS-BLOCK-DEVICE !
     _MP64VFS-BLOCK-DEVICE BD-OPEN
     ABORT" mp64vfs: block device open failed"

@@ -250,14 +250,13 @@ from overwriting the unaccepted external source. The status bar reports
 `Source blocked`; saving is enabled again only after a clean reload (or a
 confirmed reload when the in-memory model is dirty).
 
-The exact-read path treats its file descriptor and previous VFS selector as
-separate owned cleanup stages. It relinquishes each ownership marker before
-calling the corresponding void cleanup operation, so a cleanup that completes
-and then throws is never retried. Close and selector restoration are caught
-independently, and restoration is still attempted when close fails. Any such
-cleanup fault is normalized to a load I/O failure: parsing and publication do
-not run, entries and dirty state remain unchanged, and the source becomes
-blocked until a clean reload succeeds.
+The exact-read path runs inside a caller-owned access scope (`vfs-access.f`),
+which owns the file descriptor and restores the volume's current directory.
+The scope relinquishes descriptor ownership before it closes, so a close that
+completes and then throws is never retried. Any cleanup fault is normalized
+to a load I/O failure: parsing and publication do not run, entries and dirty
+state remain unchanged, and the source becomes blocked until a clean reload
+succeeds.
 
 Save uses the generic VFS staged-replacement protocol. The candidate is written
 and read back exactly, synchronized, and published through a checksummed
@@ -317,10 +316,9 @@ deterministic checks for atomic strict import, unknown/malformed lines, the
 96-record and 120-byte limits, pre-read oversize rejection, injected short
 reads, staged persistence, interrupted-publication recovery, artifact cleanup,
 corrupt-marker refusal, blocked-source overwrite prevention, dirty-state
-preservation, and close negotiation. It also injects after-effect throws from
-descriptor close and VFS-selector restoration, proving that both cleanup
-stages are attempted exactly once, the descriptor free list remains intact,
-the previous selector is restored, and no failed load publishes a model.
+preservation, and close negotiation. It also injects an after-effect throw
+from descriptor close, proving that the close is attempted exactly once, the
+descriptor free list remains intact, and no failed load publishes a model.
 
 `python3 local_testing/test_daybook_shared_lens.py` supplies the four required
 Desk services to two Daybook applet instances. It verifies snapshot/replace,

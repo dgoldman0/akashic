@@ -145,11 +145,10 @@ O2SESSION-RECORD-SIZE CVAULT-BACKING-SIZE
     CVAULT-FINI CVAULT-S-OK _attt-status
     _O2PKT-BACKING @ _O2PKT-BACKING-U
         _atpart-zero? _attt-assert
-    0 VFS-USE
     _CVTD-RESET
     _O2PKT-VFS VFS-DESC-SIZE 0 FILL
     _CVTD-ROOT-INODE _O2PKT-VFS V.CWD !
-    _O2PKT-VFS VFS-USE ;
+    ;
 
 : _ATSI-SETUP  ( -- )
     _atsi-vault-config @ 0= IF
@@ -303,8 +302,6 @@ O2SESSION-RECORD-SIZE CVAULT-BACKING-SIZE
     _atsi-backing-a @ _ATSI-BACKING-U
     _atpart-zero? _attt-assert
 
-    0 VFS-USE
-    _O2PKT-VFS VFS-USE
     _atsi-backing-b @ _atsi-vault-b @ _atsi-configure-vault
     _atsi-vault-b @ _atsi-session-b @ _atsi-configure-session
     _atsi-resolver-calls @ _atsi-resolver-before !

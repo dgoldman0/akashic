@@ -13,7 +13,6 @@ VARIABLE _sr3d-depth
 VARIABLE _sr3d-arena
 VARIABLE _sr3d-vfs
 VARIABLE _sr3d-ior
-VARIABLE _sr3d-old-vfs
 VARIABLE _sr3d-source-calls
 VARIABLE _sr3d-sink-bytes
 VARIABLE _sr3d-current-spool
@@ -158,7 +157,6 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     R> DROP ;
 
 : _sr3d-setup-vfs  ( -- )
-    VFS-CUR _sr3d-old-vfs !
     VFS-RAM-OPS _sr3d-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _sr3d-binding VFS-BINDING-DESC-SIZE MOVE
     _sr3d-ops _sr3d-binding VB.OPS !
@@ -1073,7 +1071,6 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     _sr3d-stale-and-final-cold
     _sr3d-cleanup-and-final-cold
 
-    _sr3d-old-vfs @ VFS-USE
     _sr3d-vfs @ VFS-DESTROY
     _sr3d-stack
     _sr3d-fails @ 0= IF

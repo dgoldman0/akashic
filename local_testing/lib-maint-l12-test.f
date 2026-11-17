@@ -10,7 +10,6 @@ VARIABLE _LM12-depth
 VARIABLE _LM12-arena
 VARIABLE _LM12-vfs
 VARIABLE _LM12-ior
-VARIABLE _LM12-old-vfs
 VARIABLE _LM12-cwd
 VARIABLE _LM12-fault-at
 VARIABLE _LM12-fd
@@ -301,7 +300,6 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     _LM12-vfs @ V.OPEN-COUNT @ 0= AND ;
 
 : _LM12-runtime-init  ( -- )
-    VFS-CUR _LM12-old-vfs !
     VFS-RAM-OPS _LM12-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _LM12-binding VFS-BINDING-DESC-SIZE MOVE
     _LM12-ops _LM12-binding VB.OPS !
@@ -693,7 +691,6 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     DEPTH 0= _LM12-assert
     0 _LM12-vfs @ VFS-UNMOUNT 0= _LM12-assert
     _LM12-vfs @ VFS-DESTROY
-    _LM12-old-vfs @ VFS-USE
     _LM12-arena @ ARENA-DESTROY
     _LM12-stack ;
 

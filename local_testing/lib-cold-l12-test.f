@@ -12,7 +12,6 @@ PROVIDED akashic-library-cold-l12-contracts
 VARIABLE _LC12-fails
 VARIABLE _LC12-checks
 VARIABLE _LC12-cold?
-VARIABLE _LC12-old-vfs
 VARIABLE _LC12-vfs
 VARIABLE _LC12-arena
 VARIABLE _LC12-range-u
@@ -113,13 +112,12 @@ CREATE _LC12-read-bytes 64 ALLOT
         PERSIST-S-OK _LC12-status ;
 
 : _LC12-runtime-init  ( -- )
-    VFS-CUR _LC12-old-vfs !
     _LC12-bd BD-OPEN THROW
     _LC12-bd _LC12-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW
     DUP 0= _LC12-assert DROP _LC12-arena !
     _LC12-arena @ _LC12-volume VMP-NEW ?DUP IF THROW THEN
-    DUP _LC12-vfs ! DUP 0<> _LC12-assert VFS-USE
+    DUP _LC12-vfs ! 0<> _LC12-assert
 
     _LC12-cache-0-memory _LC12-cache-0 _LC12-cache-init
     _LC12-cache-1-memory _LC12-cache-1 _LC12-cache-init
@@ -353,7 +351,6 @@ CREATE _LC12-read-bytes 64 ALLOT
     _LC12-repository _LC12-repository-work LIBRARY-REPOSITORY-FINI
         LIBRARY-REPOSITORY-S-OK _LC12-status
     _LC12-vfs @ VFS-SYNC 0= _LC12-assert
-    _LC12-old-vfs @ VFS-USE
     _LC12-vfs @ VFS-DESTROY
     _LC12-volume VOL-CLOSE 0= _LC12-assert
     _LC12-bd BD-CLOSE 0= _LC12-assert ;

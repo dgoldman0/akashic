@@ -811,13 +811,12 @@ CREATE _EX-EV 24 ALLOT
 \ a file in it, a file and a hidden file.
 : _EX-VFS  ( -- vfs )
     524288 A-XMEM ARENA-NEW IF -1 THROW THEN
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-    DUP VFS-USE
-    S" docs" VFS-CUR VFS-MKDIR DROP
-    S" hello.f" VFS-CUR VFS-MKFILE DROP
-    S" .hidden" VFS-CUR VFS-MKFILE DROP
-    S" docs" VFS-CUR VFS-CD DROP  S" readme" VFS-CUR VFS-MKFILE DROP
-    S" .." VFS-CUR VFS-CD DROP ;
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN >R
+    S" docs" R@ VFS-MKDIR DROP
+    S" hello.f" R@ VFS-MKFILE DROP
+    S" .hidden" R@ VFS-MKFILE DROP
+    S" docs" R@ VFS-CD DROP  S" readme" R@ VFS-MKFILE DROP
+    S" .." R@ VFS-CD DROP  R> ;
 \ Each explorer shows a set of its own: one writable place over its
 \ file system's root, on a volume named for it, with one label for all.
 VARIABLE _EX-N  0 _EX-N !

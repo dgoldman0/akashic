@@ -12,7 +12,6 @@ VARIABLE _sr3a-depth
 VARIABLE _sr3a-arena
 VARIABLE _sr3a-vfs
 VARIABLE _sr3a-ior
-VARIABLE _sr3a-old-vfs
 VARIABLE _sr3a-fault-at
 VARIABLE _sr3a-source-calls
 VARIABLE _sr3a-sink-bytes
@@ -226,7 +225,6 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     R> DROP ;
 
 : _sr3a-setup-vfs  ( -- )
-    VFS-CUR _sr3a-old-vfs !
     VFS-RAM-OPS _sr3a-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _sr3a-binding VFS-BINDING-DESC-SIZE MOVE
     _sr3a-ops _sr3a-binding VB.OPS !
@@ -1190,7 +1188,6 @@ STREAMS-OPATT-SIZE PBLOB-CHUNK-SIZE MAX
     _sr3a-test-corrupt-reachable-authority
     _sr3a-test-cold-reconciliation-algorithms
 
-    _sr3a-old-vfs @ VFS-USE
     _sr3a-vfs @ VFS-DESTROY
     _sr3a-stack
     _sr3a-fails @ 0= IF

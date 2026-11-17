@@ -1,8 +1,8 @@
 # Scoped VFS access
 
 `vfs-access.f` provides caller-owned file-descriptor scopes and bounded byte
-reads over the generic VFS. It centralizes selector, CWD, descriptor, range,
-and cleanup mechanics without owning a file format or a persistence policy.
+reads over the generic VFS. It centralizes CWD, descriptor, range, and
+cleanup mechanics without owning a file format or a persistence policy.
 
 ```forth
 REQUIRE utils/fs/vfs-access.f
@@ -41,20 +41,19 @@ VFA-SCOPE-CALL       ( body-xt scope -- primary cleanup )
 ```
 
 `VFA-SCOPE-OPEN?` accepts the checked VFS open flags and refuses a second open
-with `VFS-E-BUSY`. It snapshots the previously selected VFS and the target
-VFS's CWD, selects the target, and opens the path. Relative paths therefore
-resolve under the target's entry CWD. Failed open restores the context before
-returning and remains available through `VFA-SCOPE-PRIMARY@`. An unmounted,
+with `VFS-E-BUSY`. It snapshots the target VFS's CWD and opens the path on
+the target, so relative paths resolve under the target's entry CWD. Failed
+open restores that CWD before returning and remains available through
+`VFA-SCOPE-PRIMARY@`. An unmounted,
 stale, null-CWD, foreign-CWD, or non-directory-CWD target is rejected before
 the scope dereferences or pins that CWD.
 
 `VFA-SCOPE-CLOSE?` retires descriptor ownership before attempting cleanup. It
-attempts the owned close once, restores the target CWD, and restores the prior
-VFS selector. A close or restore that fails after taking effect is not retried.
-Calling close again is safe and performs no second release. Nested scopes must
-unwind in LIFO order because each scope restores the selector it observed at
-entry; explicit-FD reads from independently live scopes may otherwise be
-interleaved.
+attempts the owned close once and restores the target CWD. A close that fails
+after taking effect is not retried. Calling close again is safe and performs
+no second release. Nested scopes over one VFS must unwind in LIFO order
+because each scope restores the CWD it observed at entry; explicit-FD reads
+from independently live scopes may otherwise be interleaved.
 
 The saved CWD is pinned against cache eviction until restoration. It remains a
 borrowed namespace object: a scoped body must not unlink, replace, or otherwise
@@ -71,18 +70,17 @@ that durable publication did or did not occur. If a body explicitly closes
 and reopens its scope, the first cleanup uncertainty is retained across the
 later descriptor; each descriptor remains an exact-once obligation.
 
-Two narrow dependency-injection setters support deterministic qualification
+One narrow dependency-injection setter supports deterministic qualification
 and mediated environments:
 
 ```forth
 VFA-SCOPE-CLOSE-XT!  ( close-xt scope -- ior )  \ close-xt: ( fd -- ior )
-VFA-SCOPE-USE-XT!    ( use-xt scope -- ior )    \ use-xt:   ( vfs -- )
 ```
 
-The default XTs are `VFS-CLOSE?` and `VFS-USE`. Installed XTs may `THROW`;
-the scope catches the exact code and still observes the same exact-once
-ownership rule. Setters are configuration, not per-operation callbacks, and
-are refused while the scope has a live context or owned FD. An injected close
+The default XT is `VFS-CLOSE?`. An installed XT may `THROW`; the scope catches
+the exact code and still observes the same exact-once ownership rule. The
+setter is configuration, not a per-operation callback, and is refused while
+the scope has a live context or owned FD. An injected close
 XT assumes the same ownership contract as `VFS-CLOSE?`: it must retire or
 delegate the supplied FD before returning or throwing. The scope clears its
 own ownership before that after-effect boundary and never retries it.
@@ -199,7 +197,7 @@ authority remain above this layer.
 
 The focused emulator profile uses two cloned RAM VFS bindings and exercises
 range edges, complete-read nonmutation, prefix truncation, stream offsets and
-faults, nested/interleaved scopes, CWD and selector restoration, after-effect
+faults, nested/interleaved scopes, CWD restoration, after-effect
 cleanup faults, separate primary/cleanup results, BUSY re-entry, idempotent
 close, invalid target rejection, active-CWD eviction refusal, cleanup retention
 across reopen, and FD-pool leak checks:

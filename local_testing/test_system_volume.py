@@ -32,14 +32,12 @@ STEPS = 400_000_000
 TRUE = 2**64 - 1
 
 HELPERS = r"""
-VARIABLE T-PRIOR
 VARIABLE C-RUNS
 VARIABLE SCRIPT-RUNS
 VARIABLE BOOT-RUNS
 : T-ARENA  ( bytes -- arena )  A-XMEM ARENA-NEW THROW ;
-\ Mount as a boot does, from an arena of BYTES, noting the current VFS.
-: T-MOUNT  ( bytes -- ior )  VFS-CUR T-PRIOR !  T-ARENA SYSVOL-MOUNT ;
-: T-CURRENT-KEPT?  ( -- flag )  VFS-CUR T-PRIOR @ = ;
+\ Mount as a boot does, from an arena of BYTES.
+: T-MOUNT  ( bytes -- ior )  T-ARENA SYSVOL-MOUNT ;
 : T-UNIT-FREE?  ( -- flag )
     _SYSVOL-BD BD-VALID? 0=  _SYSVOL-VOLUME VOL-VALID? 0=  AND ;
 """
@@ -109,8 +107,8 @@ def test_a_boot_mounts_the_volume_and_loads_modules_from_it(
     assert machine.run("SYSVOL-VFS") == (0,)
 
     assert machine.run("524288 T-MOUNT") == (0,)
-    assert machine.run("SYSVOL-VFS 0<> T-CURRENT-KEPT?") == (TRUE, TRUE)
-    # Mounting selects nothing: modules still come from the boot volume.
+    assert machine.run("SYSVOL-VFS 0<>") == (TRUE,)
+    # Modules still come from the boot volume until the source changes.
     assert machine.run("MODULE-SOURCE @ FS-MODULE-SOURCE =") == (TRUE,)
     assert machine.run("REQUIRE boot.f BOOT-WORD BOOT-RUNS @") == (77, 1)
 
@@ -149,7 +147,7 @@ def test_the_volume_mounts_once(system_volume: bytes) -> None:
     (mounted,) = machine.run("SYSVOL-VFS")
 
     assert machine.run("524288 T-MOUNT VFS-E-BUSY =") == (TRUE,)
-    assert machine.run("SYSVOL-VFS T-CURRENT-KEPT?") == (mounted, TRUE)
+    assert machine.run("SYSVOL-VFS") == (mounted,)
     assert machine.run("SYSVOL-SOURCE MODULE-SOURCE! REQUIRE mods/c.f") == ()
     assert machine.run("C-WORD") == (103,)
 
@@ -166,11 +164,7 @@ def test_a_failed_mount_gives_the_unit_back(system_volume: bytes) -> None:
 
     # An arena too small for the mount's own records.
     assert machine.run("4096 T-MOUNT VFS-E-NOMEM =") == (TRUE,)
-    assert machine.run("SYSVOL-VFS T-CURRENT-KEPT? T-UNIT-FREE?") == (
-        0,
-        TRUE,
-        TRUE,
-    )
+    assert machine.run("SYSVOL-VFS T-UNIT-FREE?") == (0, TRUE)
     assert machine.run("' SYSVOL-SOURCE CATCH VFS-E-NOVOLUME =") == (TRUE,)
 
     # The unit opens again, which a reference left behind would refuse.
@@ -183,22 +177,14 @@ def test_a_machine_without_a_system_volume_reports_it() -> None:
     machine = Machine(None)
 
     assert machine.run("524288 T-MOUNT BD-E-NO-MEDIA =") == (TRUE,)
-    assert machine.run("SYSVOL-VFS T-CURRENT-KEPT? T-UNIT-FREE?") == (
-        0,
-        TRUE,
-        TRUE,
-    )
+    assert machine.run("SYSVOL-VFS T-UNIT-FREE?") == (0, TRUE)
 
 
 def test_a_volume_that_is_not_ext4_is_refused() -> None:
     machine = Machine(module_source._boot_disk())
 
     assert machine.run("524288 T-MOUNT 0<>") == (TRUE,)
-    assert machine.run("SYSVOL-VFS T-CURRENT-KEPT? T-UNIT-FREE?") == (
-        0,
-        TRUE,
-        TRUE,
-    )
+    assert machine.run("SYSVOL-VFS T-UNIT-FREE?") == (0, TRUE)
 
 
 # ---- token files on the volume -------------------------------------------------
@@ -345,11 +331,10 @@ def test_the_boot_sequence_runs_on_the_emulator(
         system_volume_path,
         [
             *module_lines,
-            "VARIABLE C-RUNS  VARIABLE SCRIPT-RUNS  VARIABLE T-PRIOR",
-            "VFS-CUR T-PRIOR !",
+            "VARIABLE C-RUNS  VARIABLE SCRIPT-RUNS",
             "524288 A-XMEM ARENA-NEW THROW SYSVOL-MOUNT",
             # One line each: the answer follows its whole input line.
-            '." [B0 " . SYSVOL-VFS 0<> . VFS-CUR T-PRIOR @ = . ." ]"',
+            '." [B0 " . SYSVOL-VFS 0<> . ." ]"',
             "SYSVOL-SOURCE MODULE-SOURCE!",
             "REQUIRE mods/a.f",
             (
@@ -370,7 +355,7 @@ def test_the_boot_sequence_runs_on_the_emulator(
         start = output.index(f"\n[{name} ") + len(name) + 3
         return " ".join(output[start : output.index("]", start)].split())
 
-    assert marker("B0") == "0 -1 -1"
+    assert marker("B0") == "0 -1"
     assert marker("B1") == "101 102 103 104 1 4 4"
     assert marker("B2") == "1 1 0 0"
     assert bytes(attached[0]._image_data) == volume

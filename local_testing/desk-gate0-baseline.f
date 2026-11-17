@@ -30,6 +30,10 @@ CREATE _dg0-source-rid RID-SIZE ALLOT
 
 : _dg0-stack  ( -- ) DEPTH _dg0-depth @ = _dg0-assert ;
 
+\ Streams keeps its records on the volume under its home: the build's one
+\ place, over the boot volume's root.
+: _dg0-vfs  ( -- vfs )  PLACES-DEFAULT PLSET-HOME PLACE-VFS ;
+
 : _dg0-allocate  ( size variable -- )
     >R ALLOCATE ABORT" DESK GATE0 BASELINE FAIL allocation" R> ! ;
 
@@ -39,7 +43,7 @@ CREATE _dg0-source-rid RID-SIZE ALLOT
     LOOP DROP -1 ;
 
 : _dg0-source-init  ( path-a path-u -- )
-    VFS-CUR _dg0-source-store STREAMS-SOURCE-STORE-INIT-AT
+    _dg0-vfs _dg0-source-store STREAMS-SOURCE-STORE-INIT-AT
         SSSTORE-S-OK = _dg0-assert ;
 
 : _dg0-source-load  ( -- status )
@@ -47,7 +51,7 @@ CREATE _dg0-source-rid RID-SIZE ALLOT
         _dg0-source-store STREAMS-SOURCE-STORE-LOAD ;
 
 : _dg0-observation-init  ( path-a path-u -- )
-    VFS-CUR _dg0-observation-store STREAMS-OBSERVATION-STORE-INIT-AT
+    _dg0-vfs _dg0-observation-store STREAMS-OBSERVATION-STORE-INIT-AT
         OSTORE-S-OK = _dg0-assert ;
 
 : _dg0-observation-load  ( -- status )
@@ -124,7 +128,7 @@ CREATE _dg0-source-rid RID-SIZE ALLOT
     _dg0-stack ;
 
 : _dg0-test-legacy-draft  ( -- )
-    S" /gate0/d-legacy.bin" VFS-CUR _dg0-draft-store
+    S" /gate0/d-legacy.bin" _dg0-vfs _dg0-draft-store
         STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-OK = _dg0-assert
     _dg0-draft-text STREAMS-DRAFT-TEXT-MAX _dg0-draft-store
         STREAMS-DRAFT-STORE-LOAD
@@ -136,8 +140,8 @@ CREATE _dg0-source-rid RID-SIZE ALLOT
     _dg0-stack ;
 
 : _dg0-test-missing-observation-companion  ( -- )
-    S" /streams-sources.bin" VFS-CUR VFS-RESOLVE 0<> _dg0-assert
-    S" /streams-observation.bin" VFS-CUR VFS-RESOLVE 0= _dg0-assert
+    S" /streams-sources.bin" _dg0-vfs VFS-RESOLVE 0<> _dg0-assert
+    S" /streams-observation.bin" _dg0-vfs VFS-RESOLVE 0= _dg0-assert
     _STREAMS-COMP-SETUP
     STREAMS-COMP-DESC CINST-NEW DUP 0= _dg0-assert DROP
         _dg0-instance !
@@ -156,13 +160,13 @@ CREATE _dg0-source-rid RID-SIZE ALLOT
     0 _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH
         _STM-SOURCE-ACQUISITION-STATE$ S" never refreshed" STR-STR=
         _dg0-assert
-    S" /streams-observation.bin" VFS-CUR VFS-RESOLVE 0= _dg0-assert
+    S" /streams-observation.bin" _dg0-vfs VFS-RESOLVE 0= _dg0-assert
     _dg0-instance @ CINST-FREE 0 _dg0-instance !
     _dg0-stack ;
 
 : _dg0-run  ( -- )
     0 _dg0-fails ! 0 _dg0-checks ! DEPTH _dg0-depth !
-    VFS-CUR 0<> _dg0-assert
+    _dg0-vfs 0<> _dg0-assert
     STREAMS-SOURCE-REGISTRY-SIZE _dg0-source-registry _dg0-allocate
     STREAMS-OBSERVATION-CHECKPOINT-SIZE _dg0-checkpoint _dg0-allocate
     _dg0-test-source-records

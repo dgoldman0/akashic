@@ -8,7 +8,6 @@ VARIABLE _PBLC-depth
 VARIABLE _PBLC-arena
 VARIABLE _PBLC-vfs
 VARIABLE _PBLC-ior
-VARIABLE _PBLC-old-vfs
 VARIABLE _PBLC-page-id
 VARIABLE _PBLC-source-mode
 VARIABLE _PBLC-sink-mode
@@ -190,7 +189,6 @@ GUARD _PBLC-guard-i3
     ['] _PBLC-fault 0 _PBLC-store-i3 PSTORE-INIT ;
 
 : _PBLC-setup  ( -- )
-    VFS-CUR _PBLC-old-vfs !
     VFS-RAM-OPS _PBLC-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _PBLC-binding VFS-BINDING-DESC-SIZE MOVE
     _PBLC-ops _PBLC-binding VB.OPS !
@@ -773,7 +771,6 @@ GUARD _PBLC-guard-i3
     _PBLC-callback-faults
     _PBLC-storage-faults
     _PBLC-four-store-interleave
-    _PBLC-old-vfs @ VFS-USE
     _PBLC-vfs @ VFS-DESTROY
     _PBLC-stack
     _PBLC-fails @ 0= IF

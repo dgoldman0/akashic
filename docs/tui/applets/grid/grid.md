@@ -105,13 +105,12 @@ current sheet and its dirty state. It also blocks saves, preventing a malformed
 or uncertain external source from being overwritten until a clean recovery and
 reload succeeds.
 
-The exact-read path owns its file descriptor and previous VFS selector as
-separate cleanup stages. Each ownership marker is cleared before its void
-cleanup operation is called, so an operation that takes effect and then throws
-cannot be retried. Close and selector restoration are caught independently,
-and restoration is attempted even after a close fault. A cleanup fault becomes
-a load I/O failure: CSV validation and model publication do not run, the sheet
-and dirty state are preserved, and saves remain source-blocked until a clean
+The exact-read path runs inside a caller-owned access scope (`vfs-access.f`),
+which owns the file descriptor and restores the volume's current directory.
+The scope relinquishes descriptor ownership before it closes, so a close that
+takes effect and then throws cannot be retried. A cleanup fault becomes a load
+I/O failure: CSV validation and model publication do not run, the sheet and
+dirty state are preserved, and saves remain source-blocked until a clean
 reload.
 
 Edits mark the sheet unsaved and repaint immediately. `Ctrl+S` serializes into a
@@ -166,10 +165,9 @@ classification, and recovery on recalculation.
 strict CSV acceptance and rejection at every shape bound, exact and oversized
 reads, short-read preservation, source blocking, failed-sync rollback,
 retry-after-rollback, replacement-artifact cleanup, and close-callback
-registration in a live MP64 image. It injects after-effect throws from both
-descriptor close and VFS-selector restoration and verifies single-attempt
-cleanup, descriptor free-list integrity, selector restoration, and preservation
-of the dirty model under both faults.
+registration in a live MP64 image. It injects an after-effect throw from
+descriptor close and verifies single-attempt cleanup, descriptor free-list
+integrity, and preservation of the dirty model under that fault.
 
 ## Deliberate Next Steps
 

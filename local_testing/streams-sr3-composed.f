@@ -44,7 +44,6 @@ VARIABLE _sr3c-fails
 VARIABLE _sr3c-checks
 VARIABLE _sr3c-depth
 VARIABLE _sr3c-cold?
-VARIABLE _sr3c-old-vfs
 VARIABLE _sr3c-vfs
 VARIABLE _sr3c-arena
 
@@ -318,7 +317,6 @@ STREAMS-EXECUTION-POOL-SIZE XBUF _sr3c-pool
     SOPATT.ATTEMPT-ID _sr3c-current-id RID-COPY ;
 
 : _sr3c-runtime-open  ( -- )
-    VFS-CUR _sr3c-old-vfs !
     _sr3c-bd BD-OPEN THROW
     _sr3c-bd _sr3c-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW
@@ -326,11 +324,10 @@ STREAMS-EXECUTION-POOL-SIZE XBUF _sr3c-pool
     DUP 0= IF DROP -1 THROW THEN _sr3c-arena !
     _sr3c-arena @ _sr3c-volume VMP-NEW ?DUP IF THROW THEN
     DUP 0= IF DROP -1 THROW THEN
-    DUP _sr3c-vfs ! VFS-USE ;
+    _sr3c-vfs ! ;
 
 : _sr3c-runtime-close  ( -- )
     _sr3c-vfs @ VFS-SYNC 0= _sr3c-assert
-    _sr3c-old-vfs @ VFS-USE
     _sr3c-vfs @ VFS-DESTROY
     _sr3c-volume VOL-CLOSE 0= _sr3c-assert
     _sr3c-bd BD-CLOSE 0= _sr3c-assert ;

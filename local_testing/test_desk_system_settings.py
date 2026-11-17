@@ -174,17 +174,18 @@ def test_an_empty_file_reads_as_no_bytes() -> None:
     assert _results(runtime, "0 FREE") == ()
 
 
-def test_the_boot_disk_s_filesystem_stays_current() -> None:
-    """Mounting the settings disk makes its filesystem current, and
-    destroying the mount leaves none; Desk, which mounted the boot disk
-    first, must find that one current after reading its settings."""
+def test_the_boot_disk_s_filesystem_stays_attached() -> None:
+    """Reading the settings mounts the settings disk on a filesystem of its
+    own and destroys it after; the boot volume Desk attached first keeps
+    its filesystem, which still resolves its root."""
     runtime = _runtime(
         _settings_image({"system.toml": SYSTEM_TOML.encode()}),
         boot_disk=_settings_image({}, sectors=2048),
     )
-    (boot,) = _results(runtime, "VFS-CUR")
+    boot_volume = 'S" boot" PLACES-VOLUME DROP PVOL-VFS'
+    (boot,) = _results(runtime, boot_volume)
     assert boot != 0 and _results(runtime, "_MP64VFS-VFS @") == (boot,)
     assert _safe_mode(runtime) == 0
-    assert _results(runtime, "VFS-CUR") == (boot,)
+    assert _results(runtime, boot_volume) == (boot,)
     # The boot disk's filesystem still works.
-    assert _results(runtime, "S\" /\" VFS-CUR VFS-RESOLVE? NIP") == (0,)
+    assert _results(runtime, "S\" /\" _MP64VFS-VFS @ VFS-RESOLVE? NIP") == (0,)

@@ -217,9 +217,8 @@ _SR-COMPACT PCOMPACT-SIZE + CONSTANT STREAMS-REPOSITORY-SIZE
 48 CONSTANT _SRW-RECORD-U
 56 CONSTANT _SRW-OP-XT
 64 CONSTANT _SRW-OP-ARG0
-72 CONSTANT _SRW-OP-OLD-VFS
-80 CONSTANT _SRW-OP-CWD
-88 CONSTANT _SRW-PSTORE
+72 CONSTANT _SRW-OP-CWD
+80 CONSTANT _SRW-PSTORE
 _SRW-PSTORE PSTORE-WORK-SIZE + CONSTANT _SRW-ADAPTER
 _SRW-ADAPTER STREAMS-PA-WORK-SIZE + CONSTANT _SRW-BUILDER-RECORD-A
 _SRW-BUILDER-RECORD-A 8 + CONSTANT _SRW-BUILDER-RECORD-U
@@ -243,7 +242,6 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
 : _SRW.RECORD-U    ( work -- a ) _SRW-RECORD-U + ;
 : _SRW.OP-XT       ( work -- a ) _SRW-OP-XT + ;
 : _SRW.OP-ARG0     ( work -- a ) _SRW-OP-ARG0 + ;
-: _SRW.OP-OLD-VFS  ( work -- a ) _SRW-OP-OLD-VFS + ;
 : _SRW.OP-CWD      ( work -- a ) _SRW-OP-CWD + ;
 : _SRW.PSTORE      ( work -- pstore-work ) _SRW-PSTORE + ;
 : _SRW.ADAPTER     ( work -- adapter-work ) _SRW-ADAPTER + ;
@@ -1339,19 +1337,12 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
     DROP STREAMS-REPOSITORY-S-OK ;
 
 \ A physical lifecycle call holds the VFS transaction from namespace
-\ classification through publication/sync and restores ambient VFS state
-\ even when the operation throws.
-: _SREPO-VFS-USE-SAVED  ( work -- )
-    _SRW.OP-OLD-VFS @ VFS-USE ;
-
+\ classification through publication/sync and restores the volume's
+\ current directory even when the operation throws.
 : _SREPO-VFS-RESTORE  ( work -- status )
     DUP _SRW.OP-CWD @
-    OVER _SRW.REPOSITORY @ _SR.VFS @ V.CWD !
-    DUP ['] _SREPO-VFS-USE-SAVED CATCH
-    DUP IF
-        _SREPO-DROP3 STREAMS-REPOSITORY-S-UNCERTAIN EXIT
-    THEN
-    DROP DROP STREAMS-REPOSITORY-S-OK ;
+    SWAP _SRW.REPOSITORY @ _SR.VFS @ V.CWD !
+    STREAMS-REPOSITORY-S-OK ;
 
 : _SREPO-VFS-CLEANUP-CALL
   ( work primary cleanup-xt -- work final )
@@ -1368,7 +1359,6 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
     THEN ;
 
 : _SREPO-VFS-TRANSACTION-DISPATCH  ( work -- status )
-    VFS-CUR OVER _SRW.OP-OLD-VFS !
     DUP _SRW.REPOSITORY @ _SR.VFS @ V.CWD @
         OVER _SRW.OP-CWD !
     DUP DUP _SRW.OP-XT @ CATCH

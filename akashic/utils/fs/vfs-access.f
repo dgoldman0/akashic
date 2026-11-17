@@ -1,10 +1,10 @@
 \ =====================================================================
 \  vfs-access.f - Caller-owned scoped and bounded VFS access
 \ =====================================================================
-\  One scope borrows one VFS, owns at most one FD, and retains primary
-\  failure separately from cleanup uncertainty.  Byte helpers are policy
-\  neutral: callers still decide path meaning, size limits, parsing, commit
-\  order, and recovery authority.
+\  One scope borrows one VFS and its current directory, owns at most one
+\  FD, and retains primary failure separately from cleanup uncertainty.
+\  Byte helpers are policy neutral: callers still decide path meaning, size
+\  limits, parsing, commit order, and recovery authority.
 \ =====================================================================
 
 PROVIDED akashic-vfs-access
@@ -68,17 +68,15 @@ REQUIRE vfs.f
   8 CONSTANT _VFA-S-VFS
  16 CONSTANT _VFA-S-FD
  24 CONSTANT _VFA-S-CLOSING-FD
- 32 CONSTANT _VFA-S-OLD-VFS
- 40 CONSTANT _VFA-S-OLD-CWD
- 48 CONSTANT _VFA-S-FLAGS
- 56 CONSTANT _VFA-S-BODY-XT
- 64 CONSTANT _VFA-S-PRIMARY
- 72 CONSTANT _VFA-S-CLEANUP
- 80 CONSTANT _VFA-S-CLOSE-IOR
- 88 CONSTANT _VFA-S-CLOSE-XT
- 96 CONSTANT _VFA-S-USE-XT
-104 CONSTANT _VFA-S-CWD-PIN-OWNED
-112 CONSTANT VFA-SCOPE-SIZE
+ 32 CONSTANT _VFA-S-OLD-CWD
+ 40 CONSTANT _VFA-S-FLAGS
+ 48 CONSTANT _VFA-S-BODY-XT
+ 56 CONSTANT _VFA-S-PRIMARY
+ 64 CONSTANT _VFA-S-CLEANUP
+ 72 CONSTANT _VFA-S-CLOSE-IOR
+ 80 CONSTANT _VFA-S-CLOSE-XT
+ 88 CONSTANT _VFA-S-CWD-PIN-OWNED
+ 96 CONSTANT VFA-SCOPE-SIZE
 
 1 CONSTANT _VFA-SF-INITIALIZED
 2 CONSTANT _VFA-SF-CONTEXT
@@ -90,7 +88,6 @@ REQUIRE vfs.f
 : _VFA-S.VFS         ( scope -- a ) _VFA-S-VFS + ;
 : _VFA-S.FD          ( scope -- a ) _VFA-S-FD + ;
 : _VFA-S.CLOSING-FD  ( scope -- a ) _VFA-S-CLOSING-FD + ;
-: _VFA-S.OLD-VFS     ( scope -- a ) _VFA-S-OLD-VFS + ;
 : _VFA-S.OLD-CWD     ( scope -- a ) _VFA-S-OLD-CWD + ;
 : _VFA-S.FLAGS       ( scope -- a ) _VFA-S-FLAGS + ;
 : _VFA-S.BODY-XT     ( scope -- a ) _VFA-S-BODY-XT + ;
@@ -98,7 +95,6 @@ REQUIRE vfs.f
 : _VFA-S.CLEANUP     ( scope -- a ) _VFA-S-CLEANUP + ;
 : _VFA-S.CLOSE-IOR   ( scope -- a ) _VFA-S-CLOSE-IOR + ;
 : _VFA-S.CLOSE-XT    ( scope -- a ) _VFA-S-CLOSE-XT + ;
-: _VFA-S.USE-XT      ( scope -- a ) _VFA-S-USE-XT + ;
 : _VFA-S.CWD-PIN-OWNED ( scope -- a ) _VFA-S-CWD-PIN-OWNED + ;
 
 : VFA-SCOPE-VALID?  ( scope -- flag )
@@ -110,8 +106,7 @@ REQUIRE vfs.f
         2DROP 0 EXIT
     THEN
     _VFA-SF-ALL INVERT AND IF DROP 0 EXIT THEN
-    DUP _VFA-S.CLOSE-XT @ 0= IF DROP 0 EXIT THEN
-    _VFA-S.USE-XT @ 0<> ;
+    _VFA-S.CLOSE-XT @ 0<> ;
 
 : VFA-SCOPE-VFS@  ( scope -- vfs|0 )
     DUP VFA-SCOPE-VALID? 0= IF DROP 0 EXIT THEN _VFA-S.VFS @ ;
@@ -154,7 +149,6 @@ REQUIRE vfs.f
     DUP R@ _VFA-S.VFS ! DROP
     _VFA-SF-INITIALIZED R@ _VFA-S.FLAGS !
     ['] VFS-CLOSE? R@ _VFA-S.CLOSE-XT !
-    ['] VFS-USE R@ _VFA-S.USE-XT !
     R> DROP 0 ;
 
 : _VFA-SCOPE-CONFIGURABLE?  ( scope -- flag )
@@ -168,14 +162,6 @@ REQUIRE vfs.f
         DROP R> DROP VFS-E-BUSY EXIT
     THEN
     R@ _VFA-S.CLOSE-XT ! R> DROP 0 ;
-
-: VFA-SCOPE-USE-XT!  ( use-xt scope -- ior )
-    >R
-    DUP 0= IF DROP R> DROP VFS-E-INVALID EXIT THEN
-    R@ _VFA-SCOPE-CONFIGURABLE? 0= IF
-        DROP R> DROP VFS-E-BUSY EXIT
-    THEN
-    R@ _VFA-S.USE-XT ! R> DROP 0 ;
 
 : _VFA-SCOPE-RESET-RESULTS  ( scope -- )
     0 OVER _VFA-S.PRIMARY !
@@ -192,12 +178,6 @@ REQUIRE vfs.f
     THEN
     R> DROP ;
 
-: _VFA-SCOPE-USE-TARGET-CALL  ( scope -- scope )
-    DUP _VFA-S.VFS @ OVER _VFA-S.USE-XT @ EXECUTE ;
-
-: _VFA-SCOPE-USE-OLD-CALL  ( scope -- scope )
-    DUP _VFA-S.OLD-VFS @ OVER _VFA-S.USE-XT @ EXECUTE ;
-
 : _VFA-SCOPE-ENTER  ( scope -- ior )
     DUP VFA-SCOPE-VALID? 0= IF DROP VFS-E-INVALID EXIT THEN
     DUP _VFA-S.FLAGS @ _VFA-SF-CONTEXT AND IF DROP 0 EXIT THEN
@@ -209,14 +189,13 @@ REQUIRE vfs.f
     THEN
     DUP _VFA-VFS-CWD? 0= IF 2DROP VFS-E-CORRUPT EXIT THEN
     DROP
-    VFS-CUR OVER _VFA-S.OLD-VFS !
     DUP _VFA-S.VFS @ V.CWD @ OVER _VFA-S.OLD-CWD !
     DUP _VFA-S.OLD-CWD @ IN.FLAGS @ VFS-IF-PINNED AND 0= IF
         VFS-IF-PINNED OVER _VFA-S.OLD-CWD @ IN.FLAGS DUP @ ROT OR SWAP !
         -1 OVER _VFA-S.CWD-PIN-OWNED !
     THEN
-    _VFA-SF-CONTEXT OVER _VFA-S.FLAGS DUP @ ROT OR SWAP !
-    ['] _VFA-SCOPE-USE-TARGET-CALL CATCH NIP ;
+    _VFA-SF-CONTEXT SWAP _VFA-S.FLAGS DUP @ ROT OR SWAP !
+    0 ;
 
 : _VFA-SCOPE-CLOSE-CALL  ( scope -- scope )
     >R
@@ -248,9 +227,7 @@ REQUIRE vfs.f
                 VFS-IF-PINNED INVERT AND SWAP !
             0 R@ _VFA-S.CWD-PIN-OWNED !
         THEN
-        R@ ['] _VFA-SCOPE-USE-OLD-CALL CATCH
-        NIP R@ _VFA-SCOPE-NOTE-CLEANUP
-        0 R@ _VFA-S.OLD-CWD ! 0 R@ _VFA-S.OLD-VFS !
+        0 R@ _VFA-S.OLD-CWD !
     THEN
     R@ _VFA-S.CLEANUP @ R> DROP ;
 

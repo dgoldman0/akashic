@@ -8,7 +8,6 @@ VARIABLE _PCCT-depth
 VARIABLE _PCCT-arena
 VARIABLE _PCCT-vfs
 VARIABLE _PCCT-ior
-VARIABLE _PCCT-old-vfs
 VARIABLE _PCCT-fault-at
 VARIABLE _PCCT-callback-mode
 VARIABLE _PCCT-finalize-fail
@@ -237,7 +236,6 @@ CREATE _PCCT-cold-reclaim RECLAIM-SIZE ALLOT
     _PCCT-callback-store @ _PCCT-callback-work @ PSTORE-COMMIT ;
 
 : _PCCT-setup  ( -- )
-    VFS-CUR _PCCT-old-vfs !
     VFS-RAM-OPS _PCCT-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _PCCT-binding VFS-BINDING-DESC-SIZE MOVE
     _PCCT-ops _PCCT-binding VB.OPS !
@@ -718,7 +716,6 @@ CREATE _PCCT-cold-reclaim RECLAIM-SIZE ALLOT
     _PCCT-complete-opposite-cycle-reusing-all
     3 PERSIST-DATA-BANK-0 _PCCT-cold-open-and-query
     _PCCT-recover-absent-stack
-    _PCCT-old-vfs @ VFS-USE
     _PCCT-vfs @ VFS-DESTROY
     _PCCT-stack
     _PCCT-fails @ 0= IF

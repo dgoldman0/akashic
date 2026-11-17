@@ -1120,9 +1120,7 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
     ui_sources = "\n".join(
         sources[name] for name in ("library.f", "view.f", "controller.f")
     )
-    assert set(
-        re.findall(r"(?<![A-Z0-9_-])VFS-[A-Z0-9-]+\b", ui_sources)
-    ) <= {"VFS-CUR"}
+    assert not re.findall(r"(?<![A-Z0-9_-])VFS-[A-Z0-9-]+\b", ui_sources)
     assert "VFSNAP-" not in ui_sources
     assert "_LIBVFS-" not in ui_sources
     assert all(

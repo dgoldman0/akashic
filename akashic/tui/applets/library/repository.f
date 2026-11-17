@@ -262,8 +262,7 @@ _LRW-ROOT-VALUE PERSIST-ROOT-VALUE-SIZE + CONSTANT _LRW-OP-XT
 _LRW-OP-XT 8 + CONSTANT _LRW-OP-ARG0
 _LRW-OP-ARG0 8 + CONSTANT _LRW-OP-ARG1
 _LRW-OP-ARG1 8 + CONSTANT _LRW-OP-ARG2
-_LRW-OP-ARG2 8 + CONSTANT _LRW-OP-OLD-VFS
-_LRW-OP-OLD-VFS 8 + CONSTANT _LRW-OP-CWD
+_LRW-OP-ARG2 8 + CONSTANT _LRW-OP-CWD
 _LRW-OP-CWD 8 + CONSTANT _LRW-INSPECTION
 _LRW-INSPECTION LIBRARY-REPOSITORY-INSPECTION-SIZE +
     CONSTANT LIBRARY-REPOSITORY-WORK-SIZE
@@ -307,7 +306,6 @@ _LRW-INSPECTION LIBRARY-REPOSITORY-INSPECTION-SIZE +
 : _LRW.OP-ARG0     ( work -- a ) _LRW-OP-ARG0 + ;
 : _LRW.OP-ARG1     ( work -- a ) _LRW-OP-ARG1 + ;
 : _LRW.OP-ARG2     ( work -- a ) _LRW-OP-ARG2 + ;
-: _LRW.OP-OLD-VFS  ( work -- a ) _LRW-OP-OLD-VFS + ;
 : _LRW.OP-CWD      ( work -- a ) _LRW-OP-CWD + ;
 : _LRW.INSPECTION  ( work -- inspection ) _LRW-INSPECTION + ;
 
@@ -1030,21 +1028,15 @@ _LRW-INSPECTION LIBRARY-REPOSITORY-INSPECTION-SIZE +
     DROP LIBRARY-REPOSITORY-S-OK ;
 
 \ One physical repository call holds the VFS exclusion region from sealed
-\ namespace classification through its last open/create/publication.  Ambient
-\ state capture, body containment, FD retirement, and restoration all occur
-\ inside that same region, so cleanup cannot race another guarded VFS caller.
-
-: _LIBREPO-VFS-USE-SAVED  ( work -- )
-    _LRW.OP-OLD-VFS @ VFS-USE ;
+\ namespace classification through its last open/create/publication.  The
+\ capture of the volume's current directory, body containment, FD retirement,
+\ and restoration all occur inside that same region, so cleanup cannot race
+\ another guarded VFS caller.
 
 : _LIBREPO-VFS-RESTORE  ( work -- status )
     DUP _LRW.OP-CWD @
-    OVER _LRW.REPOSITORY @ _LR.VFS @ V.CWD !
-    DUP ['] _LIBREPO-VFS-USE-SAVED CATCH
-    DUP IF
-        _LIBREPO-DROP3 LIBRARY-REPOSITORY-S-UNCERTAIN EXIT
-    THEN
-    DROP DROP LIBRARY-REPOSITORY-S-OK ;
+    SWAP _LRW.REPOSITORY @ _LR.VFS @ V.CWD !
+    LIBRARY-REPOSITORY-S-OK ;
 
 : _LIBREPO-VFS-RETIRE-FD  ( work -- status )
     DUP _LRW.FD @ DUP 0= IF
@@ -1068,7 +1060,6 @@ _LRW-INSPECTION LIBRARY-REPOSITORY-INSPECTION-SIZE +
     THEN ;
 
 : _LIBREPO-VFS-TRANSACTION-DISPATCH  ( work -- status )
-    VFS-CUR OVER _LRW.OP-OLD-VFS !
     DUP _LRW.REPOSITORY @ _LR.VFS @ V.CWD @
         OVER _LRW.OP-CWD !
     DUP DUP _LRW.OP-XT @ CATCH

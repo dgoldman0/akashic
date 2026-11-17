@@ -234,8 +234,8 @@ whereas a secondary one-shot worker only clears its own preemption flag.
 
 Mutual exclusion does not make every operation worker-safe. A guarded word may
 still be core-affine because it uses UI state, terminal I/O, dictionary or heap
-mutation, the active VFS selector, an applet's module-global current-state
-pointer, or another owner-only service.
+mutation, an applet's module-global current-state pointer, or another
+owner-only service.
 
 Consequently, globally enabling every optional `GUARDED` wrapper is not a
 multicore-safety policy. Each public surface still needs an execution class

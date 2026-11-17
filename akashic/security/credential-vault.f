@@ -220,12 +220,12 @@ CREATE _CV-FRAME-VAULT 0 ,
 CREATE _CV-FRAME-ACTIVE 0 ,
 CREATE _CV-CALLBACK-DEPTH 0 ,
 
-\ VFS selector and namespace traversal state must remain outside backend-owned
-\ or caller-owned memory while a binding callback is executing.
-CREATE _CV-VFS-OLD 0 ,
+\ The target's saved current directory and namespace traversal state must
+\ remain outside backend-owned or caller-owned memory while a binding
+\ callback is executing.
 CREATE _CV-VFS-TARGET 0 ,
 CREATE _CV-VFS-OLD-CWD 0 ,
-CREATE _CV-VFS-SELECTED 0 ,
+CREATE _CV-VFS-ENTERED 0 ,
 CREATE _CV-DIR-ROOT-INODE 0 ,
 CREATE _CV-DIR-SHARD1-INODE 0 ,
 CREATE _CV-DIR-SHARD2-INODE 0 ,
@@ -1426,38 +1426,28 @@ CREATE _CV-VFS-MAGIC
         THEN
     THEN ;
 
-: _CV-VFS-USE-SAVED  ( vault -- )
-    DROP _CV-VFS-OLD @ VFS-USE ;
-
-: _CV-VFS-SELECT  ( vault -- )
+\ Note the vault's VFS and its current directory, which the vault's walk
+\ moves and the restore gives back.
+: _CV-VFS-ENTER  ( vault -- )
     >R
-    0 _CV-VFS-SELECTED !
-    VFS-CUR _CV-VFS-OLD !
+    0 _CV-VFS-ENTERED !
     R@ _CV.VFS @ DUP _CV-VFS-TARGET !
     V.CWD @ _CV-VFS-OLD-CWD !
-    1 _CV-VFS-SELECTED !
-    _CV-VFS-TARGET @ VFS-USE
-    2 _CV-VFS-SELECTED !
+    1 _CV-VFS-ENTERED !
     R> DROP ;
 
 : _CV-VFS-RESTORE  ( vault -- status )
     DROP
     _CV-VFS-OLD-CWD @ _CV-VFS-TARGET @ V.CWD !
-    0
-    DUP ['] _CV-VFS-USE-SAVED CATCH
-    DUP IF
-        2DROP DROP CVAULT-S-RECOVERY EXIT
-    THEN
-    DROP DROP CVAULT-S-OK ;
+    CVAULT-S-OK ;
 
-: _CV-VFS-RESTORE-IF-SELECTED  ( vault -- status )
+: _CV-VFS-RESTORE-IF-ENTERED  ( vault -- status )
     >R
-    _CV-VFS-SELECTED @ 1 U< IF
+    _CV-VFS-ENTERED @ 1 U< IF
         R> DROP CVAULT-S-OK EXIT
     THEN
     R@ _CV-VFS-RESTORE
-    0 _CV-VFS-SELECTED !
-    0 _CV-VFS-OLD !
+    0 _CV-VFS-ENTERED !
     0 _CV-VFS-TARGET !
     0 _CV-VFS-OLD-CWD !
     R> DROP ;
@@ -1477,11 +1467,11 @@ CREATE _CV-VFS-MAGIC
     THEN ;
 
 : _CV-TOPOLOGY-DISPATCH  ( vault -- status )
-    0 _CV-VFS-SELECTED !
-    DUP ['] _CV-VFS-SELECT CATCH
+    0 _CV-VFS-ENTERED !
+    DUP ['] _CV-VFS-ENTER CATCH
     DUP IF
         2DROP CVAULT-S-IO
-        ['] _CV-VFS-RESTORE-IF-SELECTED _CV-VFS-CLEANUP-CALL
+        ['] _CV-VFS-RESTORE-IF-ENTERED _CV-VFS-CLEANUP-CALL
         NIP EXIT
     THEN
     DROP
@@ -1494,7 +1484,7 @@ CREATE _CV-VFS-MAGIC
             DROP CVAULT-S-INTERNAL
         THEN
     THEN
-    ['] _CV-VFS-RESTORE-IF-SELECTED _CV-VFS-CLEANUP-CALL
+    ['] _CV-VFS-RESTORE-IF-ENTERED _CV-VFS-CLEANUP-CALL
     NIP ;
 
 : _CV-TOPOLOGY-TRANSACTION-CALL  ( vault -- status )

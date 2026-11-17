@@ -640,16 +640,11 @@ PLACES_BOOT_LINES = (
     "    _boot-places @ PLACES-DEFAULT! ;",
     PLACES_BOOT_ENTRY,
 )
-# Forth for a check that keeps a store on a RAM volume of its own: a
-# writable place over the root of VFS, declared under NAME, which must be
-# a name no other volume or place of the check has.
-TEST_ROOT_PLACE = r'''
-: _t-root-place  ( vfs name-a name-u -- place )
-    2DUP PLACES-VOLUME THROW >R
-    ROT R@ PVOL-ATTACH THROW
-    S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW
-    PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;
-'''
+# Forth for a check that keeps its records on a RAM volume of its own: a
+# writable place over the volume's root, in a set of its own or as the
+# default set its applet instances take (local_testing/test-root-place.f).
+TEST_ROOT_PLACE_F = AKASHIC_ROOT / "local_testing" / "test-root-place.f"
+TEST_ROOT_PLACE = "\n" + TEST_ROOT_PLACE_F.read_text(encoding="utf-8")
 # With --system-volume a profile's modules are plain files on the system
 # volume, the ext4 volume on the machine's third storage unit.  The boot
 # volume then carries only the closure of the module that mounts it,
@@ -905,8 +900,9 @@ VARIABLE _boot-streams-u
 VARIABLE _boot-streams-status
 : _boot-streams-load-fixture  ( instance -- status )
     _boot-streams-inst !
-    S" {path}" VFS-CUR VFS-OPEN DUP _boot-streams-fd !
-    0= IF BFM-S-MISSING EXIT THEN
+    S" {path}" VFS-FF-READ _boot-streams-inst @ CINST-ORIGIN PLACE-OPEN
+    IF DROP BFM-S-MISSING EXIT THEN
+    _boot-streams-fd !
     _boot-streams-fd @ VFS-SIZE DUP _boot-streams-u !
     DUP 0< IF
         DROP _boot-streams-fd @ VFS-CLOSE BFM-S-INVALID EXIT
@@ -16080,7 +16076,8 @@ CREATE _stc-ev 3 CELLS ALLOT
         STR-STR= _stc-assert
     BFM.ITEM.TEXT S" bounded model test" STR-STR= _stc-assert ;
 : _stc-load-feed  ( -- flag )
-    S" /testing/streams/timeline.json" VFS-CUR VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
+    S" /testing/streams/timeline.json" VFS-FF-READ _stc-inst @ CINST-ORIGIN
+        PLACE-OPEN IF DROP 0 EXIT THEN
     DUP _stc-fd ! VFS-SIZE DUP _stc-doc-u !
     ALLOCATE IF DROP _stc-fd @ VFS-CLOSE 0 EXIT THEN _stc-doc !
     _stc-doc @ _stc-doc-u @ _stc-fd @ VFS-READ-EXACT IF
@@ -19524,11 +19521,11 @@ ENTER-USERLAND
 ." [akashic] loading Streams persistence contracts" CR
 REQUIRE utils/fs/vfs.f
 REQUIRE tui/applets/streams/streams.f
-
+""" + TEST_ROOT_PLACE + r"""
 VARIABLE _spc-fails
 VARIABLE _spc-checks
 VARIABLE _spc-depth
-VARIABLE _spc-old-vfs
+VARIABLE _spc-prior-places
 VARIABLE _spc-vfs
 VARIABLE _spc-old-write-xt
 VARIABLE _spc-fd
@@ -19677,12 +19674,12 @@ CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
 
 : _spc-run  ( -- )
     0 _spc-fails ! 0 _spc-checks ! DEPTH _spc-depth !
-    VFS-CUR _spc-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _spc-assert DROP
     VFS-RAM-OPS _spc-ops VFS-OPS-SIZE CMOVE
     VFS-RAM-BINDING _spc-binding VFS-BINDING-DESC-SIZE CMOVE
     _spc-ops _spc-binding VB.OPS !
-    _spc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _spc-vfs ! VFS-USE
+    _spc-binding 0 VFS-NEW ?DUP IF THROW THEN _spc-vfs !
+    _spc-vfs @ S" spc" _t-default-home _spc-prior-places !
     _STREAMS-COMP-SETUP
     CBR-NEW DUP 0= _spc-assert DROP _spc-req !
 
@@ -19802,7 +19799,8 @@ CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
     _spc-inst3 @ CINST-FREE _spc-inst4 @ CINST-FREE
     _spc-inst5 @ CINST-FREE _spc-inst6 @ CINST-FREE
     _spc-inst7 @ CINST-FREE
-    _spc-old-vfs @ VFS-USE _spc-vfs @ VFS-DESTROY
+    _spc-prior-places @ S" spc" _t-default-restore
+    _spc-vfs @ VFS-DESTROY
     _spc-stack
     _spc-fails @ 0= IF
         ." STREAMS PERSISTENCE CONTRACTS PASS " _spc-checks @ .
@@ -21573,7 +21571,6 @@ VARIABLE _aac-fails
 VARIABLE _aac-checks
 VARIABLE _aac-depth
 VARIABLE _aac-vfs
-VARIABLE _aac-old-vfs
 VARIABLE _aac-inst
 VARIABLE _aac-pad-inst
 VARIABLE _aac-request
@@ -21813,12 +21810,11 @@ VARIABLE _aac-old-entry
     DUP CS.TYPE-MASK @ _aac-text-types = _aac-assert
     CS.MAX-LEN @ _FEXP-CAP-TEXT-MAX = _aac-assert
 
-    VFS-CUR _aac-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _aac-assert DROP
     VFS-RAM-OPS _aac-ops VFS-OPS-SIZE CMOVE
     VFS-RAM-BINDING _aac-binding VFS-BINDING-DESC-SIZE CMOVE
     _aac-ops _aac-binding VB.OPS !
-    _aac-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _aac-vfs ! VFS-USE
+    _aac-binding 0 VFS-NEW ?DUP IF THROW THEN _aac-vfs !
     FEXP-COMP-DESC CINST-NEW
     DUP 0= _aac-assert DROP _aac-inst !
     _aac-inst @ _FEXP-ACTIVATE _aac-vfs @ _aac-places _FEXP-SET !
@@ -21830,7 +21826,7 @@ VARIABLE _aac-old-entry
     _aac-path-integrity
     _aac-replaced-entry
     _aac-request @ CBR-FREE _aac-inst @ CINST-FREE
-    _aac-old-vfs @ VFS-USE _aac-vfs @ VFS-DESTROY
+    _aac-vfs @ VFS-DESTROY
     _aac-stack
     _aac-fails @ 0= IF
         ." AGENT APPLET CAPABILITIES PASS " _aac-checks @ .
@@ -24331,11 +24327,11 @@ ENTER-USERLAND
 ." [akashic] loading Streams source owner contracts" CR
 REQUIRE utils/fs/vfs.f
 REQUIRE tui/applets/streams/streams.f
-
+""" + TEST_ROOT_PLACE + r"""
 VARIABLE _soc-fails
 VARIABLE _soc-checks
 VARIABLE _soc-depth
-VARIABLE _soc-old-vfs
+VARIABLE _soc-prior-places
 VARIABLE _soc-vfs
 VARIABLE _soc-i1
 VARIABLE _soc-i2
@@ -24598,13 +24594,13 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
 
 : _soc-run  ( -- )
     0 _soc-fails ! 0 _soc-checks ! DEPTH _soc-depth !
-    VFS-CUR _soc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0= _soc-assert DROP
     VFS-RAM-OPS _soc-ops VFS-OPS-SIZE CMOVE
     VFS-RAM-BINDING _soc-vfs-binding VFS-BINDING-DESC-SIZE CMOVE
     _soc-ops _soc-vfs-binding VB.OPS !
     _soc-vfs-binding 0 VFS-NEW ?DUP IF THROW THEN
-        DUP 0<> _soc-assert DUP _soc-vfs ! VFS-USE
+        DUP 0<> _soc-assert _soc-vfs !
+    _soc-vfs @ S" soc" _t-default-home _soc-prior-places !
     _STREAMS-COMP-SETUP
     _STM-CAP-COUNT 15 = _soc-assert
     STREAMS-COMP-DESC COMP.CAPS-N @ 15 = _soc-assert
@@ -25133,7 +25129,8 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
     _soc-i3 @ CINST-FREE _soc-i4 @ CINST-FREE
     _soc-i5 @ CINST-FREE _soc-i6 @ CINST-FREE
     _soc-i7 @ CINST-FREE _soc-i8 @ CINST-FREE
-    _soc-old-vfs @ VFS-USE _soc-vfs @ VFS-DESTROY
+    _soc-prior-places @ S" soc" _t-default-restore
+    _soc-vfs @ VFS-DESTROY
     _soc-stack
     _soc-fails @ 0= IF
         ." STREAMS SOURCE OWNER CONTRACTS PASS " _soc-checks @ .
@@ -26389,7 +26386,6 @@ VARIABLE _ssoc-fails
 VARIABLE _ssoc-checks
 VARIABLE _ssoc-depth
 VARIABLE _ssoc-vfs
-VARIABLE _ssoc-old-vfs
 VARIABLE _ssoc-registry-one
 VARIABLE _ssoc-registry-two
 VARIABLE _ssoc-destination
@@ -26913,15 +26909,13 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     _SSOC-ALIAS-SIZE _ssoc-alias _ssoc-allocate
     _SSOC-ALIAS-SIZE _ssoc-alias-snapshot _ssoc-allocate
     STREAMS-SOURCE-STORE-RECORD-MAX _ssoc-span-snapshot _ssoc-allocate
-    VFS-CUR _ssoc-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _ssoc-assert DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _ssoc-vfs ! 0<> _ssoc-assert
-    _ssoc-vfs @ VFS-USE
     _ssoc-build-registries
     _ssoc-test-basic _ssoc-test-corrupt _ssoc-test-noncanonical-unused
     _ssoc-test-future _ssoc-test-recovery _ssoc-test-alias-preflight
-    _ssoc-old-vfs @ VFS-USE _ssoc-vfs @ VFS-DESTROY
+    _ssoc-vfs @ VFS-DESTROY
     _ssoc-store-case _ssoc-free _ssoc-store-probe _ssoc-free
     _ssoc-store-cold _ssoc-free _ssoc-store-a _ssoc-free
     _ssoc-span-snapshot _ssoc-free
@@ -36097,11 +36091,11 @@ ENTER-USERLAND
 ." [akashic] loading Streams source UI contracts" CR
 REQUIRE utils/fs/vfs.f
 REQUIRE tui/applets/streams/streams.f
-
+""" + TEST_ROOT_PLACE + r"""
 VARIABLE _suc-fails
 VARIABLE _suc-checks
 VARIABLE _suc-depth
-VARIABLE _suc-old-vfs
+VARIABLE _suc-prior-places
 VARIABLE _suc-vfs
 VARIABLE _suc-i1
 VARIABLE _suc-i2
@@ -36340,10 +36334,10 @@ CREATE _suc-evs 31 ALLOT
 
 : _suc-run  ( -- )
     0 _suc-fails ! 0 _suc-checks ! DEPTH _suc-depth !
-    VFS-CUR _suc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0= _suc-assert DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP 0<> _suc-assert DUP _suc-vfs ! VFS-USE
+        DUP 0<> _suc-assert _suc-vfs !
+    _suc-vfs @ S" suc" _t-default-home _suc-prior-places !
     _STREAMS-COMP-SETUP
     STREAMS-COMP-DESC CINST-NEW DUP 0= _suc-assert DROP _suc-i1 !
     _suc-i1 @ STREAMS-INIT-CB
@@ -36356,7 +36350,8 @@ CREATE _suc-evs 31 ALLOT
     _suc-test-confirmed-remove
     _suc-test-fail-closed-status
     _suc-i1 @ CINST-FREE _suc-i2 @ CINST-FREE _suc-i3 @ CINST-FREE
-    _suc-old-vfs @ VFS-USE _suc-vfs @ VFS-DESTROY
+    _suc-prior-places @ S" suc" _t-default-restore
+    _suc-vfs @ VFS-DESTROY
     _suc-stack
     _suc-fails @ 0= IF
         ." STREAMS SOURCE UI CONTRACTS PASS " _suc-checks @ .
@@ -37408,8 +37403,11 @@ _smrc-run
         (
             "local_testing/smrc-contracts.f",
             (
-                AKASHIC_ROOT / "local_testing" / "streams-manual-refresh.f"
-            ).read_bytes(),
+                TEST_ROOT_PLACE
+                + (
+                    AKASHIC_ROOT / "local_testing" / "streams-manual-refresh.f"
+                ).read_text(encoding="utf-8")
+            ).encode("utf-8"),
         ),
         ("manual-feed.json", SYNDICATION_JSON_FEED_BASE_FIXTURE),
     ),
@@ -37435,7 +37433,6 @@ VARIABLE _lrc-checks
 VARIABLE _lrc-depth
 VARIABLE _lrc-run-ior
 VARIABLE _lrc-cleanup-fails
-VARIABLE _lrc-old-vfs
 VARIABLE _lrc-vfs
 VARIABLE _lrc-service-live
 VARIABLE _lrc-durable
@@ -37605,7 +37602,6 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
 
 : _lrc-exercise  ( -- )
     DEPTH _lrc-depth !
-    VFS-CUR _lrc-old-vfs !
     S" org.akashic.trust.streams-syndication-live"
         ['] _lrc-trust-emit 0 MTRUST-REGISTER
         MTRUST-S-OK = _lrc-assert
@@ -37629,7 +37625,6 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
     8388608 A-XMEM ARENA-NEW DUP IF 2DROP -4105 THROW THEN DROP
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _lrc-vfs ! 0= IF -4106 THROW THEN
-    _lrc-vfs @ VFS-USE
     _lrc-service XIO-SERVICE-INIT XIO-S-OK = _lrc-assert
     -1 _lrc-service-live !
     _lrc-source-init
@@ -37669,7 +37664,6 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
             0 _lrc-service-live !
         THEN
     THEN
-    _lrc-old-vfs @ ?DUP IF VFS-USE THEN
     _lrc-vfs @ ?DUP IF VFS-DESTROY 0 _lrc-vfs ! THEN
     _lrc-durable @ ?DUP IF
         DUP STREAMS-OBSERVATION-CHECKPOINT-SIZE 0 FILL FREE

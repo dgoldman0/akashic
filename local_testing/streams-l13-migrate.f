@@ -10,7 +10,6 @@ PROVIDED akashic-streams-l13-migration-contracts
 VARIABLE _SL13M-checks
 VARIABLE _SL13M-fails
 VARIABLE _SL13M-depth
-VARIABLE _SL13M-old-vfs
 VARIABLE _SL13M-vfs
 VARIABLE _SL13M-arena
 VARIABLE _SL13M-ior
@@ -106,7 +105,6 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
     _SL13M-repository-work STREAMS-REPOSITORY-AUTHORITY-ROOT@ ;
 
 : _SL13M-case-setup  ( -- )
-    VFS-CUR _SL13M-old-vfs !
     VFS-RAM-OPS _SL13M-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _SL13M-binding VFS-BINDING-DESC-SIZE MOVE
     _SL13M-ops _SL13M-binding VB.OPS !
@@ -116,7 +114,6 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
     _SL13M-ior ! _SL13M-vfs !
     _SL13M-ior @ 0= _SL13M-assert
     _SL13M-vfs @ 0<> _SL13M-assert
-    _SL13M-vfs @ VFS-USE
 
     _SL13M-cache0-memory _SL13M-cache0 _SL13M-cache-init
     _SL13M-cache1-memory _SL13M-cache1 _SL13M-cache-init
@@ -165,7 +162,6 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
     THEN
     0 _SL13M-vfs @ VFS-UNMOUNT 0= _SL13M-assert
     _SL13M-vfs @ VFS-DESTROY
-    _SL13M-old-vfs @ VFS-USE
     _SL13M-arena @ ARENA-DESTROY
     0 _SL13M-vfs !
     0 _SL13M-arena !
@@ -658,7 +654,7 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
 
 : _SL13M-read-source-record  ( -- )
     STREAMS-SOURCE-STORE-TARGET$
-        VFS-FF-READ VFS-CUR VFS-OPEN?
+        VFS-FF-READ _SL13M-vfs @ VFS-OPEN?
     _SL13M-ior ! _SL13M-fd !
     _SL13M-ior @ 0= _SL13M-assert
     _SL13M-fd @ 0<> _SL13M-assert
@@ -671,7 +667,7 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
 
 : _SL13M-write-source-record  ( -- )
     STREAMS-SOURCE-STORE-TARGET$
-        VFS-FF-READ VFS-FF-WRITE OR VFS-CUR VFS-OPEN?
+        VFS-FF-READ VFS-FF-WRITE OR _SL13M-vfs @ VFS-OPEN?
     _SL13M-ior ! _SL13M-fd !
     _SL13M-ior @ 0= _SL13M-assert
     _SL13M-fd @ 0<> _SL13M-assert

@@ -81,18 +81,15 @@ CREATE T-BD /BLOCK-DEVICE ALLOT
 CREATE T-VOL /VOLUME ALLOT
 CREATE T-SOURCE /MODULE-SOURCE ALLOT
 VARIABLE T-VFS
-VARIABLE T-OLD-VFS
 VARIABLE C-RUNS
 VARIABLE SCRIPT-RUNS
 VARIABLE BOOT-RUNS
 : T-MOUNT  ( -- ior )
-    VFS-CUR T-OLD-VFS !
     T-BD SETTINGS-UNIT BD-OPEN-UNIT ?DUP IF EXIT THEN
     T-BD T-VOL VOL-RAW ?DUP IF EXIT THEN
     524288 A-XMEM ARENA-NEW ?DUP IF NIP EXIT THEN
     T-VOL EXT4-NEW ?DUP IF NIP EXIT THEN
     T-VFS !
-    T-OLD-VFS @ VFS-USE
     T-VFS @ T-SOURCE VMS-INIT
     0 ;
 : T-AT-ROOT?  ( -- flag )  T-VFS @ V.CWD @ T-VFS @ V.ROOT @ = ;
@@ -392,10 +389,8 @@ def test_a_binding_without_stable_identities_gets_none(
     assert machine.run(
         "CREATE B-BD /BLOCK-DEVICE ALLOT  CREATE B-VOL /VOLUME ALLOT "
         "CREATE B-SOURCE /MODULE-SOURCE ALLOT  VARIABLE B-VFS "
-        "VFS-CUR T-OLD-VFS ! "
         "B-BD BD-OPEN  B-BD B-VOL VOL-RAW "
         "131072 A-XMEM ARENA-NEW SWAP B-VOL VMP-NEW SWAP B-VFS ! "
-        "T-OLD-VFS @ VFS-USE "
         "B-VFS @ B-SOURCE VMS-INIT  B-SOURCE MODULE-SOURCE!"
     ) == (0, 0, 0, 0)
 
@@ -455,10 +450,9 @@ def test_identities_tell_files_attachments_and_versions_apart(
     assert machine.run(
         "CREATE U-BD /BLOCK-DEVICE ALLOT  CREATE U-VOL /VOLUME ALLOT "
         "CREATE U-SOURCE /MODULE-SOURCE ALLOT  VARIABLE U-VFS "
-        "VFS-CUR T-OLD-VFS ! "
         "U-BD SETTINGS-UNIT BD-OPEN-UNIT  U-BD U-VOL VOL-RAW "
         "524288 A-XMEM ARENA-NEW SWAP U-VOL EXT4-NEW SWAP U-VFS ! "
-        "T-OLD-VFS @ VFS-USE  U-VFS @ U-SOURCE VMS-INIT"
+        "U-VFS @ U-SOURCE VMS-INIT"
     ) == (0, 0, 0, 0)
     again_low, again_high, _used, _reserve = identity(
         machine, "mods/c.f", "U-SOURCE"

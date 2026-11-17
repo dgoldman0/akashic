@@ -6,7 +6,6 @@ VARIABLE _vrct-fails
 VARIABLE _vrct-checks
 VARIABLE _vrct-depth
 VARIABLE _vrct-byte
-VARIABLE _vrct-old-vfs
 VARIABLE _vrct-arena
 VARIABLE _vrct-vfs
 VARIABLE _vrct-main-vfs
@@ -239,20 +238,17 @@ VARIABLE _vrct-u2
     _vrct-fd @ VFS-CLOSE
     _vrct-fail-vfs @ VFS-DESTROY
     _vrct-main-vfs @ _vrct-vfs !
-    _vrct-vfs @ VFS-USE
     _vrct-stack ;
 
 : _vrct-setup  ( -- )
-    VFS-CUR _vrct-old-vfs !
     10000 _vrct-buffer _vrct-allocate
     10000 _vrct-output _vrct-allocate
     262144 A-XMEM ARENA-NEW DUP 0= _vrct-assert DROP _vrct-arena !
     _vrct-arena @ VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP 0<> _vrct-assert DUP _vrct-vfs ! _vrct-main-vfs !
-    _vrct-vfs @ VFS-USE ;
+    ;
 
 : _vrct-cleanup  ( -- )
-    _vrct-old-vfs @ VFS-USE
     _vrct-vfs @ VFS-DESTROY
     _vrct-output _vrct-free-buffer
     _vrct-buffer _vrct-free-buffer ;

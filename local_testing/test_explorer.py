@@ -88,18 +88,17 @@ _EXPL_SETUP = [
     'VARIABLE _TR  0 0 20 40 RGN-NEW DUP _TR !',
     # VFS
     'T-VFS-NEW',
-    'DUP VFS-USE',
-    # Create files/dirs in root (cwd = root after VFS-NEW)
-    'S" docs"      VFS-CUR VFS-MKDIR DROP',
-    'S" src"       VFS-CUR VFS-MKDIR DROP',
-    'S" hello.f"   VFS-CUR VFS-MKFILE DROP',
-    'S" notes.txt" VFS-CUR VFS-MKFILE DROP',
-    # Create file inside docs/
-    'S" docs" VFS-CUR VFS-CD DROP',
-    'S" readme" VFS-CUR VFS-MKFILE DROP',
-    'S" .." VFS-CUR VFS-CD DROP',
     # Stash VFS handle
-    'VARIABLE _TV  VFS-CUR _TV !',
+    'VARIABLE _TV  DUP _TV !',
+    # Create files/dirs in root (cwd = root after VFS-NEW)
+    'S" docs"      _TV @ VFS-MKDIR DROP',
+    'S" src"       _TV @ VFS-MKDIR DROP',
+    'S" hello.f"   _TV @ VFS-MKFILE DROP',
+    'S" notes.txt" _TV @ VFS-MKFILE DROP',
+    # Create file inside docs/
+    'S" docs" _TV @ VFS-CD DROP',
+    'S" readme" _TV @ VFS-MKFILE DROP',
+    'S" .." _TV @ VFS-CD DROP',
     # Create explorer: ( rgn set -- widget )
     'DROP _TV @ T-PLACES  EXPL-NEW',
     # Stash explorer widget

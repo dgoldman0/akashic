@@ -8,7 +8,6 @@ VARIABLE _LRP12-depth
 VARIABLE _LRP12-arena
 VARIABLE _LRP12-vfs
 VARIABLE _LRP12-ior
-VARIABLE _LRP12-old-vfs
 VARIABLE _LRP12-cwd
 VARIABLE _LRP12-library-in
 VARIABLE _LRP12-target-in
@@ -110,7 +109,6 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
         _LRP12-ops VFS-OP-READLINK CELLS + ! ;
 
 : _LRP12-runtime-init  ( -- )
-    VFS-CUR _LRP12-old-vfs !
     _LRP12-binding-init
     67108864 A-XMEM ARENA-NEW
         DUP 0= _LRP12-assert DROP _LRP12-arena !
@@ -118,7 +116,6 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
         _LRP12-ior ! _LRP12-vfs !
     _LRP12-ior @ 0= _LRP12-assert
     _LRP12-vfs @ 0<> _LRP12-assert
-    _LRP12-old-vfs @ VFS-USE
 
     _LRP12-cache-0-memory _LRP12-cache-0 _LRP12-cache-init
     _LRP12-cache-1-memory _LRP12-cache-1 _LRP12-cache-init
@@ -166,8 +163,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-repository _LR.GUARD @ GUARD-HELD? 0= AND
     _LRP12-repository _LR.BUILDER-GUARD @ GUARD-HELD? 0= AND
     _LRP12-vfs @ V.OPEN-COUNT @ 0= AND
-    _LRP12-vfs @ V.CWD @ _LRP12-cwd @ = AND
-    VFS-CUR _LRP12-old-vfs @ = AND ;
+    _LRP12-vfs @ V.CWD @ _LRP12-cwd @ = AND ;
 
 : _LRP12-owner-reset  ( -- )
     _LRP12-repository _LRP12-work LIBRARY-REPOSITORY-FINI
@@ -452,7 +448,6 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
         LIBRARY-REPOSITORY-S-OK _LRP12-status
     0 _LRP12-vfs @ VFS-UNMOUNT 0= _LRP12-assert
     _LRP12-vfs @ VFS-DESTROY
-    _LRP12-old-vfs @ VFS-USE
     _LRP12-arena @ ARENA-DESTROY
     _LRP12-stack ;
 

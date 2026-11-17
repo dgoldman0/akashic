@@ -489,15 +489,6 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 CREATE _VFS-PRIVATE-BEGIN 0 ALLOT
 
 \ =====================================================================
-\  Current VFS Context
-\ =====================================================================
-
-VARIABLE _VFS-CUR    \ current VFS instance handle
-
-: VFS-USE   ( vfs -- )  _VFS-CUR ! ;
-: VFS-CUR   ( -- vfs )  _VFS-CUR @ ;
-
-\ =====================================================================
 \  Binding validation and dispatch helpers
 \ =====================================================================
 
@@ -1599,7 +1590,6 @@ VARIABLE _VN-ENTRY-PTR
     VFS-L-MOUNTED _VN-VFS @ V.LIFECYCLE !
     \ The mount has given the root its binding id.
     _VN-VFS @ V.ROOT @ D.VNODE @ _VN-VFS @ _VFS-VNODE-FILE
-    _VN-VFS @ VFS-USE
     _VN-VFS @ 0 ;
 
 \ =====================================================================
@@ -1645,7 +1635,6 @@ VARIABLE _VUM-V
     _VUM-V @ _VFS-RESULT ;
 
 : VFS-DESTROY  ( vfs -- )
-    DUP _VFS-CUR @ = IF 0 _VFS-CUR ! THEN
     DUP >R VFS-UNMOUNT-F-FORCE SWAP VFS-UNMOUNT DROP
     R> V.ARENA @ ARENA-DESTROY ;
 
@@ -3489,8 +3478,6 @@ VARIABLE _VIP-D  VARIABLE _VIP-BUF  VARIABLE _VIP-CAP  VARIABLE _VIP-POS
 REQUIRE ../../concurrency/guard.f
 GUARD _vfs-guard
 
-' VFS-USE          CONSTANT _vfs-use-xt
-' VFS-CUR          CONSTANT _vfs-cur-xt
 ' VFS-PROBE        CONSTANT _vfs-probe-xt
 ' VFS-NEW          CONSTANT _vfs-new-xt
 ' VFS-DESTROY      CONSTANT _vfs-destroy-xt
@@ -3543,8 +3530,6 @@ GUARD _vfs-guard
 ' VFS-INODE-PATH   CONSTANT _vfs-inode-path-xt
 ' VFS-TRANSACTION  CONSTANT _vfs-transaction-xt
 
-: VFS-USE          _vfs-use-xt      _vfs-guard WITH-GUARD ;
-: VFS-CUR          _vfs-cur-xt      _vfs-guard WITH-GUARD ;
 : VFS-PROBE        _vfs-probe-xt    _vfs-guard WITH-GUARD ;
 : VFS-NEW          _vfs-new-xt      _vfs-guard WITH-GUARD ;
 : VFS-DESTROY      _vfs-destroy-xt  _vfs-guard WITH-GUARD ;

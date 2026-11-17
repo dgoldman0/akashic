@@ -4,7 +4,6 @@
 Tests:
   - VFS-NEW creates a valid VFS instance (descriptor fields non-zero)
   - Root inode exists and has type VFS-T-DIR
-  - VFS-USE / VFS-CUR context management
   - VFS-MKFILE creates a file in cwd
   - VFS-MKDIR creates a subdirectory
   - VFS-OPEN / VFS-CLOSE / VFS-READ / VFS-WRITE file I/O round-trip
@@ -544,16 +543,6 @@ def test_ext4_facing_dispatch_surface():
         ': T-META-DISPATCH  _IN _V1 VFS-GETATTR 0= IF ." GA " THEN  _ATTR _IN _V1 VFS-SETATTR 0= IF ." SA " THEN  _RB 8 _SYM _V1 VFS-READLINK 0= SWAP 4 = AND IF ." RL " THEN  _RB 8 _IN _V1 VFS-LISTXATTR 0= SWAP 2 = AND IF ." LX " THEN  S" user.t" _RB 8 _IN _V1 VFS-GETXATTR 0= SWAP 3 = AND IF ." GX " THEN  S" user.t" S" v" 0 _IN _V1 VFS-SETXATTR 0= IF ." SX " THEN  S" user.t" _IN _V1 VFS-REMOVEXATTR 0= IF ." RX " THEN  _SFS VFS-STATFS-SIZE _V1 VFS-STATFS 0= IF ." SF " THEN  _DISPATCH-CALLS @ 9 = IF ." NINE" THEN ;',
         'T-META-DISPATCH CR',
     ], "GA SA RL LX GX SX RX SF NINE")
-
-# ── VFS-USE / VFS-CUR ──
-
-def test_vfs_use_cur():
-    """VFS-USE sets the context, VFS-CUR retrieves it."""
-    check("VFS-USE / VFS-CUR", [
-        'T-VFS-NEW  CONSTANT _V1',
-        '_V1 VFS-USE',
-        'VFS-CUR _V1 = IF ." OK" ELSE ." FAIL" THEN',
-    ], "OK")
 
 # ── VFS-MKFILE ──
 
@@ -2291,13 +2280,12 @@ def test_set_hwm():
 # ── VFS-DESTROY ──
 
 def test_destroy():
-    """VFS-DESTROY completes and clears a current handle into its arena."""
+    """VFS-DESTROY completes."""
     check("VFS-DESTROY", [
         'T-VFS-NEW  CONSTANT _V1',
-        '_V1 VFS-USE',
         '_V1 VFS-DESTROY',
-        'VFS-CUR 0= IF ." CLEARED " THEN ." OK" CR',
-    ], "CLEARED OK")
+        '." OK" CR',
+    ], "OK")
 
 def test_cross_vfs_dentries_are_rejected():
     """Namespace and metadata operations cannot pass a foreign dentry to a binding."""

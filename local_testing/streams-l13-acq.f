@@ -8,7 +8,6 @@ VARIABLE _SL13A-depth
 VARIABLE _SL13A-arena
 VARIABLE _SL13A-vfs
 VARIABLE _SL13A-ior
-VARIABLE _SL13A-old-vfs
 VARIABLE _SL13A-expected-sequence
 VARIABLE _SL13A-expected-attempt-count
 VARIABLE _SL13A-check-attempt
@@ -121,7 +120,6 @@ CREATE _SL13A-key STREAMS-PI-KEY-MAX ALLOT
     OCHK-SOURCE-SIZE * _SL13A-recovered + ;
 
 : _SL13A-runtime-init  ( -- )
-    VFS-CUR _SL13A-old-vfs !
     VFS-RAM-OPS _SL13A-ops VFS-OPS-SIZE MOVE
     VFS-RAM-BINDING _SL13A-binding VFS-BINDING-DESC-SIZE MOVE
     _SL13A-ops _SL13A-binding VB.OPS !
@@ -681,7 +679,6 @@ CREATE _SL13A-key STREAMS-PI-KEY-MAX ALLOT
         STREAMS-REPOSITORY-S-OK _SL13A-status
     0 _SL13A-vfs @ VFS-UNMOUNT 0= _SL13A-assert
     _SL13A-vfs @ VFS-DESTROY
-    _SL13A-old-vfs @ VFS-USE
     _SL13A-arena @ ARENA-DESTROY
     _SL13A-stack ;
 
