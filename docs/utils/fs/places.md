@@ -306,7 +306,10 @@ every file under `akashic/` to it.
 4. The user volume attaches: the builder's user image on the machine's
    fourth storage unit, `user-volume.f`, the shipping form's places, and
    a boot without the user image. Stores refuse changes on a read-only
-   place themselves, and narrowing a set no longer marks its volumes.
+   place themselves, and narrowing a set no longer marks its volumes. The
+   slice begins in the replacement and copy libraries: names follow each
+   volume's limit and paths the VFS's, and a copy syncs only where a
+   replacement does.
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
@@ -413,7 +416,19 @@ What slices 2 and 3 leave:
   at most 23 bytes, MP64FS's limit, and a path of at most 255. A move
   takes the same destinations, so a file whose name is longer than 23
   bytes can be neither copied nor moved, even within an ext4 volume,
-  whose names may be 255 bytes.
+  whose names may be 255 bytes. At the start of slice 4 the rule follows
+  the volume (Decided, 2026-11-17): a name may be as long as the volume's
+  own limit, `VSF.NAMEMAX`, which the MP64FS binding then reports as its
+  23 bytes, and a path as long as the VFS's `VFS-PATH-MAX`, 4,096 bytes.
+  Each replacement keeps its paths at the length they need rather than
+  reserving that maximum for each of them. The stage's own name stays
+  23 bytes, so it fits every volume. Pad's saves follow the same rule.
+- A copy syncs twice on every binding, after its stage and after the
+  rename, where a checked replacement leaves out its syncs on a binding
+  with `VFS-CAP-DURABLE-MUTATIONS`, whose changes are on the medium when
+  each call returns. In slice 4 both take their barriers from one word
+  that syncs only where a binding lacks that capability (Decided,
+  2026-11-17).
 - File Explorer copies and moves files only and refuses a folder on its
   clipboard. Copying a folder is a walk that calls the copy for each file,
   which the tests make and no applet makes yet.
@@ -421,7 +436,8 @@ What slices 2 and 3 leave:
   slice 8.
 - `PLACE-NAME-LIMIT` asks the volume, and the MP64FS binding gives no
   answer yet, so the limit there is the VFS's 255 and the binding's own
-  refusal of a name over 23 bytes stands.
+  refusal of a name over 23 bytes stands until the binding reports its
+  limit in slice 4.
 - Starting Desk with a home that is missing has run only as the
   activation's own case; the stores' answers with no home are exercised
   when the user volume attaches (slice 4).
@@ -431,11 +447,6 @@ What slices 2 and 3 leave:
 - A sweep of stale copy stages at mount costs a folder walk per boot and
   is left out until measured.
 - Explicit-parent VFS words in place of the current-directory bracket.
-- Whether a copy's destination, and a replacement's target, take the
-  volume's own name limit (`VSF.NAMEMAX`) in place of MP64FS's 23 bytes.
-- Whether a copy leaves out its two syncs on a binding with
-  `VFS-CAP-DURABLE-MUTATIONS`, as a checked replacement does; it syncs on
-  every binding now.
 - The user volume's two places, documents and records, are the layout for
   now and may change.
 - Whether the shipping form becomes the default build.
