@@ -531,8 +531,8 @@
           "id": "fexplorer.verified-transfer-failures",
           "coverage": "covered",
           "facets": ["persistence", "failures"],
-          "preserve": ["Chunked read-back verified copy and cut delete ordering", "Guard, context, FD, CWD and VFS-selector cleanup", "Progress, sync, corruption, throw and cleanup-after-effect failures preserve committed/residue facts exactly"],
-          "evidence": ["driver:local_testing/test_explorer_transactions.py"]
+          "preserve": ["Paste between places on one or two volumes through a stage that is read back before a rename publishes it, and a cut that removes its source only once the copy stands", "Descriptor and current-directory cleanup on every failure, with the stage removed", "Space, sync, rename, corruption and throw failures leave no destination file, and a partial answer says the destination stands"],
+          "evidence": ["pytest:local_testing/test_fexplorer.py::test_paste_copies_a_file_between_places_on_two_volumes", "pytest:local_testing/test_fexplorer.py::test_cut_moves_a_file_between_places_and_says_what_stands", "pytest:local_testing/test_vfs_copy.py::test_running_out_of_space_midway_leaves_no_final_name", "pytest:local_testing/test_vfs_copy.py::test_a_stage_that_does_not_read_back_is_removed", "pytest:local_testing/test_vfs_copy.py::test_a_failed_sync_before_the_comparison_removes_the_stage", "pytest:local_testing/test_vfs_copy.py::test_a_failed_sync_after_the_rename_leaves_the_copy_standing", "pytest:local_testing/test_vfs_copy.py::test_a_write_that_throws_is_a_failure_that_cleans_up", "pytest:local_testing/test_vfs_copy.py::test_a_move_whose_delete_fails_keeps_both_files"]
         },
         {
           "id": "fexplorer.resource-capabilities",

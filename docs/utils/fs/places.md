@@ -239,9 +239,12 @@ commit: before it the final name does not exist, and a failure removes
 the stage. The file never needs to fit in memory. `VFS-MOVE` inside one
 instance is `VFS-RENAME-AT`. Across instances it is the copy, then
 `VFS-RM` of the source and a sync; a failed delete reports that the copy
-stands and the source was kept. The word copies files, and a folder copy
-is a walk that calls it. A stage left by a crash is removed when the same
-copy is retried and is otherwise a hidden file.
+stands and the source was kept. An answer that carries `VFS-IOR-F-PARTIAL`
+says so: the destination file stands though a later step failed. The word
+copies files, and a folder copy is a walk that calls it.
+A stage left by a crash is removed when the same copy is retried and is
+otherwise a hidden file. [vfs-copy.md](vfs-copy.md) describes the words
+and their answers.
 
 ### The explorer widget
 
@@ -298,7 +301,8 @@ every file under `akashic/` to it.
 2. Done: every VFS word names its instance and each writer gets its
    home. Stores take places; shipped files read from the origin. A
    source rule holds `akashic/` to it.
-3. Copy and move: `vfs-copy.f`, `PLACE-COPY`, File Explorer's paste.
+3. Done: copy and move, `vfs-copy.f` with `PLACE-COPY` and
+   `PLACE-MOVE`, and File Explorer's paste across its set's places.
 4. The user volume attaches: the builder's user image on the machine's
    fourth storage unit, `user-volume.f`, the shipping form's places, and
    a boot without the user image. Stores refuse changes on a read-only
@@ -324,8 +328,8 @@ emulator or the simulator").
 
 ## Status
 
-Slices 1 and 2 are in the tree. The linked build declares one place and
-everything below runs on it.
+Slices 1, 2 and 3 are in the tree. The linked build declares one place
+and everything below runs on it.
 
 - `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
   `local_testing/test_places.py` on two RAM volumes.
@@ -371,8 +375,19 @@ everything below runs on it.
 - The shell and the applet host read an applet's UIDL file from its
   origin, and a document's media read their file from the place the
   document came from (`UTUI-FILES!`).
+- `utils/fs/vfs-copy.f` copies and moves files inside a volume, between
+  volumes and between places, through a stage that is read back before a
+  rename publishes it, as "Copy and move" describes.
+  `local_testing/test_vfs_copy.py` runs it between RAM volumes whose
+  binding fails on demand and with the MP64FS boot volume on either side,
+  and `local_testing/test_vfs_copy_ext4.py` runs it to, from and within
+  an ext4 volume, out of space included, and checks the medium with
+  `e2fsck`.
+- File Explorer keeps its clipboard as a place and a path, and its paste
+  copies with `PLACE-COPY`, or after a cut moves with `PLACE-MOVE`, into
+  any place of its set, on its volume or another.
 
-What slice 2 leaves:
+What slices 2 and 3 leave:
 
 - Narrowing a set still marks the volumes under its places read-only.
   Each store binds its file through its place when it opens, for writing
@@ -393,8 +408,17 @@ What slice 2 leaves:
   its folder in its home once when it opens and composes its paths under
   that folder, through one helper both share, and the persistence layer
   keeps taking an instance and a path (Decided, 2026-11-17).
-- File Explorer's paste runs its transaction on one volume and refuses a
-  source on another. Slice 3 replaces it with `PLACE-COPY`.
+- A copy's destination follows the replacement library's path rule,
+  since the stage's name comes from `VREPL-DERIVE-PATHS!`: components of
+  at most 23 bytes, MP64FS's limit, and a path of at most 255. A move
+  takes the same destinations, so a file whose name is longer than 23
+  bytes can be neither copied nor moved, even within an ext4 volume,
+  whose names may be 255 bytes.
+- File Explorer copies and moves files only and refuses a folder on its
+  clipboard. Copying a folder is a walk that calls the copy for each file,
+  which the tests make and no applet makes yet.
+- Power cuts during a copy's stage write and rename are qualified in
+  slice 8.
 - `PLACE-NAME-LIMIT` asks the volume, and the MP64FS binding gives no
   answer yet, so the limit there is the VFS's 255 and the binding's own
   refusal of a name over 23 bytes stands.
@@ -407,6 +431,11 @@ What slice 2 leaves:
 - A sweep of stale copy stages at mount costs a folder walk per boot and
   is left out until measured.
 - Explicit-parent VFS words in place of the current-directory bracket.
+- Whether a copy's destination, and a replacement's target, take the
+  volume's own name limit (`VSF.NAMEMAX`) in place of MP64FS's 23 bytes.
+- Whether a copy leaves out its two syncs on a binding with
+  `VFS-CAP-DURABLE-MUTATIONS`, as a checked replacement does; it syncs on
+  every binding now.
 - The user volume's two places, documents and records, are the layout for
   now and may change.
 - Whether the shipping form becomes the default build.

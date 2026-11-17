@@ -460,6 +460,9 @@ AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
 
 AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
   python3 -m pytest -q local_testing/test_vfs_replace_ext4.py
+
+AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
+  python3 -m pytest -q local_testing/test_vfs_copy_ext4.py
 ```
 
 `test_vfs_replace_ext4.py` is a unit of its own that imports the ext4
@@ -471,24 +474,32 @@ ordinary run cuts on either side of every commit block and after every
 eighth write, and the unit takes seven minutes; `AKASHIC_SAVE_CUT_STRIDE=1`
 cuts after every write, which takes seventeen minutes for those tests alone.
 
+`test_vfs_copy_ext4.py` is a unit of its own that imports the same harness.
+It copies and moves files (`vfs-copy.f`) between the 64 MiB image and a
+RAM volume in the same machine, and within the image, runs one copy out of
+space on a volume a filler file leaves with 39 free blocks, and checks the
+medium with the pinned `e2fsck` and `debugfs`. It takes about seven
+seconds on the simulator.
+
 ### On the emulator or the simulator
 
 The ext4 tests run their journeys on MegaPad's simulator unless
-`AKASHIC_EXT4_BACKEND=emulator` chooses MegaPad's emulator.  The four
+`AKASHIC_EXT4_BACKEND=emulator` chooses MegaPad's emulator.  The five
 files that use the ext4 harness, `test_vfs_ext4.py`,
-`test_vfs_ext4_user_volume.py`, `test_vfs_ext4_retained_orphan.py` and
-`test_vfs_replace_ext4.py`, take their machines from the harness in
-`test_vfs_ext4.py` and from `machine_backends.py`.  The simulator needs its
-native extension built in the MegaPad that `MEGAPAD_ROOT` names (`make
-build` there).
+`test_vfs_ext4_user_volume.py`, `test_vfs_ext4_retained_orphan.py`,
+`test_vfs_replace_ext4.py` and `test_vfs_copy_ext4.py`, take their machines
+from the harness in `test_vfs_ext4.py` and from `machine_backends.py`.  The
+simulator needs its native extension built in the MegaPad that
+`MEGAPAD_ROOT` names (`make build` there).
 
 The emulator runs the BIOS, KDOS and the driver instruction by instruction
 and moves every storage request one byte at a time; it is the
 device-faithful reference.  The simulator evaluates the same source
 semantically, loaded in the emulator snapshot's order: KDOS, the FAT
 harness's closure and test words, CRC, bitset and the ext4 driver, and for
-the save tests `vfs-replace.f` and their words.  Both machines' storage
-controllers take the same planted faults and record the same admitted
+the save tests `vfs-replace.f` and their words, and for the copy tests
+`vfs-copy.f`'s closure and theirs.  Both machines' storage controllers take
+the same planted faults and record the same admitted
 requests, from one definition in MegaPad (`docs/storage-faults.md`), so a
 test plants a fault for the Nth write, flush or read and reads the request
 trace the same way on either.
@@ -1091,7 +1102,6 @@ drivers:
 ```bash
 python3 local_testing/test_guard.py
 python3 local_testing/test_vfs_replace.py
-python3 local_testing/test_explorer_transactions.py
 python3 local_testing/test_applet_close.py
 ```
 

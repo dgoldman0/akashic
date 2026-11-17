@@ -44,6 +44,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 | region.f | `akashic-tui-region` |
 | keys.f | `akashic-tui-keys` |
 | vfs.f | `akashic-vfs` |
+| vfs-copy.f | `akashic-vfs-copy` |
 
 ## Public Words
 
@@ -60,7 +61,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 |------|-------|-------------|
 | `FEXP-CLIP-COPY` | `( -- )` | Copy selected item to clipboard. |
 | `FEXP-CLIP-CUT` | `( -- )` | Cut selected item to clipboard. |
-| `FEXP-CLIP-PASTE` | `( -- )` | Paste a copied file into the selected or current directory. |
+| `FEXP-CLIP-PASTE` | `( -- )` | Copy the clipboard's file, or move it after a cut, into the selected directory, the selected file's directory, or the listed directory, in any place of the set. |
 
 ### Constants
 
@@ -178,10 +179,11 @@ while retaining the Explorer guard.
   bar shows the selection's path, after its place's label when the set
   has several places. Go To takes a path in the listed directory's
   place, or the full form `vfs://<place>/<path>`.
-- A paste still runs the transaction that copies between two paths of one
-  volume, so it is refused when the source and the destination are on
-  different volumes, and when the destination's place, or a cut's source
-  place, is read-only. Copy across volumes arrives with `PLACE-COPY`.
+- A paste copies with `PLACE-COPY`, or after a cut moves with
+  `PLACE-MOVE` ([vfs-copy.md](../../../utils/fs/vfs-copy.md)), from the
+  clipboard's place to the place of the directory the paste goes to,
+  which may be on another volume. A read-only destination place refuses
+  the paste, and so does a cut's read-only source place.
 - `fexplorer.toml` is read from the set's origin.
 - File Explorer never keeps a VFS entry between operations. Another applet
   may replace or remove an entry at any time; Daybook, for one, saves by
@@ -214,20 +216,25 @@ while retaining the Explorer guard.
   only once the Preview tab draws it, a slice a pass from the shell's
   service. A file that cannot be read, or text the memory refuses, shows its
   facts and the reason.
-- One 32 KiB scratch buffer serves the file copy (two 16 KiB chunks, so a
-  copy can be compared with its source), the properties text, and the
-  agent's text preview.
+- One 32 KiB scratch buffer serves a paste's copy, which writes 32 KiB at
+  a time and compares the copy with its source 16 KiB at a time, the
+  properties text, and the agent's text preview.
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments
-- Clipboard captures a canonical source path rather than relying on a live
-  inode pointer. Directories, same-path pastes, and existing destinations are
-  rejected before mutation.
-- Paste holds `VFS-TRANSACTION` across validation, context selection, exact
-  chunked I/O, sync, byte verification, cleanup, and context restoration. A
-  pre-verification failure removes the newly created destination; cleanup
-  uncertainty is reported explicitly.
-- Cut removes the source only after the copied destination has synced and
-  byte-verified. If source deletion fails, both verified copies remain and the
-  app reports the incomplete cut instead of silently losing data.
+- Copy and cut keep the selected file in the clipboard as its place and its
+  path there, as the selection is kept, and refuse a directory. A paste puts
+  the file under its own name, and refuses a name the destination already
+  holds, the source's own among them, before anything is written.
+- The copy writes a stage file, whose name starts with `.s-`, beside the
+  destination, syncs, reads the stage back against the source and only
+  then renames it to the file's name. A paste that fails therefore leaves
+  no file, and its notice says why: no space, a copy that did not match
+  its source, a place that is read-only or unavailable, or a storage
+  error.
+- A cut moves the file: by one rename when both places are on one volume,
+  and otherwise by the copy, after which the source is removed. If the
+  source cannot be removed, both files remain and the toast says so, as
+  it does when a pasted file stands but its volume did not confirm the
+  last sync. The clipboard is cleared once a cut's paste stands.
 - Create, rename, and post-confirmation delete mutations are bounded
   `VFS-TRANSACTION` operations. Modal confirmation never holds the VFS guard
   across its input/yield loop.

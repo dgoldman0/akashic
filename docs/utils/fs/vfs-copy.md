@@ -142,7 +142,9 @@ moves. A read-only destination place therefore refuses a copy with
 `VFS-E-READONLY`, and a read-only source place refuses a move; a path that
 leaves its place answers `VFS-E-XDEV`, and an unavailable place answers its
 status. Both places may be the same place, or two places of one volume, in
-which case a move is a rename.
+which case a move is a rename. File Explorer's paste copies and moves this
+way across the places of its set
+([fexplorer.md](../../tui/applets/fexplorer/fexplorer.md)).
 
 ## Guards
 
