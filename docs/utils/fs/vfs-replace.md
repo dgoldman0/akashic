@@ -365,10 +365,10 @@ call. An operation also rejects recursive replacement, including a different
 descriptor invoked by a precondition, because the implementation has one
 bounded scratch/intent workspace.
 
-The entire recovery or replacement sequence runs inside `VFS-TRANSACTION`.
-In a `GUARDED` build this excludes unrelated public VFS callers while the
-process-global `VFS-CUR` selector is switched, and the caller's prior selector
-is restored before the VFS guard is released. Owner serialization remains
+The entire recovery or replacement sequence runs inside `VFS-TRANSACTION`,
+and every step names the descriptor's own VFS. In a `GUARDED` build the
+transaction excludes unrelated public VFS callers for the whole sequence.
+Owner serialization remains
 defense in depth and the semantic authority boundary: worker cores may prepare
 immutable output buffers, but the owner core performs precondition, mutation,
 sync, recovery, and revision publication. In an unguarded build,

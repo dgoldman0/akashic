@@ -86,7 +86,7 @@ VARIABLE _ostc-store-case-a
     THEN
     _ostc-path-a @ _ostc-path-u @ _ostc-vfs @ VFS-CREATE
         DUP 0<> _ostc-assert DUP 0= IF DROP EXIT THEN DROP
-    _ostc-path-a @ _ostc-path-u @ VFS-OPEN DUP _ostc-fd !
+    _ostc-path-a @ _ostc-path-u @ _ostc-vfs @ VFS-OPEN DUP _ostc-fd !
         0<> _ostc-assert
     _ostc-fd @ 0= IF EXIT THEN
     _ostc-data-a @ _ostc-data-u @ _ostc-fd @ VFS-WRITE-EXACT
@@ -102,7 +102,7 @@ VARIABLE _ostc-store-case-a
     _ostc-read-store @ STREAMS-OBSERVATION-STORE-PATH$
         _ostc-vfs @ VFS-RESOLVE 0<> _ostc-assert
     _ostc-read-store @ STREAMS-OBSERVATION-STORE-PATH$
-        VFS-OPEN DUP _ostc-fd ! 0<> _ostc-assert
+        _ostc-vfs @ VFS-OPEN DUP _ostc-fd ! 0<> _ostc-assert
     _ostc-fd @ 0= IF EXIT THEN
     _ostc-fd @ VFS-SIZE STREAMS-OBSERVATION-STORE-RECORD-MAX =
         _ostc-assert

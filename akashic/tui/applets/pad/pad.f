@@ -836,25 +836,19 @@ VARIABLE _PIO-NAME-U
 VARIABLE _PIO-SIZE
 VARIABLE _PIO-ACT
 VARIABLE _PIO-BUF
-VARIABLE _PIO-OLD-VFS
 VARIABLE _PIO-STATUS
 VARIABLE _PIO-THROW
 VARIABLE _PIO-CLEANUP-THROW
 
-\ Storage dependency seams used by the load transaction's ownership tests.
-\ Product builds leave these bound to KDOS.  Keeping them below the public
-\ API makes after-effect fault injection deterministic without redefining a
+\ Storage dependency seam used by the load transaction's ownership tests.
+\ Product builds leave it bound to KDOS.  Keeping it below the public API
+\ makes after-effect fault injection deterministic without redefining a
 \ global VFS word.
 VARIABLE _PAD-LOAD-CLOSE-XT
-VARIABLE _PAD-LOAD-USE-XT
 ' VFS-CLOSE _PAD-LOAD-CLOSE-XT !
-' VFS-USE   _PAD-LOAD-USE-XT !
 
 : _PAD-LOAD-CLOSE  ( fd -- )
     _PAD-LOAD-CLOSE-XT @ EXECUTE ;
-
-: _PAD-LOAD-USE  ( vfs -- )
-    _PAD-LOAD-USE-XT @ EXECUTE ;
 
 \ Relinquish descriptor ownership before invoking close.  If the driver
 \ closes successfully and then throws, cleanup must not close the recycled
@@ -1268,11 +1262,10 @@ VARIABLE _PSHO-NEW
     0 ;
 
 \ Unexpected THROWs at the applet/storage boundary are normalized to -7.
-\ Cleanup still runs for every owned fd/buffer and restores the caller's
-\ active VFS; an ordinary short/zero transfer remains the more specific -5.
+\ Cleanup still runs for every owned fd and buffer; an ordinary short or
+\ zero transfer remains the more specific -5.
 : _PAD-LOAD-FILE-BODY  ( -- ior )
-    _PAD-IO-VFS @ _PAD-LOAD-USE
-    _PAD-REPL VREPL-TARGET$ VFS-OPEN
+    _PAD-REPL VREPL-TARGET$ _PAD-IO-VFS @ VFS-OPEN
     DUP 0= IF
         DROP -1 EXIT
     THEN
@@ -1300,12 +1293,6 @@ VARIABLE _PSHO-NEW
 : _PAD-LOAD-FREE-BUF  ( -- )
     _PIO-BUF @ ?DUP IF 0 _PIO-BUF ! FREE THEN ;
 
-: _PAD-LOAD-RESTORE-VFS  ( -- )
-    _PIO-OLD-VFS @ _PAD-LOAD-USE ;
-
-: _PAD-LOAD-RESTORE-VFS-RAW  ( -- )
-    _PIO-OLD-VFS @ VFS-USE ;
-
 : _PAD-LOAD-RECORD-CLEANUP-THROW  ( ior -- )
     ?DUP IF
         _PIO-CLEANUP-THROW @ 0= IF _PIO-CLEANUP-THROW ! ELSE DROP THEN
@@ -1314,19 +1301,10 @@ VARIABLE _PSHO-NEW
 : _PAD-LOAD-CLEANUP  ( -- )
     0 _PIO-CLEANUP-THROW !
     ['] _PAD-LOAD-CLOSE-FD CATCH _PAD-LOAD-RECORD-CLEANUP-THROW
-    ['] _PAD-LOAD-FREE-BUF CATCH _PAD-LOAD-RECORD-CLEANUP-THROW
-    ['] _PAD-LOAD-RESTORE-VFS CATCH _PAD-LOAD-RECORD-CLEANUP-THROW
-    \ An injected or future selector implementation can fail before its
-    \ side effect.  Recheck the invariant and use the stable KDOS primitive
-    \ as a final backstop; an after-effect THROW needs no duplicate switch.
-    VFS-CUR _PIO-OLD-VFS @ <> IF
-        ['] _PAD-LOAD-RESTORE-VFS-RAW CATCH
-        _PAD-LOAD-RECORD-CLEANUP-THROW
-    THEN ;
+    ['] _PAD-LOAD-FREE-BUF CATCH _PAD-LOAD-RECORD-CLEANUP-THROW ;
 
 : _PAD-LOAD-FILE-TRANSACTION  ( -- ior )
     0 _PIO-FD ! 0 _PIO-BUF ! 0 _PIO-THROW !
-    VFS-CUR _PIO-OLD-VFS !
     ['] _PAD-LOAD-FILE-BODY CATCH ?DUP IF
         _PIO-THROW ! -7 _PIO-STATUS !
     ELSE
@@ -1335,8 +1313,8 @@ VARIABLE _PSHO-NEW
     _PAD-LOAD-CLEANUP
     \ Status precedence is deliberate: a specific primary transfer result
     \ survives later cleanup faults.  Cleanup-only failure after an otherwise
-    \ successful load is normalized to -7.  All owned resources and the VFS
-    \ selector have already passed through independent cleanup stages.
+    \ successful load is normalized to -7.  All owned resources have already
+    \ passed through independent cleanup stages.
     _PIO-STATUS @ 0= _PIO-CLEANUP-THROW @ 0<> AND IF
         -7
     ELSE

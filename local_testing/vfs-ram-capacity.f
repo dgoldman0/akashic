@@ -64,7 +64,7 @@ VARIABLE _vrct-u2
 
 : _vrct-open  ( path-a path-u -- fd )
     2DUP _vrct-vfs @ VFS-MKFILE DUP 0<> _vrct-assert _vrct-in !
-    _vrct-vfs @ VFS-USE VFS-OPEN DUP 0<> _vrct-assert ;
+    _vrct-vfs @ VFS-OPEN DUP 0<> _vrct-assert ;
 
 : _vrct-write-error  ( buffer length fd reason -- )
     >R VFS-WRITE?

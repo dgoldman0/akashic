@@ -190,7 +190,7 @@ CREATE _aload-hash-hex 64 ALLOT
 
 : _ALOAD-READ-IMAGE  ( -- status )
     0 _aload-fd ! 0 _aload-image-a ! 0 _aload-image-u !
-    _aload-mft @ MFT-IMAGE VFS-OPEN DUP _aload-fd ! 0= IF
+    _aload-mft @ MFT-IMAGE VFS-CUR VFS-OPEN DUP _aload-fd ! 0= IF
         ALOAD-E-IMAGE-OPEN EXIT
     THEN
     _aload-fd @ VFS-SIZE DUP _aload-image-u !
@@ -455,7 +455,7 @@ VARIABLE _alp-path-char
     _ALOAD-MANIFEST-PATH-VALID? 0= IF
         0 ALOAD-E-MANIFEST-PATH EXIT
     THEN
-    _alp-path-a @ _alp-path-u @ VFS-OPEN DUP _alp-fd ! 0= IF
+    _alp-path-a @ _alp-path-u @ VFS-CUR VFS-OPEN DUP _alp-fd ! 0= IF
         0 ALOAD-E-MANIFEST-OPEN EXIT
     THEN
     _alp-fd @ VFS-SIZE DUP _alp-doc-u !

@@ -479,6 +479,16 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 : FD.FREE      56 + ;         \ +56
 
 \ =====================================================================
+\  Private state
+\ =====================================================================
+\
+\  Everything this module defines from here on lies after this mark, so
+\  a library that must not let caller memory alias the VFS's own state
+\  checks a span against the range that starts here.
+
+CREATE _VFS-PRIVATE-BEGIN 0 ALLOT
+
+\ =====================================================================
 \  Current VFS Context
 \ =====================================================================
 
@@ -2074,8 +2084,12 @@ VARIABLE _VOQ-IOR
     1 _VOQ-V @ V.OPEN-COUNT +!
     _VOQ-FD @ 0 ;
 
-: VFS-OPEN  ( c-addr u -- fd | 0 )
-    VFS-CUR DUP V.FLAGS @ VFS-F-RO AND IF
+\ VFS-OPEN ( c-addr u vfs -- fd | 0 )
+\   Open a file on VFS for reading and writing, or for reading alone when
+\   VFS is read-only.  0 when the path names nothing; any other failure
+\   throws its ior.
+: VFS-OPEN  ( c-addr u vfs -- fd | 0 )
+    DUP V.FLAGS @ VFS-F-RO AND IF
         VFS-FF-READ
     ELSE
         VFS-FF-READ VFS-FF-WRITE OR
@@ -3114,14 +3128,12 @@ VARIABLE _VSF-V
 VARIABLE _VCR-A
 VARIABLE _VCR-U
 VARIABLE _VCR-V
-VARIABLE _VCR-OLD-V
 VARIABLE _VCR-OLD-CWD
 VARIABLE _VCR-SPLIT
 VARIABLE _VCR-PARENT
 
 : _VCR-RESTORE  ( -- )
-    _VCR-OLD-CWD @ _VCR-V @ V.CWD !
-    _VCR-OLD-V @ VFS-USE ;
+    _VCR-OLD-CWD @ _VCR-V @ V.CWD ! ;
 
 \ VFS-CREATE ( path-a path-u vfs -- inode | 0 )
 \   Create a file at an absolute or relative path.  Parent directories
@@ -3131,9 +3143,7 @@ VARIABLE _VCR-PARENT
     _VCR-V @ V.FLAGS @ VFS-F-RO AND IF 0 EXIT THEN
     _VCR-U @ 0= IF 0 EXIT THEN
     _VCR-A @ _VCR-U @ 1- + C@ [CHAR] / = IF 0 EXIT THEN
-    VFS-CUR _VCR-OLD-V !
     _VCR-V @ V.CWD @ _VCR-OLD-CWD !
-    _VCR-V @ VFS-USE
     _VCR-A @ _VCR-U @ VFS-RP-NOFOLLOW-FINAL _VCR-V @
     _VFS-RESOLVE-POLICY ?DUP IF
         DROP _VCR-RESTORE 0 EXIT

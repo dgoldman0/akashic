@@ -155,7 +155,7 @@ VARIABLE _abr-buf
 : _AB-READ-FILE  ( path-a path-u cap -- buffer length status )
     _abr-cap ! _abr-u ! _abr-a !
     0 _abr-buf ! 0 _ab-fd !
-    _abr-a @ _abr-u @ VFS-OPEN DUP _ab-fd !
+    _abr-a @ _abr-u @ VFS-CUR VFS-OPEN DUP _ab-fd !
     0= IF 0 0 ABUILD-E-IO EXIT THEN
     _ab-fd @ VFS-SIZE DUP _abr-size !
     1 < _abr-size @ _abr-cap @ > OR IF
@@ -271,7 +271,7 @@ CREATE _ab-repl VREPL-SIZE ALLOT
 
 : _AB-CHECK-EXISTING  ( -- status )
     0 _ab-fd !
-    _abp-path-a @ _abp-path-u @ VFS-OPEN DUP _ab-fd !
+    _abp-path-a @ _abp-path-u @ VFS-CUR VFS-OPEN DUP _ab-fd !
     0= IF _AB-PUB-MISSING EXIT THEN
     _ab-fd @ VFS-SIZE _abp-u @ <> IF
         _AB-CLOSE-FD ABUILD-E-COLLISION EXIT

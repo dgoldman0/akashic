@@ -76,7 +76,7 @@ CREATE _g0-volume /VOLUME ALLOT
     _g0-path-u ! _g0-path-a ! _g0-data-u ! _g0-data-a !
     _g0-path-a @ _g0-path-u @ VFS-CUR VFS-CREATE
         DUP 0<> _g0-assert DROP
-    _g0-path-a @ _g0-path-u @ VFS-OPEN DUP _g0-fd ! 0<> _g0-assert
+    _g0-path-a @ _g0-path-u @ VFS-CUR VFS-OPEN DUP _g0-fd ! 0<> _g0-assert
     _g0-data-a @ _g0-data-u @ _g0-fd @ VFS-WRITE-EXACT 0= _g0-assert
     _g0-fd @ VFS-CLOSE 0 _g0-fd !
     VFS-CUR VFS-SYNC 0= _g0-assert ;

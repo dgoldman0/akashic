@@ -68,7 +68,7 @@ VARIABLE _cold-latest
     _cold-cat @ ACAT-COUNT 1 = _cold-assert
     S" local.hello" _cold-cat @ ACAT-FIND-ID
     DUP 0<> _cold-assert DUP _cold-entry !
-    ACE-MANIFEST$ VFS-OPEN DUP 0<> _cold-assert ?DUP IF VFS-CLOSE THEN
+    ACE-MANIFEST$ _cold-vfs @ VFS-OPEN DUP 0<> _cold-assert ?DUP IF VFS-CLOSE THEN
     ['] _cold-resolver 0 _cold-cat @ ACAT-RESOLVER!
     _cold-entry @ _cold-cat @ ACAT-RESOLVE
     DUP ACAT-S-OK = _cold-assert DROP DUP 0<> _cold-assert _cold-desc !

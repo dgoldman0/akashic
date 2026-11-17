@@ -30,7 +30,7 @@
 \  the VFS layer can still require filesystem repair.
 \
 \  One recovery serves both.  Recover/replace hold one VFS-TRANSACTION
-\  across context switch, all phases, and context restore.
+\  across all phases, and every phase works on the descriptor's own VFS.
 \
 \  Public API:
 \    VREPL-INIT              ( vfs replacement -- status )
@@ -98,9 +98,8 @@ REQUIRE ../../concurrency/guard.f
  80 CONSTANT _VR-D-STAGE-BASE
  88 CONSTANT _VR-D-BACKUP-BASE
  96 CONSTANT _VR-D-MARKER-BASE
-104 CONSTANT _VR-D-OLD-VFS
-112 CONSTANT _VR-D-LAST-STATUS
-120 CONSTANT _VR-D-RESERVED
+104 CONSTANT _VR-D-LAST-STATUS
+112 CONSTANT _VR-D-RESERVED     \ 16 bytes
 128 CONSTANT _VR-D-TARGET
 384 CONSTANT _VR-D-STAGE
 640 CONSTANT _VR-D-BACKUP
@@ -120,7 +119,6 @@ REQUIRE ../../concurrency/guard.f
 : VREPL.STAGE-BASE     ( r -- a ) _VR-D-STAGE-BASE + ;
 : VREPL.BACKUP-BASE    ( r -- a ) _VR-D-BACKUP-BASE + ;
 : VREPL.MARKER-BASE    ( r -- a ) _VR-D-MARKER-BASE + ;
-: VREPL.OLD-VFS        ( r -- a ) _VR-D-OLD-VFS + ;
 : VREPL.LAST-STATUS    ( r -- a ) _VR-D-LAST-STATUS + ;
 : VREPL.TARGET         ( r -- a ) _VR-D-TARGET + ;
 : VREPL.STAGE          ( r -- a ) _VR-D-STAGE + ;
@@ -541,7 +539,7 @@ VARIABLE _VRW-FD
     _VRW-PA @ _VRW-PU @ _VRO-VFS VFS-CREATE DUP 0= IF
         DROP VREPL-S-IO EXIT
     THEN DROP
-    _VRW-PA @ _VRW-PU @ VFS-OPEN DUP _VRW-FD ! 0= IF
+    _VRW-PA @ _VRW-PU @ _VRO-VFS VFS-OPEN DUP _VRW-FD ! 0= IF
         _VRW-PA @ _VRW-PU @ _VRO-VFS VFS-RM DROP
         VREPL-S-IO EXIT
     THEN
@@ -572,7 +570,7 @@ VARIABLE _VRV-WANT
 
 : _VREPL-VERIFY-FILE  ( data len path-a path-u -- status )
     _VRV-PU ! _VRV-PA ! _VRV-U ! _VRV-A !
-    _VRV-PA @ _VRV-PU @ VFS-OPEN DUP _VRV-FD ! 0= IF
+    _VRV-PA @ _VRV-PU @ _VRO-VFS VFS-OPEN DUP _VRV-FD ! 0= IF
         VREPL-S-IO EXIT
     THEN
     _VRV-FD @ VFS-SIZE _VRV-U @ <> IF
@@ -663,7 +661,7 @@ CREATE _VREPL-TARGET-HASH SHA3-256-LEN ALLOT
 VARIABLE _VRM-FD
 
 : _VREPL-READ-MARKER  ( -- status )
-    _VRO-R @ VREPL-MARKER$ VFS-OPEN DUP _VRM-FD ! 0= IF
+    _VRO-R @ VREPL-MARKER$ _VRO-VFS VFS-OPEN DUP _VRM-FD ! 0= IF
         VREPL-S-IO EXIT
     THEN
     _VRM-FD @ VFS-SIZE _VREPL-MARKER-SIZE <> IF
@@ -890,7 +888,7 @@ VARIABLE _VRM-FD
     THEN ;
 
 \ =====================================================================
-\  Public guarded entry points and exception-safe VFS context restore
+\  Public guarded entry points
 \ =====================================================================
 
 VARIABLE _vrepl-operation-active
@@ -901,13 +899,10 @@ VARIABLE _vrepl-operation-active
     DUP VREPL.FLAGS @ VREPL-F-BUSY AND IF DROP VREPL-S-BUSY EXIT THEN
     -1 _vrepl-operation-active !
     DUP _VRO-R !
-    VREPL-F-BUSY OVER VREPL.FLAGS DUP @ ROT OR SWAP !
-    VFS-CUR OVER VREPL.OLD-VFS !
-    VREPL.VFS @ VFS-USE
+    VREPL-F-BUSY SWAP VREPL.FLAGS DUP @ ROT OR SWAP !
     VREPL-S-OK ;
 
 : _VREPL-LEAVE  ( status -- status )
-    _VRO-R @ VREPL.OLD-VFS @ VFS-USE
     _VRO-R @ VREPL.FLAGS @ VREPL-F-BUSY INVERT AND
     _VRO-R @ VREPL.FLAGS !
     0 _vrepl-operation-active !

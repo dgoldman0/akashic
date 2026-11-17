@@ -39,7 +39,7 @@ CREATE _dsc-practice-store PHEADVFS-SIZE ALLOT
 : _dsc-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 
 : _dsc-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 
 : _dsc-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _dsc-practice-slot?

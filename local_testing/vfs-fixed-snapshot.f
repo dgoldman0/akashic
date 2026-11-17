@@ -9,7 +9,6 @@ VARIABLE _vfsnc-fails
 VARIABLE _vfsnc-checks
 VARIABLE _vfsnc-depth
 VARIABLE _vfsnc-byte
-VARIABLE _vfsnc-old-vfs
 VARIABLE _vfsnc-vfs
 VARIABLE _vfsnc-spec
 VARIABLE _vfsnc-spec-probe
@@ -41,7 +40,6 @@ VARIABLE _vfsnc-fault-count
 VARIABLE _vfsnc-fault-at
 VARIABLE _vfsnc-sync-armed
 VARIABLE _vfsnc-close-count
-VARIABLE _vfsnc-restore-count
 VARIABLE _vfsnc-encode-generation
 VARIABLE _vfsnc-link-a
 VARIABLE _vfsnc-link-u
@@ -140,7 +138,7 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     THEN
     _vfsnc-path-a @ _vfsnc-path-u @ _vfsnc-vfs @ VFS-CREATE
         DUP 0<> _vfsnc-assert DUP 0= IF DROP EXIT THEN DROP
-    _vfsnc-path-a @ _vfsnc-path-u @ VFS-OPEN DUP _vfsnc-fd !
+    _vfsnc-path-a @ _vfsnc-path-u @ _vfsnc-vfs @ VFS-OPEN DUP _vfsnc-fd !
         0<> _vfsnc-assert
     _vfsnc-fd @ 0= IF EXIT THEN
     _vfsnc-data-a @ _vfsnc-data-u @ _vfsnc-fd @ VFS-WRITE-EXACT
@@ -153,7 +151,7 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 
 : _vfsnc-read-target  ( destination store -- length )
     _vfsnc-read-store ! _vfsnc-read-dst !
-    _vfsnc-read-store @ VFSNAP-PATH$ VFS-OPEN DUP _vfsnc-fd !
+    _vfsnc-read-store @ VFSNAP-PATH$ _vfsnc-vfs @ VFS-OPEN DUP _vfsnc-fd !
         0<> _vfsnc-assert
     _vfsnc-fd @ 0= IF 0 EXIT THEN
     _vfsnc-fd @ VFS-SIZE _vfsnc-read-u !
@@ -537,11 +535,8 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
 
 : _vfsnc-close-after  ( fd -- )
     VFS-CLOSE 1 _vfsnc-close-count +! -779 THROW ;
-: _vfsnc-restore-after  ( vfs -- )
-    VFS-USE 1 _vfsnc-restore-count +! -780 THROW ;
 : _vfsnc-hooks-reset  ( store -- )
-    ['] VFS-CLOSE OVER VFSNAP.CLOSE-XT !
-    ['] VFS-USE SWAP VFSNAP.RESTORE-XT ! ;
+    ['] VFS-CLOSE SWAP VFSNAP.CLOSE-XT ! ;
 
 : _vfsnc-fault-contracts  ( -- )
     \ A zero-progress read becomes I/O, closes once, and latches.
@@ -552,27 +547,14 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _vfsnc-fault-count @ 1 >= _vfsnc-assert
     _vfsnc-fault-binding-end
 
-    \ Close-after-success and restore-after-success are each exact-once.
+    \ Close-after-success is exact-once.
     S" /vfsnap-main.bin" _vfsnc-reset-b
     0 _vfsnc-close-count !
     ['] _vfsnc-close-after _vfsnc-store-b @ VFSNAP.CLOSE-XT !
-    0 VFS-USE
     VFSNAP-S-IO _vfsnc-store-b @ _vfsnc-blocking-load
     _vfsnc-close-count @ 1 = _vfsnc-assert
-    VFS-CUR 0= _vfsnc-assert
     _VFSRD-FD @ 0= _vfsnc-assert
-    _VFSRD-HAVE-OLD-VFS @ 0= _vfsnc-assert
-    _vfsnc-store-b @ _vfsnc-hooks-reset _vfsnc-vfs @ VFS-USE
-
-    S" /vfsnap-main.bin" _vfsnc-reset-b
-    0 _vfsnc-restore-count !
-    ['] _vfsnc-restore-after _vfsnc-store-b @ VFSNAP.RESTORE-XT !
-    0 VFS-USE
-    VFSNAP-S-IO _vfsnc-store-b @ _vfsnc-blocking-load
-    _vfsnc-restore-count @ 1 = _vfsnc-assert
-    VFS-CUR 0= _vfsnc-assert
-    _VFSRD-HAVE-OLD-VFS @ 0= _vfsnc-assert
-    _vfsnc-store-b @ _vfsnc-hooks-reset _vfsnc-vfs @ VFS-USE
+    _vfsnc-store-b @ _vfsnc-hooks-reset
 
     \ Validate and encode exceptions are normalized, wiped, and blocked.
     S" /vfsnap-main.bin" _vfsnc-reset-b
@@ -720,18 +702,15 @@ CREATE _vfsnc-callback-private-end 0 ALLOT
     _VFSNC-RAW-U _vfsnc-raw-b _vfsnc-allocate
     _VFSNC-ALIAS-U _vfsnc-alias _vfsnc-allocate
     40 _vfsnc-output _vfsnc-allocate
-    VFS-CUR _vfsnc-old-vfs !
     1048576 A-XMEM ARENA-NEW DUP 0= _vfsnc-assert DROP
     VFS-RAM-OPS _vfsnc-ops VFS-OPS-SIZE CMOVE
     VFS-RAM-BINDING _vfsnc-binding VFS-BINDING-DESC-SIZE CMOVE
     _vfsnc-ops _vfsnc-binding VB.OPS !
     _vfsnc-binding 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _vfsnc-vfs ! 0<> _vfsnc-assert
-    _vfsnc-vfs @ VFS-USE ;
+        DUP _vfsnc-vfs ! 0<> _vfsnc-assert ;
 
 : _vfsnc-cleanup  ( -- )
-    _vfsnc-vfs @ VFS-USE
-    _vfsnc-old-vfs @ VFS-USE _vfsnc-vfs @ VFS-DESTROY
+    _vfsnc-vfs @ VFS-DESTROY
     _vfsnc-output _vfsnc-free _vfsnc-alias _vfsnc-free
     _vfsnc-raw-b _vfsnc-free _vfsnc-raw-a _vfsnc-free
     _vfsnc-generation _vfsnc-free _vfsnc-destination _vfsnc-free

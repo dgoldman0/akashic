@@ -72,7 +72,7 @@ STREAMS-OBSERVATION-STORE-RECORD-MAX XBUF _SL13E-observation-raw
 : _SL13E-read-exact  ( destination expected-u path-a path-u -- flag )
     _SL13E-path-u ! _SL13E-path-a !
     _SL13E-read-u ! _SL13E-read-a !
-    _SL13E-path-a @ _SL13E-path-u @ VFS-OPEN
+    _SL13E-path-a @ _SL13E-path-u @ _SL13E-vfs @ VFS-OPEN
     DUP _SL13E-fd ! 0= IF 0 EXIT THEN
     _SL13E-fd @ VFS-SIZE _SL13E-read-u @ =
     DUP IF

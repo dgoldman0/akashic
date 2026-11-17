@@ -46,7 +46,7 @@ CREATE _dh-practice-out PHEAD-SIZE ALLOT
 CREATE _dh-practice-store PHEADVFS-SIZE ALLOT
 : _dh-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _dh-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 : _dh-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _dh-practice-slot?
     S" /practice-head-b.bin" _dh-practice-slot? OR ;

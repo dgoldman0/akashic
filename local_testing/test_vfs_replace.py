@@ -174,11 +174,11 @@ def build_snapshot() -> None:
         ": T-VFS-NEW T-BINDING-RESET "
         "524288 A-XMEM ARENA-NEW IF -1 THROW THEN "
         "_TV-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;",
-        ": T-SETUP T-VFS-NEW _TV ! _TV @ VFS-USE "
+        ": T-SETUP T-VFS-NEW _TV ! "
         "_TV @ _TR VREPL-INIT DROP "
         'S\" /doc.txt\" S\" /doc.new\" S\" /doc.bak\" '
         'S\" /doc.txn\" _TR VREPL-PATHS! DROP _TR _VRO-R ! ;',
-        ": T-PUT _TR _VRO-R ! _TV @ VFS-USE _VREPL-CREATE-WRITE ;",
+        ": T-PUT _TR _VRO-R ! _VREPL-CREATE-WRITE ;",
         ': T-OLD-TARGET S" old" S" /doc.txt" T-PUT ;',
         ': T-NEW-STAGE S" new" S" /doc.new" T-PUT ;',
         ': T-OLD-BACKUP S" old" S" /doc.bak" T-PUT ;',
@@ -200,8 +200,8 @@ def build_snapshot() -> None:
         "DROP _TP-LEN @ 1+ 0 ;",
         ": T-SYNC _TV @ VFS-SYNC DROP ;",
         ": T-MARK _VRO-ORIGINAL ! S\" new\" _VRO-LEN ! _VRO-DATA ! "
-        "_TR _VRO-R ! _TV @ VFS-USE _VREPL-WRITE-MARKER ;",
-        ": T-SHOW VFS-OPEN DUP 0= IF DROP .\" <absent> \" EXIT THEN "
+        "_TR _VRO-R ! _VREPL-WRITE-MARKER ;",
+        ": T-SHOW _TV @ VFS-OPEN DUP 0= IF DROP .\" <absent> \" EXIT THEN "
         "_TS-FD ! _TS-FD @ VFS-SIZE _TS-LEN ! "
         "_TOUT _TS-LEN @ _TS-FD @ VFS-READ _TS-LEN @ = IF "
         "_TOUT _TS-LEN @ TYPE SPACE ELSE .\" <read-error> \" THEN "
@@ -450,7 +450,7 @@ def test_derived_paths_drive_the_complete_replacement_protocol():
     check(
         "derived paths drive the complete replacement protocol",
         [
-            "T-VFS-NEW _TV ! _TV @ VFS-USE _TV @ _TR VREPL-INIT DROP",
+            "T-VFS-NEW _TV ! _TV @ _TR VREPL-INIT DROP",
             ': TDP S" /doc.txt" _TR VREPL-DERIVE-PATHS! . ; TDP',
             "_TR _VRO-R !",
             ': _RUN-LINE S" old" S" /doc.txt" T-PUT . T-SYNC ; _RUN-LINE',
@@ -468,7 +468,7 @@ def test_exact_io_loops_legal_partial_transfers_under_one_vfs_guard():
         "exact I/O loops legal partial transfers under one VFS guard",
         [
             "T-SETUP S\" /exact.txt\" _TV @ VFS-CREATE DROP "
-            "S\" /exact.txt\" VFS-OPEN CONSTANT _EFD",
+            "S\" /exact.txt\" _TV @ VFS-OPEN CONSTANT _EFD",
             "0 _TP-GUARDED ! ' T-PART-WRITE _TV-OPS "
             "VFS-OP-WRITE CELLS + !",
             'S" hello" _EFD VFS-WRITE-EXACT . _TP-GUARDED @ . '
@@ -487,7 +487,7 @@ def test_exact_io_rejects_stalled_and_invalid_binding_counts():
         "exact I/O rejects stalled and invalid binding counts",
         [
             "T-SETUP S\" /exact.txt\" _TV @ VFS-CREATE DROP "
-            "S\" /exact.txt\" VFS-OPEN CONSTANT _EFD",
+            "S\" /exact.txt\" _TV @ VFS-OPEN CONSTANT _EFD",
             "' T-ZERO-XFER _TV-OPS VFS-OP-WRITE CELLS + ! "
             'S" ab" _EFD VFS-WRITE-EXACT . _EFD VFS-TELL .',
             "' T-NEG-XFER _TV-OPS VFS-OP-WRITE CELLS + ! "
@@ -514,7 +514,7 @@ def test_vfs_transaction_holds_the_recursive_public_guard():
         [
             "T-SETUP",
             ': T-TX _vfs-guard GUARD-MINE? . '
-            '_TV @ VFS-CUR = . ;',
+            'S" /" _TV @ VFS-RESOLVE _TV @ V.ROOT @ = . ;',
             "' T-TX VFS-TRANSACTION",
         ],
         "-1 -1 ",
@@ -527,25 +527,13 @@ def test_vfs_transaction_excludes_an_unrelated_full_core_caller():
         [
             "T-SETUP VARIABLE _TX-START VARIABLE _TX-DONE "
             "0 _TX-START ! 0 _TX-DONE !",
-            ": T-TX-WORKER -1 _TX-START ! VFS-CUR DROP "
+            ": T-TX-WORKER -1 _TX-START ! S\" /\" _TV @ VFS-RESOLVE DROP "
             "-1 _TX-DONE ! ;",
             ": T-TX-HOLDER ['] T-TX-WORKER 1 CORE-RUN "
             "BEGIN _TX-START @ 0= WHILE YIELD? REPEAT "
             "2000 0 DO I DROP LOOP _TX-DONE @ . ;",
             "' T-TX-HOLDER VFS-TRANSACTION",
             "1 CORE-WAIT _TX-DONE @ .",
-        ],
-        "0 -1 ",
-    )
-
-
-def test_replacement_restores_caller_vfs_context_before_unlock():
-    check(
-        "replacement restores caller VFS context before unlock",
-        [
-            "T-SETUP T-VFS-NEW CONSTANT _OTHER _OTHER VFS-USE",
-            'S" new" _TR VREPL-REPLACE .',
-            "VFS-CUR _OTHER = .",
         ],
         "0 -1 ",
     )
@@ -640,7 +628,7 @@ def test_missing_transaction_parent_is_recovery_state_not_target_absence():
     check(
         "missing transaction parent is recovery state, not target absence",
         [
-            "T-VFS-NEW _TV ! _TV @ VFS-USE _TV @ _TR VREPL-INIT DROP",
+            "T-VFS-NEW _TV ! _TV @ _TR VREPL-INIT DROP",
             ': TMP S" /missing/doc.txt" S" /missing/doc.new" '
             'S" /missing/doc.bak" S" /missing/doc.txn" '
             '_TR VREPL-PATHS! . ; TMP',
@@ -678,7 +666,7 @@ def test_symlinked_shared_parent_retains_ordinary_intermediate_traversal():
     check(
         "symlinked shared parent retains ordinary intermediate traversal",
         [
-            "T-VFS-NEW _TV ! _TV @ VFS-USE _TV @ _TR VREPL-INIT DROP",
+            "T-VFS-NEW _TV ! _TV @ _TR VREPL-INIT DROP",
             'S" real" _TV @ VFS-MKDIR DROP '
             'S" alias" 901 _TV @ V.ROOT @ T-CACHE-SYMLINK DROP',
             ': TPP S" /alias/doc.txt" S" /alias/doc.new" '
@@ -1037,7 +1025,7 @@ def test_rename_publication_leaves_an_open_old_target_readable():
         "rename publication leaves an open old target readable",
         [
             "T-SETUP T-DURABLE T-OLD-TARGET DROP",
-            'S" /doc.txt" VFS-OPEN CONSTANT _OFD',
+            'S" /doc.txt" _TV @ VFS-OPEN CONSTANT _OFD',
             'S" new" _TR VREPL-REPLACE .',
             "_TOUT 3 _OFD VFS-READ . _TOUT 3 TYPE SPACE _OFD VFS-CLOSE",
             'S" /doc.txt" T-SHOW T-ARTIFACTS',

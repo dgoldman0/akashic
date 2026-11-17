@@ -633,16 +633,14 @@ def test_open_close():
     check("OPEN/CLOSE round-trip", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" fo.txt" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
-        'S" fo.txt" VFS-OPEN  DUP 0<> IF ." OPEN-OK" THEN  VFS-CLOSE ." CLOSED" CR',
+        'S" fo.txt" _V1 VFS-OPEN  DUP 0<> IF ." OPEN-OK" THEN  VFS-CLOSE ." CLOSED" CR',
     ], "OPEN-OKCLOSED")
 
 def test_open_nonexistent():
     """Opening a file that doesn't exist returns 0."""
     check("OPEN non-existent = 0", [
         'T-VFS-NEW  CONSTANT _V1',
-        '_V1 VFS-USE',
-        'S" nope.txt" VFS-OPEN',
+        'S" nope.txt" _V1 VFS-OPEN',
         '. CR',
     ], "0")
 
@@ -653,9 +651,8 @@ def test_write_read_roundtrip():
     check("WRITE/READ round-trip", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" data.bin" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
         # Write "Hello" (5 bytes)
-        'S" data.bin" VFS-OPEN  CONSTANT _FD',
+        'S" data.bin" _V1 VFS-OPEN  CONSTANT _FD',
         'S" Hello" _FD VFS-WRITE DROP',
         # Rewind and read back
         '_FD VFS-REWIND',
@@ -671,8 +668,8 @@ def test_write_extends_size():
     # Diagnostic: print actual from write, cursor, inode size directly
     check_fn("WRITE extends size", [
         'T-VFS-NEW  CONSTANT _V1',
-        'S" sz.bin" _V1 VFS-MKFILE DROP  _V1 VFS-USE',
-        'S" sz.bin" VFS-OPEN  CONSTANT _FD',
+        'S" sz.bin" _V1 VFS-MKFILE DROP ',
+        'S" sz.bin" _V1 VFS-OPEN  CONSTANT _FD',
         'S" ABCDEFGHIJ" _FD VFS-WRITE',
         '." W=" . ." C=" _FD FD.CUR-LO @ . ." S=" _FD FD.INODE @ IN.SIZE-LO @ . CR',
         '_FD VFS-CLOSE',
@@ -686,8 +683,8 @@ def test_checked_write_preserves_partial_progress():
         'T-BINDING-CLONE CONSTANT _BIND',
         "' T-PARTIAL-WRITE _BIND VB.OPS @ VFS-OP-WRITE CELLS + !",
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
-        'S" p.bin" _V1 VFS-MKFILE DROP _V1 VFS-USE',
-        'S" p.bin" VFS-OPEN CONSTANT _FD',
+        'S" p.bin" _V1 VFS-MKFILE DROP',
+        'S" p.bin" _V1 VFS-OPEN CONSTANT _FD',
         ': T-PWRITE  S" hello" _FD VFS-WRITE? DUP VFS-IOR-REASON 9 = IF ." IOR " THEN  DUP VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND IF ." PARTIAL " THEN  DROP 2 = IF ." ACTUAL " THEN  _FD VFS-TELL 2 = IF ." CURSOR " THEN  _FD VFS-SIZE 2 = IF ." SIZE" THEN ;',
         'T-PWRITE CR',
     ], "IOR PARTIAL ACTUAL CURSOR SIZE")
@@ -699,8 +696,8 @@ def test_checked_read_preserves_partial_progress():
         'T-BINDING-CLONE CONSTANT _BIND',
         "' T-PARTIAL-READ _BIND VB.OPS @ VFS-OP-READ CELLS + !",
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
-        'S" p.bin" _V1 VFS-MKFILE DROP _V1 VFS-USE',
-        'S" p.bin" VFS-OPEN CONSTANT _FD',
+        'S" p.bin" _V1 VFS-MKFILE DROP',
+        'S" p.bin" _V1 VFS-OPEN CONSTANT _FD',
         ': T-PREAD  _RB 5 _FD VFS-READ? DUP VFS-IOR-REASON 9 = IF ." IOR " THEN  DUP VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND IF ." PARTIAL " THEN  DROP 3 = IF ." ACTUAL " THEN  _FD VFS-TELL 3 = IF ." CURSOR" THEN ;',
         'T-PREAD CR',
     ], "IOR PARTIAL ACTUAL CURSOR")
@@ -712,8 +709,8 @@ def test_source_write_wrapper_throws_after_progress():
         'T-BINDING-CLONE CONSTANT _BIND',
         "' T-PARTIAL-WRITE _BIND VB.OPS @ VFS-OP-WRITE CELLS + !",
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
-        'S" p.bin" _V1 VFS-MKFILE DROP _V1 VFS-USE',
-        'S" p.bin" VFS-OPEN CONSTANT _FD',
+        'S" p.bin" _V1 VFS-MKFILE DROP',
+        'S" p.bin" _V1 VFS-OPEN CONSTANT _FD',
         ': T-WRAPPER  S" hello" _FD VFS-WRITE DROP ;',
         ": T-CATCH-WRAPPER  ['] T-WRAPPER CATCH VFS-IOR-REASON 9 = IF .\" THROW \" THEN  _FD VFS-TELL 2 = IF .\" CURSOR\" THEN ;",
         'T-CATCH-WRAPPER CR',
@@ -741,8 +738,7 @@ def test_seek_tell():
     check("SEEK/TELL", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" sk.bin" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
-        'S" sk.bin" VFS-OPEN  CONSTANT _FD',
+        'S" sk.bin" _V1 VFS-OPEN  CONSTANT _FD',
         'S" 0123456789" _FD VFS-WRITE DROP',
         '5 _FD VFS-SEEK',
         '_FD VFS-TELL . CR',
@@ -754,8 +750,7 @@ def test_seek_read():
     check("SEEK then READ", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" sk2.bin" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
-        'S" sk2.bin" VFS-OPEN  CONSTANT _FD',
+        'S" sk2.bin" _V1 VFS-OPEN  CONSTANT _FD',
         'S" ABCDE" _FD VFS-WRITE DROP',
         '2 _FD VFS-SEEK',
         '_RB 3 _FD VFS-READ DROP',
@@ -768,8 +763,7 @@ def test_rewind():
     check("REWIND", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" rw.bin" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
-        'S" rw.bin" VFS-OPEN  CONSTANT _FD',
+        'S" rw.bin" _V1 VFS-OPEN  CONSTANT _FD',
         'S" XY" _FD VFS-WRITE DROP',
         '_FD VFS-REWIND',
         '_FD VFS-TELL . CR',
@@ -786,7 +780,7 @@ def test_invalid_offsets_never_reach_binding():
         "' T-BAD-RW-CB _BIND VB.OPS @ VFS-OP-READ CELLS + !",
         "' T-BAD-RW-CB _BIND VB.OPS @ VFS-OP-WRITE CELLS + !",
         "' T-BAD-TR-CB _BIND VB.OPS @ VFS-OP-TRUNCATE CELLS + !",
-        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1 S" f" _V1 VFS-MKFILE DROP _V1 VFS-USE S" f" VFS-OPEN CONSTANT _FD',
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1 S" f" _V1 VFS-MKFILE DROP S" f" _V1 VFS-OPEN CONSTANT _FD',
         ': T-SEEK-THROW  -1 _FD VFS-SEEK ;',
         ': T-BAD-OFFSETS  -1 _FD VFS-SEEK? VFS-IOR-REASON 15 = IF ." SEEK? " THEN  _FD VFS-TELL 0= IF ." CURSOR0 " THEN  [\'] T-SEEK-THROW CATCH VFS-IOR-REASON 15 = IF ." THROW " THEN  -1 _FD FD.CUR-LO !  _RB 1 _FD VFS-READ? VFS-IOR-REASON 15 = SWAP 0= AND IF ." READ " THEN  S" x" _FD VFS-WRITE? VFS-IOR-REASON 15 = SWAP 0= AND IF ." WRITE " THEN  0x7FFFFFFFFFFFFFFF _FD FD.CUR-LO !  _RB 1 _FD VFS-READ? VFS-IOR-REASON 15 = SWAP 0= AND IF ." READ-CAP " THEN  S" x" _FD VFS-WRITE? VFS-IOR-REASON 15 = SWAP 0= AND IF ." WRITE-CAP " THEN  _FD VFS-TELL 0x7FFFFFFFFFFFFFFF = IF ." CEILING " THEN  0 _FD FD.CUR-LO !  VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR _FD FD.FLAGS !  -1 _FD FD.INODE @ IN.SIZE-LO !  S" x" _FD VFS-WRITE? VFS-IOR-REASON 15 = SWAP 0= AND IF ." APPEND " THEN  _FD VFS-TELL 0= IF ." APPEND-CURSOR " THEN  5 _FD FD.INODE @ IN.SIZE-LO !  -1 _FD VFS-TRUNCATE VFS-IOR-REASON 15 = IF ." TRUNC " THEN  _FD VFS-SIZE 5 = IF ." SIZE " THEN  _BAD-IO-CALLS @ 0= IF ." NO-CALL" THEN ;',
         'T-BAD-OFFSETS CR',
@@ -795,8 +789,8 @@ def test_invalid_offsets_never_reach_binding():
 def test_successful_truncate_preserves_stack():
     """A successful one-ior callback leaves exactly one public result."""
     check("successful truncate preserves stack", [
-        'T-VFS-NEW CONSTANT _V1 S" t.bin" _V1 VFS-MKFILE DROP _V1 VFS-USE',
-        'S" t.bin" VFS-OPEN CONSTANT _FD S" data" _FD VFS-WRITE DROP',
+        'T-VFS-NEW CONSTANT _V1 S" t.bin" _V1 VFS-MKFILE DROP',
+        'S" t.bin" _V1 VFS-OPEN CONSTANT _FD S" data" _FD VFS-WRITE DROP',
         'VARIABLE _TR-DEPTH',
         ': T-TRUNC-STACK  DEPTH _TR-DEPTH !',
         '  2 _FD VFS-TRUNCATE 0= IF ." OK " THEN',
@@ -868,9 +862,9 @@ def test_successful_truncate_preserves_new_binding_diagnostic_only():
         ),
         (
             '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1 S" t.bin" '
-            "_V1 VFS-MKFILE DROP _V1 VFS-USE"
+            "_V1 VFS-MKFILE DROP"
         ),
-        'S" t.bin" VFS-OPEN CONSTANT _FD S" data" _FD VFS-WRITE DROP',
+        'S" t.bin" _V1 VFS-OPEN CONSTANT _FD S" data" _FD VFS-WRITE DROP',
         "-1 _TR-DIAG ! 2 _FD VFS-TRUNCATE CONSTANT _FIRST-IOR",
         (
             '_FIRST-IOR 0= _V1 V.LAST-IOR @ VFS-E-IO = AND '
@@ -1621,10 +1615,10 @@ def test_hard_link_shares_vnode_and_data():
         'T-VFS-NEW CONSTANT _V1',
         'S" original" _V1 VFS-MKFILE CONSTANT _A',
         'S" alias" _A _V1 V.ROOT @ _V1 VFS-LINK ?DUP IF THROW THEN CONSTANT _B',
-        '_V1 VFS-USE S" original" VFS-OPEN CONSTANT _FD',
+        'S" original" _V1 VFS-OPEN CONSTANT _FD',
         'S" shared" _FD VFS-WRITE DROP _FD VFS-CLOSE',
         ': T-LINK-META  _A D.VNODE @ _B D.VNODE @ = IF ." VNODE " THEN  _A D.VNODE @ VN.NLINK @ 2 = IF ." NLINK " THEN  _A IN.SIZE-LO @ _B IN.SIZE-LO @ = IF ." SIZE " THEN ;',
-        'T-LINK-META S" alias" VFS-OPEN CONSTANT _AFD _RB 6 _AFD VFS-READ 6 = IF _RB 6 TYPE THEN CR',
+        'T-LINK-META S" alias" _V1 VFS-OPEN CONSTANT _AFD _RB 6 _AFD VFS-READ 6 = IF _RB 6 TYPE THEN CR',
     ], "VNODE NLINK SIZE shared")
 
 def test_cached_hard_links_share_vnode_identity():
@@ -2097,8 +2091,8 @@ def test_unlink_while_open_keeps_file_alive():
     """An open descriptor retains an unlinked dentry and vnode until close."""
     check("unlink while open keeps file alive", [
         'T-VFS-NEW CONSTANT _V1',
-        'S" live" _V1 VFS-MKFILE DROP _V1 VFS-USE',
-        'S" live" VFS-OPEN CONSTANT _FD S" bytes" _FD VFS-WRITE DROP _FD VFS-REWIND',
+        'S" live" _V1 VFS-MKFILE DROP',
+        'S" live" _V1 VFS-OPEN CONSTANT _FD S" bytes" _FD VFS-WRITE DROP _FD VFS-REWIND',
         'S" live" _V1 VFS-RM DROP',
         ': T-OPEN-UNLINK  S" live" _V1 VFS-RESOLVE 0= IF ." GONE " THEN  _V1 V.VCOUNT @ 2 = IF ." RETAINED " THEN  _RB 5 _FD VFS-READ 5 = IF _RB 5 TYPE SPACE THEN  _FD VFS-CLOSE  _V1 V.VCOUNT @ 1 = IF ." REAPED" THEN ;',
         'T-OPEN-UNLINK CR',
@@ -2118,12 +2112,12 @@ def test_cross_directory_rename_is_atomic_in_cache():
 def test_rename_replacement_keeps_open_victim_alive():
     """Replacement switches the namespace while an old destination FD survives."""
     check("rename replacement keeps open victim", [
-        'T-VFS-NEW CONSTANT _V1 _V1 VFS-USE',
+        'T-VFS-NEW CONSTANT _V1',
         'S" src" _V1 VFS-MKFILE CONSTANT _SRC S" dst" _V1 VFS-MKFILE CONSTANT _OLD',
-        'S" src" VFS-OPEN CONSTANT _SFD S" new" _SFD VFS-WRITE DROP _SFD VFS-CLOSE',
-        'S" dst" VFS-OPEN CONSTANT _OFD S" old" _OFD VFS-WRITE DROP _OFD VFS-REWIND',
+        'S" src" _V1 VFS-OPEN CONSTANT _SFD S" new" _SFD VFS-WRITE DROP _SFD VFS-CLOSE',
+        'S" dst" _V1 VFS-OPEN CONSTANT _OFD S" old" _OFD VFS-WRITE DROP _OFD VFS-REWIND',
         'S" dst" _SRC _V1 V.ROOT @ 0 _V1 VFS-RENAME-AT ?DUP IF THROW THEN',
-        'S" dst" VFS-OPEN CONSTANT _NFD',
+        'S" dst" _V1 VFS-OPEN CONSTANT _NFD',
         ': T-REPLACE  S" src" _V1 VFS-RESOLVE 0= IF ." SRC-GONE " THEN  S" dst" _V1 VFS-RESOLVE _SRC = IF ." DST-SRC " THEN  _RB 3 _OFD VFS-READ DROP _RB 3 TYPE SPACE  _RB 3 _NFD VFS-READ DROP _RB 3 TYPE SPACE  _V1 V.VCOUNT @ 3 = IF ." RETAINED " THEN  _OFD VFS-CLOSE _V1 V.VCOUNT @ 2 = IF ." REAPED" THEN ;',
         'T-REPLACE CR',
     ], "SRC-GONE DST-SRC old new RETAINED REAPED")
@@ -2151,8 +2145,7 @@ def test_sync_after_write():
     check("VFS-SYNC after write", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" w.bin" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
-        'S" w.bin" VFS-OPEN  CONSTANT _FD',
+        'S" w.bin" _V1 VFS-OPEN  CONSTANT _FD',
         'S" data" _FD VFS-WRITE DROP',
         '_FD VFS-CLOSE',
         '_V1 VFS-SYNC . CR',
@@ -2165,10 +2158,10 @@ def test_syncfs_is_binding_owned_once():
         ': T-SYNCFS  DROP 1 _SYNC-CALLS +! 0 ;',
         'T-BINDING-CLONE CONSTANT _BIND',
         "' T-SYNCFS _BIND VB.OPS @ VFS-OP-SYNCFS CELLS + !",
-        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1 _V1 VFS-USE',
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         'S" a" _V1 VFS-MKFILE CONSTANT _A S" b" _V1 VFS-MKFILE CONSTANT _B',
-        'S" a" VFS-OPEN CONSTANT _AFD S" x" _AFD VFS-WRITE DROP _AFD VFS-CLOSE',
-        'S" b" VFS-OPEN CONSTANT _BFD S" y" _BFD VFS-WRITE DROP _BFD VFS-CLOSE',
+        'S" a" _V1 VFS-OPEN CONSTANT _AFD S" x" _AFD VFS-WRITE DROP _AFD VFS-CLOSE',
+        'S" b" _V1 VFS-OPEN CONSTANT _BFD S" y" _BFD VFS-WRITE DROP _BFD VFS-CLOSE',
         ': T-SYNC-ONCE  _V1 VFS-SYNC 0= IF ." OK " THEN  _SYNC-CALLS @ 1 = IF ." ONCE " THEN  _A IN.FLAGS @ VFS-IF-DIRTY AND 0= _B IN.FLAGS @ VFS-IF-DIRTY AND 0= AND IF ." CLEAN" THEN ;',
         'T-SYNC-ONCE CR',
     ], "OK ONCE CLEAN")
@@ -2188,7 +2181,7 @@ def test_unmount_is_binding_owned_once():
 def test_unmount_rejects_open_descriptors():
     """Ordinary unmount is busy while FDs are open and succeeds after close."""
     check("unmount rejects open descriptors", [
-        'T-VFS-NEW CONSTANT _V1 S" f" _V1 VFS-MKFILE DROP _V1 VFS-USE S" f" VFS-OPEN CONSTANT _FD',
+        'T-VFS-NEW CONSTANT _V1 S" f" _V1 VFS-MKFILE DROP S" f" _V1 VFS-OPEN CONSTANT _FD',
         ': T-UNMOUNT-BUSY  0 _V1 VFS-UNMOUNT VFS-IOR-REASON 14 = IF ." BUSY " THEN  _V1 V.LIFECYCLE @ VFS-L-MOUNTED = IF ." MOUNTED " THEN  _FD VFS-CLOSE  0 _V1 VFS-UNMOUNT 0= IF ." DONE" THEN ;',
         'T-UNMOUNT-BUSY CR',
     ], "BUSY MOUNTED DONE")
@@ -2249,8 +2242,7 @@ def test_read_only_rejects_data_mutations():
     check("read-only preserves file data", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" keep.bin" _V1 VFS-MKFILE DROP',
-        '_V1 VFS-USE',
-        'S" keep.bin" VFS-OPEN CONSTANT _FD',
+        'S" keep.bin" _V1 VFS-OPEN CONSTANT _FD',
         'S" stable" _FD VFS-WRITE DROP',
         '_FD VFS-REWIND',
         'VFS-F-RO _V1 V.FLAGS DUP @ ROT OR SWAP !',
@@ -2264,8 +2256,7 @@ def test_read_only_allows_sync():
     check("read-only allows sync", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" dirty.bin" _V1 VFS-MKFILE CONSTANT _IN',
-        '_V1 VFS-USE',
-        'S" dirty.bin" VFS-OPEN CONSTANT _FD',
+        'S" dirty.bin" _V1 VFS-OPEN CONSTANT _FD',
         'S" data" _FD VFS-WRITE DROP _FD VFS-CLOSE',
         'VFS-F-RO _V1 V.FLAGS DUP @ ROT OR SWAP !',
         ': T-RO-SYNC  _V1 VFS-SYNC 0= IF ." SYNC " THEN  _IN IN.FLAGS @ VFS-IF-DIRTY AND 0= IF ." CLEAN " THEN  S" dirty.bin" _V1 VFS-RESOLVE _IN = IF ." TREE" THEN ;',
@@ -2275,12 +2266,12 @@ def test_read_only_allows_sync():
 def test_read_only_legacy_open_is_readable():
     """Legacy VFS-OPEN requests read-only access on a read-only VFS."""
     check_fn("read-only legacy open remains readable", [
-        'T-VFS-NEW CONSTANT _V1 _V1 VFS-USE',
-        'S" readable" _V1 VFS-MKFILE DROP S" readable" VFS-OPEN CONSTANT _WFD',
+        'T-VFS-NEW CONSTANT _V1',
+        'S" readable" _V1 VFS-MKFILE DROP S" readable" _V1 VFS-OPEN CONSTANT _WFD',
         'S" ok" _WFD VFS-WRITE DROP _WFD VFS-CLOSE',
         'VFS-F-RO _V1 V.FLAGS DUP @ ROT OR SWAP !',
         'S" readable" VFS-FF-WRITE _V1 VFS-OPEN? VFS-IOR-REASON 7 = SWAP 0= AND IF ." WRITE-BLOCKED " THEN',
-        'S" readable" VFS-OPEN CONSTANT _RFD',
+        'S" readable" _V1 VFS-OPEN CONSTANT _RFD',
         ': T-RO-LEGACY  _RFD 0<> IF ." OPEN " THEN  _RFD FD.FLAGS @ VFS-FF-READ = IF ." READ-ONLY " THEN  _RB 2 _RFD VFS-READ 2 = _RB C@ [CHAR] o = AND _RB 1+ C@ [CHAR] k = AND IF ." DATA" THEN ;',
         'T-RO-LEGACY CR',
     ], lambda out: all(marker in out for marker in
@@ -2345,8 +2336,7 @@ def test_large_write_read():
     check("256-byte write/read", [
         'T-VFS-NEW  CONSTANT _V1',
         '  S" big.bin" _V1 VFS-MKFILE DROP',
-        '  _V1 VFS-USE',
-        '  S" big.bin" VFS-OPEN  CONSTANT _FD',
+        '  S" big.bin" _V1 VFS-OPEN  CONSTANT _FD',
         # Fill _TB with 256 bytes (all 0x41 = 'A')
         '  256 0 DO  65 _TB I + C!  LOOP',
         '  _TB 256 _FD VFS-WRITE DROP',

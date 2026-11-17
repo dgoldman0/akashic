@@ -137,14 +137,13 @@ _snapshot: tuple[bytes, bytes, list[dict], bytes] | None = None
 
 
 HELPERS = [
-    "VARIABLE _TV VARIABLE _TO",
+    "VARIABLE _TV",
     "CREATE _TOUT 256 ALLOT VARIABLE _TOUT-FD VARIABLE _TOUT-LEN",
     "VARIABLE _TP-DA VARIABLE _TP-DU VARIABLE _TP-PA VARIABLE _TP-PU",
     "VARIABLE _TF-WRITE-MODE VARIABLE _TF-WRITES",
     "VARIABLE _TF-DELETE-FAIL VARIABLE _TF-SYNC-FAIL-ONCE",
     "VARIABLE _TF-SYNC-AFTER VARIABLE _TF-CLOSE-CALLS",
-    "VARIABLE _TF-CLOSE-THROW-AT VARIABLE _TF-USE-CALLS",
-    "VARIABLE _TF-USE-THROW-AT",
+    "VARIABLE _TF-CLOSE-THROW-AT",
     "VARIABLE _TF-GUARDED VARIABLE _TFW-B VARIABLE _TFW-L ",
     "VARIABLE _TFW-O VARIABLE _TFW-I VARIABLE _TFW-V",
     ": T-WRITE _TFW-V ! _TFW-I ! _TFW-O ! _TFW-L ! _TFW-B !",
@@ -165,8 +164,6 @@ HELPERS = [
     "DROP -225 THROW ELSE _VFS-RAM-SYNCFS THEN THEN ;",
     ": T-CLOSE-AFTER VFS-CLOSE 1 _TF-CLOSE-CALLS +! "
     "_TF-CLOSE-CALLS @ _TF-CLOSE-THROW-AT @ = IF -226 THROW THEN ;",
-    ": T-USE-AFTER VFS-USE 1 _TF-USE-CALLS +! "
-    "_TF-USE-CALLS @ _TF-USE-THROW-AT @ = IF -227 THROW THEN ;",
     ": T-RM-AFTER VFS-RM DUP IF EXIT THEN DROP -228 THROW ;",
     ": T-SYNC-AFTER VFS-SYNC DUP IF EXIT THEN DROP -229 THROW ;",
     "CREATE T-OPS VFS-OPS-SIZE ALLOT",
@@ -181,14 +178,14 @@ HELPERS = [
     "T-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;",
     ": T-PUT _TP-PU ! _TP-PA ! _TP-DU ! _TP-DA !",
     "_TP-PA @ _TP-PU @ _TV @ VFS-CREATE DUP 0= IF -101 THROW THEN DROP",
-    "_TV @ VFS-USE _TP-PA @ _TP-PU @ VFS-OPEN",
+    "_TP-PA @ _TP-PU @ _TV @ VFS-OPEN",
     "DUP 0= IF -102 THROW THEN DUP _TOUT-FD !",
     "_TP-DA @ _TP-DU @ ROT VFS-WRITE-EXACT IF -103 THROW THEN",
     "_TOUT-FD @ VFS-CLOSE _TV @ VFS-SYNC IF -104 THROW THEN ;",
     ": T-FD-FREE-COUNT 0 SWAP V.FDFREE @ BEGIN DUP WHILE "
     "SWAP 1+ SWAP FD.FREE @ REPEAT DROP ;",
     ": T-PRESENT? _TV @ VFS-RESOLVE 0<> ;",
-    ": T-SHOW _TV @ VFS-USE VFS-OPEN",
+    ": T-SHOW _TV @ VFS-OPEN",
     "DUP 0= IF DROP .\" <absent> \" EXIT THEN",
     "DUP _TOUT-FD ! DUP VFS-SIZE DUP _TOUT-LEN !",
     "_TOUT SWAP ROT VFS-READ-EXACT IF .\" <read-error> \" ELSE",
@@ -199,14 +196,13 @@ HELPERS = [
     ": T-SETUP 0 _TF-WRITE-MODE ! 0 _TF-WRITES !",
     "0 _TF-DELETE-FAIL ! 0 _TF-SYNC-FAIL-ONCE ! 0 _TF-SYNC-AFTER !",
     "0 _TF-CLOSE-CALLS ! 0 _TF-CLOSE-THROW-AT !",
-    "0 _TF-USE-CALLS ! 0 _TF-USE-THROW-AT !",
-    "['] VFS-CLOSE _FCP-CLOSE-XT ! ['] VFS-USE _FCP-USE-XT !",
+    "['] VFS-CLOSE _FCP-CLOSE-XT !",
     "['] VFS-RM _FCP-RM-XT ! ['] VFS-SYNC _FCP-SYNC-XT !",
     "T-VFS-NEW _TV ! _TV @ _FCP-VFS !",
-    "_TV @ VFS-USE S\" dest\" _TV @ VFS-MKDIR THROW",
+    "S\" dest\" _TV @ VFS-MKDIR THROW",
     "S\" payload-across-io\" S\" /src.txt\" T-PUT",
     "T-CLIP-SRC T-SELECT-DEST _FEXP-CLIP-COPY _FEXP-CLIP-OP !",
-    "T-VFS-NEW _TO ! _TO @ VFS-USE 0 _TF-GUARDED ! ;",
+    "0 _TF-GUARDED ! ;",
 ]
 
 
@@ -386,11 +382,11 @@ def test_copy_is_exact_guarded_context_safe_and_descriptor_clean():
             "_TV @ V.CWD @ CONSTANT _CWD",
             "2 _TF-WRITE-MODE ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TF-GUARDED @ .",
+            "_TF-GUARDED @ .",
             "_TV @ T-FD-FREE-COUNT _BEFORE = . _TV @ V.CWD @ _CWD = .",
             'S" /dest/src.txt" T-SHOW',
         ],
-        "0 -1 -1 -1 -1 -1 -1 payload-across-io ",
+        "0 -1 -1 -1 -1 -1 payload-across-io ",
     )
 
 
@@ -401,9 +397,9 @@ def test_zero_progress_write_rolls_back_the_new_destination():
             "T-SETUP _TV @ T-FD-FREE-COUNT CONSTANT _BEFORE",
             "1 _TF-WRITE-MODE ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TV @ T-FD-FREE-COUNT _BEFORE = .",
+            "_TV @ T-FD-FREE-COUNT _BEFORE = .",
         ],
-        "6 -1 0 -1 -1 ",
+        "6 -1 0 -1 ",
     )
 
 
@@ -413,9 +409,8 @@ def test_target_sync_failure_rolls_back_before_verification():
         [
             "T-SETUP TRUE _TF-SYNC-FAIL-ONCE ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = .",
         ],
-        "6 -1 0 -1 ",
+        "6 -1 0 ",
     )
 
 
@@ -425,9 +420,8 @@ def test_destination_corruption_is_detected_and_rolled_back():
         [
             "T-SETUP 3 _TF-WRITE-MODE ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = .",
         ],
-        "7 -1 0 -1 ",
+        "7 -1 0 ",
     )
 
 
@@ -438,9 +432,9 @@ def test_unexpected_write_throw_preserves_its_io_phase_and_unwinds():
             "T-SETUP _TV @ T-FD-FREE-COUNT CONSTANT _BEFORE",
             "4 _TF-WRITE-MODE ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TV @ T-FD-FREE-COUNT _BEFORE = .",
+            "_TV @ T-FD-FREE-COUNT _BEFORE = .",
         ],
-        "6 -1 0 -1 -1 ",
+        "6 -1 0 -1 ",
     )
 
 
@@ -452,11 +446,11 @@ def test_after_effect_close_attempts_both_descriptors_without_double_close():
             "1 _TF-CLOSE-THROW-AT ! ' T-CLOSE-AFTER _FCP-CLOSE-XT !",
             "_FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TV @ T-FD-FREE-COUNT _BEFORE = .",
+            "_TV @ T-FD-FREE-COUNT _BEFORE = .",
             "_TF-CLOSE-CALLS @ . _FCP-FDS @ 0= . _FCP-FDD @ 0= .",
             "_FCP-RESIDUE @ 0= . _FCP-THROW @ -226 = .",
         ],
-        "6 -1 0 -1 -1 2 -1 -1 -1 -1 ",
+        "6 -1 0 -1 2 -1 -1 -1 -1 ",
     )
 
 
@@ -467,10 +461,10 @@ def test_after_effect_rollback_delete_remains_explicitly_uncertain():
             "T-SETUP _TV @ T-FD-FREE-COUNT CONSTANT _BEFORE",
             "1 _TF-WRITE-MODE ! ' T-RM-AFTER _FCP-RM-XT ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TV @ T-FD-FREE-COUNT _BEFORE = .",
+            "_TV @ T-FD-FREE-COUNT _BEFORE = .",
             "_FCP-RESIDUE @ . _FCP-CLEANUP-THROW @ -228 = .",
         ],
-        "10 -1 0 -1 -1 -1 -1 ",
+        "10 -1 0 -1 -1 -1 ",
     )
 
 
@@ -481,26 +475,10 @@ def test_after_effect_rollback_sync_remains_explicitly_uncertain():
             "T-SETUP _TV @ T-FD-FREE-COUNT CONSTANT _BEFORE",
             "1 _TF-WRITE-MODE ! ' T-SYNC-AFTER _FCP-SYNC-XT ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TV @ T-FD-FREE-COUNT _BEFORE = .",
+            "_TV @ T-FD-FREE-COUNT _BEFORE = .",
             "_FCP-RESIDUE @ . _FCP-CLEANUP-THROW @ -229 = .",
         ],
-        "10 -1 0 -1 -1 -1 -1 ",
-    )
-
-
-def test_after_effect_selector_restore_preserves_publication_facts():
-    check(
-        "after-effect selector restore preserves publication facts",
-        [
-            "T-SETUP _TV @ T-FD-FREE-COUNT CONSTANT _BEFORE "
-            "2 _TF-USE-THROW-AT ! ' T-USE-AFTER _FCP-USE-XT !",
-            "_FCP-RUN .",
-            'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _TV @ T-FD-FREE-COUNT _BEFORE = .",
-            "_TF-USE-CALLS @ . _FCP-COMMITTED @ . _FCP-RESIDUE @ 0= .",
-            "_FCP-CLEANUP-THROW @ -227 = .",
-        ],
-        "11 -1 -1 -1 -1 2 -1 -1 -1 ",
+        "10 -1 0 -1 -1 -1 ",
     )
 
 
@@ -511,10 +489,10 @@ def test_after_effect_cut_delete_reports_durable_state_uncertainty():
             "T-SETUP _FEXP-CLIP-CUT _FEXP-CLIP-OP ! "
             "' T-RM-AFTER _FCP-RM-XT ! _FCP-RUN .",
             'S" /src.txt" T-PRESENT? . S" /dest/src.txt" T-PRESENT? .',
-            "VFS-CUR _TO @ = . _FCP-COMMITTED @ . _FCP-RESIDUE @ 0= .",
+            "_FCP-COMMITTED @ . _FCP-RESIDUE @ 0= .",
             "_FCP-THROW @ -228 = .",
         ],
-        "9 0 -1 -1 -1 -1 -1 ",
+        "9 0 -1 -1 -1 -1 ",
     )
 
 
@@ -550,7 +528,7 @@ def test_same_path_collision_and_directory_sources_are_rejected_pre_mutation():
             "T-SETUP S\" /src.txt\" _TV @ VFS-RESOLVE _FEXP-SEL-IN ! "
             "_FCP-RUN .",
             ": _RUN-LINE T-SELECT-DEST S\" existing\" S\" /dest/src.txt\" T-PUT "
-            "_TO @ VFS-USE _FCP-RUN . ; _RUN-LINE",
+            "_FCP-RUN . ; _RUN-LINE",
             "S\" /dest\" DUP _FEXP-CLIP-PATH-LEN ! "
             "_FEXP-CLIP-PATH SWAP CMOVE _FCP-RUN .",
         ],
@@ -568,7 +546,7 @@ def test_files_larger_than_one_explorer_buffer_half_copy_without_clipping():
             'S" /big.bin" DUP _FEXP-CLIP-PATH-LEN ! '
             "_FEXP-CLIP-PATH SWAP CMOVE",
             "T-SELECT-DEST",
-            "_TO @ VFS-USE _FCP-RUN .",
+            "_FCP-RUN .",
             'S" /dest/big.bin" _TV @ VFS-RESOLVE DUP 0<> .',
             "DUP IF IN.SIZE-LO @ 20000 = ELSE DROP FALSE THEN .",
         ],

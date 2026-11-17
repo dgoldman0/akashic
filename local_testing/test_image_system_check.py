@@ -49,10 +49,10 @@ FIXTURE = (
     "    _t-cat @ ABUILD-CATALOG! ;",
     ": _t-put  ( data-a data-u path-a path-u -- )",
     "    2DUP _t-vfs @ VFS-CREATE 0= IF -2 THROW THEN",
-    "    VFS-OPEN DUP 0= IF -3 THROW THEN _t-fd !",
+    "    _t-vfs @ VFS-OPEN DUP 0= IF -3 THROW THEN _t-fd !",
     "    _t-fd @ VFS-WRITE-EXACT IF -4 THROW THEN _t-fd @ VFS-CLOSE ;",
     ": _t-get  ( path-a path-u dst -- len )",
-    "    >R VFS-OPEN DUP 0= IF -5 THROW THEN _t-fd !",
+    "    >R _t-vfs @ VFS-OPEN DUP 0= IF -5 THROW THEN _t-fd !",
     "    R> _t-fd @ VFS-SIZE DUP >R _t-fd @ VFS-READ-EXACT IF -6 THROW THEN",
     "    _t-fd @ VFS-CLOSE R> ;",
     # Desk's own resolver: the catalog entry's manifest, through the loader.

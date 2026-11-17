@@ -33,7 +33,6 @@ UTF8_F    = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
 UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
 MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
-VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 VFS_FAT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-fat.f")
 
 sys.path.insert(0, MEGAPAD_ROOT)
@@ -497,7 +496,7 @@ _boot_img_path = None     # MP64FS boot image (for snapshot build)
 # either of MegaPad's backends start from the same.
 SNAPSHOT_MODULES = (
     EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
-    VFS_F, VFS_MNT_F, VFS_FAT_F,
+    VFS_F, VFS_FAT_F,
 )
 TEST_WORDS = (
     'CREATE _RB 4096 ALLOT',

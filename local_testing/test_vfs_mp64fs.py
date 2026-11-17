@@ -28,7 +28,6 @@ UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
 BITSET_F = os.path.join(ROOT_DIR, "akashic", "utils", "bitset.f")
 MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
-VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 VFS_MP_F  = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-mp64fs.f")
 
 sys.path.insert(0, MEGAPAD_ROOT)
@@ -364,7 +363,7 @@ def build_snapshot():
     dep_lines = []
     for path in [
         EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, BITSET_F, MEMORY_SPAN_F,
-        VFS_F, VFS_MNT_F, VFS_MP_F,
+        VFS_F, VFS_MP_F,
     ]:
         dep_lines += _load_forth_lines(path)
 
@@ -497,7 +496,7 @@ def run_fresh_forth(image_path, lines, max_steps=800_000_000):
     load_lines = _load_forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
     for path in [
         EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, BITSET_F, MEMORY_SPAN_F,
-        VFS_F, VFS_MNT_F, VFS_MP_F,
+        VFS_F, VFS_MP_F,
     ]:
         load_lines += _load_forth_lines(path)
     load_lines += [
@@ -552,16 +551,14 @@ def _cold_worker(phase, image_path):
     if phase == "write":
         lines = [
             'T-VMP-NEW CONSTANT _V',
-            '_V VFS-USE',
-            'S" /hello.txt" VFS-OPEN CONSTANT _FD',
+            'S" /hello.txt" _V VFS-OPEN CONSTANT _FD',
             'S" COLD-PERSISTED" _FD VFS-WRITE . ." <wrote "',
             '_V VFS-SYNC . ." <sync WRITE-DONE"',
         ]
     elif phase == "read":
         lines = [
             'T-VMP-NEW CONSTANT _V',
-            '_V VFS-USE',
-            'S" /hello.txt" VFS-OPEN CONSTANT _FD',
+            'S" /hello.txt" _V VFS-OPEN CONSTANT _FD',
             '_RB 14 _FD VFS-READ . ." <read "',
             '_RB 14 TYPE ."  READ-DONE"',
         ]

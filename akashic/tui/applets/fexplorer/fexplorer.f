@@ -619,7 +619,7 @@ VARIABLE _FCP-WANT      VARIABLE _FCP-BASE
 VARIABLE _FCP-RESULT    VARIABLE _FCP-CREATED
 VARIABLE _FCP-COMMITTED VARIABLE _FCP-RESIDUE
 VARIABLE _FCP-TARGET-MAYBE
-VARIABLE _FCP-OLD-VFS   VARIABLE _FCP-OLD-CWD
+VARIABLE _FCP-OLD-CWD
 VARIABLE _FCP-THROW
 VARIABLE _FCP-CLEANUP-THROW
 VARIABLE _FCP-CLOSE-THROW
@@ -631,19 +631,14 @@ VARIABLE _FCP-CLIP-SET-IN  VARIABLE _FCP-CLIP-SET-OP
 \ Deterministic seams for cleanup after-effect tests.  Product bindings stay
 \ on the KDOS primitives; callers do not use these internal vectors.
 VARIABLE _FCP-CLOSE-XT
-VARIABLE _FCP-USE-XT
 VARIABLE _FCP-RM-XT
 VARIABLE _FCP-SYNC-XT
 ' VFS-CLOSE _FCP-CLOSE-XT !
-' VFS-USE   _FCP-USE-XT !
 ' VFS-RM    _FCP-RM-XT !
 ' VFS-SYNC  _FCP-SYNC-XT !
 
 : _FCP-CLOSE  ( fd -- )
     _FCP-CLOSE-XT @ EXECUTE ;
-
-: _FCP-USE  ( vfs -- )
-    _FCP-USE-XT @ EXECUTE ;
 
 : _FCP-RM  ( path-a path-u vfs -- ior )
     _FCP-RM-XT @ EXECUTE ;
@@ -789,9 +784,9 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
     TRUE ;
 
 : _FCP-OPEN-PAIR  ( -- flag )
-    _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ VFS-OPEN
+    _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ _FCP-VFS @ VFS-OPEN
     DUP 0= IF DROP FALSE EXIT THEN _FCP-FDS !
-    _FEXP-PATH-BUF _FCP-TARGET-LEN @ VFS-OPEN
+    _FEXP-PATH-BUF _FCP-TARGET-LEN @ _FCP-VFS @ VFS-OPEN
     DUP 0= IF DROP FALSE EXIT THEN _FCP-FDD !
     TRUE ;
 
@@ -885,40 +880,23 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 : _FCP-RESTORE-CWD  ( -- )
     _FCP-OLD-CWD @ _FCP-VFS @ V.CWD ! ;
 
-: _FCP-RESTORE-VFS  ( -- )
-    _FCP-OLD-VFS @ _FCP-USE ;
-
-: _FCP-RESTORE-VFS-RAW  ( -- )
-    _FCP-OLD-VFS @ VFS-USE ;
-
 : _FCP-CLEANUP  ( -- )
-    \ Cleanup stages are independent: no close, rollback, or selector fault
-    \ may suppress a later release/restoration attempt.  Preserve the first
+    \ Cleanup stages are independent: no close or rollback fault may
+    \ suppress a later release/restoration attempt.  Preserve the first
     \ cleanup THROW for deterministic diagnostics.
     0 _FCP-CLEANUP-THROW !
     ['] _FCP-CLOSE-SRC CATCH _FCP-RECORD-CLEANUP-THROW
     ['] _FCP-CLOSE-DST CATCH _FCP-RECORD-CLEANUP-THROW
     ['] _FCP-ROLLBACK CATCH _FCP-RECORD-CLEANUP-THROW
-    ['] _FCP-RESTORE-CWD CATCH _FCP-RECORD-CLEANUP-THROW
-    ['] _FCP-RESTORE-VFS CATCH _FCP-RECORD-CLEANUP-THROW
-    VFS-CUR _FCP-OLD-VFS @ <> IF
-        ['] _FCP-RESTORE-VFS-RAW CATCH _FCP-RECORD-CLEANUP-THROW
-    THEN ;
-
-: _FCP-TRANSACTION-BODY  ( -- )
-    \ Selecting the Explorer VFS is itself part of the caught operation.  An
-    \ after-effect selector fault must still reach the restoration pipeline.
-    _FCP-VFS @ _FCP-USE
-    _FCP-COPY-CORE ;
+    ['] _FCP-RESTORE-CWD CATCH _FCP-RECORD-CLEANUP-THROW ;
 
 : _FCP-TRANSACTION  ( -- status )
     0 _FCP-FDS ! 0 _FCP-FDD !
     0 _FCP-CREATED ! 0 _FCP-COMMITTED ! 0 _FCP-RESIDUE !
     0 _FCP-TARGET-MAYBE !
     _FCP-S-INTERNAL _FCP-RESULT !
-    VFS-CUR _FCP-OLD-VFS !
     _FCP-VFS @ V.CWD @ _FCP-OLD-CWD !
-    ['] _FCP-TRANSACTION-BODY CATCH _FCP-THROW !
+    ['] _FCP-COPY-CORE CATCH _FCP-THROW !
     _FCP-CLEANUP
     \ Rollback uncertainty has highest precedence.  Otherwise preserve the
     \ phase-specific primary status; only a cleanup-only fault following an

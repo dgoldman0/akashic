@@ -77,7 +77,7 @@ VARIABLE _sd-direct-u0
 
 : _sd-direct-file=  ( expected-a expected-u -- flag )
     _sd-direct-u0 ! _sd-direct-a0 !
-    S" /daybook.md" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
+    S" /daybook.md" _sd-vfs @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
     _sd-direct-fd !
     _sd-direct-fd @ VFS-SIZE _sd-direct-u0 @ <> IF
         _sd-direct-fd @ VFS-CLOSE 0 EXIT

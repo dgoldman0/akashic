@@ -236,7 +236,7 @@ CREATE _lc-practice-out PHEAD-SIZE ALLOT
 CREATE _lc-practice-store PHEADVFS-SIZE ALLOT
 : _lc-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _lc-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 : _lc-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _lc-practice-slot?
     S" /practice-head-b.bin" _lc-practice-slot? OR ;

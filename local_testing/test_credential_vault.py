@@ -377,7 +377,7 @@ def _assert_geometry(
     private_set_size = mspan_header_size + private_max * mspan_entry_size
     vfs_spec_crec_offset = 56 + private_set_size
     vfs_spec_size = vfs_spec_crec_offset + crec_spec_size
-    vfs_store_crec_offset = vrepl_size + 10 * 8
+    vfs_store_crec_offset = vrepl_size + 9 * 8
     vfs_context_size = 56
     vfs_store_size = (
         vfs_store_crec_offset + crec_work_size + vfs_context_size
@@ -385,8 +385,8 @@ def _assert_geometry(
     assert private_set_size == 272
     assert vfs_spec_crec_offset == 328
     assert vfs_spec_size == 440
-    assert vfs_store_crec_offset == 1232
-    assert vfs_store_size == 1424
+    assert vfs_store_crec_offset == 1224
+    assert vfs_store_size == 1416
 
     spec_layout = _flat(snapshot)
     assert (
@@ -398,7 +398,7 @@ def _assert_geometry(
         "CONSTANT VFSNAP-SPEC-SIZE"
     ) in spec_layout
     assert (
-        "_VFSND-RESTORE-XT 8 + CONSTANT _VFSND-CREC-WORK"
+        "_VFSND-CLOSE-XT 8 + CONSTANT _VFSND-CREC-WORK"
     ) in spec_layout
     assert (
         "_VFSND-CREC-WORK CREC-WORK-SIZE + "

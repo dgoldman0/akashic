@@ -239,9 +239,8 @@ write-free and byte-stable.
 my-arena VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN CONSTANT my-vfs
 
 S" readme.txt" my-vfs VFS-MKFILE DROP
-my-vfs VFS-USE
 
-S" readme.txt" VFS-OPEN CONSTANT fd
+S" readme.txt" my-vfs VFS-OPEN CONSTANT fd
 S" Hello" fd VFS-WRITE DROP
 fd VFS-REWIND
 
@@ -515,7 +514,7 @@ binding error is returned unchanged after any legal progress.
 
 ```forth
 VFS-RESOLVE      ( path-a path-u vfs -- inode|0 )
-VFS-OPEN         ( path-a path-u -- fd|0 )
+VFS-OPEN         ( path-a path-u vfs -- fd|0 )
 VFS-CLOSE        ( fd -- )
 VFS-READ         ( buf len fd -- actual )
 VFS-WRITE        ( buf len fd -- actual )
@@ -525,7 +524,7 @@ VFS-CD           ( path-a path-u vfs -- 0|-1 )
 
 These retain older stack shapes. `VFS-RESOLVE` uses the same terminal-follow
 policy as `VFS-RESOLVE?`. The I/O/seek/close forms throw a structured ior.
-`VFS-OPEN` requests read access only when the current VFS is read-only, and
+`VFS-OPEN` requests read access only when its VFS is read-only, and
 read/write access otherwise. New code should use the checked forms when it
 must inspect the error class.
 

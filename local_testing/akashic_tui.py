@@ -806,7 +806,7 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
@@ -894,7 +894,7 @@ VARIABLE _boot-streams-u
 VARIABLE _boot-streams-status
 : _boot-streams-load-fixture  ( instance -- status )
     _boot-streams-inst !
-    S" {path}" VFS-OPEN DUP _boot-streams-fd !
+    S" {path}" VFS-CUR VFS-OPEN DUP _boot-streams-fd !
     0= IF BFM-S-MISSING EXIT THEN
     _boot-streams-fd @ VFS-SIZE DUP _boot-streams-u !
     DUP 0< IF
@@ -1408,7 +1408,6 @@ VARIABLE _ts-fault-generation
 VARIABLE _ts-fault-slot
 VARIABLE _ts-fault-fd-head
 VARIABLE _ts-fault-fd-next
-VARIABLE _ts-fault-use-count
 VARIABLE _ts-fault-read-count
 VARIABLE _ts-fault-decode-count
 VARIABLE _ts-fault-heap
@@ -1444,8 +1443,7 @@ CREATE _ts-bad 8 ALLOT
     DUP ACSTORE-S-OK = _ts-assert DROP ;
 
 : _ts-corrupt  ( path-a path-u -- )
-    _ts-vfs @ VFS-USE
-    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-vfs @ VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
     _ts-bad 8 88 FILL
     _ts-fd @ VFS-REWIND
     _ts-bad 8 _ts-fd @ VFS-WRITE 8 = _ts-assert
@@ -1453,8 +1451,7 @@ CREATE _ts-bad 8 ALLOT
     _ts-vfs @ VFS-SYNC 0= _ts-assert ;
 
 : _ts-generation!  ( generation path-a path-u -- )
-    _ts-vfs @ VFS-USE
-    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-vfs @ VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
     _ts-bad !
     16 _ts-fd @ VFS-SEEK? 0= _ts-assert
     _ts-bad 8 _ts-fd @ VFS-WRITE-EXACT 0= _ts-assert
@@ -1462,8 +1459,7 @@ CREATE _ts-bad 8 ALLOT
     _ts-vfs @ VFS-SYNC 0= _ts-assert ;
 
 : _ts-read-copy  ( path-a path-u -- bytes-a bytes-u )
-    _ts-vfs @ VFS-USE
-    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-vfs @ VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
     _ts-fd @ VFS-SIZE DUP ALLOCATE
     DUP 0= _ts-assert ?DUP IF THROW THEN
     SWAP
@@ -1471,8 +1467,7 @@ CREATE _ts-bad 8 ALLOT
     _ts-fd @ VFS-CLOSE ;
 
 : _ts-write-copy  ( bytes-a bytes-u path-a path-u -- )
-    _ts-vfs @ VFS-USE
-    VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _ts-vfs @ VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
     _ts-fd @ VFS-REWIND
     0 _ts-fd @ VFS-TRUNCATE 0= _ts-assert
     _ts-fd @ VFS-WRITE-EXACT 0= _ts-assert
@@ -1545,7 +1540,6 @@ CREATE _ts-bad 8 ALLOT
     VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVW-FD @ 0= _ts-assert
     _AVW-BUF @ 0= _ts-assert
-    _AVW-HAVE-OLD-VFS @ 0= _ts-assert
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN
     _ts-fault-fd-next @ = _ts-assert
@@ -1560,7 +1554,6 @@ CREATE _ts-bad 8 ALLOT
     VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVR-FD @ 0= _ts-assert
     _AVR-BUF @ 0= _ts-assert
-    _AVR-HAVE-OLD-VFS @ 0= _ts-assert
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN
     _ts-fault-fd-next @ = _ts-assert
@@ -1572,7 +1565,6 @@ CREATE _ts-bad 8 ALLOT
     VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVW-FD @ 0= _ts-assert
     _AVW-BUF @ 0= _ts-assert
-    _AVW-HAVE-OLD-VFS @ 0= _ts-assert
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
     ?DUP IF FD.FREE @ ELSE 0 THEN
     _ts-fault-fd-next @ = _ts-assert
@@ -1582,20 +1574,10 @@ CREATE _ts-bad 8 ALLOT
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @
     _ts-fault-slot @ = 0= _ts-assert ;
 
-: _ts-throw-use  ( vfs -- )
-    _AVW-BUF @ _ts-fault-buffer !
-    DUP VFS-USE DROP -701 THROW ;
-: _ts-throw-use-on-restore  ( vfs -- )
-    1 _ts-fault-use-count +!
-    DUP VFS-USE
-    _ts-fault-use-count @ 2 = IF
-        DROP _AVW-BUF @ _ts-fault-buffer ! -709 THROW
-    THEN
-    DROP ;
-: _ts-throw-open  ( path-a path-u -- fd )
-    2DROP _AVW-BUF @ _ts-fault-buffer ! -702 THROW ;
-: _ts-open-missing  ( path-a path-u -- fd )
-    2DROP 0 ;
+: _ts-throw-open  ( path-a path-u vfs -- fd )
+    DROP 2DROP _AVW-BUF @ _ts-fault-buffer ! -702 THROW ;
+: _ts-open-missing  ( path-a path-u vfs -- fd )
+    DROP 2DROP 0 ;
 : _ts-throw-create  ( path-a path-u vfs -- inode )
     DROP 2DROP _AVW-BUF @ _ts-fault-buffer ! -710 THROW ;
 : _ts-throw-read  ( buf len fd -- ior )
@@ -1678,22 +1660,6 @@ CREATE _ts-bad 8 ALLOT
     _ts-fault-begin ['] _ts-throw-encode _AVFS-ENCODE-XT !
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
     _AVFS-RESET-DEPENDENCIES _ts-save-clean?
-    _ts-fault-buffer @ 0<> _ts-assert
-    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
-
-    _ts-fault-begin ['] _ts-throw-use _AVFS-USE-XT !
-    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
-    _AVFS-RESET-DEPENDENCIES _ts-save-clean?
-    _ts-fault-buffer @ 0<> _ts-assert
-    _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
-
-    _ts-fault-begin 0 _ts-fault-use-count !
-    ['] _ts-throw-use-on-restore _AVFS-USE-XT !
-    _ts-fault-conv @ _ts-store @ ACSTORE-SAVE
-    ACSTORE-S-UNCERTAIN = _ts-assert
-    \ Sync crossed the durability boundary before selector restoration
-    \ threw, so the pair retains the published generation in RAM.
-    _AVFS-RESET-DEPENDENCIES _ts-save-published-clean?
     _ts-fault-buffer @ 0<> _ts-assert
     _AVW-SIZE @ _ts-buffer-reusable? _ts-assert _ts-stack
 
@@ -1822,7 +1788,7 @@ CREATE _ts-bad 8 ALLOT
     _ts-conv @ SWAP ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
     _ts-store @ AVFSSTORE.GENERATION @ 1 = _ts-assert
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @ 0= _ts-assert
-    _AVFS-PATH-A VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
+    _AVFS-PATH-A _ts-vfs @ VFS-OPEN DUP _ts-fd ! 0<> _ts-assert
     _ts-fd @ VFS-SIZE _ts-snapshot-u @ = _ts-assert
     _ts-fd @ VFS-CLOSE
 
@@ -10343,14 +10309,14 @@ VARIABLE _pc-first-epoch
     _pc-avfs @ VFS-DESTROY ;
 
 : _pc-persist-corrupt  ( path-a path-u -- )
-    _pc-pvfs @ VFS-USE VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
+    _pc-pvfs @ VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
     _pc-persist-bad 8 88 FILL _pc-pvfs-fd @ VFS-REWIND
     _pc-persist-bad 8 _pc-pvfs-fd @ VFS-WRITE 8 = _pc-assert
     _pc-pvfs-fd @ VFS-CLOSE ;
 
 : _pc-persist-record!  ( path-a path-u generation revision -- )
     _pc-persist-revision ! _pc-persist-generation !
-    _pc-pvfs @ VFS-USE VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
+    _pc-pvfs @ VFS-OPEN DUP _pc-pvfs-fd ! 0<> _pc-assert
     _pc-persist-snapshot PHEADVFS-SNAPSHOT-SIZE _pc-pvfs-fd @ VFS-READ
         PHEADVFS-SNAPSHOT-SIZE = _pc-assert
     _pc-persist-generation @
@@ -12373,7 +12339,7 @@ CREATE _pc-io 128 ALLOT
 CREATE _pc-desc APP-DESC ALLOT
 CREATE _pc-ops VFS-OPS-SIZE ALLOT
 CREATE _pc-binding VFS-BINDING-DESC-SIZE ALLOT
-VARIABLE _pc-vfs VARIABLE _pc-other-vfs VARIABLE _pc-screen VARIABLE _pc-rgn
+VARIABLE _pc-vfs VARIABLE _pc-screen VARIABLE _pc-rgn
 VARIABLE _pc-volume VARIABLE _pc-set VARIABLE _pc-place
 \ A place set over a volume: one writable place at its root, which is the
 \ set's home and origin, as a build with one volume declares.
@@ -12390,7 +12356,7 @@ VARIABLE _pc-a VARIABLE _pc-u VARIABLE _pc-pa VARIABLE _pc-pu
 VARIABLE _pc-fd VARIABLE _pc-calls VARIABLE _pc-orig VARIABLE _pc-loaded
 VARIABLE _pc-fdfree VARIABLE _pc-heap VARIABLE _pc-xmem VARIABLE _pc-arena-used
 VARIABLE _pc-xfree VARIABLE _pc-lines
-VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
+VARIABLE _pc-close-calls
 
 : _pc-xmem-avail  ( -- u )
     0 _pc-xfree ! XMEM-FL @
@@ -12402,13 +12368,13 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
 : _pc-put  ( data-a data-u path-a path-u -- )
     _pc-pu ! _pc-pa ! _pc-u ! _pc-a !
     _pc-pa @ _pc-pu @ _pc-vfs @ VFS-CREATE 0<> _pc-assert
-    _pc-pa @ _pc-pu @ VFS-OPEN DUP 0<> _pc-assert _pc-fd !
+    _pc-pa @ _pc-pu @ _pc-vfs @ VFS-OPEN DUP 0<> _pc-assert _pc-fd !
     _pc-a @ _pc-u @ _pc-fd @ VFS-WRITE-EXACT 0= _pc-assert
     _pc-fd @ VFS-CLOSE _pc-vfs @ VFS-SYNC 0= _pc-assert ;
 
 : _pc-file=  ( expected-a expected-u path-a path-u -- flag )
     _pc-pu ! _pc-pa ! _pc-u ! _pc-a !
-    _pc-pa @ _pc-pu @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _pc-fd !
+    _pc-pa @ _pc-pu @ _pc-vfs @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _pc-fd !
     _pc-fd @ VFS-SIZE _pc-u @ <> IF _pc-fd @ VFS-CLOSE 0 EXIT THEN
     _pc-u @ 128 > IF _pc-fd @ VFS-CLOSE 0 EXIT THEN
     _pc-io _pc-u @ _pc-fd @ VFS-READ-EXACT IF
@@ -12430,9 +12396,6 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
 : _pc-fail-sync  ( vfs -- ior ) DROP -1 ;
 : _pc-close-after  ( fd -- )
     VFS-CLOSE 1 _pc-close-calls +! -92 THROW ;
-: _pc-use-after  ( vfs -- )
-    VFS-USE 1 _pc-use-calls +!
-    _pc-use-calls @ _pc-use-throw-at @ = IF -93 THROW THEN ;
 
 : _pc-arm-marked-rollback  ( -- )
     _pc-place @ _PAD-IO-PLACE !
@@ -12454,10 +12417,9 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     VFS-RAM-OPS _pc-ops VFS-OPS-SIZE CMOVE
     VFS-RAM-BINDING _pc-binding VFS-BINDING-DESC-SIZE CMOVE
     _pc-ops _pc-binding VB.OPS !
-    _pc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-vfs ! VFS-USE
+    _pc-binding 0 VFS-NEW ?DUP IF THROW THEN _pc-vfs !
     _pc-vfs @ _pc-places _PAD-PLACES!
     ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
-    ['] VFS-USE _PAD-LOAD-USE-XT !
     _PAD-INIT-BUF-TABLE
     _PAD-ARENA-SIZE A-XMEM ARENA-NEW
     DUP 0= _pc-assert DROP _PAD-ARENA !
@@ -12578,22 +12540,17 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     S" keep" _pc-text= _pc-assert
 
     \ A thrown transfer is contained after allocating/opening.  The newly
-    \ opened buffer is rolled back, owned I/O state is released, and the
-    \ caller's active-VFS selector is restored even when it names another VFS.
-    _pc-vfs @ VFS-USE S" throw" S" /throw.txt" _pc-put
-    524288 A-XMEM ARENA-NEW IF -3 THROW THEN
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _pc-other-vfs !
+    \ opened buffer is rolled back and owned I/O state is released.
+    S" throw" S" /throw.txt" _pc-put
     _pc-vfs @ V.FDFREE @ _pc-fdfree !
     HEAP-FREE-BYTES _pc-heap !
     _pc-xmem-avail _pc-xmem !
     _PAD-ARENA @ ARENA-USED _pc-arena-used !
     0 _pc-calls !
     ['] _pc-throw-read _pc-ops VFS-OP-READ CELLS + !
-    _pc-other-vfs @ VFS-USE
     S" /throw.txt" _PAD-OPEN-PATH -7 = _pc-assert
     ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 0> _pc-assert
-    VFS-CUR _pc-other-vfs @ = _pc-assert
     _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
     _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
     HEAP-FREE-BYTES _pc-heap @ = _pc-assert
@@ -12601,24 +12558,21 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _PAD-ARENA @ ARENA-USED _pc-arena-used @ = _pc-assert
     _PAD-ACTIVE @ _pc-orig @ = _pc-assert
     S" keep" _pc-text= _pc-assert
-    _pc-vfs @ VFS-USE
 
     \ A close implementation may recycle the descriptor and only then
     \ throw.  Ownership is cleared before the call, so cleanup neither
-    \ double-closes it nor skips the remaining buffer/selector stages.
+    \ double-closes it nor skips the remaining buffer stage.
     S" after" S" /after.txt" _pc-put
     _pc-vfs @ V.FDFREE @ _pc-fdfree !
     HEAP-FREE-BYTES _pc-heap ! _pc-xmem-avail _pc-xmem !
     _PAD-ARENA @ ARENA-USED _pc-arena-used !
     0 _pc-close-calls !
     ['] _pc-close-after _PAD-LOAD-CLOSE-XT !
-    _pc-other-vfs @ VFS-USE
     S" /after.txt" _PAD-OPEN-PATH -7 = _pc-assert
     ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
     _pc-close-calls @ 1 = _pc-assert
     _PIO-THROW @ -92 = _pc-assert
     _PIO-CLEANUP-THROW @ 0= _pc-assert
-    VFS-CUR _pc-other-vfs @ = _pc-assert
     _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
     _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
     HEAP-FREE-BYTES _pc-heap @ = _pc-assert
@@ -12627,43 +12581,19 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _PAD-ACTIVE @ _pc-orig @ = _pc-assert
     S" keep" _pc-text= _pc-assert
 
-    \ Cleanup-only selector failure is normalized to -7.  The injected use
-    \ switches first and throws second, so the old selector invariant still
-    \ holds and the successfully loaded scratch tab is rolled back.
-    _pc-vfs @ V.FDFREE @ _pc-fdfree !
-    HEAP-FREE-BYTES _pc-heap ! _pc-xmem-avail _pc-xmem !
-    0 _pc-use-calls ! 2 _pc-use-throw-at !
-    ['] _pc-use-after _PAD-LOAD-USE-XT !
-    _pc-other-vfs @ VFS-USE
-    S" /after.txt" _PAD-OPEN-PATH -7 = _pc-assert
-    ['] VFS-USE _PAD-LOAD-USE-XT !
-    _pc-use-calls @ 2 = _pc-assert
-    _PIO-THROW @ 0= _pc-assert
-    _PIO-CLEANUP-THROW @ -93 = _pc-assert
-    VFS-CUR _pc-other-vfs @ = _pc-assert
-    _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
-    _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
-    HEAP-FREE-BYTES _pc-heap @ = _pc-assert
-    _pc-xmem-avail _pc-xmem @ = _pc-assert
-    _PAD-ACTIVE @ _pc-orig @ = _pc-assert
-    S" keep" _pc-text= _pc-assert
-
-    \ A specific primary transfer result wins over a later restoration
-    \ THROW, while cleanup still restores the selector and all ownership.
-    0 _pc-calls ! 0 _pc-use-calls ! 2 _pc-use-throw-at !
+    \ A specific primary transfer result wins over a later cleanup THROW,
+    \ while cleanup still releases all ownership.
+    0 _pc-calls ! 0 _pc-close-calls !
     ['] _pc-zero-read _pc-ops VFS-OP-READ CELLS + !
-    ['] _pc-use-after _PAD-LOAD-USE-XT !
-    _pc-other-vfs @ VFS-USE
+    ['] _pc-close-after _PAD-LOAD-CLOSE-XT !
     S" /short.txt" _PAD-OPEN-PATH -5 = _pc-assert
-    ['] VFS-USE _PAD-LOAD-USE-XT !
+    ['] VFS-CLOSE _PAD-LOAD-CLOSE-XT !
     ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
-    _pc-calls @ 0> _pc-assert _pc-use-calls @ 2 = _pc-assert
-    _PIO-CLEANUP-THROW @ -93 = _pc-assert
-    VFS-CUR _pc-other-vfs @ = _pc-assert
+    _pc-calls @ 0> _pc-assert _pc-close-calls @ 1 = _pc-assert
+    _PIO-CLEANUP-THROW @ -92 = _pc-assert
     _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
     _PAD-ACTIVE @ _pc-orig @ = _pc-assert
     S" keep" _pc-text= _pc-assert
-    _pc-vfs @ VFS-USE
 
     S" old" S" /save.txt" _pc-put
     S" new" _PAD-TXTA @ TXTA-SET-TEXT
@@ -12699,8 +12629,8 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _PAD-MAX-BUFS _PAD-BUF-CAP _GB-DESC-SZ + * = _pc-assert
 
     \ Roll back the same inactive slot repeatedly after it has held the
-    \ worst-case document.  Both allocators, the VFS descriptor pool, the
-    \ active selector, and the arena high-water mark must remain unchanged.
+    \ worst-case document.  Both allocators, the VFS descriptor pool and the
+    \ arena high-water mark must remain unchanged.
     _PAD-MAX-BUFS 1- _PAD-BUF-CLOSE
     _pc-vfs @ V.FDFREE @ _pc-fdfree !
     HEAP-FREE-BYTES _pc-heap !
@@ -12708,11 +12638,9 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _PAD-ARENA @ ARENA-USED _pc-arena-used !
     0 _pc-calls !
     ['] _pc-throw-read _pc-ops VFS-OP-READ CELLS + !
-    _pc-other-vfs @ VFS-USE
     32 0 DO S" /throw.txt" _PAD-OPEN-PATH -7 = _pc-assert LOOP
     ['] _VFS-RAM-READ _pc-ops VFS-OP-READ CELLS + !
     _pc-calls @ 32 = _pc-assert
-    VFS-CUR _pc-other-vfs @ = _pc-assert
     _PIO-FD @ 0= _pc-assert _PIO-BUF @ 0= _pc-assert
     _pc-vfs @ V.FDFREE @ _pc-fdfree @ = _pc-assert
     HEAP-FREE-BYTES _pc-heap @ = _pc-assert
@@ -12720,7 +12648,6 @@ VARIABLE _pc-close-calls VARIABLE _pc-use-calls VARIABLE _pc-use-throw-at
     _PAD-ARENA @ ARENA-USED _pc-arena-used @ = _pc-assert
     _PAD-BUF-CNT @ _PAD-MAX-BUFS 1- = _pc-assert
     _PAD-ACTIVE @ 0= _pc-assert
-    _pc-vfs @ VFS-USE
 
     \ Leave the normal one-tab state for the remaining descriptor checks.
     _PAD-MAX-BUFS 1- 1 DO I _PAD-BUF-CLOSE LOOP
@@ -12796,13 +12723,13 @@ CREATE _pr-io 256 ALLOT
 : _pr-put  ( data-a data-u path-a path-u -- )
     _pr-pu ! _pr-pa ! _pr-u ! _pr-a !
     _pr-pa @ _pr-pu @ _pr-vfs @ VFS-CREATE 0<> _pr-assert
-    _pr-pa @ _pr-pu @ VFS-OPEN DUP 0<> _pr-assert _pr-fd !
+    _pr-pa @ _pr-pu @ _pr-vfs @ VFS-OPEN DUP 0<> _pr-assert _pr-fd !
     _pr-a @ _pr-u @ _pr-fd @ VFS-WRITE-EXACT 0= _pr-assert
     _pr-fd @ VFS-CLOSE _pr-vfs @ VFS-SYNC 0= _pr-assert ;
 
 : _pr-file=  ( expected-a expected-u path-a path-u -- flag )
     _pr-pu ! _pr-pa ! _pr-u ! _pr-a !
-    _pr-pa @ _pr-pu @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _pr-fd !
+    _pr-pa @ _pr-pu @ _pr-vfs @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _pr-fd !
     _pr-fd @ VFS-SIZE _pr-u @ <> IF _pr-fd @ VFS-CLOSE 0 EXIT THEN
     _pr-u @ 256 > IF _pr-fd @ VFS-CLOSE 0 EXIT THEN
     _pr-io _pr-u @ _pr-fd @ VFS-READ-EXACT IF
@@ -13406,9 +13333,9 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 
 : _dt-write-oversize  ( -- )
     _dt-big _DB-IO-CAP 1+ [CHAR] z FILL
-    S" /daybook.md" VFS-OPEN DUP 0= IF
+    S" /daybook.md" _DB-VFS @ VFS-OPEN DUP 0= IF
         DROP S" /daybook.md" _DB-VFS @ VFS-CREATE DROP
-        S" /daybook.md" VFS-OPEN
+        S" /daybook.md" _DB-VFS @ VFS-OPEN
     THEN
     DUP 0<> _dt-assert _dt-fd !
     0 _dt-fd @ VFS-TRUNCATE 0= _dt-assert
@@ -13907,9 +13834,9 @@ CREATE _gcx-desc APP-DESC ALLOT
 
 : _gcx-put  ( a u -- )
     _gcx-u ! _gcx-a !
-    S" /grid.csv" VFS-OPEN DUP 0= IF
+    S" /grid.csv" _GRID-VFS @ VFS-OPEN DUP 0= IF
         DROP S" /grid.csv" _GRID-VFS @ VFS-CREATE 0<> _gcx-assert
-        S" /grid.csv" VFS-OPEN
+        S" /grid.csv" _GRID-VFS @ VFS-OPEN
     THEN
     DUP 0<> _gcx-assert _gcx-fd !
     0 _gcx-fd @ VFS-TRUNCATE 0= _gcx-assert
@@ -13919,7 +13846,7 @@ CREATE _gcx-desc APP-DESC ALLOT
 
 : _gcx-file=  ( a u -- flag )
     _gcx-u ! _gcx-a !
-    S" /grid.csv" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _gcx-fd !
+    S" /grid.csv" _GRID-VFS @ VFS-OPEN DUP 0= IF DROP 0 EXIT THEN _gcx-fd !
     _gcx-fd @ VFS-SIZE _gcx-u @ <> IF
         _gcx-fd @ VFS-CLOSE 0 EXIT
     THEN
@@ -15473,8 +15400,6 @@ VARIABLE _sdc-fails
 VARIABLE _sdc-checks
 VARIABLE _sdc-depth
 VARIABLE _sdc-vfs
-VARIABLE _sdc-other-vfs
-VARIABLE _sdc-old-vfs
 VARIABLE _sdc-old-fault-xt
 VARIABLE _sdc-fault-slot
 VARIABLE _sdc-fd
@@ -15609,7 +15534,7 @@ CREATE _sdc-crc64-tails
     THEN
     _sdc-pa @ _sdc-pu @ _sdc-vfs @ VFS-CREATE
     DUP 0<> _sdc-assert DUP 0= IF DROP EXIT THEN DROP
-    _sdc-pa @ _sdc-pu @ VFS-OPEN DUP _sdc-fd ! 0<> _sdc-assert
+    _sdc-pa @ _sdc-pu @ _sdc-vfs @ VFS-OPEN DUP _sdc-fd ! 0<> _sdc-assert
     _sdc-fd @ 0= IF EXIT THEN
     _sdc-a @ _sdc-u @ _sdc-fd @ VFS-WRITE-EXACT 0= _sdc-assert
     _sdc-fd @ VFS-CLOSE
@@ -15692,15 +15617,11 @@ CREATE _sdc-crc64-tails
     _sdc-store-a _sdc-artifacts-clean? _sdc-assert ;
 
 : _sdc-init  ( -- )
-    VFS-CUR _sdc-old-vfs !
     524288 A-XMEM ARENA-NEW DUP 0= _sdc-assert DROP
     VFS-RAM-OPS _sdc-ops VFS-OPS-SIZE CMOVE
     VFS-RAM-BINDING _sdc-binding VFS-BINDING-DESC-SIZE CMOVE
     _sdc-ops _sdc-binding VB.OPS !
-    _sdc-binding 0 VFS-NEW ?DUP IF THROW THEN DUP _sdc-vfs ! VFS-USE
-    524288 A-XMEM ARENA-NEW DUP 0= _sdc-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _sdc-other-vfs ! 0<> _sdc-assert
+    _sdc-binding 0 VFS-NEW ?DUP IF THROW THEN _sdc-vfs !
 
     0 2 _sdc-vfs @ _sdc-store-invalid STREAMS-DRAFT-STORE-INIT-AT
         SDSTORE-S-INVALID = _sdc-assert
@@ -15778,19 +15699,15 @@ CREATE _sdc-crc64-tails
     _sdc-revision @ 7 = _sdc-assert
     _sdc-destination _sdc-u @ _sdc-text$ COMPARE 0= _sdc-assert
 
-    \ A binding-level read THROW is contained as IO.  The caller-selected
-    \ VFS, destination, descriptor cleanup state, FD free list, and scratch
-    \ all return exactly to their pre-call state.
+    \ A binding-level read THROW is contained as IO.  The destination,
+    \ descriptor cleanup state, FD free list, and scratch all return exactly
+    \ to their pre-call state.
     _sdc-fd-snapshot _sdc-fault-read-on
-    _sdc-other-vfs @ VFS-USE
     STREAMS-DRAFT-TEXT-MAX _sdc-store-a SDSTORE-S-IO
         _sdc-load-failure
-    VFS-CUR _sdc-other-vfs @ = _sdc-assert
     _SDRR-FD @ 0= _sdc-assert
-    _SDRR-HAVE-OLD-VFS @ 0= _sdc-assert
     _sdc-fds-stable
     _sdc-fault-off
-    _sdc-vfs @ VFS-USE
 
     \ VFS-OPEN also returns zero when an existing target cannot acquire an
     \ FD.  That is IO, never the ABSENT state used for a missing target.
@@ -15800,7 +15717,6 @@ CREATE _sdc-crc64-tails
         _sdc-load-failure
     _sdc-saved-fdfree @ _sdc-vfs @ V.FDFREE !
     _SDRR-FD @ 0= _sdc-assert
-    _SDRR-HAVE-OLD-VFS @ 0= _sdc-assert
 
     STREAMS-DRAFT-TEXT-MAX _sdc-store-a _sdc-load!
     _sdc-status @ SDSTORE-S-OK = _sdc-assert
@@ -15910,8 +15826,6 @@ CREATE _sdc-crc64-tails
     _sdc-test-wrapper-failures
     _sdc-test-malformed-records
     _sdc-test-cold-recovery
-    _sdc-old-vfs @ VFS-USE
-    _sdc-other-vfs @ VFS-DESTROY
     _sdc-vfs @ VFS-DESTROY
     _sdc-stack
     _sdc-fails @ 0= IF
@@ -16196,7 +16110,7 @@ CREATE _stc-ev 3 CELLS ALLOT
         STR-STR= _stc-assert
     BFM.ITEM.TEXT S" bounded model test" STR-STR= _stc-assert ;
 : _stc-load-feed  ( -- flag )
-    S" /testing/streams/timeline.json" VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
+    S" /testing/streams/timeline.json" VFS-CUR VFS-OPEN DUP 0= IF DROP 0 EXIT THEN
     DUP _stc-fd ! VFS-SIZE DUP _stc-doc-u !
     ALLOCATE IF DROP _stc-fd @ VFS-CLOSE 0 EXIT THEN _stc-doc !
     _stc-doc @ _stc-doc-u @ _stc-fd @ VFS-READ-EXACT IF
@@ -19739,7 +19653,7 @@ CREATE _spc-load-buffer STREAMS-DRAFT-TEXT-MAX ALLOT
     THEN
     _spc-path-a @ _spc-path-u @ _spc-vfs @ VFS-CREATE
     DUP 0<> _spc-assert DUP 0= IF DROP EXIT THEN DROP
-    _spc-path-a @ _spc-path-u @ VFS-OPEN DUP _spc-fd !
+    _spc-path-a @ _spc-path-u @ _spc-vfs @ VFS-OPEN DUP _spc-fd !
         0<> _spc-assert
     _spc-fd @ 0= IF EXIT THEN
     _spc-data-a @ _spc-data-u @ _spc-fd @ VFS-WRITE-EXACT
@@ -20370,7 +20284,7 @@ VARIABLE _mc-mft
 : _mc-stack  ( -- ) DEPTH _mc-depth @ = _mc-assert ;
 
 : _mc-read  ( path-a path-u -- status )
-    VFS-OPEN DUP _mc-fd ! 0= IF -1 EXIT THEN
+    _mc-vfs @ VFS-OPEN DUP _mc-fd ! 0= IF -1 EXIT THEN
     _mc-fd @ VFS-SIZE DUP _mc-doc-u !
     1 MAX ALLOCATE DUP IF
         2DROP _mc-fd @ VFS-CLOSE 0 _mc-fd ! -2 EXIT
@@ -20544,7 +20458,7 @@ CREATE _pkg-writer-small 4 ALLOT
     _pkg-stack ;
 
 : _pkg-read-installed  ( -- status )
-    ABUILD-INSTALLED-PATH VFS-OPEN DUP _pkg-fd ! 0= IF -1 EXIT THEN
+    ABUILD-INSTALLED-PATH _pkg-vfs @ VFS-OPEN DUP _pkg-fd ! 0= IF -1 EXIT THEN
     _pkg-fd @ VFS-SIZE DUP _pkg-doc-u !
     1 MAX ALLOCATE DUP IF
         2DROP _pkg-fd @ VFS-CLOSE 0 _pkg-fd ! -2 EXIT
@@ -21731,7 +21645,7 @@ VARIABLE _aac-volume VARIABLE _aac-set VARIABLE _aac-place
     _aac-pu ! _aac-pa ! _aac-du ! _aac-da !
     _aac-pa @ _aac-pu @ _aac-vfs @ VFS-CREATE
     DUP 0<> _aac-assert DUP _aac-in ! DROP
-    _aac-pa @ _aac-pu @ VFS-OPEN
+    _aac-pa @ _aac-pu @ _aac-vfs @ VFS-OPEN
     DUP 0<> _aac-assert _aac-fd !
     _aac-da @ _aac-du @ _aac-fd @ VFS-WRITE-EXACT 0= _aac-assert
     _aac-fd @ VFS-CLOSE _aac-in @ ;
@@ -23116,7 +23030,7 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
@@ -23195,7 +23109,7 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
@@ -23288,7 +23202,7 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
@@ -24660,7 +24574,7 @@ CREATE _soc-grant AUTH-GRANT-SIZE ALLOT
     THEN
     _soc-path-a @ _soc-path-u @ _soc-vfs @ VFS-CREATE
         DUP 0<> _soc-assert DUP 0= IF DROP EXIT THEN DROP
-    _soc-path-a @ _soc-path-u @ VFS-OPEN DUP _soc-fd !
+    _soc-path-a @ _soc-path-u @ _soc-vfs @ VFS-OPEN DUP _soc-fd !
         0<> _soc-assert
     _soc-fd @ 0= IF EXIT THEN
     _soc-data-a @ _soc-data-u @ _soc-fd @ VFS-WRITE-EXACT
@@ -26611,7 +26525,7 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     THEN
     _ssoc-path-a @ _ssoc-path-u @ _ssoc-vfs @ VFS-CREATE
         DUP 0<> _ssoc-assert DUP 0= IF DROP EXIT THEN DROP
-    _ssoc-path-a @ _ssoc-path-u @ VFS-OPEN DUP _ssoc-fd !
+    _ssoc-path-a @ _ssoc-path-u @ _ssoc-vfs @ VFS-OPEN DUP _ssoc-fd !
         0<> _ssoc-assert
     _ssoc-fd @ 0= IF EXIT THEN
     _ssoc-data-a @ _ssoc-data-u @ _ssoc-fd @ VFS-WRITE-EXACT
@@ -26995,15 +26909,16 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     _SHA3-COMPARE-DIGEST SHA3-256-LEN
         _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
 
-    \ VFS context and operation scratch are part of the nested mutation
-    \ boundary too.  A valid store must reject that complete destination
-    \ before VFS-USE, resolution, wrapper arguments, or cleanup can touch it.
-    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE
+    \ The VFS library's private state and operation scratch are part of the
+    \ nested mutation boundary too.  A valid store must reject that complete
+    \ destination before resolution, wrapper arguments, or cleanup can touch
+    \ it.
+    _VFS-PRIVATE-BEGIN STREAMS-SOURCE-REGISTRY-SIZE
         _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
-    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
-    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
+    _VFS-PRIVATE-BEGIN STREAMS-SOURCE-REGISTRY-SIZE _ssoc-span-snapshot!
+    _VFS-PRIVATE-BEGIN STREAMS-SOURCE-REGISTRY-SIZE _ssoc-alias @
         STREAMS-SOURCE-STORE-LOAD
-    _VFS-CUR STREAMS-SOURCE-REGISTRY-SIZE
+    _VFS-PRIVATE-BEGIN STREAMS-SOURCE-REGISTRY-SIZE
         _ssoc-span-unchanged? _ssoc-assert
     SSSTORE-S-INVALID = _ssoc-assert
     _ssoc-alias @ STREAMS-SOURCE-STORE-SCRATCH-WIPE

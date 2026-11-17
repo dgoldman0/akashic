@@ -69,8 +69,8 @@ _WORDS = (
     ),
     ': RO-RM SVT-V @ VFS-RM ." [rm " . ." ]" ;',
     ': RO-MK SVT-V @ VFS-MKFILE? ." [mk " . DROP ." ]" ;',
-    ': RO-HOLD2 VFS-OPEN DUP RO-FD2 ! ." [hold2 " 0<> . ." ]" ;',
-    ': RO-HOLD3 VFS-OPEN DUP RO-FD3 ! ." [hold3 " 0<> . ." ]" ;',
+    ': RO-HOLD2 SVT-V @ VFS-OPEN DUP RO-FD2 ! ." [hold2 " 0<> . ." ]" ;',
+    ': RO-HOLD3 SVT-V @ VFS-OPEN DUP RO-FD3 ! ." [hold3 " 0<> . ." ]" ;',
     ': RO-RELEASE2 RO-FD2 @ VFS-CLOSE? ." [release2 " . ." ]" ;',
     ': RO-RELEASE3 RO-FD3 @ VFS-CLOSE? ." [release3 " . ." ]" ;',
     (
@@ -377,7 +377,7 @@ def test_truncate_across_transactions_beside_a_retained_record(
     machine.line(
         ': RO-UP RO-UP5 ?DUP IF ." [up " . ." ]" EXIT THEN SVT-WRITER @ '
         "5 0 0 SVT-V @ EXT4-BIND-WRITER-ARENA? "
-        'DUP 0= IF SVT-V @ VFS-USE THEN ." [up " . ." ]" ;'
+        '." [up " . ." ]" ;'
     )
     assert machine.one("RO-UP", "up") == ["0"]
     assert machine.one('S" /doc.txt" SVT-HOLD', "hold") == ["-1"]
