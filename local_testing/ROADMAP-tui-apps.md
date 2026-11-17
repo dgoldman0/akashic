@@ -562,28 +562,21 @@ Shell API:
 - `ASHELL-CLIP-PASTE ( -- addr u )` — paste from shared clipboard
 - Guard-protected for multi-task safety
 
-**5B — Mounted VFS**:
+**5B — Places**:
 
-`utils/fs/vfs-mount.f` provides a mount table (`VMNT-MOUNT`,
-`VMNT-RESOLVE`, up to 64 mount points × 256-byte prefix).
-`utils/fs/drivers/vfs-mp64fs.f` bridges to the Megapad-64 native
-filesystem.
-
-The shell mounts a default filesystem at startup so apps get a
-working `VMNT-OPEN` / `VMNT-RESOLVE` without configuring storage
-themselves. Mount configuration comes from a simple config source
-(initially hardcoded defaults, later from a config file — see 5D).
-
-```forth
-\ Shell startup mounts the SD card at /sd
-S" /sd" MY-VFS VMNT-MOUNT     ( ior )
-```
+Apps see storage as places (`docs/utils/fs/places.md`). A place is a
+folder of a volume with a name and an access. Desk lends each app its
+place set through the service `org.akashic.fs.places`: a home, where the
+app keeps its records, and an origin, from which it reads its shipped
+files. A file is named `vfs://<place>/<path>`, and every VFS word names
+the instance it works on, so no app configures storage itself or depends
+on which volume another app last used.
 
 **5C — Notifications & IPC**:
 
 Apps communicate via named channels. The shell provides:
 - **Notifications** — apps send toast messages to the shell
-- **File dialogs** — shell-provided Open/Save using the mounted VFS
+- **File dialogs** — shell-provided Open/Save over the app's places
 - **Theme broadcast** — shell sends style-change events to all apps
 
 Uses `conc-map.f` for a service registry:
@@ -595,15 +588,15 @@ S" hello" 5 CHAN-SEND-BUF
 
 **5D — Shell Configuration** (later):
 
-A settings system for the shell itself: default mount points, theme,
-key bindings, tick interval, UIDL defaults. Likely TOML-based (we
+A settings system for the shell itself: theme, key bindings, tick
+interval, UIDL defaults. Likely TOML-based (we
 have a TOML parser in `app-manifest.f`). Config loaded at shell
 startup before any apps launch. Not required for initial stages —
 hardcoded defaults work first, config file comes when there's enough
 to configure.
 
 **Files**: `tui/app-services.f` (clipboard/notification wrappers),
-`utils/fs/vfs-mount.f` (already exists), `conc-map.f` integration,
+`utils/fs/places.f` (exists), `conc-map.f` integration,
 eventually `tui/app-config.f`.
 
 ---
