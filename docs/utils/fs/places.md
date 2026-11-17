@@ -301,14 +301,16 @@ every file under `akashic/` to it.
 3. Copy and move: `vfs-copy.f`, `PLACE-COPY`, File Explorer's paste.
 4. The user volume attaches: the builder's user image on the machine's
    fourth storage unit, `user-volume.f`, the shipping form's places, and
-   a boot without the user image.
+   a boot without the user image. Stores refuse changes on a read-only
+   place themselves, and narrowing a set no longer marks its volumes.
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
    now lands that sync and takes other writes, keeping the file's record
    until its last close.
 7. The other writers on ext4: Daybook, Grid, the Agent, Streams, the
-   catalogs, the sandbox store, the head.
+   catalogs, the sandbox store, the head. Streams and Library compose
+   their layouts under a folder of their home.
 8. The killed run: the simulator killed at chosen flushes during a save
    and during a copy's stage write and rename; each image passes the
    machine's own remount and the host tools' recovery, then `e2fsck`.
@@ -376,17 +378,21 @@ What slice 2 leaves:
   Each store binds its file through its place when it opens, for writing
   only when the place is writable, but a store bound for reading still
   writes through its instance if asked, so the mark is what refuses that
-  write. The mark goes when each store refuses a change on a read-only
-  place itself; whether such a store opens read-only and refuses each
-  change, or answers as a service that says why, is still to be decided.
+  write. In slice 4 the mark goes, and a store on a read-only place
+  refuses each change itself, with an answer that says why (Decided,
+  2026-11-17). The refusal is written once, in the layers the stores
+  share: a replacement bound for reading refuses to replace, the
+  `PLACE-` words bind for writing only on a writable place, and Streams
+  and Library open their repositories read-only.
 - Streams and Library keep repositories with fixed layouts from the
   volume's root (`/streams/...`, `/library/...`, `/streams-*.bin`) whose
   paths their persistence layer and their own checks compare literally,
   and they open them on the volume under their home. In every build so
   far the home's folder is that volume's root, so their files stay where
-  they were. How such a layout moves inside a place's folder (each path
-  bound at open, the folder bound and the paths composed under it, or a
-  place form of the persistence layer) is still to be decided.
+  they were. Before they move to the user volume in slice 7, each binds
+  its folder in its home once when it opens and composes its paths under
+  that folder, through one helper both share, and the persistence layer
+  keeps taking an instance and a path (Decided, 2026-11-17).
 - File Explorer's paste runs its transaction on one volume and refuses a
   source on another. Slice 3 replaces it with `PLACE-COPY`.
 - `PLACE-NAME-LIMIT` asks the volume, and the MP64FS binding gives no
