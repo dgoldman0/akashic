@@ -229,7 +229,7 @@ took 494.1 million cycles with the journal landed and 472.7 million with it
 active. The volume passed the pinned `e2fsck` afterwards, and the run peaked
 at 2.8 GB of host memory, held mostly by the 1 GiB image in the host process.
 
-**Stopped: the journal map's workspace check.** Each journal validation,
+**Kept: the journal map's workspace check.** Each journal validation,
 three in every checkpoint, takes the CRC32C of the whole journal-map
 workspace: one cell for every journal block and a uniqueness table twice
 that size, 96 KiB for the 4,096-block journal all three measured volumes
@@ -239,16 +239,9 @@ overwrite after a sync took at 64 MiB, and of the 32.6 million at 256 MiB:
 the largest single cost left in an everyday write. The check guards the
 map the driver writes journal blocks through against a change by anything but
 its own build; this machine has no memory protection, and on a mismatch the
-driver rebuilds the map. Removing or thinning it would change what the writer
-checks, so it stays, and the options are left to a decision: (1) keep it as
-it is; (2) check the workspace once per checkpoint rather than at each of its
-three validations, saving about 4.9 million cycles an overwrite, with the
-window between two validations of one checkpoint no longer checked;
-(3) hold the journal's map as its extents, a few cells for a journal in one
-extent, so the same whole-workspace check costs almost nothing, a larger
-change to the replay and revoke code that reads the map; or (4) give the CRC
-engine a bulk feed in the BIOS, which speeds every CRC the driver takes, a
-MegaPad change.
+driver rebuilds the map. The check stays as it is, at each of the three
+validations (Decided, 2026-11-16): removing or thinning it would change what
+the writer checks.
 
 **Left as they are.** The same debug copy, run on the committed reload work,
 shows where an everyday write's cycles go now. At 256 MiB a 2 KiB save by
