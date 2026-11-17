@@ -9,17 +9,21 @@ This is not a security sandbox. A loaded applet is native Forth code, image impo
 ## API and ownership
 
 ```forth
-ALOAD-FROM-MFT   ( mft -- desc status )
-ALOAD-MANIFEST   ( doc-a doc-u -- desc status )
-ALOAD-PATH       ( manifest-path-a manifest-path-u -- desc status )
+ALOAD-FROM-MFT   ( mft place -- desc status )
+ALOAD-MANIFEST   ( doc-a doc-u place -- desc status )
+ALOAD-PATH       ( manifest-path-a manifest-path-u place -- desc status )
 ALOAD-DESC-FREE  ( desc -- )
 ```
+
+A manifest names its image by a path in the place the manifest is read
+from, and each load operation takes that place: Desk's resolver gives the
+catalog's (`ACAT-PLACE`).
 
 All three load operations return `0 status` on failure. On success they return a loader-owned `APP-DESC` and `ALOAD-S-OK`.
 
 - `ALOAD-FROM-MFT` borrows the manifest descriptor and its backing TOML document. It neither frees nor retains them after the call.
 - `ALOAD-MANIFEST` borrows the TOML document for the duration of the call. It creates and frees its temporary manifest descriptor internally.
-- `ALOAD-PATH` validates the path, exact-reads the document through VFS, and releases the document buffer and file handle internally. Manifest files are limited to 4096 bytes.
+- `ALOAD-PATH` validates the path, exact-reads the document from the place, and releases the document buffer and file handle internally. Manifest files are limited to 4096 bytes.
 - `ALOAD-DESC-FREE` releases a descriptor returned with `ALOAD-S-OK`; it accepts zero. The caller must keep the descriptor alive while Desk or another consumer still refers to it.
 
 The successful descriptor is one heap allocation containing the `APP-DESC` plus owned copies of the manifest title and optional UIDL-file path. It no longer borrows those strings from the manifest document. The loaded dictionary image itself remains resident and has no unload operation.

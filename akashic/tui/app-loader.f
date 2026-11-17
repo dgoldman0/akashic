@@ -20,9 +20,12 @@
 \  of accidental extra outputs.
 \
 \  Public API:
-\    ALOAD-FROM-MFT   ( mft -- desc status )
-\    ALOAD-MANIFEST   ( doc-a doc-u -- desc status )
-\    ALOAD-PATH       ( path-a path-u -- desc status )
+\    ALOAD-FROM-MFT   ( mft place -- desc status )
+\    ALOAD-MANIFEST   ( doc-a doc-u place -- desc status )
+\    ALOAD-PATH       ( path-a path-u place -- desc status )
+\
+\  A manifest names its image by a path in the place the manifest is
+\  read from, and that place is the one each entry takes.
 \    ALOAD-DESC-FREE  ( desc -- )
 \
 \  Synchronous and core-0 only.  This module is intentionally not wrapped
@@ -32,6 +35,7 @@
 PROVIDED akashic-tui-app-loader
 
 REQUIRE ../utils/fs/vfs.f
+REQUIRE ../utils/fs/places.f
 REQUIRE ../utils/binimg.f
 REQUIRE ../math/sha3.f
 REQUIRE app-manifest.f
@@ -84,6 +88,7 @@ REQUIRE app-desc.f
 \ =====================================================================
 
 VARIABLE _aload-mft
+VARIABLE _aload-place     \ where the manifest and its image are
 VARIABLE _aload-fd
 VARIABLE _aload-image-a
 VARIABLE _aload-image-u
@@ -190,9 +195,9 @@ CREATE _aload-hash-hex 64 ALLOT
 
 : _ALOAD-READ-IMAGE  ( -- status )
     0 _aload-fd ! 0 _aload-image-a ! 0 _aload-image-u !
-    _aload-mft @ MFT-IMAGE VFS-CUR VFS-OPEN DUP _aload-fd ! 0= IF
-        ALOAD-E-IMAGE-OPEN EXIT
-    THEN
+    _aload-mft @ MFT-IMAGE VFS-FF-READ _aload-place @ PLACE-OPEN IF
+        DROP ALOAD-E-IMAGE-OPEN EXIT
+    THEN _aload-fd !
     _aload-fd @ VFS-SIZE DUP _aload-image-u !
     DUP 1 < OVER ALOAD-IMAGE-MAX > OR IF
         DROP _ALOAD-IMAGE-CLEAN ALOAD-E-IMAGE-SIZE EXIT
@@ -455,9 +460,9 @@ VARIABLE _alp-path-char
     _ALOAD-MANIFEST-PATH-VALID? 0= IF
         0 ALOAD-E-MANIFEST-PATH EXIT
     THEN
-    _alp-path-a @ _alp-path-u @ VFS-CUR VFS-OPEN DUP _alp-fd ! 0= IF
-        0 ALOAD-E-MANIFEST-OPEN EXIT
-    THEN
+    _alp-path-a @ _alp-path-u @ VFS-FF-READ _aload-place @ PLACE-OPEN IF
+        DROP 0 ALOAD-E-MANIFEST-OPEN EXIT
+    THEN _alp-fd !
     _alp-fd @ VFS-SIZE DUP _alp-doc-u !
     DUP 1 < OVER ALOAD-MANIFEST-MAX > OR IF
         DROP _ALOAD-PATH-CLEAN 0 ALOAD-E-MANIFEST-SIZE EXIT
@@ -540,25 +545,26 @@ VARIABLE _alp-path-char
 \ An installed applet is a machine-code image.  A system whose dictionary
 \ holds no machine code cannot run one, so each entry refuses before it
 \ reads a manifest or an image.
-: ALOAD-FROM-MFT  ( mft -- desc status )
-    IMG-VERIFY-SYSTEM IF DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
-    COREID 0<> IF DROP 0 ALOAD-E-CORE EXIT THEN
-    _aload-busy @ IF DROP 0 ALOAD-E-BUSY EXIT THEN
-    _ALOAD-API-RESET _aload-mft ! -1 _aload-busy !
+: ALOAD-FROM-MFT  ( mft place -- desc status )
+    IMG-VERIFY-SYSTEM IF 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
+    COREID 0<> IF 2DROP 0 ALOAD-E-CORE EXIT THEN
+    _aload-busy @ IF 2DROP 0 ALOAD-E-BUSY EXIT THEN
+    _ALOAD-API-RESET _aload-place ! _aload-mft ! -1 _aload-busy !
     ['] _ALOAD-FROM-MFT-THUNK CATCH _ALOAD-API-FINISH ;
 
-: ALOAD-MANIFEST  ( doc-a doc-u -- desc status )
-    IMG-VERIFY-SYSTEM IF 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
-    COREID 0<> IF 2DROP 0 ALOAD-E-CORE EXIT THEN
-    _aload-busy @ IF 2DROP 0 ALOAD-E-BUSY EXIT THEN
-    _ALOAD-API-RESET _alm-doc-u ! _alm-doc-a ! -1 _aload-busy !
+: ALOAD-MANIFEST  ( doc-a doc-u place -- desc status )
+    IMG-VERIFY-SYSTEM IF DROP 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
+    COREID 0<> IF DROP 2DROP 0 ALOAD-E-CORE EXIT THEN
+    _aload-busy @ IF DROP 2DROP 0 ALOAD-E-BUSY EXIT THEN
+    _ALOAD-API-RESET _aload-place ! _alm-doc-u ! _alm-doc-a ! -1 _aload-busy !
     ['] _ALOAD-MANIFEST-THUNK CATCH _ALOAD-API-FINISH ;
 
-: ALOAD-PATH  ( manifest-path-a manifest-path-u -- desc status )
-    IMG-VERIFY-SYSTEM IF 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
-    COREID 0<> IF 2DROP 0 ALOAD-E-CORE EXIT THEN
-    _aload-busy @ IF 2DROP 0 ALOAD-E-BUSY EXIT THEN
-    _ALOAD-API-RESET _alp-path-u ! _alp-path-a ! -1 _aload-busy !
+: ALOAD-PATH  ( manifest-path-a manifest-path-u place -- desc status )
+    IMG-VERIFY-SYSTEM IF DROP 2DROP 0 ALOAD-E-UNSUPPORTED EXIT THEN
+    COREID 0<> IF DROP 2DROP 0 ALOAD-E-CORE EXIT THEN
+    _aload-busy @ IF DROP 2DROP 0 ALOAD-E-BUSY EXIT THEN
+    _ALOAD-API-RESET _aload-place ! _alp-path-u ! _alp-path-a !
+    -1 _aload-busy !
     ['] _ALOAD-PATH-THUNK CATCH _ALOAD-API-FINISH ;
 
 \ Only descriptors returned with ALOAD-S-OK are loader-owned.

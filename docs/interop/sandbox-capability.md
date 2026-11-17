@@ -200,11 +200,11 @@ The host drives the instance:
   `SBOX-JOB-SERVICE-INIT` describes: with workers, every job runs on one of
   those cores while the host's core runs none. The policy is copied at bind;
   the parent Context stays borrowed until unbind.
-- `SBOX-CAPABILITY-MODULES ( registry vfs catalog catalog-u pack pack-u
+- `SBOX-CAPABILITY-MODULES ( registry place catalog catalog-u pack pack-u
   instance -- status )` gives a bound instance installed modules. The
   registry names the components that ask for them, and the module store keeps
-  them in the catalog and pack files at those absolute paths of the VFS, in
-  one directory. The instance opens the store at once and owns it and its
+  them in the catalog and pack files at those paths of the place, in one
+  folder; Desk gives the home of the Practice's places. The instance opens the store at once and owns it and its
   module table until unbind. A store in recovery opens and serves what it
   could read.
 - `SBOX-CAPABILITY-STORE@` and `SBOX-CAPABILITY-MODULES@ ( instance --

@@ -10,7 +10,7 @@
 \
 \  Public API:
 \    ABUILD-CATALOG!       ( catalog -- )
-\    ABUILD-INSTALL        ( project-path-a project-path-u -- entry status )
+\    ABUILD-INSTALL        ( project-path-a project-path-u place -- entry status )
 \    ABUILD-LAST-STATUS    ( -- status )
 \    ABUILD-LAST-DETAIL    ( -- detail )
 \    ABUILD-EVAL-STATUS    ( -- status )
@@ -20,6 +20,10 @@
 \    ABUILD-EVAL-TOKEN     ( -- addr len )
 \    ABUILD-SOURCE-PATH    ( -- addr len )
 \    ABUILD-INSTALLED-PATH ( -- addr len )
+\
+\  The project's manifest and source are read in the place the project is
+\  in.  The image and installed manifest are published in the catalog's
+\  place (ACAT-PLACE), where the loader reads them.
 \
 \  A successful return owns no temporary buffers.  The returned catalog
 \  entry is stable until the next catalog mutation.  Failed compilation
@@ -36,6 +40,7 @@ REQUIRE ../utils/binimg.f
 REQUIRE ../utils/fmt.f
 REQUIRE ../utils/buffer-writer.f
 REQUIRE ../utils/fs/vfs-replace.f
+REQUIRE ../utils/fs/place-replace.f
 REQUIRE ../math/sha3.f
 
 \ ---------------------------------------------------------------------
@@ -78,6 +83,7 @@ VARIABLE _ab-detail
 VARIABLE _ab-result
 VARIABLE _ab-path-a
 VARIABLE _ab-path-u
+VARIABLE _ab-place         \ the project's place
 
 VARIABLE _ab-project-a
 VARIABLE _ab-project-u
@@ -155,8 +161,8 @@ VARIABLE _abr-buf
 : _AB-READ-FILE  ( path-a path-u cap -- buffer length status )
     _abr-cap ! _abr-u ! _abr-a !
     0 _abr-buf ! 0 _ab-fd !
-    _abr-a @ _abr-u @ VFS-CUR VFS-OPEN DUP _ab-fd !
-    0= IF 0 0 ABUILD-E-IO EXIT THEN
+    _abr-a @ _abr-u @ VFS-FF-READ _ab-place @ PLACE-OPEN
+    IF DROP 0 0 ABUILD-E-IO EXIT THEN _ab-fd !
     _ab-fd @ VFS-SIZE DUP _abr-size !
     1 < _abr-size @ _abr-cap @ > OR IF
         _AB-CLOSE-FD 0 0 ABUILD-E-BOUNDS EXIT
@@ -268,11 +274,15 @@ VARIABLE _abp-path-u
 VARIABLE _abp-off
 VARIABLE _abp-chunk
 CREATE _ab-repl VREPL-SIZE ALLOT
+_ab-repl VREPL-SIZE 0 FILL
 
 : _AB-CHECK-EXISTING  ( -- status )
     0 _ab-fd !
-    _abp-path-a @ _abp-path-u @ VFS-CUR VFS-OPEN DUP _ab-fd !
-    0= IF _AB-PUB-MISSING EXIT THEN
+    _abp-path-a @ _abp-path-u @ VFS-FF-READ _ab-catalog @ ACAT-PLACE
+        PLACE-OPEN ?DUP IF
+        NIP VFS-IOR-REASON VFS-R-NOENT = IF _AB-PUB-MISSING ELSE ABUILD-E-IO THEN
+        EXIT
+    THEN _ab-fd !
     _ab-fd @ VFS-SIZE _abp-u @ <> IF
         _AB-CLOSE-FD ABUILD-E-COLLISION EXIT
     THEN
@@ -300,9 +310,8 @@ CREATE _ab-repl VREPL-SIZE ALLOT
     _abp-path-u ! _abp-path-a ! _abp-u ! _abp-data !
     _AB-CHECK-EXISTING DUP ABUILD-S-OK = IF EXIT THEN
     DUP _AB-PUB-MISSING <> IF EXIT THEN DROP
-    VFS-CUR _ab-repl VREPL-INIT DUP IF EXIT THEN DROP
-    _abp-path-a @ _abp-path-u @ _ab-repl VREPL-DERIVE-PATHS!
-    DUP IF EXIT THEN DROP
+    _abp-path-a @ _abp-path-u @ _ab-catalog @ ACAT-PLACE -1 _ab-repl
+        PLACE-VREPL! IF ABUILD-E-IO EXIT THEN
     _ab-repl VREPL-RECOVER DUP _AB-REPL-USABLE? 0= IF EXIT THEN DROP
     _abp-data @ _abp-u @ _ab-repl VREPL-REPLACE
     DUP VREPL-S-OK = OVER VREPL-S-COMMITTED-CLEANUP = OR IF
@@ -438,9 +447,9 @@ VARIABLE _ab-entry-xt
     0 _ab-fd ! 0 _abr-buf !
     0 _ab-image-path-u ! 0 _ab-manifest-path-u ! 0 _ab-source-path-u ! ;
 
-: ABUILD-INSTALL  ( project-path-a project-path-u -- entry status )
-    _ab-busy @ IF 2DROP 0 ABUILD-E-BUSY EXIT THEN
-    _ab-path-u ! _ab-path-a !
+: ABUILD-INSTALL  ( project-path-a project-path-u place -- entry status )
+    _ab-busy @ IF DROP 2DROP 0 ABUILD-E-BUSY EXIT THEN
+    _ab-place ! _ab-path-u ! _ab-path-a !
     _AB-RESET-OP -1 _ab-busy !
     ['] _AB-INSTALL-BODY CATCH
     DUP IF

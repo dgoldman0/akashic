@@ -39,7 +39,7 @@
 \  The store is caller-serialized.
 \
 \  Public API:
-\    DBAS-INIT         ( vfs path path-u store -- status )
+\    DBAS-INIT         ( place path path-u store -- status )
 \    DBAS-OPEN         ( store -- status )
 \    DBAS-CLOSE        ( store -- status )
 \    DBAS-COMMIT       ( store -- status )
@@ -79,6 +79,7 @@ REQUIRE ../../../math/entropy.f
 REQUIRE ../../../utils/checked-record.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../utils/record-table.f
 REQUIRE ../../../utils/blob-slot.f
 REQUIRE ../../../text/utf8.f
@@ -1060,22 +1061,18 @@ _DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
 \ =====================================================================
 
 \ Configures STORE, DBAS-SIZE cell-aligned bytes, to keep its file at
-\ PATH, an absolute path, in VFS.  vfs-replace derives the stage, backup
-\ and marker names beside it.  The store starts closed.
-: DBAS-INIT  ( vfs path path-u store -- status )
+\ PATH in PLACE.  vfs-replace derives the stage, backup and marker names
+\ beside it.  The store starts closed.
+: DBAS-INIT  ( place path path-u store -- status )
     DUP 0= OVER 7 AND OR IF 2DROP 2DROP DBAS-S-INVALID EXIT THEN
     DUP DBAS-VALID? IF 2DROP 2DROP DBAS-S-STATE EXIT THEN
     3 PICK 0= IF 2DROP 2DROP DBAS-S-INVALID EXIT THEN
     DUP DBAS-SIZE 0 FILL
     >R
-    2 PICK R@ _DBAS.VFS !
-    2 PICK R@ _DBAS.REPL VREPL-INIT IF
-        2DROP DROP R> DBAS-SIZE 0 FILL DBAS-S-INVALID EXIT
+    ROT DUP PLACE-WRITABLE? R@ _DBAS.REPL PLACE-VREPL! IF
+        R> DBAS-SIZE 0 FILL DBAS-S-INVALID EXIT
     THEN
-    R@ _DBAS.REPL VREPL-DERIVE-PATHS! IF
-        DROP R> DBAS-SIZE 0 FILL DBAS-S-INVALID EXIT
-    THEN
-    DROP
+    R@ _DBAS.REPL VREPL.VFS @ R@ _DBAS.VFS !
     _DBAS-MAGIC$ _DBAS-FORMAT CREC-TAG-POSITIVE ['] _DBAS-ENCODE ['] _DBAS-VALIDATE
         R@ _DBAS.SPEC CREC-SPEC-INIT
     \ The file grows with its tables; memory, not the format, bounds it.

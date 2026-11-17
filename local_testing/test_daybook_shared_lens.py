@@ -16,7 +16,13 @@ import sys
 LOCAL_TESTING = Path(__file__).resolve().parent
 sys.path.insert(0, str(LOCAL_TESTING))
 
-from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
+from akashic_tui import (  # noqa: E402
+    PROFILES,
+    TEST_ROOT_PLACE,
+    Profile,
+    build_image,
+    smoke,
+)
 
 
 PROFILE_NAME = "daybook-shared-lens-contracts"
@@ -27,11 +33,13 @@ ENTER-USERLAND
 REQUIRE tui/applets/daybook/daybook.f
 REQUIRE tui/applets/daybook/shared-document.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
+''' + TEST_ROOT_PLACE + r'''
 
 VARIABLE _dsl-fails
 VARIABLE _dsl-checks
 VARIABLE _dsl-depth
 VARIABLE _dsl-vfs
+VARIABLE _dsl-place
 CREATE _dsl-bd /BLOCK-DEVICE ALLOT
 CREATE _dsl-volume /VOLUME ALLOT
 VARIABLE _dsl-context
@@ -133,7 +141,8 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     _dsl-bd BD-OPEN THROW
     _dsl-bd _dsl-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
-    _dsl-volume VMP-NEW ?DUP IF THROW THEN DUP _dsl-vfs ! VFS-USE
+    _dsl-volume VMP-NEW ?DUP IF THROW THEN _dsl-vfs !
+    _dsl-vfs @ S" dsl" _t-root-place _dsl-place !
 
     77 CTX-NEW DUP 0= _dsl-assert DROP _dsl-context !
     _dsl-head _dsl-context @ CTX.PRACTICE !
@@ -146,7 +155,7 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
         DUP 0= _dsl-assert DROP _dsl-bus !
     _dsl-policy _dsl-context @ CTX.POLICY !
     _dsl-bus @ _dsl-context @ CTX.QUEUE !
-    _dsl-vfs @ _dsl-rid _dsl-context @ _dsl-rreg @ _dsl-creg @
+    _dsl-place @ _dsl-rid _dsl-context @ _dsl-rreg @ _dsl-creg @
         SDOC-ACTIVATE
     DUP SDOC-S-OK = _dsl-assert DROP _dsl-owner !
 

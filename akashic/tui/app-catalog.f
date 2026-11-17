@@ -14,7 +14,8 @@
 \  Resolver hook:  ( entry context -- desc status )
 \
 \  Public API:
-\    ACAT-NEW                 ( vfs -- catalog status )
+\    ACAT-NEW                 ( place -- catalog status )
+\    ACAT-PLACE               ( catalog -- place )
 \    ACAT-FREE                ( catalog -- )
 \    ACAT-ACTIVATE            ( catalog -- status )
 \    ACAT-RESOLVER!           ( xt context catalog -- )
@@ -34,6 +35,7 @@ PROVIDED akashic-tui-app-catalog
 
 REQUIRE app-desc.f
 REQUIRE ../utils/fs/vfs-replace.f
+REQUIRE ../utils/fs/place-replace.f
 REQUIRE ../utils/string.f
 REQUIRE ../text/utf8.f
 REQUIRE ../math/crc.f
@@ -152,7 +154,7 @@ CONSTANT ACAT-FILE-MAX
 \ Catalog descriptor.  It owns live and candidate tables plus one codec
 \ buffer.  The relatively large object is heap allocated once per Desk.
 0  CONSTANT _ACD-MAGIC
-8  CONSTANT _ACD-VFS
+8  CONSTANT _ACD-PLACE
 16 CONSTANT _ACD-FLAGS
 24 CONSTANT _ACD-GENERATION
 32 CONSTANT _ACD-COUNT
@@ -170,7 +172,7 @@ _ACD-IO ACAT-FILE-MAX + CONSTANT ACAT-SIZE
 0x4143415444455343 CONSTANT _ACAT-DESC-MAGIC  \ "ACATDESC"
 
 : ACAT.MAGIC       ( c -- a ) _ACD-MAGIC + ;
-: ACAT.VFS         ( c -- a ) _ACD-VFS + ;
+: ACAT.PLACE       ( c -- a ) _ACD-PLACE + ;
 : ACAT.FLAGS       ( c -- a ) _ACD-FLAGS + ;
 : ACAT.GENERATION  ( c -- a ) _ACD-GENERATION + ;
 : ACAT.COUNT       ( c -- a ) _ACD-COUNT + ;
@@ -187,7 +189,7 @@ _ACD-IO ACAT-FILE-MAX + CONSTANT ACAT-SIZE
 : ACAT-VALID?  ( c -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP ACAT.MAGIC @ _ACAT-DESC-MAGIC =
-    SWAP ACAT.VFS @ 0<> AND ;
+    SWAP ACAT.PLACE @ 0<> AND ;
 
 : ACAT-READONLY?  ( c -- flag )
     ACAT.FLAGS @ _ACAT-D-F-READONLY AND 0<> ;
@@ -506,23 +508,26 @@ VARIABLE _ACDEC-E
 \  Allocation, activation, and recovery
 \ =====================================================================
 
-VARIABLE _ACN-VFS
+VARIABLE _ACN-PLACE
 VARIABLE _ACN-CAT
-VARIABLE _ACN-IOR
 
-: ACAT-NEW  ( vfs -- c status )
-    DUP 0= IF DROP 0 ACAT-S-INVALID EXIT THEN _ACN-VFS !
+: ACAT-NEW  ( place -- c status )
+    DUP 0= IF DROP 0 ACAT-S-INVALID EXIT THEN _ACN-PLACE !
     ACAT-SIZE ALLOCATE DUP IF 2DROP 0 ACAT-S-IO EXIT THEN
     DROP DUP _ACN-CAT ! ACAT-SIZE 0 FILL
     _ACAT-DESC-MAGIC _ACN-CAT @ ACAT.MAGIC !
-    _ACN-VFS @ _ACN-CAT @ ACAT.VFS !
-    _ACN-VFS @ _ACN-CAT @ ACAT.REPLACE VREPL-INIT DUP _ACN-IOR !
-    _ACN-IOR @ VREPL-S-OK <> IF
-        _ACN-CAT @ FREE 0 ACAT-S-IO EXIT
-    THEN DROP
-    S" /app-catalog.bin" _ACN-CAT @ ACAT.REPLACE VREPL-DERIVE-PATHS!
-    VREPL-S-OK <> IF _ACN-CAT @ FREE 0 ACAT-S-IO EXIT THEN
+    _ACN-PLACE @ _ACN-CAT @ ACAT.PLACE !
+    \ A file the place cannot bind leaves the replacement unconfigured,
+    \ and activation then reports recovery: the catalog serves built-ins
+    \ and refuses to keep packages, rather than failing to exist.
+    S" /app-catalog.bin" _ACN-PLACE @ DUP PLACE-WRITABLE?
+        _ACN-CAT @ ACAT.REPLACE PLACE-VREPL! DROP
     _ACN-CAT @ ACAT-S-OK ;
+
+\ ACAT-PLACE ( c -- place )
+\   The place the catalog keeps its file in, where installed packages'
+\   manifests and images are too.
+: ACAT-PLACE  ( c -- place )  ACAT.PLACE @ ;
 
 : ACAT-FREE  ( c -- )
     ?DUP IF
@@ -540,7 +545,8 @@ VARIABLE _ACA-CLEAN-FAILED
     _ACA-FD @ VFS-CLOSE ;
 
 : _ACAT-ACTIVATE-OP  ( -- )
-    _ACA-CAT @ ACAT.REPLACE VREPL-TARGET$ _ACA-CAT @ ACAT.VFS @ VFS-OPEN
+    _ACA-CAT @ ACAT.REPLACE VREPL-TARGET$
+        _ACA-CAT @ ACAT.REPLACE VREPL.VFS @ VFS-OPEN
     DUP _ACA-FD ! 0= IF
         ACAT-S-MISSING _ACA-STATUS ! EXIT
     THEN

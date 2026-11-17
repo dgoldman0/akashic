@@ -46,7 +46,7 @@
 \
 \  Public API:
 \    SBRK-SIZE          ( -- bytes )
-\    SBRK-INIT          ( vfs head context broker -- status )
+\    SBRK-INIT          ( place head context broker -- status )
 \    SBRK-FINI          ( broker -- )
 \    SBRK-VALID?        ( broker -- flag )
 \    SBRK-STORE         ( broker -- store )
@@ -807,17 +807,17 @@ VARIABLE _SBDS-F  VARIABLE _SBDS-Q  VARIABLE _SBDS-DOC  VARIABLE _SBDS-S
 : _SBRK-PATH$  ( -- address length ) S" /schedule-perms.bin" ;
 
 \ Opens a broker for the Practice HEAD, whose root Context is CONTEXT,
-\ over the permissions in VFS.  The broker works whatever state the
+\ over the permissions in PLACE.  The broker works whatever state the
 \ permissions are in, so a blocked store can say why; the status is the
 \ store's.
-: SBRK-INIT  ( vfs head context broker -- status )
+: SBRK-INIT  ( place head context broker -- status )
     DUP 0= OVER 7 AND OR IF 2DROP 2DROP SPERM-S-INVALID EXIT THEN
     DUP SBRK-VALID? IF 2DROP 2DROP SPERM-S-STATE EXIT THEN
     2 PICK PHEAD-VALID? 0= IF 2DROP 2DROP SPERM-S-INVALID EXIT THEN
     OVER CTX-VALID? 0= IF 2DROP 2DROP SPERM-S-INVALID EXIT THEN
     OVER CTX.PRACTICE @ 3 PICK <> IF 2DROP 2DROP SPERM-S-INVALID EXIT THEN
     DUP SBRK-SIZE 0 FILL
-    TUCK _SBRK.ROOT ! TUCK _SBRK.HEAD !             ( vfs broker )
+    TUCK _SBRK.ROOT ! TUCK _SBRK.HEAD !             ( place broker )
     >R _SBRK-PATH$ R@ SBRK-STORE SPERM-INIT ?DUP IF R> SBRK-SIZE 0 FILL EXIT THEN
     R@ R@ SBRK-CLIENT SDSP-CLIENT-INIT
     ['] _SBRK-SUBMIT R@ SBRK-CLIENT SDSP-C.SUBMIT-XT !

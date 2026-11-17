@@ -236,13 +236,14 @@ CREATE _lc-practice-out PHEAD-SIZE ALLOT
 CREATE _lc-practice-store PHEADVFS-SIZE ALLOT
 : _lc-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _lc-practice-slot?  ( path-a path-u -- flag )
-    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
+    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
 : _lc-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _lc-practice-slot?
     S" /practice-head-b.bin" _lc-practice-slot? OR ;
 : _lc-practice-provision  ( -- )
     _lc-practice-present? IF EXIT THEN
-    VFS-CUR _lc-practice-store PHEADVFS-INIT
+    PLACES-DEFAULT PLSET-HOME _lc-practice-store PHEADVFS-INIT
         PHEADVFS-S-OK = _lc-assert
     _lc-practice-out _lc-practice-store PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY = _lc-assert

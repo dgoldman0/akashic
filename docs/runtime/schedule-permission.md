@@ -36,7 +36,7 @@ that only counts up, a revoked RID is never granted again.
 ## Operations
 
 ```forth
-SPERM-INIT         ( vfs path path-u store -- status )
+SPERM-INIT         ( place path path-u store -- status )
 SPERM-OPEN         ( store -- status )
 SPERM-CLOSE        ( store -- status )
 SPERM-STATE@       ( store -- state )

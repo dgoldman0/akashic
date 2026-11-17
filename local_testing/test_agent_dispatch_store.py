@@ -36,7 +36,7 @@ PRELUDE = RAM_VFS + rf"""
 {NOW} CONSTANT T-NOW
 CREATE AS-RAW ADST-SIZE 7 + ALLOT  AS-RAW 7 + -8 AND CONSTANT AS
 : A-PATH  ( -- a u ) S" /agent-dispatch.bin" ;
-: A-INIT  ( -- status ) AS ADST-SIZE 0 FILL TV @ A-PATH AS ADST-INIT ;
+: A-INIT  ( -- status ) AS ADST-SIZE 0 FILL TV-PLACE A-PATH AS ADST-INIT ;
 : A-WIPE  ( -- )
     A-PATH T-RM
     AS _ADST.REPL VREPL-STAGE$ T-RM
@@ -199,8 +199,8 @@ def test_lifecycle_and_its_refusals(forth):
     rows = run(forth, [
         "A-FRESH AS ADST-STATE@ . GEN . COUNT. A-PATH T-THERE? . "
         "HD ADST-H.SERIAL @ . HD ADST-H.KEEP @ . HD RID-ZERO? . CR",
-        "TV @ A-PATH AS 1+ ADST-INIT . TV @ A-PATH 0 ADST-INIT . "
-        "TV @ A-PATH AS ADST-INIT . 0 A-PATH AS ADST-INIT . CR",
+        "TV-PLACE A-PATH AS 1+ ADST-INIT . TV-PLACE A-PATH 0 ADST-INIT . "
+        "TV-PLACE A-PATH AS ADST-INIT . 0 A-PATH AS ADST-INIT . CR",
         "AS ADST-OPEN . AS ADST-CLOSE . AS ADST-STATE@ . "
         "A-OPS 1 1 R-OCC T-NOW ACC . RN @ . RQ SDSP-R.KEY AS ADST-FIND . "
         "HELLO RQ AS ADST-TRANSCRIPT! . 1 0 0 0 RQ AS ADST-FINISH . "

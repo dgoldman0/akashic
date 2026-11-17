@@ -16,7 +16,13 @@ import sys
 LOCAL_TESTING = Path(__file__).resolve().parent
 sys.path.insert(0, str(LOCAL_TESTING))
 
-from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
+from akashic_tui import (  # noqa: E402
+    PROFILES,
+    TEST_ROOT_PLACE,
+    Profile,
+    build_image,
+    smoke,
+)
 
 
 PROFILE_NAME = "shared-document-contracts"
@@ -28,6 +34,7 @@ REQUIRE tui/applets/daybook/shared-document.f
 REQUIRE interop/lens-binding.f
 REQUIRE interop/resource-client.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
+''' + TEST_ROOT_PLACE + r'''
 
 VARIABLE _sd-fails
 VARIABLE _sd-checks
@@ -52,6 +59,7 @@ CREATE _sd-direct-b VREPL-SIZE ALLOT
 CREATE _sd-direct-read 128 ALLOT
 
 VARIABLE _sd-vfs
+VARIABLE _sd-place
 CREATE _sd-bd /BLOCK-DEVICE ALLOT
 CREATE _sd-volume /VOLUME ALLOT
 VARIABLE _sd-context
@@ -122,7 +130,8 @@ VARIABLE _sd-direct-u0
     _sd-bd BD-OPEN THROW
     _sd-bd _sd-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
-    _sd-volume VMP-NEW ?DUP IF THROW THEN DUP _sd-vfs ! VFS-USE
+    _sd-volume VMP-NEW ?DUP IF THROW THEN _sd-vfs !
+    _sd-vfs @ S" sd" _t-root-place _sd-place !
 
     \ Control: two ordinary path clients can both publish successfully.  The
     \ second has no exact-revision contract and silently replaces the first;
@@ -147,7 +156,7 @@ VARIABLE _sd-direct-u0
     _sd-creg @ _sd-context @ RREG-NEW
         DUP RREG-S-OK = _sd-assert DROP _sd-rreg !
 
-    _sd-vfs @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
+    _sd-place @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
         SDOC-ACTIVATE
     DUP SDOC-S-OK = _sd-assert DROP
     DUP 0<> _sd-assert DUP _sd-owner !
@@ -161,7 +170,7 @@ VARIABLE _sd-direct-u0
     _sd-rid SWAP ROPOOL-REFS@ 1 = _sd-assert
 
     \ A second owner cannot claim the activation or backing path.
-    _sd-vfs @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
+    _sd-place @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
         SDOC-ACTIVATE
     DUP SDOC-S-BUSY = _sd-assert SWAP 0= _sd-assert DROP
 
@@ -330,7 +339,7 @@ VARIABLE _sd-direct-u0
     CREG-NEW DUP 0= _sd-assert DROP _sd-creg !
     _sd-creg @ _sd-context @ RREG-NEW
         DUP RREG-S-OK = _sd-assert DROP _sd-rreg !
-    _sd-vfs @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
+    _sd-place @ _sd-rid _sd-context @ _sd-rreg @ _sd-creg @
         SDOC-ACTIVATE
     DUP SDOC-S-OK = _sd-assert DROP
     DUP 0<> _sd-assert DUP _sd-owner !

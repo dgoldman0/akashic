@@ -33,7 +33,7 @@
 \  the next operation.
 \
 \  Public API:
-\    ADST-INIT         ( vfs path path-u store -- status )
+\    ADST-INIT         ( place path path-u store -- status )
 \    ADST-OPEN         ( store -- status )
 \    ADST-CLOSE        ( store -- status )
 \    ADST-STATE@       ( store -- state )
@@ -62,6 +62,7 @@ REQUIRE ../../../../math/entropy.f
 REQUIRE ../../../../utils/checked-record.f
 REQUIRE ../../../../utils/fs/vfs.f
 REQUIRE ../../../../utils/fs/vfs-replace.f
+REQUIRE ../../../../utils/fs/place-replace.f
 REQUIRE ../../../../utils/record-table.f
 REQUIRE ../../../../utils/blob-slot.f
 REQUIRE ../../../../interop/scheduled-dispatch.f
@@ -580,21 +581,17 @@ _ADST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT ADST-SIZE
 \ =====================================================================
 
 \ Configures STORE, ADST-SIZE cell-aligned bytes, to keep its file at
-\ PATH, an absolute path, in VFS.  The store starts closed.
-: ADST-INIT  ( vfs path path-u store -- status )
+\ PATH in PLACE.  The store starts closed.
+: ADST-INIT  ( place path path-u store -- status )
     DUP 0= OVER 7 AND OR IF 2DROP 2DROP ADST-S-INVALID EXIT THEN
     DUP ADST-VALID? IF 2DROP 2DROP ADST-S-STATE EXIT THEN
     3 PICK 0= IF 2DROP 2DROP ADST-S-INVALID EXIT THEN
     DUP ADST-SIZE 0 FILL
     >R
-    2 PICK R@ _ADST.VFS !
-    2 PICK R@ _ADST.REPL VREPL-INIT IF
-        2DROP DROP R> ADST-SIZE 0 FILL ADST-S-INVALID EXIT
+    ROT DUP PLACE-WRITABLE? R@ _ADST.REPL PLACE-VREPL! IF
+        R> ADST-SIZE 0 FILL ADST-S-INVALID EXIT
     THEN
-    R@ _ADST.REPL VREPL-DERIVE-PATHS! IF
-        DROP R> ADST-SIZE 0 FILL ADST-S-INVALID EXIT
-    THEN
-    DROP
+    R@ _ADST.REPL VREPL.VFS @ R@ _ADST.VFS !
     _ADST-MAGIC$ _ADST-FORMAT CREC-TAG-POSITIVE ['] _ADST-ENCODE
         ['] _ADST-VALIDATE R@ _ADST.SPEC CREC-SPEC-INIT
     \ The file grows with the runs; memory, not the format, bounds it.

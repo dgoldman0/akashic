@@ -17,7 +17,7 @@ compiled.
 
 ```forth
 SBRK-SIZE          ( -- bytes )
-SBRK-INIT          ( vfs head context broker -- status )
+SBRK-INIT          ( place head context broker -- status )
 SBRK-FINI          ( broker -- )
 SBRK-VALID?        ( broker -- flag )
 SBRK-STORE         ( broker -- store )
@@ -33,7 +33,8 @@ SBRK-ACTIVE?       ( broker -- flag )
 ```
 
 `SBRK-INIT` takes a valid Practice head and its own root Context (the
-Context's Practice must be that head), then opens the permissions. The
+Context's Practice must be that head), then opens the permissions in the
+place. The
 broker works whatever state the permissions are in, so a damaged file can
 say why. The status is the store's: `SPERM-S-BLOCKED` for a file that
 blocked the store, and `SPERM-S-INVALID` or `SPERM-S-STATE` for bad

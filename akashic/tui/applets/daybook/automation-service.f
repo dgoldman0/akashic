@@ -28,7 +28,7 @@
 \
 \  Public API:
 \    DBSVC-SIZE        ( -- bytes )
-\    DBSVC-OPEN        ( vfs service -- status )
+\    DBSVC-OPEN        ( place service -- status )
 \    DBSVC-CLOSE       ( service -- )
 \    DBSVC-CLIENT!     ( client service -- )
 \    DBSVC-TICK        ( service -- notice? )
@@ -181,9 +181,9 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
 
 : _DBSVC-PATH$  ( -- address length ) S" /daybook-automations.bin" ;
 
-\ Opens the schedules in VFS.  The service works whatever the store's
+\ Opens the schedules in PLACE.  The service works whatever the store's
 \ state, so a blocked store can say why; the status is the store's.
-: DBSVC-OPEN  ( vfs service -- status )
+: DBSVC-OPEN  ( place service -- status )
     DUP 0= OVER 7 AND OR IF 2DROP DBAO-S-INVALID EXIT THEN
     DUP DBSVC-VALID? IF 2DROP DBAO-S-STATE EXIT THEN
     DUP DBSVC-SIZE 0 FILL

@@ -640,6 +640,16 @@ PLACES_BOOT_LINES = (
     "    _boot-places @ PLACES-DEFAULT! ;",
     PLACES_BOOT_ENTRY,
 )
+# Forth for a check that keeps a store on a RAM volume of its own: a
+# writable place over the root of VFS, declared under NAME, which must be
+# a name no other volume or place of the check has.
+TEST_ROOT_PLACE = r'''
+: _t-root-place  ( vfs name-a name-u -- place )
+    2DUP PLACES-VOLUME THROW >R
+    ROT R@ PVOL-ATTACH THROW
+    S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW
+    PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;
+'''
 # With --system-volume a profile's modules are plain files on the system
 # volume, the ext4 volume on the machine's third storage unit.  The boot
 # volume then carries only the closure of the module that mounts it,
@@ -806,13 +816,14 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
+    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
 : _boot-practice-provision  ( -- )
     _boot-practice-present? IF EXIT THEN
-    VFS-CUR _boot-practice-store PHEADVFS-INIT
+    PLACES-DEFAULT PLSET-HOME _boot-practice-store PHEADVFS-INIT
         PHEADVFS-S-OK <> ABORT" Practice store init failed"
     _boot-practice-out _boot-practice-store PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
@@ -1388,7 +1399,7 @@ _cx-run
 ENTER-USERLAND
 ." [akashic] loading conversation store" CR
 REQUIRE tui/applets/agent/storage/vfs-conversation.f
-
+""" + TEST_ROOT_PLACE + r"""
 VARIABLE _ts-fails
 VARIABLE _ts-checks
 VARIABLE _ts-depth
@@ -1402,7 +1413,7 @@ VARIABLE _ts-store4
 VARIABLE _ts-split-store
 VARIABLE _ts-fd
 VARIABLE _ts-snapshot-u
-VARIABLE _ts-other-vfs
+VARIABLE _ts-place
 VARIABLE _ts-fault-buffer
 VARIABLE _ts-fault-generation
 VARIABLE _ts-fault-slot
@@ -1439,7 +1450,7 @@ CREATE _ts-bad 8 ALLOT
     DUP GPAIR-CANDIDATE-VALUE@ = _ts-assert ;
 
 : _ts-new-store  ( -- store )
-    _ts-vfs @ AVFSSTORE-NEW
+    _ts-place @ AVFSSTORE-NEW
     DUP ACSTORE-S-OK = _ts-assert DROP ;
 
 : _ts-corrupt  ( path-a path-u -- )
@@ -1497,7 +1508,6 @@ CREATE _ts-bad 8 ALLOT
     _ts-a-copy @ FREE 0 _ts-a-copy ! 0 _ts-a-copy-u !
     _AVL-A-CONV @ 0= _ts-assert _AVL-B-CONV @ 0= _ts-assert
     _AVL-A-BUF @ 0= _ts-assert _AVL-B-BUF @ 0= _ts-assert
-    VFS-CUR _ts-vfs @ = _ts-assert
     HEAP-FREE-BYTES _ts-pair-heap @ = _ts-assert
     _ts-stack ;
 
@@ -1519,7 +1529,6 @@ CREATE _ts-bad 8 ALLOT
     1 _AVFS-PATH-A _ts-generation!
     _AVL-A-CONV @ 0= _ts-assert _AVL-B-CONV @ 0= _ts-assert
     _AVL-A-BUF @ 0= _ts-assert _AVL-B-BUF @ 0= _ts-assert
-    VFS-CUR _ts-vfs @ = _ts-assert
     HEAP-FREE-BYTES _ts-pair-heap @ = _ts-assert
     _ts-stack ;
 
@@ -1533,11 +1542,9 @@ CREATE _ts-bad 8 ALLOT
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @ _ts-fault-slot !
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head !
     ?DUP IF FD.FREE @ ELSE 0 THEN _ts-fault-fd-next !
-    HEAP-FREE-BYTES _ts-fault-heap !
-    _ts-other-vfs @ VFS-USE ;
+    HEAP-FREE-BYTES _ts-fault-heap ! ;
 
 : _ts-save-clean?  ( -- )
-    VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVW-FD @ 0= _ts-assert
     _AVW-BUF @ 0= _ts-assert
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
@@ -1551,7 +1558,6 @@ CREATE _ts-bad 8 ALLOT
 
 : _ts-read-clean?  ( store -- )
     >R
-    VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVR-FD @ 0= _ts-assert
     _AVR-BUF @ 0= _ts-assert
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
@@ -1562,7 +1568,6 @@ CREATE _ts-bad 8 ALLOT
     R> AVFSSTORE.ACTIVE-SLOT @ -1 = _ts-assert ;
 
 : _ts-save-published-clean?  ( -- )
-    VFS-CUR _ts-other-vfs @ = _ts-assert
     _AVW-FD @ 0= _ts-assert
     _AVW-BUF @ 0= _ts-assert
     _ts-vfs @ V.FDFREE @ DUP _ts-fault-fd-head @ = _ts-assert
@@ -1574,11 +1579,11 @@ CREATE _ts-bad 8 ALLOT
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @
     _ts-fault-slot @ = 0= _ts-assert ;
 
-: _ts-throw-open  ( path-a path-u vfs -- fd )
-    DROP 2DROP _AVW-BUF @ _ts-fault-buffer ! -702 THROW ;
-: _ts-open-missing  ( path-a path-u vfs -- fd )
-    DROP 2DROP 0 ;
-: _ts-throw-create  ( path-a path-u vfs -- inode )
+: _ts-throw-open  ( path-a path-u flags place -- fd ior )
+    2DROP 2DROP _AVW-BUF @ _ts-fault-buffer ! -702 THROW ;
+: _ts-open-missing  ( path-a path-u flags place -- fd ior )
+    2DROP 2DROP 0 VFS-E-NOENT ;
+: _ts-throw-create  ( path-a path-u place -- inode ior )
     DROP 2DROP _AVW-BUF @ _ts-fault-buffer ! -710 THROW ;
 : _ts-throw-read  ( buf len fd -- ior )
     2DROP _ts-fault-buffer ! -703 THROW ;
@@ -1592,9 +1597,9 @@ CREATE _ts-bad 8 ALLOT
     2DROP _ts-fault-buffer ! -704 THROW ;
 : _ts-throw-close  ( fd -- )
     _AVW-BUF @ _ts-fault-buffer ! VFS-CLOSE -705 THROW ;
-: _ts-throw-sync  ( vfs -- ior )
-    _AVW-BUF @ _ts-fault-buffer ! VFS-SYNC DROP -706 THROW ;
-: _ts-fail-sync  ( vfs -- ior )
+: _ts-throw-sync  ( place -- ior )
+    _AVW-BUF @ _ts-fault-buffer ! PLACE-SYNC DROP -706 THROW ;
+: _ts-fail-sync  ( place -- ior )
     DROP 1 ;
 : _ts-throw-encode-size  ( conversation -- length status )
     DROP -711 THROW ;
@@ -1614,7 +1619,7 @@ CREATE _ts-bad 8 ALLOT
     DUP GUARD-RELEASE DROP -713 THROW ;
 
 : _ts-probe-newer  ( -- )
-    _ts-vfs @ AVFSSTORE-NEW
+    _ts-place @ AVFSSTORE-NEW
     DUP ACSTORE-S-OK = _ts-assert DROP _ts-probe-store !
     _ts-probe-store @ ACSTORE-LOAD
     DUP ACSTORE-S-OK = _ts-assert DROP
@@ -1629,7 +1634,7 @@ CREATE _ts-bad 8 ALLOT
     HEAP-FREE-BYTES _ts-fault-heap @ = _ts-assert ;
 
 : _ts-test-load-guard-release  ( -- )
-    _ts-vfs @ AVFSSTORE-NEW
+    _ts-place @ AVFSSTORE-NEW
     DUP ACSTORE-S-OK = _ts-assert DROP _ts-probe-store !
     _ts-fault-begin
     ['] _ts-throw-guard-release _AVFS-GUARD-RELEASE-XT !
@@ -1646,12 +1651,7 @@ CREATE _ts-bad 8 ALLOT
 : _ts-test-fault-cleanup  ( -- )
     ACONV-NEW DUP 0= _ts-assert DROP _ts-fault-conv !
     \ Re-establish one known-valid generation after the corruption tests.
-    _ts-vfs @ VFS-USE
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
-
-    524288 A-XMEM ARENA-NEW DUP 0= _ts-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
-        DUP _ts-other-vfs ! DROP
 
     _ts-fault-begin ['] _ts-throw-encode-size _AVFS-ENCODE-SIZE-XT !
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-IO = _ts-assert
@@ -1744,7 +1744,6 @@ CREATE _ts-bad 8 ALLOT
     \ Ordinary use remains possible after contained and post-body faults.
     _ts-fault-begin
     _ts-fault-conv @ _ts-store @ ACSTORE-SAVE ACSTORE-S-OK = _ts-assert
-    VFS-CUR _ts-other-vfs @ = _ts-assert
     _ts-store @ AVFSSTORE.GENERATION @
     _ts-fault-generation @ 1+ = _ts-assert
     _ts-store @ AVFSSTORE.ACTIVE-SLOT @
@@ -1756,7 +1755,8 @@ CREATE _ts-bad 8 ALLOT
     0 _ts-fails ! 0 _ts-checks ! DEPTH _ts-depth !
     524288 A-XMEM ARENA-NEW
     DUP 0= _ts-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _ts-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _ts-vfs !
+    _ts-vfs @ S" ts" _t-root-place _ts-place !
     ACONV-NEW DUP 0= _ts-assert DROP _ts-conv !
 
     AROLE-USER AMSG-S-COMPLETE 1 S" first durable message"
@@ -1842,8 +1842,6 @@ CREATE _ts-bad 8 ALLOT
     _ts-store2 @ ACSTORE-FREE
     _ts-store @ ACSTORE-FREE
     _ts-conv @ ACONV-FREE
-    0 VFS-USE
-    _ts-other-vfs @ VFS-DESTROY
     _ts-vfs @ VFS-DESTROY
     _ts-stack
     _ts-fails @ 0= IF
@@ -1871,11 +1869,13 @@ ENTER-USERLAND
 REQUIRE tui/applets/agent/storage/vfs-conversation.f
 REQUIRE tui/applets/agent/providers/devtools/scripted.f
 REQUIRE tui/applets/agent/runtime.f
+""" + TEST_ROOT_PLACE + r"""
 
 VARIABLE _ap-fails
 VARIABLE _ap-checks
 VARIABLE _ap-depth
 VARIABLE _ap-vfs
+VARIABLE _ap-place
 VARIABLE _ap-source
 VARIABLE _ap-provider
 VARIABLE _ap-runtime
@@ -1898,7 +1898,7 @@ VARIABLE _ap-msg
     DUP 0= _ap-assert DROP _ap-provider !
     _ap-provider @ ARUNTIME-NEW
     DUP 0= _ap-assert DROP _ap-runtime !
-    _ap-vfs @ AVFSSTORE-NEW
+    _ap-place @ AVFSSTORE-NEW
     DUP ACSTORE-S-OK = _ap-assert DROP DUP _ap-store !
     _ap-runtime @ ARUNTIME-CONVERSATION-STORE!
     ACSTORE-S-OK = _ap-assert
@@ -1934,7 +1934,8 @@ VARIABLE _ap-msg
 : _ap-run  ( -- )
     0 _ap-fails ! 0 _ap-checks ! DEPTH _ap-depth !
     524288 A-XMEM ARENA-NEW DUP 0= _ap-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _ap-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _ap-vfs !
+    _ap-vfs @ S" ap" _t-root-place _ap-place !
 
     _ap-open 2 _ap-pump
     _ap-runtime @ ARUNTIME.STATUS @ ARUN-S-IDLE = _ap-assert
@@ -6175,6 +6176,7 @@ REQUIRE security/credential.f
 REQUIRE tui/applets/agent/storage/vfs-conversation.f
 REQUIRE tui/applets/agent/providers/openai/responses.f
 REQUIRE tui/applets/agent/runtime.f
+""" + TEST_ROOT_PLACE + r"""
 
 VARIABLE _op-fails
 VARIABLE _op-checks
@@ -6246,6 +6248,7 @@ VARIABLE _op-gateway
 VARIABLE _op-provider
 VARIABLE _op-runtime
 VARIABLE _op-vfs
+VARIABLE _op-place
 VARIABLE _op-store
 VARIABLE _op-handler-hits
 VARIABLE _op-handler-status
@@ -6576,8 +6579,9 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _op-runtime @ ARUNTIME-REMOTE-VERIFIED? 0= _op-assert
     ." [openai-provider] runtime-new" CR
     524288 A-XMEM ARENA-NEW DUP 0= _op-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _op-vfs ! VFS-USE
-    _op-vfs @ AVFSSTORE-NEW
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _op-vfs !
+    _op-vfs @ S" op" _t-root-place _op-place !
+    _op-place @ AVFSSTORE-NEW
     DUP ACSTORE-S-OK = _op-assert DROP DUP _op-store !
     _op-runtime @ ARUNTIME-CONVERSATION-STORE!
     ACSTORE-S-OK = _op-assert
@@ -10143,6 +10147,7 @@ REQUIRE interop/authority.f
 REQUIRE interop/practice-turn.f
 REQUIRE interop/request-bus.f
 REQUIRE tui/applets/agent/mandate-run.f
+""" + TEST_ROOT_PLACE + r"""
 
 VARIABLE _pc-fails
 VARIABLE _pc-checks
@@ -10181,6 +10186,7 @@ CREATE _pc-handle2 INVOCATION-HANDLE-SIZE ALLOT
 VARIABLE _pc-table
 
 VARIABLE _pc-pvfs
+VARIABLE _pc-pplace
 VARIABLE _pc-pvfs-fd
 CREATE _pc-pstore PHEADVFS-SIZE ALLOT
 CREATE _pc-pstore2 PHEADVFS-SIZE ALLOT
@@ -10211,11 +10217,19 @@ VARIABLE _pc-first-epoch
 
 : _pc-activation-run  ( -- )
     524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-avfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _pc-avfs !
+    \ The head and the activation work over a place set whose home is the volume.
+    S" pc-volume" PLACES-VOLUME 0= _pc-assert _pc-avolume !
+    _pc-avfs @ _pc-avolume @ PVOL-ATTACH 0= _pc-assert
+    S" pc-home" S" /" PLACE-WRITABLE _pc-avolume @ PLACES-DECLARE
+        0= _pc-assert _pc-adecl !
+    PLSET-NEW 0= _pc-assert _pc-aset !
+    PLACE-WRITABLE _pc-adecl @ _pc-aset @ PLSET-GRANT 0= _pc-assert
+        _pc-aset @ PLSET-HOME!
     _pc-ahead PHEAD-INIT
     31 _pc-ahead PHEAD.ID _pc-id!
     41 _pc-ahead PHEAD.CURRENT-ROOT _pc-id!
-    _pc-avfs @ _pc-astore PHEADVFS-INIT
+    _pc-aset @ PLSET-HOME _pc-astore PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-ahead _pc-astore PHEADVFS-SAVE
         PHEADVFS-S-OK = _pc-assert
@@ -10243,14 +10257,6 @@ VARIABLE _pc-first-epoch
     _pc-arejected PHEAD.REVISION @ 2 = _pc-assert
     _pc-arejected PHEAD.CURRENT-ROOT @ 42 = _pc-assert
 
-    \ The activation works over a place set whose home is the volume.
-    S" pc-volume" PLACES-VOLUME 0= _pc-assert _pc-avolume !
-    _pc-avfs @ _pc-avolume @ PVOL-ATTACH 0= _pc-assert
-    S" pc-home" S" /" PLACE-WRITABLE _pc-avolume @ PLACES-DECLARE
-        0= _pc-assert _pc-adecl !
-    PLSET-NEW 0= _pc-assert _pc-aset !
-    PLACE-WRITABLE _pc-adecl @ _pc-aset @ PLSET-GRANT 0= _pc-assert
-        _pc-aset @ PLSET-HOME!
     _pc-pact PACT-INIT
     ['] _pc-semantic-validator _pc-validator-reject
         PACT-TRUST-STRUCTURAL _pc-pact PACT-VALIDATOR!
@@ -10333,11 +10339,12 @@ VARIABLE _pc-first-epoch
 
 : _pc-persist-run  ( -- )
     524288 A-XMEM ARENA-NEW DUP 0= _pc-assert DROP
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pc-pvfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _pc-pvfs !
+    _pc-pvfs @ S" pc-persist" _t-root-place _pc-pplace !
     _pc-persist-head PHEAD-INIT
     11 _pc-persist-head PHEAD.ID _pc-id!
     22 _pc-persist-head PHEAD.CURRENT-ROOT _pc-id!
-    _pc-pvfs @ _pc-pstore PHEADVFS-INIT
+    _pc-pplace @ _pc-pstore PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-pstore _PHEADVFS.PAIR GPAIR-VALID? _pc-assert
     _pc-persist-head _pc-pstore PHEADVFS-SAVE
@@ -10367,7 +10374,7 @@ VARIABLE _pc-first-epoch
         PHEADVFS-S-IO = _pc-assert
     _pc-persist-vfs-flags @ _pc-pvfs @ V.FLAGS !
 
-    _pc-pvfs @ _pc-pstore2 PHEADVFS-INIT
+    _pc-pplace @ _pc-pstore2 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore2 PHEADVFS-LOAD
         PHEADVFS-S-OK = _pc-assert
@@ -10380,7 +10387,7 @@ VARIABLE _pc-first-epoch
     \ The same generation and same decoded payload deterministically select
     \ physical slot A without claiming a fallback.
     S" /practice-head-a.bin" 2 2 _pc-persist-record!
-    _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
+    _pc-pplace @ _pc-pstore3 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
         PHEADVFS-S-OK = _pc-assert
@@ -10395,7 +10402,7 @@ VARIABLE _pc-first-epoch
     \ Keep both checksums valid while forcing an equal-generation payload
     \ divergence.  Neither slot may win this structurally split-brain tie.
     S" /practice-head-a.bin" 2 1 _pc-persist-record!
-    _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
+    _pc-pplace @ _pc-pstore3 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY = _pc-assert
@@ -10412,7 +10419,7 @@ VARIABLE _pc-first-epoch
     S" /practice-head-a.bin" 1 1 _pc-persist-record!
 
     S" /practice-head-b.bin" _pc-persist-corrupt
-    _pc-pvfs @ _pc-pstore3 PHEADVFS-INIT
+    _pc-pplace @ _pc-pstore3 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore3 PHEADVFS-LOAD
         PHEADVFS-S-OK = _pc-assert
@@ -10436,7 +10443,7 @@ VARIABLE _pc-first-epoch
         GPAIR-R-NONE = _pc-assert
     _pc-pstore3 _PHEADVFS.PAIR GPAIR-SELECTED@ 0= _pc-assert
     _pc-pstore3 PHEADVFS-FALLBACK? 0= _pc-assert
-    _pc-pvfs @ _pc-pstore2 PHEADVFS-INIT
+    _pc-pplace @ _pc-pstore2 PHEADVFS-INIT
         PHEADVFS-S-OK = _pc-assert
     _pc-persist-out _pc-pstore2 PHEADVFS-LOAD
         PHEADVFS-S-OK = _pc-assert
@@ -12823,7 +12830,7 @@ VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
 
 : _pr-pad-storage-setup  ( -- )
     _pr-pad @ _PAD-ACTIVATE
-    _pr-vfs @ VFS-USE _pr-vfs @ _pr-places _PAD-PLACES!
+    _pr-set @ _PAD-PLACES!
     _PAD-INIT-BUF-TABLE
     _PAD-ARENA-SIZE A-XMEM ARENA-NEW
     DUP 0= _pr-assert DROP _PAD-ARENA !
@@ -12869,7 +12876,8 @@ VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
     0 _pr-fails ! 0 _pr-checks ! 0 _pr-request ! 0 _pr-ext-request !
     0 _pr-service-mode ! DEPTH _pr-depth !
     524288 A-XMEM ARENA-NEW IF -201 THROW THEN
-    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _pr-vfs ! VFS-USE
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _pr-vfs !
+    _pr-vfs @ _pr-places DROP
     S" # Daybook\n" S" /daybook.md" _pr-put
 
     _pr-head PHEAD-INIT
@@ -12882,7 +12890,7 @@ VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
     _pr-creg @ _pr-context @ RREG-NEW
         DUP 0= _pr-assert DROP _pr-rreg !
     103 _pr-rid _pr-id!
-    _pr-vfs @ _pr-rid _pr-context @ _pr-rreg @ _pr-creg @
+    _pr-place @ _pr-rid _pr-context @ _pr-rreg @ _pr-creg @
         SDOC-ACTIVATE DUP SDOC-S-OK = _pr-assert DROP _pr-owner !
     _pr-policy CPOLICY-INIT
     _pr-creg @ _pr-policy CBUS-NEW DUP 0= _pr-assert DROP _pr-bus !
@@ -14579,7 +14587,7 @@ CREATE _boot-rid RID-SIZE ALLOT
     DUP DBAO-S-CONFLICT = IF DROP 0 THEN ;
 : _boot-reminder  ( -- )
     _boot-reminders DBAO-SIZE 0 FILL
-    VFS-CUR S" /daybook-automations.bin" _boot-reminders DBAO-INIT
+    PLACES-DEFAULT PLSET-HOME S" /daybook-automations.bin" _boot-reminders DBAO-INIT
         ABORT" reminder owner init failed"
     _boot-reminders DBAO-OPEN ABORT" reminder store open failed"
     _boot-draft DBAO-DRAFT-SIZE 0 FILL
@@ -20397,11 +20405,12 @@ REQUIRE tui/app-builder.f
 REQUIRE tui/app-loader.f
 REQUIRE tui/draw.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
-
+""" + TEST_ROOT_PLACE + r"""
 VARIABLE _pkg-fails
 VARIABLE _pkg-checks
 VARIABLE _pkg-depth
 VARIABLE _pkg-vfs
+VARIABLE _pkg-place
 CREATE _pkg-bd /BLOCK-DEVICE ALLOT
 CREATE _pkg-volume /VOLUME ALLOT
 VARIABLE _pkg-cat
@@ -20471,11 +20480,11 @@ CREATE _pkg-writer-small 4 ALLOT
     _pkg-fd @ VFS-CLOSE 0 _pkg-fd ! 0 ;
 
 : _pkg-load-fails  ( expected -- )
-    >R _pkg-doc @ _pkg-doc-u @ ALOAD-MANIFEST
+    >R _pkg-doc @ _pkg-doc-u @ _pkg-place @ ALOAD-MANIFEST
     R> = SWAP 0= AND _pkg-assert ;
 
 : _pkg-resolver  ( entry context -- desc status )
-    DROP ACE-MANIFEST$ ALOAD-PATH ;
+    DROP ACE-MANIFEST$ _pkg-cat @ ACAT-PLACE ALOAD-PATH ;
 
 : _pkg-cycle  ( -- )
     _pkg-desc @ APP.COMP-DESC @ CINST-NEW
@@ -20491,11 +20500,11 @@ CREATE _pkg-writer-small 4 ALLOT
     _pkg-inst @ CINST-FREE 0 _pkg-inst ! ;
 
 : _pkg-bad-build  ( -- )
-    S" /bad.toml" ABUILD-INSTALL
+    S" /bad.toml" _pkg-place @ ABUILD-INSTALL
     ABUILD-E-COMPILE = SWAP 0= AND _pkg-assert ;
 
 : _pkg-throw-build  ( -- )
-    S" /throw.toml" ABUILD-INSTALL _pkg-status ! _pkg-entry !
+    S" /throw.toml" _pkg-place @ ABUILD-INSTALL _pkg-status ! _pkg-entry !
     _pkg-status @ ABUILD-E-COMPILE <>
     ABUILD-LAST-DETAIL EVAL-S-THROW <> OR
     ABUILD-EVAL-THROW -777 <> OR IF
@@ -20513,8 +20522,9 @@ CREATE _pkg-writer-small 4 ALLOT
     _pkg-bd _pkg-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
     _pkg-volume VMP-NEW ?DUP IF THROW THEN
-    DUP _pkg-vfs ! VFS-USE
-    _pkg-vfs @ ACAT-NEW
+    _pkg-vfs !
+    _pkg-vfs @ S" pkg" _t-root-place _pkg-place !
+    _pkg-place @ ACAT-NEW
     DUP ACAT-S-OK = _pkg-assert DROP DUP _pkg-cat !
     ACAT-ACTIVATE
     DUP ACAT-S-MISSING = SWAP ACAT-S-OK = OR _pkg-assert
@@ -20523,7 +20533,7 @@ CREATE _pkg-writer-small 4 ALLOT
 
     _pkg-test-builder-writer
 
-    S" /hello.toml" ABUILD-INSTALL _pkg-status ! _pkg-entry !
+    S" /hello.toml" _pkg-place @ ABUILD-INSTALL _pkg-status ! _pkg-entry !
     _pkg-status @ ABUILD-S-OK = _pkg-assert
     _pkg-entry @ 0<> _pkg-assert
     ABUILD-SOURCE-PATH S" /hello.f" COMPARE 0= _pkg-assert
@@ -21557,7 +21567,7 @@ VARIABLE _al-store
     AROLE-ASSISTANT AMSG-S-COMPLETE 1 _al-text _al-text-u @
     _al-conv @ ACONV-APPEND
     0<> ABORT" layout message append failed" DROP
-    VFS-CUR AVFSSTORE-NEW
+    PLACES-DEFAULT PLSET-HOME AVFSSTORE-NEW
     DUP ACSTORE-S-OK <> ABORT" layout store allocation failed"
     DROP _al-store !
     _al-conv @ _al-store @ ACSTORE-SAVE
@@ -23030,13 +23040,14 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
+    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
 : _boot-practice-provision  ( -- )
     _boot-practice-present? IF EXIT THEN
-    VFS-CUR _boot-practice-store PHEADVFS-INIT
+    PLACES-DEFAULT PLSET-HOME _boot-practice-store PHEADVFS-INIT
         PHEADVFS-S-OK <> ABORT" Practice store init failed"
     _boot-practice-out _boot-practice-store PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
@@ -23109,13 +23120,14 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
+    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
 : _boot-practice-provision  ( -- )
     _boot-practice-present? IF EXIT THEN
-    VFS-CUR _boot-practice-store PHEADVFS-INIT
+    PLACES-DEFAULT PLSET-HOME _boot-practice-store PHEADVFS-INIT
         PHEADVFS-S-OK <> ABORT" Practice store init failed"
     _boot-practice-out _boot-practice-store PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
@@ -23202,13 +23214,14 @@ CREATE _boot-practice-out PHEAD-SIZE ALLOT
 CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 : _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 : _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
+    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
 : _boot-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _boot-practice-slot?
     S" /practice-head-b.bin" _boot-practice-slot? OR ;
 : _boot-practice-provision  ( -- )
     _boot-practice-present? IF EXIT THEN
-    VFS-CUR _boot-practice-store PHEADVFS-INIT
+    PLACES-DEFAULT PLSET-HOME _boot-practice-store PHEADVFS-INIT
         PHEADVFS-S-OK <> ABORT" Practice store init failed"
     _boot-practice-out _boot-practice-store PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
@@ -37012,7 +37025,7 @@ VARIABLE _dst-impostor
         0= _dst-assert
     S" org.akashic.agent.access-profile" _dst-desk @ CINST-SERVICE
         0= _dst-assert
-    VFS-CUR _DESK-REMINDERS DBSVC-OPEN 0= _dst-assert
+    PLACES-DEFAULT PLSET-HOME _DESK-REMINDERS DBSVC-OPEN 0= _dst-assert
     S" org.akashic.daybook.automations" _dst-daybook @ CINST-SERVICE
         _DESK-REMINDERS = _dst-assert
     S" org.akashic.daybook.automations" _dst-agent @ CINST-SERVICE
@@ -37022,7 +37035,8 @@ VARIABLE _dst-impostor
     S" org.akashic.daybook.automations" _dst-desk @ CINST-SERVICE
         0= _dst-assert
     _DESK-REMINDERS DBSVC-CLOSE
-    _dst-runtime VFS-CUR _DESK-AGENT-DISPATCH ADISP-INIT 0= _dst-assert
+    _dst-runtime PLACES-DEFAULT PLSET-HOME _DESK-AGENT-DISPATCH ADISP-INIT
+        0= _dst-assert
     S" org.akashic.agent.dispatch" _dst-agent @ CINST-SERVICE
         _DESK-AGENT-DISPATCH = _dst-assert
     S" org.akashic.agent.dispatch" _dst-daybook @ CINST-SERVICE 0= _dst-assert

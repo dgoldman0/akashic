@@ -227,7 +227,7 @@ it, and pointer input outside it is ignored.  An open is only recorded by the
 list and carried out by Desk after the host's dispatch returns, so no slot is
 launched or closed from inside the launcher's own callbacks.  The overlay
 never takes focus or a taskbar entry, and closing it relays out the tiles.  Package resolution is manifest-bound:
-`ACE-MANIFEST$ ALOAD-PATH`.  A package is a machine-code image, so on a system
+`ACE-MANIFEST$`, loaded by `ALOAD-PATH` in the catalog's place.  A package is a machine-code image, so on a system
 whose Forth is not compiled to machine code, as in MegaPad's simulator and its
 hybrid mode, the loader refuses with `ALOAD-E-UNSUPPORTED` before it reads
 anything and the status line says "this system cannot run machine-code

@@ -40,6 +40,7 @@ REQUIRE ../math/crc.f
 REQUIRE ../utils/checked-record.f
 REQUIRE ../utils/fs/vfs.f
 REQUIRE ../utils/fs/vfs-replace.f
+REQUIRE ../utils/fs/place-replace.f
 REQUIRE ../utils/caller-span.f
 REQUIRE ../utils/memory-span.f
 
@@ -943,10 +944,10 @@ _SST-PROBE _SST-GRANT-SIZE + CONSTANT SBOX-STORE-SIZE
 \ =====================================================================
 
 \ Configures STORE, SBOX-STORE-SIZE cell-aligned bytes, to keep the
-\ modules OWNER holds in two files of VFS, at absolute paths in one
-\ directory.  The owner stays the caller's.
+\ modules OWNER holds in two files of PLACE, at paths in one folder.  The
+\ owner stays the caller's.
 : SBOX-STORE-INIT
-  ( vfs catalog-path catalog-u pack-path pack-u owner store -- status )
+  ( place catalog-path catalog-u pack-path pack-u owner store -- status )
     DUP 0= OVER 7 AND OR IF _SST-DROP7 SBOX-STORE-S-INVALID EXIT THEN
     DUP SBOX-STORE-SIZE _SST-SPAN? 0= IF
         _SST-DROP7 SBOX-STORE-S-INVALID EXIT
@@ -958,20 +959,13 @@ _SST-PROBE _SST-GRANT-SIZE + CONSTANT SBOX-STORE-SIZE
     6 PICK 0= IF _SST-DROP7 SBOX-STORE-S-INVALID EXIT THEN
     DUP SBOX-STORE-SIZE 0 FILL
     >R R@ _SST.OWNER !
-    4 PICK R@ _SST.VFS !
-    4 PICK R@ _SST.PACK-REPL VREPL-INIT IF
-        2DROP 2DROP DROP R> DROP SBOX-STORE-S-INVALID EXIT
-    THEN
-    R@ _SST.PACK-REPL VREPL-DERIVE-PATHS! IF
+    4 PICK DUP PLACE-WRITABLE? R@ _SST.PACK-REPL PLACE-VREPL! IF
         2DROP DROP R> SBOX-STORE-SIZE 0 FILL SBOX-STORE-S-INVALID EXIT
     THEN
-    2 PICK R@ _SST.CAT-REPL VREPL-INIT IF
-        2DROP DROP R> SBOX-STORE-SIZE 0 FILL SBOX-STORE-S-INVALID EXIT
+    ROT DUP PLACE-WRITABLE? R@ _SST.CAT-REPL PLACE-VREPL! IF
+        R> SBOX-STORE-SIZE 0 FILL SBOX-STORE-S-INVALID EXIT
     THEN
-    R@ _SST.CAT-REPL VREPL-DERIVE-PATHS! IF
-        DROP R> SBOX-STORE-SIZE 0 FILL SBOX-STORE-S-INVALID EXIT
-    THEN
-    DROP
+    R@ _SST.CAT-REPL VREPL.VFS @ R@ _SST.VFS !
     _SST-CATALOG-MAGIC 1 CREC-TAG-POSITIVE
         ['] _SST-CATALOG-ENCODE ['] _SST-CATALOG-VALID
         R@ _SST.SPEC CREC-SPEC-INIT

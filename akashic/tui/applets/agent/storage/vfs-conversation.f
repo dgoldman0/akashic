@@ -6,7 +6,9 @@
 \  is exact and each publication is one guarded VFS transaction.  A store
 \  guard also covers the module scratch state and generation selection, so
 \  owner-core callers cannot interleave before the VFS transaction begins.
-\  Allocation and VFS selection keep this adapter core-affine; the runtime
+\  The two snapshot files are in the place the store is given, and every
+\  open, create and sync goes through that place, so a read-only place
+\  refuses a save.  Allocation keeps this adapter core-affine; the runtime
 \  must separately serialize object lifetime against AVFSSTORE-FREE.
 \ =====================================================================
 
@@ -15,20 +17,21 @@ PROVIDED akashic-agent-vfs-store
 REQUIRE ../conversation-store.f
 REQUIRE thread-codec.f
 REQUIRE ../../../../utils/fs/vfs.f
+REQUIRE ../../../../utils/fs/places.f
 REQUIRE ../../../../utils/generation-pair.f
 REQUIRE ../../../../concurrency/guard.f
 
 GUARD _avfs-store-guard
 
 0 CONSTANT _AVS-STORE
-_AVS-STORE AGENT-CONVERSATION-STORE-SIZE + CONSTANT _AVS-VFS
-_AVS-VFS 8 + CONSTANT _AVS-PAIR
+_AVS-STORE AGENT-CONVERSATION-STORE-SIZE + CONSTANT _AVS-PLACE
+_AVS-PLACE 8 + CONSTANT _AVS-PAIR
 _AVS-PAIR GPAIR-SIZE + CONSTANT _AVS-FLAGS
 _AVS-FLAGS 8 + CONSTANT _AVS-CANDIDATE-A
 _AVS-CANDIDATE-A GPAIR-CANDIDATE-SIZE + CONSTANT _AVS-CANDIDATE-B
 _AVS-CANDIDATE-B GPAIR-CANDIDATE-SIZE + CONSTANT AVFSSTORE-SIZE
 
-: AVFSSTORE.VFS         ( store -- a ) _AVS-VFS + ;
+: AVFSSTORE.PLACE       ( store -- a ) _AVS-PLACE + ;
 : AVFSSTORE.PAIR        ( store -- pair ) _AVS-PAIR + ;
 : AVFSSTORE.GENERATION  ( store -- a )
     AVFSSTORE.PAIR GPAIR.GENERATION ;
@@ -57,12 +60,12 @@ VARIABLE _AVFS-CONV-FREE-XT
 VARIABLE _AVFS-GUARD-RELEASE-XT
 
 : _AVFS-RESET-DEPENDENCIES  ( -- )
-    ['] VFS-OPEN            _AVFS-OPEN-XT !
-    ['] VFS-CREATE          _AVFS-CREATE-XT !
+    ['] PLACE-OPEN          _AVFS-OPEN-XT !
+    ['] PLACE-CREATE        _AVFS-CREATE-XT !
     ['] VFS-READ-EXACT      _AVFS-READ-XT !
     ['] VFS-WRITE-EXACT     _AVFS-WRITE-XT !
     ['] VFS-CLOSE           _AVFS-CLOSE-XT !
-    ['] VFS-SYNC            _AVFS-SYNC-XT !
+    ['] PLACE-SYNC          _AVFS-SYNC-XT !
     ['] ATHREAD-DECODE      _AVFS-DECODE-XT !
     ['] ATHREAD-ENCODE-SIZE _AVFS-ENCODE-SIZE-XT !
     ['] ATHREAD-ENCODE      _AVFS-ENCODE-XT !
@@ -70,6 +73,14 @@ VARIABLE _AVFS-GUARD-RELEASE-XT
     ['] GUARD-RELEASE       _AVFS-GUARD-RELEASE-XT ! ;
 
 _AVFS-RESET-DEPENDENCIES
+
+\ The file at PATH in STORE's place, open with FLAGS; 0 when the path
+\ names nothing.  Any other failure throws its ior.
+: _AVFS-OPEN  ( path-a path-u flags store -- fd | 0 )
+    AVFSSTORE.PLACE @ _AVFS-OPEN-XT @ EXECUTE
+    ?DUP 0= IF EXIT THEN
+    DUP VFS-IOR-REASON VFS-R-NOENT = IF 2DROP 0 EXIT THEN
+    NIP THROW ;
 
 VARIABLE _AVFS-CLEAN-IOR
 
@@ -134,8 +145,7 @@ VARIABLE _AVR-CLEAN-FD
 
 : _AVFS-READ-BYTES-BODY  ( -- )
     ACSTORE-S-IO _AVR-STATUS !
-    _AVR-PA @ _AVR-PU @ _AVR-S @ AVFSSTORE.VFS @ _AVFS-OPEN-XT @ EXECUTE
-    _AVR-FD !
+    _AVR-PA @ _AVR-PU @ VFS-FF-READ _AVR-S @ _AVFS-OPEN _AVR-FD !
     _AVR-FD @ 0= IF ACSTORE-S-NOT-FOUND _AVR-STATUS ! EXIT THEN
     _AVR-FD @ VFS-SIZE DUP _AVR-SIZE !
     DUP ATHREAD-HEADER-SIZE < SWAP ATHREAD-MAX-SNAPSHOT > OR IF
@@ -429,20 +439,19 @@ VARIABLE _AVW-PUBLICATION-MAYBE
     IF _AVFS-PATH-B ELSE _AVFS-PATH-A THEN
     _AVW-PU ! _AVW-PA ! ;
 
+: _AVFS-OPEN-WRITE  ( -- fd | 0 )
+    _AVW-PA @ _AVW-PU @ VFS-FF-READ VFS-FF-WRITE OR _AVW-S @ _AVFS-OPEN ;
+
 : _AVFS-OPEN-WRITE-LOCKED  ( -- fd | 0 )
-    _AVW-PA @ _AVW-PU @ _AVW-S @ AVFSSTORE.VFS @ _AVFS-OPEN-XT @ EXECUTE
+    _AVFS-OPEN-WRITE
     DUP 0= IF
         DROP
         \ Creating the inactive path is already an externally visible effect,
         \ even if the later snapshot write never reaches durability.
         _AVFS-PAIR-MAYBE!
-        _AVW-PA @ _AVW-PU @ _AVW-S @ AVFSSTORE.VFS @
-        _AVFS-CREATE-XT @ EXECUTE
-        DUP 0= IF
-            DROP 0 EXIT
-        THEN
-        DROP _AVW-PA @ _AVW-PU @ _AVW-S @ AVFSSTORE.VFS @
-        _AVFS-OPEN-XT @ EXECUTE
+        _AVW-PA @ _AVW-PU @ _AVW-S @ AVFSSTORE.PLACE @
+        _AVFS-CREATE-XT @ EXECUTE NIP IF 0 EXIT THEN
+        _AVFS-OPEN-WRITE
     THEN ;
 
 : _AVW-CLEAN-CLOSE  ( -- ) _AVW-CLEAN-FD @ VFS-CLOSE ;
@@ -477,7 +486,7 @@ VARIABLE _AVW-PUBLICATION-MAYBE
     IF EXIT THEN
     _AVW-FD @ 0 _AVW-FD ! _AVFS-CLOSE-XT @ EXECUTE
     ACSTORE-S-UNCERTAIN _AVW-STATUS !
-    _AVW-S @ AVFSSTORE.VFS @ _AVFS-SYNC-XT @ EXECUTE IF EXIT THEN
+    _AVW-S @ AVFSSTORE.PLACE @ _AVFS-SYNC-XT @ EXECUTE IF EXIT THEN
     _AVFS-PAIR-DURABLE!
     ACSTORE-S-OK _AVW-STATUS ! ;
 
@@ -614,13 +623,13 @@ VARIABLE _AVP-STATUS
 
 VARIABLE _AVN-S
 
-: _AVFSSTORE-NEW-LOCKED  ( vfs -- store status )
+: _AVFSSTORE-NEW-LOCKED  ( place -- store status )
     DUP 0= IF DROP 0 ACSTORE-S-INVALID EXIT THEN
     >R AVFSSTORE-SIZE ALLOCATE
     DUP IF 2DROP R> DROP 0 ACSTORE-S-NOMEM EXIT THEN
     DROP DUP _AVN-S ! AVFSSTORE-SIZE 0 FILL
     _AVN-S @ ACSTORE-INIT
-    R> _AVN-S @ AVFSSTORE.VFS !
+    R> _AVN-S @ AVFSSTORE.PLACE !
     _AVN-S @ _AVFSSTORE-CANDIDATE-A GPAIR-CANDIDATE-INIT DROP
     _AVN-S @ _AVFSSTORE-CANDIDATE-B GPAIR-CANDIDATE-INIT DROP
     ['] _AVFS-PAIR-EQUAL ['] _AVFS-PAIR-SAVE _AVN-S @
@@ -634,5 +643,7 @@ VARIABLE _AVN-S
     ['] AVFSSTORE-FREE _AVN-S @ ACSTORE.FREE-XT !
     _AVN-S @ ACSTORE-S-OK ;
 
-: AVFSSTORE-NEW  ( vfs -- store status )
+\ AVFSSTORE-NEW ( place -- store status )
+\   A store that keeps the conversation in two files of PLACE.
+: AVFSSTORE-NEW  ( place -- store status )
     ['] _AVFSSTORE-NEW-LOCKED _avfs-store-guard WITH-GUARD ;

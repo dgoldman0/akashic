@@ -188,7 +188,7 @@ says.
 ## Words
 
 ```forth
-DBAO-INIT          ( vfs path path-u owner -- status )
+DBAO-INIT          ( place path path-u owner -- status )
 DBAO-OPEN          ( owner -- status )
 DBAO-CLOSE         ( owner -- status )
 DBAO-STORE         ( owner -- store )

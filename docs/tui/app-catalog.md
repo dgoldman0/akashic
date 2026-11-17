@@ -22,7 +22,8 @@ and Desk slot fields.  Callers should use `ACE-ID$`, `ACE-TITLE$`,
 
 | Word | Stack | Meaning |
 |---|---|---|
-| `ACAT-NEW` | `( vfs -- catalog status )` | Allocate/configure a catalog. |
+| `ACAT-NEW` | `( place -- catalog status )` | Allocate a catalog that keeps `/app-catalog.bin` in the place. A file the place cannot bind leaves the catalog to activate in recovery. |
+| `ACAT-PLACE` | `( catalog -- place )` | The catalog's place, where installed packages' manifests and images are too. |
 | `ACAT-ACTIVATE` | `( catalog -- status )` | Recover VREPL state and strictly load the target.  Missing is an empty usable catalog. |
 | `ACAT-BIND-BUILTIN` | `( desc default-flags catalog -- status )` | Bind by exact descriptor component ID; a missing row is committed first. |
 | `ACAT-UPSERT-PACKAGE` | `( ia iu ta tu va vu ma mu flags catalog -- status )` | Insert or transactionally update copied package metadata. |

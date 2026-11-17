@@ -42,7 +42,7 @@
 \
 \  Public API:
 \    ADISP-SIZE    ( -- bytes )
-\    ADISP-INIT    ( runtime vfs dispatch -- status )
+\    ADISP-INIT    ( runtime place dispatch -- status )
 \    ADISP-FINI    ( dispatch -- )
 \    ADISP-VALID?  ( dispatch -- flag )
 \    ADISP-STORE   ( dispatch -- store )
@@ -407,11 +407,11 @@ _ADISP-READER ACREAD-SIZE + CONSTANT ADISP-SIZE
 : _ADISP-PATH$  ( -- address length ) S" /agent-dispatch.bin" ;
 
 \ Configures DISPATCH, ADISP-SIZE cell-aligned bytes, for RUNTIME with its
-\ run store in VFS, and opens the store, ending as interrupted any run it
+\ run store in PLACE, and opens the store, ending as interrupted any run it
 \ shows in flight: the Agent was running it when it last stopped.  The
 \ dispatcher works whatever state the store is in, so a store that cannot
 \ be used can say why; the status is the store's, an ADST-S- value.
-: ADISP-INIT  ( runtime vfs dispatch -- status )
+: ADISP-INIT  ( runtime place dispatch -- status )
     DUP 0= OVER 7 AND OR IF 2DROP DROP ADST-S-INVALID EXIT THEN
     DUP ADISP-VALID? IF 2DROP DROP ADST-S-STATE EXIT THEN
     2 PICK 0= IF 2DROP DROP ADST-S-INVALID EXIT THEN

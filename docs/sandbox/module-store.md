@@ -120,9 +120,11 @@ store refuses every write, so nothing more is lost before someone repairs it.
 
 ## Words
 
-- `SBOX-STORE-INIT ( vfs catalog-path catalog-u pack-path pack-u owner store
-  -- status )` configures `SBOX-STORE-SIZE` cell-aligned bytes for an owner.
-  The paths are absolute and in one directory.
+- `SBOX-STORE-INIT ( place catalog-path catalog-u pack-path pack-u owner
+  store -- status )` configures `SBOX-STORE-SIZE` cell-aligned bytes for an
+  owner. The paths are in the place and in one folder; each file is bound
+  through the place (`PLACE-VREPL!`), for writing when the place is
+  writable.
 - `SBOX-STORE-OPEN ( store -- status )` recovers, reads and fills the owner,
   which must be empty. `SBOX-STORE-CLOSE ( store -- status )` frees what
   opening read; the owner keeps its modules.

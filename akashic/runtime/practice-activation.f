@@ -180,10 +180,11 @@ VARIABLE _PACT-A-LOAD-STATUS
 VARIABLE _PACT-A-CONTEXT
 VARIABLE _PACT-A-CTX-FLAGS
 
-\ Narrow every place of the set to read-only.  Until each store takes a
-\ place (the second slice of docs/utils/fs/places.md), the stores write
-\ through the instance itself, so the volumes under the set's places are
-\ marked read-only as well.
+\ Narrow every place of the set to read-only.  A store that keeps its
+\ file through a replacement binds it in its place when it opens, and
+\ on a read-only place it binds the file for reading; it would still
+\ write through the instance that binding gave if asked, so the volumes
+\ under the set's places are marked read-only as well.
 : _PACT-NARROW  ( -- )
     _PACT-A-SET @ PLSET-READ-ONLY!
     _PACT-A-SET @ PLSET-FIRST
@@ -231,7 +232,7 @@ VARIABLE _PACT-A-CTX-FLAGS
     _PACT-A-PACT @ PACT-DEACTIVATE
     _PACT-A-SET @ _PACT-A-PACT @ PACT.PLACES !
     _PACT-A-SET @ _PACT-USABLE-HOME DUP _PACT-A-HOME ! IF
-        _PACT-A-HOME @ PLACE-VFS _PACT-A-PACT @ PACT-STORE PHEADVFS-INIT
+        _PACT-A-HOME @ _PACT-A-PACT @ PACT-STORE PHEADVFS-INIT
         PHEADVFS-S-OK <> IF
             PACT-S-INVALID _PACT-A-PACT @ PACT.STATUS !
             PACT-S-INVALID EXIT

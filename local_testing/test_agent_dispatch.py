@@ -222,9 +222,9 @@ FAKE-G AGENT-TOOL-GATEWAY-SIZE 0 FILL
     4 PUMPS
     ARUN-S-IDLE RT @ ARUNTIME.STATUS !
     DS ADISP-SIZE 0 FILL T-OPS-RESET
-    DS ADISP-STORE ADST-SIZE 0 FILL TV @ D-PATH DS ADISP-STORE ADST-INIT DROP D-WIPE
+    DS ADISP-STORE ADST-SIZE 0 FILL TV-PLACE D-PATH DS ADISP-STORE ADST-INIT DROP D-WIPE
     DS ADISP-STORE ADST-SIZE 0 FILL
-    RT @ TV @ DS ADISP-INIT DROP
+    RT @ TV-PLACE DS ADISP-INIT DROP
     16384 OUT-U ! NEWS$ OPS! 300000 A-TIME ! 4096 A-DISC ! ;
 """
 
@@ -490,11 +490,11 @@ def test_a_run_out_of_time(forth):
 def test_a_restart_finds_the_run_left_in_flight(forth):
     rows = run(forth, [
         "FRESH LINGER$ OPS! 1 1 R-OCC KEEP1 GO . 2 STEPS CRASH "
-        "RT @ TV @ DS ADISP-INIT . KEY1 STAND . ANS. R0 ADST-R.PHASE @ . STATUS@ . CR",
+        "RT @ TV-PLACE DS ADISP-INIT . KEY1 STAND . ANS. R0 ADST-R.PHASE @ . STATUS@ . CR",
         "1 1 R-OCC GO . ANS. AM-LIVE? . AM-FREE CR",
         # A restart whose reconcile could not be written answers the same.
         "FRESH LINGER$ OPS! 1 1 R-OCC KEEP1 GO DROP 2 STEPS CRASH 1 T-SYNC-N ! "
-        "RT @ TV @ DS ADISP-INIT . 0 T-SYNC-N ! KEY1 STAND . ANS. R0 ADST-R.PHASE @ . CR",
+        "RT @ TV-PLACE DS ADISP-INIT . 0 T-SYNC-N ! KEY1 STAND . ANS. R0 ADST-R.PHASE @ . CR",
         "1 1 R-OCC GO . ANS. AM-LIVE? . AM-FREE CR",
     ])
     assert ints(rows[0]) == [S_STARTED, 0, S_ENDED, INDETERMINATE, R_INTERRUPTED, ENDED, IDLE]
@@ -507,7 +507,7 @@ def test_closing_ends_the_run_in_flight(forth):
     rows = run(forth, [
         "FRESH LINGER$ OPS! 1 1 R-OCC KEEP1 GO . 2 STEPS DS ADISP-FINI HELD? . STATUS@ . "
         "DS ADISP-VALID? . CR",
-        "RT @ TV @ DS ADISP-INIT . KEY1 STAND . ANS. CR",
+        "RT @ TV-PLACE DS ADISP-INIT . KEY1 STAND . ANS. CR",
         "FRESH LINGER$ RT @ ARUNTIME-SEND DROP 3 STEPS 1 1 R-OCC GO . AM-FREE HELD? . "
         "DS ADISP-FINI HELD? . RT @ ARUNTIME-CANCEL DROP 2 STEPS CR",
     ])
@@ -535,8 +535,8 @@ def test_answers_and_their_refusals(forth):
 
 def test_lifecycle_refusals(forth):
     rows = run(forth, [
-        "FRESH DS ADISP-FINI RT @ TV @ DS 1+ ADISP-INIT . 0 TV @ DS ADISP-INIT . "
-        "DS ADISP-VALID? . RT @ TV @ DS ADISP-INIT . RT @ TV @ DS ADISP-INIT . CR",
+        "FRESH DS ADISP-FINI RT @ TV-PLACE DS 1+ ADISP-INIT . 0 TV-PLACE DS ADISP-INIT . "
+        "DS ADISP-VALID? . RT @ TV-PLACE DS ADISP-INIT . RT @ TV-PLACE DS ADISP-INIT . CR",
     ])
     # Misaligned, no runtime, then opened, and a dispatcher already in use.
     assert ints(rows[0]) == [1, 1, 0, 0, 5]
@@ -557,7 +557,7 @@ def test_a_store_that_fails_to_write_an_end(forth):
         "FRESH 1 1 R-OCC KEEP1 GO DROP 3 STEPS 5 T-SYNC-N ! STEP 0 T-SYNC-N ! "
         "DS ADISP-STORE ADST-STATE@ . DS ADISP-IDLE? . HELD? . KEY1 STAND . CR",
         "1 2 R-OCC GO . ANS. AM-FREE CR",
-        "DS ADISP-FINI RT @ TV @ DS ADISP-INIT . KEY1 STAND . ANS. CR",
+        "DS ADISP-FINI RT @ TV-PLACE DS ADISP-INIT . KEY1 STAND . ANS. CR",
     ])
     assert ints(rows[0]) == [0, 0, S_ENDED, COMPLETED, R_NONE, ACCEPTED]
     assert ints(rows[1]) == [S_WAITING]
@@ -668,6 +668,6 @@ def test_a_run_starts_with_its_reference(forth):
 def test_a_store_that_cannot_be_used(forth):
     rows = run(forth, [
         "FRESH DS ADISP-FINI TBUF 16 0 FILL 16 TLEN ! D-PATH T-PUT-AT "
-        "RT @ TV @ DS ADISP-INIT . 1 1 R-OCC GO . ANS. RUNS . AM-LIVE? . AM-FREE CR",
+        "RT @ TV-PLACE DS ADISP-INIT . 1 1 R-OCC GO . ANS. RUNS . AM-LIVE? . AM-FREE CR",
     ])
     assert ints(rows[0]) == [4, S_ENDED, BLOCKED, R_AGENT_UNAVAILABLE, 0, -1]

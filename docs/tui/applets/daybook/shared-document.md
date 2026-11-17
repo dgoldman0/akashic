@@ -49,7 +49,7 @@ activation but does not own the Daybook data or policy.
 ## Public interface
 
 ```forth
-SDOC-ACTIVATE   ( vfs rid context rreg creg -- instance status )
+SDOC-ACTIVATE   ( place rid context rreg creg -- instance status )
 SDOC-ACTIVATION-CLEANUP ( context rreg creg -- status )
 SDOC-DEACTIVATE ( instance -- status )
 SDOC-REF        ( instance destination-rref -- status )
@@ -65,7 +65,8 @@ SDOC-CAP-DESCRIBE ( -- capability )
 
 Only one owner may be live in the module at a time. `SDOC-ACTIVATE` configures
 a one-slot caller-owned pool, acquires an identity locator as the owner's
-anchor, copies the RID, uses `/daybook.md` as its canonical VFS backing path,
+anchor, copies the RID, keeps `/daybook.md` in the place it is given (Desk
+gives the home of the Practice's places), binding it through the place,
 recovers its `VREPL` transaction namespace, validates the existing bounded
 UTF-8 source, publishes the pool-created component, and initializes its
 caller-owned `ROFFER`. `SDOC-SERVICE` lends that offer as the public named-

@@ -46,7 +46,14 @@ VARIABLE T-SYNC-N
 T-OPS-RESET
 VFS-RAM-BINDING TV-BINDING VFS-BINDING-DESC-SIZE CMOVE
 TV-OPS TV-BINDING VB.OPS !
-33554432 A-XMEM ARENA-NEW THROW TV-BINDING 0 VFS-NEW THROW DUP TV ! VFS-USE
+33554432 A-XMEM ARENA-NEW THROW TV-BINDING 0 VFS-NEW THROW TV !
+\ The suite's place: the RAM filesystem's root, writable.  Stores keep
+\ their files in it.
+: T-PLACE  ( vfs -- place )
+    S" tv" PLACES-VOLUME THROW TUCK PVOL-ATTACH THROW
+    >R S" tv" S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW
+    PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;
+TV @ T-PLACE CONSTANT TV-PLACE
 
 : T-PATH  ( -- a u ) S" /daybook-automations.bin" ;
 : T-RM  ( a u -- ) TV @ VFS-RM DROP ;
@@ -75,7 +82,7 @@ CREATE T-ID2 32 ALLOT
 VARIABLE T-SUMV  VARIABLE T-SUMV2  VARIABLE T-FILE
 
 \ A configured, closed store over the file.
-: T-INIT  ( -- status ) ST DBAS-SIZE 0 FILL TV @ T-PATH ST DBAS-INIT ;
+: T-INIT  ( -- status ) ST DBAS-SIZE 0 FILL TV-PLACE T-PATH ST DBAS-INIT ;
 : T-WIPE  ( -- )
     T-PATH T-RM
     ST _DBAS.REPL VREPL-STAGE$ T-RM
@@ -288,10 +295,10 @@ def run(forth, lines: list[str], max_steps: int = 4_000_000_000) -> list[list[in
 def test_lifecycle_and_its_refusals(forth):
     rows = run(forth, [
         "T-FRESH",
-        "TV @ T-PATH ST 1+ DBAS-INIT . TV @ T-PATH 0 DBAS-INIT .",
+        "TV-PLACE T-PATH ST 1+ DBAS-INIT . TV-PLACE T-PATH 0 DBAS-INIT .",
         "ST2 DBAS-SIZE 0 FILL 0 T-PATH ST2 DBAS-INIT .",
-        'TV @ S" relative.bin" ST2 DBAS-INIT . ST2 DBAS-VALID? .',
-        "TV @ T-PATH ST DBAS-INIT . CR",
+        'TV-PLACE S" /absent/file.bin" ST2 DBAS-INIT . ST2 DBAS-VALID? .',
+        "TV-PLACE T-PATH ST DBAS-INIT . CR",
         "ST DBAS-STATE@ . ST DBAS-COMMIT . ST DBAS-IDENTITY NIP . CR",
         "ST DBAS-OPEN . ST DBAS-STATE@ . ST DBAS-OPEN . CR",
         "ST DBAS-CLOSE . ST DBAS-STATE@ . ST DBAS-COMMIT . CR",

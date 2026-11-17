@@ -45,6 +45,9 @@ def main() -> int:
     vrepl_test.build_snapshot()
     sources = (
         ROOT / "akashic" / "utils" / "string.f",
+        ROOT / "akashic" / "utils" / "fs" / "place-name.f",
+        ROOT / "akashic" / "utils" / "fs" / "places.f",
+        ROOT / "akashic" / "utils" / "fs" / "place-replace.f",
         ROOT / "akashic" / "runtime" / "instance.f",
         ROOT / "akashic" / "tui" / "app-desc.f",
         ROOT / "akashic" / "tui" / "app-catalog.f",
@@ -54,7 +57,7 @@ def main() -> int:
         forth.extend(vrepl_test._forth_lines(source))
     forth.extend(
         [
-            "VARIABLE _CTV VARIABLE _CC1 VARIABLE _CC2 VARIABLE _CC3",
+            "VARIABLE _CTV VARIABLE _CTP VARIABLE _CC1 VARIABLE _CC2 VARIABLE _CC3",
             "VARIABLE _CS VARIABLE _CU",
             "VARIABLE _CREL-N",
             "CREATE _CTCOMP COMP-DESC ALLOT CREATE _CTAPP APP-DESC ALLOT",
@@ -68,6 +71,10 @@ def main() -> int:
             ": CT-VFS-NEW CT-BINDING-RESET "
             "1048576 A-XMEM ARENA-NEW IF -1 THROW THEN "
             "_CT-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;",
+            ": CT-PLACE ( vfs -- place ) "
+            'S" ct" PLACES-VOLUME THROW TUCK PVOL-ATTACH THROW '
+            '>R S" ct" S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW '
+            "PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;",
             ": CT-DESCS "
             "_CTCOMP COMP-DESC-INIT "
             'S" org.test.builtin" _CTCOMP COMP.ID-U ! _CTCOMP COMP.ID-A ! '
@@ -93,8 +100,8 @@ def main() -> int:
             ": CT-RESOLVE 2DROP _CPAPP ACAT-S-OK ;",
             ": CT-RELEASE DROP _CPAPP = IF 1 _CREL-N +! THEN ;",
             'S" CATRESULT " TYPE '
-            "CT-VFS-NEW DUP _CTV ! VFS-USE "
-            "_CTV @ ACAT-NEW _CS ! _CC1 ! _CS @ . "
+            "CT-VFS-NEW DUP _CTV ! CT-PLACE _CTP ! "
+            "_CTP @ ACAT-NEW _CS ! _CC1 ! _CS @ . "
             # Activation returns its status alone.
             "DEPTH _CU ! _CC1 @ ACAT-ACTIVATE . DEPTH _CU @ - . "
             "CT-DESCS "
@@ -130,7 +137,7 @@ def main() -> int:
             'S" org.test.package" _CC1 @ ACAT-FIND-ID _CC1 @ '
             "ACAT-RESOLVE 2DROP "
             "_CC1 @ ACAT-FREE _CREL-N @ . "
-            "_CTV @ ACAT-NEW _CS ! _CC2 ! _CS @ . "
+            "_CTP @ ACAT-NEW _CS ! _CC2 ! _CS @ . "
             "_CC2 @ ACAT-ACTIVATE . _CC2 @ ACAT-COUNT . "
             'S" org.test.builtin" _CC2 @ ACAT-FIND-ID '
             "DUP ACE.DESC @ . ACE.STATE @ . "
@@ -138,7 +145,7 @@ def main() -> int:
             "DUP ACE.DESC @ . ACE.STATE @ . "
             "_CBUF ACAT-FILE-MAX _CC2 @ ACAT-ENCODE _CS ! _CU ! "
             "_CS @ . _CU @ . "
-            "_CTV @ ACAT-NEW _CS ! _CC3 ! _CS @ . "
+            "_CTP @ ACAT-NEW _CS ! _CC3 ! _CS @ . "
             "_CBUF _CU @ _CC3 @ ACAT-DECODE . _CC3 @ ACAT-COUNT . "
             "_CBUF _CU @ 1+ _CC3 @ ACAT-DECODE . _CC3 @ ACAT-COUNT . "
             "_CBUF 80 + DUP C@ 1 XOR SWAP C! "

@@ -18,6 +18,7 @@ REQUIRE ../../widget.f
 REQUIRE ../../widgets/list.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../interop/place-resource.f
 REQUIRE service.f
 REQUIRE scheduled-runs.f
 
@@ -1344,8 +1345,9 @@ VARIABLE _AG-REVIEW-APPROVED
 : _AG-DO-QUIT    ( elem -- ) DROP ASHELL-QUIT ;
 : _AG-DO-ABOUT   ( elem -- ) DROP S" Agent - provider-neutral conversations and app tools" 2500 ASHELL-TOAST ;
 
+\ The conversation is kept in the home of this instance's places.
 : _AG-BIND-STORE  ( -- )
-    VFS-CUR ?DUP 0= IF EXIT THEN
+    _AG-CURRENT-INSTANCE @ CINST-HOME ?DUP 0= IF EXIT THEN
     AVFSSTORE-NEW DUP IF
         NIP _AG-RUNTIME @ ARUNTIME.STORE-STATUS ! EXIT
     THEN

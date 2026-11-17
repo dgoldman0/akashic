@@ -126,6 +126,7 @@ PLACE-SYNC      ( place -- ior )
 PLACE-BIND      ( path-a path-u place buf cap -- vfs len ior )
 PLACE-BIND-WRITE  ( path-a path-u place buf cap -- vfs len ior )
 PLACE-NAME-LIMIT  ( place -- n )
+PLACE-VREPL!    ( path-a path-u place write? replacement -- ior )
 ```
 
 A path inside a place starts at its folder, so `/` is that folder and a
@@ -171,7 +172,13 @@ symbolic link in it, and a name that is a link without its target is
 refused, since a write through it could leave the place. `PLACE-BIND`
 serves a library that reads; `PLACE-BIND-WRITE` is the same for one that
 will write, and a read-only place refuses it, so the place's access holds
-for those libraries too. `PLACE-NAME-LIMIT` is the longest entry name the
+for those libraries too. `PLACE-VREPL!` (`utils/fs/place-replace.f`) is the
+binding a checked replacement takes: it binds a file of the place, for
+writing when asked, and points the replacement at it, configuring the
+replacement on the place's volume when it was on another. Pad points its
+one replacement at each document this way, and a store that keeps its
+records through a replacement binds its file in its place when it opens,
+for writing when the place is writable. `PLACE-NAME-LIMIT` is the longest entry name the
 place's volume takes, from the volume's own answer (`VSF.NAMEMAX`), or
 the VFS's 255 when the volume gives none. `PLACE-VFS`
 hands native code the instance, so the `PLACE-` words keep applets to

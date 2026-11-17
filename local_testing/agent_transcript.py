@@ -79,7 +79,7 @@ def forth_seed() -> str:
         "    _ags-conv ! 0 _ags-u !",
         "    _ags-question AROLE-USER _ags-message",
         "    _ags-answer AROLE-ASSISTANT _ags-message",
-        "    VFS-CUR AVFSSTORE-NEW",
+        "    PLACES-DEFAULT PLSET-HOME AVFSSTORE-NEW",
         '    DUP ACSTORE-S-OK <> ABORT" Agent seed store allocation failed"',
         "    DROP _ags-store !",
         "    _ags-conv @ _ags-store @ ACSTORE-SAVE",

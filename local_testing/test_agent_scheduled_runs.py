@@ -133,7 +133,7 @@ def test_what_the_view_says_without_rows(forth):
         "VW ASRV-FREE 0 VW ASRV-INIT VW ASRV-REBUILD VW ASRV-COUNT@ . VW ASRV-STALE? . NOTE. CR",
         "FRESH VIEW NOTE. CR",
         # A record that cannot be read.
-        "DS ADISP-FINI TBUF 16 0 FILL 16 TLEN ! D-PATH T-PUT-AT RT @ TV @ DS ADISP-INIT DROP "
+        "DS ADISP-FINI TBUF 16 0 FILL 16 TLEN ! D-PATH T-PUT-AT RT @ TV-PLACE DS ADISP-INIT DROP "
         "VIEW VW ASRV-COUNT@ . NOTE. CR",
         # The clock not set when the run was accepted.
         "FRESH 0 EPOCH-SET 1 1 R-OCC GO DROP 8 STEPS VIEW 0 DETAIL. CR",

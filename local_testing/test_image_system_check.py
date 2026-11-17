@@ -38,14 +38,18 @@ ROOTS = ("tui/app-builder.f", "tui/app-loader.f", "tui/draw.f")
 # A RAM filesystem with an application catalog, and file transfer through
 # one buffer.  The same words run on both machines.
 FIXTURE = (
-    "VARIABLE _t-vfs  VARIABLE _t-cat  VARIABLE _t-entry",
+    "VARIABLE _t-vfs  VARIABLE _t-place  VARIABLE _t-cat  VARIABLE _t-entry",
     "VARIABLE _t-status  VARIABLE _t-desc  VARIABLE _t-fd",
     "VARIABLE _t-pa  VARIABLE _t-pu",
     "65536 XBUF _t-buf",
     ": _t-setup  ( -- )",
     "    2097152 A-XMEM ARENA-NEW IF -1 THROW THEN",
-    "    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN DUP _t-vfs ! VFS-USE",
-    "    _t-vfs @ ACAT-NEW DROP DUP _t-cat ! ACAT-ACTIVATE DROP",
+    "    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _t-vfs !",
+    # The volume's root is the place the catalog and the projects are in.
+    '    S" t" PLACES-VOLUME THROW _t-vfs @ OVER PVOL-ATTACH THROW',
+    '    >R S" t" S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW',
+    "    PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW _t-place !",
+    "    _t-place @ ACAT-NEW DROP DUP _t-cat ! ACAT-ACTIVATE DROP",
     "    _t-cat @ ABUILD-CATALOG! ;",
     ": _t-put  ( data-a data-u path-a path-u -- )",
     "    2DUP _t-vfs @ VFS-CREATE 0= IF -2 THROW THEN",
@@ -57,7 +61,7 @@ FIXTURE = (
     "    _t-fd @ VFS-CLOSE R> ;",
     # Desk's own resolver: the catalog entry's manifest, through the loader.
     ": _t-resolver  ( entry context -- desc status )",
-    "    DROP ACE-MANIFEST$ ALOAD-PATH ;",
+    "    DROP ACE-MANIFEST$ _t-place @ ALOAD-PATH ;",
     ": _t-catalog  ( manifest-a manifest-u -- status )",
     "    _t-pu ! _t-pa !",
     '    S" local.hello" S" Hello" S" 0.1.0" _t-pa @ _t-pu @',
@@ -143,11 +147,11 @@ def emulator_applet() -> dict:
         '." CODE " DICT-MACHINE-CODE? . ." SYSTEM " IMG-VERIFY-SYSTEM . CR',
         f'_t-buf {len(PROJECT)} S" /hello.toml" _t-put',
         f'_t-buf {SOURCE_AT} + {len(SOURCE)} S" /hello.f" _t-put',
-        'S" /hello.toml" ABUILD-INSTALL _t-status ! _t-entry !',
+        'S" /hello.toml" _t-place @ ABUILD-INSTALL _t-status ! _t-entry !',
         '." BUILD " _t-status @ . CR',
         '." MPATH " ABUILD-INSTALLED-PATH TYPE ."  ;" CR',
         '." IPATH " _ab-image-path _ab-image-path-u @ TYPE ."  ;" CR',
-        'ABUILD-INSTALLED-PATH ALOAD-PATH _t-status ! _t-desc !',
+        'ABUILD-INSTALLED-PATH _t-place @ ALOAD-PATH _t-status ! _t-desc !',
         '." LOAD " _t-status @ . ." DESC " _t-desc @ 0<> . CR',
         '." MFT " ABUILD-INSTALLED-PATH _t-buf _t-get . CR',
         f'." IMAGE " _ab-image-path _ab-image-path-u @ _t-buf {IMAGE_AT} + _t-get . CR',
@@ -197,14 +201,14 @@ def test_a_build_is_refused_before_a_file_is_read_or_source_compiled(simulator):
     _put(simulator, "/hello.f", SOURCE)
     text = _run(simulator, [
         "HERE LATEST",
-        'S" /hello.toml" ABUILD-INSTALL _t-status ! _t-entry !',
+        'S" /hello.toml" _t-place @ ABUILD-INSTALL _t-status ! _t-entry !',
         '." STATUS " _t-status @ . ." ENTRY " _t-entry @ .',
         '." DETAIL " ABUILD-LAST-DETAIL . ." LAST " ABUILD-LAST-STATUS . CR',
         '." LATEST-SAME " LATEST = . ." HERE-SAME " HERE = . CR',
         '." ROWS " _t-cat @ ACAT-COUNT . ." INSTALLED " ABUILD-INSTALLED-PATH NIP . CR',
         '." COMPILED " [DEFINED] HELLO-ENTRY . ." RELOC " _RELOC-ACTIVE @ . CR',
         # A project that is not there gets the same answer, not an I/O error.
-        'S" /absent.toml" ABUILD-INSTALL ." ABSENT " . . CR',
+        'S" /absent.toml" _t-place @ ABUILD-INSTALL ." ABSENT " . . CR',
         '." DEPTH " DEPTH . CR',
     ])
     assert _number(text, "STATUS") == expected["ABUILD"] == -214
@@ -279,12 +283,12 @@ def test_the_loader_refuses_an_installed_applet_before_it_reads_one(
     simulator.runtime.memory.write_bytes(_buffer(simulator), manifest)
     text = _run(simulator, [
         "HERE LATEST",
-        f'S" {path}" ALOAD-PATH ." PATH " . . CR',
-        f'_t-buf {len(manifest)} ALOAD-MANIFEST ." DOCUMENT " . . CR',
+        f'S" {path}" _t-place @ ALOAD-PATH ." PATH " . . CR',
+        f'_t-buf {len(manifest)} _t-place @ ALOAD-MANIFEST ." DOCUMENT " . . CR',
         f"_t-buf {len(manifest)} MFT-PARSE DROP DUP _t-entry !",
-        'ALOAD-FROM-MFT ." PARSED " . . CR  _t-entry @ MFT-FREE',
+        '_t-place @ ALOAD-FROM-MFT ." PARSED " . . CR  _t-entry @ MFT-FREE',
         # A manifest that is not there gets the same answer, not an open error.
-        'S" /absent.toml" ALOAD-PATH ." ABSENT " . . CR',
+        'S" /absent.toml" _t-place @ ALOAD-PATH ." ABSENT " . . CR',
         '." LATEST-SAME " LATEST = . ." HERE-SAME " HERE = . CR',
         '." LOADED " [DEFINED] HELLO-ENTRY . ." DEPTH " DEPTH . CR',
     ])

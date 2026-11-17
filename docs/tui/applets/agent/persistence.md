@@ -15,20 +15,22 @@ akashic/tui/applets/agent/storage/vfs-conversation.f
 ```
 
 `conversation-store.f` defines `ACSTORE`, the generic load/save/free port.
-`thread-codec.f` owns the bounded binary format. `vfs-conversation.f` adapts
-that format to any Akashic VFS. The VFS adapter belongs under agent storage
+`thread-codec.f` owns the bounded binary format. `vfs-conversation.f` keeps
+that format in two files of a place. The adapter belongs under agent storage
 because its paths, generation policy, and recovery semantics are specific to
 agent transcripts; the VFS itself remains a reusable filesystem facility.
 
 ## Runtime Ownership
 
 ```forth
-vfs AVFSSTORE-NEW             ( store status )
+place AVFSSTORE-NEW           ( store status )
 store runtime ARUNTIME-CONVERSATION-STORE!  ( status )
 ```
 
 `ARUNTIME-CONVERSATION-STORE!` transfers ownership of the store to the
-runtime. The store borrows its VFS, so the VFS must outlive the runtime. On
+runtime. The store borrows its place, so the place must outlive the
+runtime. Every open, create and sync goes through the place, so a
+read-only place refuses a save. On
 binding, the runtime loads the newest valid snapshot or creates the first
 snapshot when neither slot exists. A valid loaded transcript replaces the
 new runtime's empty conversation and advances the next run ID beyond every

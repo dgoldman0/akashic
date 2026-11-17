@@ -147,7 +147,7 @@ CREATE FC-REQ-RAW 4103 ALLOT  FC-REQ-RAW 7 + -8 AND CONSTANT FC-REQ
     DBAS-O.SUMMARY 8 + @ . ;
 : S-AUTH.  ( -- ) RID1 SOW DBAO-ACTION DBAS-A.AUTHORIZED @ . ;
 \ A cold start of the service over the same disk, with the fake.
-: S-REOPEN  ( -- status ) SV DBSVC-CLOSE TV @ SV DBSVC-OPEN FC-ON ;
+: S-REOPEN  ( -- status ) SV DBSVC-CLOSE TV-PLACE SV DBSVC-OPEN FC-ON ;
 """
 
 SUITE = NativeForth(("tui/applets/daybook/automation-service.f",),

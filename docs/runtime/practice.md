@@ -52,7 +52,8 @@ forward to latest or ambient VFS access.
 ## Current implementation boundary
 
 The landed runtime uses the fixed `/practice-head-a.bin` and
-`/practice-head-b.bin` pair for one minimal accepted head. It carries identity
+`/practice-head-b.bin` pair, in the home of the place set the Practice
+activates over, for one minimal accepted head. It carries identity
 and revision plus current/previous, binding, cell, grant, manifest, schema,
 export root, retention policy, and activation policy. This is not a
 multi-Practice catalog, naming UI, layout store, domain database, or general
@@ -68,7 +69,7 @@ either generation as authority. Semantic rejection records its generation in
 the dedicated evidence field; when the older candidate is accepted, the
 generation pair reclassifies and publishes that fallback consistently. A save
 adopts the next generation in memory only after the inactive file has been
-written and the VFS durability barrier succeeds.
+written and the place's sync succeeds.
 Pair candidates retain stable descriptor identity while decoded heads remain
 transient Practice-owned buffers used only for comparison and copying. Thus a
 published selection cannot expose a head pointer after that buffer is freed.

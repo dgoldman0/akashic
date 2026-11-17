@@ -34,7 +34,7 @@
 \  what it holds in memory is what the file holds.
 \
 \  Public API:
-\    SPERM-INIT         ( vfs path path-u store -- status )
+\    SPERM-INIT         ( place path path-u store -- status )
 \    SPERM-OPEN         ( store -- status )
 \    SPERM-CLOSE        ( store -- status )
 \    SPERM-STATE@       ( store -- state )
@@ -58,6 +58,7 @@ REQUIRE ../math/entropy.f
 REQUIRE ../utils/checked-record.f
 REQUIRE ../utils/fs/vfs.f
 REQUIRE ../utils/fs/vfs-replace.f
+REQUIRE ../utils/fs/place-replace.f
 REQUIRE ../utils/record-table.f
 REQUIRE ../interop/scheduled-dispatch.f
 
@@ -450,21 +451,17 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
 \ =====================================================================
 
 \ Configures STORE, SPERM-SIZE cell-aligned bytes, to keep its file at
-\ PATH, an absolute path, in VFS.  The store starts closed.
-: SPERM-INIT  ( vfs path path-u store -- status )
+\ PATH in PLACE.  The store starts closed.
+: SPERM-INIT  ( place path path-u store -- status )
     DUP 0= OVER 7 AND OR IF 2DROP 2DROP SPERM-S-INVALID EXIT THEN
     DUP SPERM-VALID? IF 2DROP 2DROP SPERM-S-STATE EXIT THEN
     3 PICK 0= IF 2DROP 2DROP SPERM-S-INVALID EXIT THEN
     DUP SPERM-SIZE 0 FILL
     >R
-    2 PICK R@ _SPERM.VFS !
-    2 PICK R@ _SPERM.REPL VREPL-INIT IF
-        2DROP DROP R> SPERM-SIZE 0 FILL SPERM-S-INVALID EXIT
+    ROT DUP PLACE-WRITABLE? R@ _SPERM.REPL PLACE-VREPL! IF
+        R> SPERM-SIZE 0 FILL SPERM-S-INVALID EXIT
     THEN
-    R@ _SPERM.REPL VREPL-DERIVE-PATHS! IF
-        DROP R> SPERM-SIZE 0 FILL SPERM-S-INVALID EXIT
-    THEN
-    DROP
+    R@ _SPERM.REPL VREPL.VFS @ R@ _SPERM.VFS !
     _SPERM-MAGIC$ _SPERM-FORMAT CREC-TAG-POSITIVE ['] _SPERM-ENCODE
         ['] _SPERM-VALIDATE R@ _SPERM.SPEC CREC-SPEC-INIT
     \ The file grows with the table; memory, not the format, bounds it.

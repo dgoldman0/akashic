@@ -32,7 +32,7 @@ VARIABLE KEYN
     SV DBSVC-VALID? IF SV DBSVC-CLOSE THEN
     T-OPS-RESET T-PATH T-RM 0 KEYN !
     VW DBAV-SIZE 0 FILL
-    TV @ SV DBSVC-OPEN SV VW DBAV-INIT ;
+    TV-PLACE SV DBSVC-OPEN SV VW DBAV-INIT ;
 \ Creates a reminder TITLE repeating at FREQ from local START seconds, in
 \ UTC, under the next create key.
 : V-CREATE  ( start title-a title-u freq -- status )
@@ -247,7 +247,7 @@ def test_notes():
     ]
     lines = run_text(machine, [
         'SV DBSVC-CLOSE T-PATH T-RM TBUF 80 65 FILL 80 TLEN ! T-PUT '
-        "TV @ SV DBSVC-OPEN . VW DBAV-NOTE TYPE CR",
+        "TV-PLACE SV DBSVC-OPEN . VW DBAV-NOTE TYPE CR",
         "VW DBAV-REBUILD . VW DBAV-COUNT@ . CR",
     ])
     assert lines == [

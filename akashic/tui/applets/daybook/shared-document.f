@@ -2,8 +2,8 @@
 \  shared-document.f - Daybook activation-local text-document owner
 \ =====================================================================
 \  This is the deliberately bounded concrete Daybook resource.  One live
-\  owner instance controls the semantic RID and the canonical VFS backing
-\  path /daybook.md.  Retained consumer sessions may come and go
+\  owner instance controls the semantic RID and the canonical backing
+\  file /daybook.md in the home place it is given.  Retained consumer sessions may come and go
 \  independently; they attach through the neutral resource contracts and
 \  issue ordinary capability requests.
 \
@@ -34,6 +34,7 @@ REQUIRE ../../../interop/resource-owner-pool.f
 REQUIRE ../../../interop/schema-common.f
 REQUIRE ../../../interop/construction.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../concurrency/guard.f
 REQUIRE ../../../text/utf8.f
 
@@ -62,8 +63,9 @@ REQUIRE ../../../text/utf8.f
 \ =====================================================================
 \  Owner state
 \ =====================================================================
-\  VFS, Context, and registries are borrowed for the activation lifetime.
-\  RID and path are copied.  VREPL and the bounded snapshot buffer are
+\  The place, Context, and registries are borrowed for the activation
+\  lifetime.  RID and path are copied, and the VFS is the one the place's
+\  binding gave.  VREPL and the bounded snapshot buffer are
 \  owner-private; no consumer session receives either address.
 
   48 CONSTANT _SDS-MAGIC
@@ -163,7 +165,8 @@ VARIABLE _SDR-CLEAN-FAILED
     _SDR-CLEAN-FAILED @ ;
 
 : _SDOC-READ-BODY  ( -- status )
-    _SDR-STATE @ _SDS-PATH$ _SDR-STATE @ _SDS.VFS @ VFS-OPEN DUP 0= IF
+    _SDR-STATE @ _SDS.REPLACE VREPL-TARGET$ _SDR-STATE @ _SDS.VFS @ VFS-OPEN
+    DUP 0= IF
         DROP 0 _SDR-STATE @ _SDS.IO-U ! SDOC-S-OK EXIT
     THEN
     _SDR-FD !
@@ -494,7 +497,7 @@ _SDOC-DESCRIPTORS-SETUP
 0x414F4453 CONSTANT _SDOC-OWNER-DATA-MAGIC  \ "SDOA"
 
  0 CONSTANT _SDOA-MAGIC
- 8 CONSTANT _SDOA-VFS
+ 8 CONSTANT _SDOA-PLACE
 16 CONSTANT _SDOA-RID                       \ RID-SIZE bytes
 48 CONSTANT _SDOA-CONTEXT
 56 CONSTANT _SDOA-RREG
@@ -503,7 +506,7 @@ _SDOC-DESCRIPTORS-SETUP
 80 CONSTANT _SDOC-OWNER-DATA-SIZE
 
 : _SDOA.MAGIC       ( data -- a ) _SDOA-MAGIC + ;
-: _SDOA.VFS         ( data -- a ) _SDOA-VFS + ;
+: _SDOA.PLACE       ( data -- a ) _SDOA-PLACE + ;
 : _SDOA.RID         ( data -- rid ) _SDOA-RID + ;
 : _SDOA.CONTEXT     ( data -- a ) _SDOA-CONTEXT + ;
 : _SDOA.RREG        ( data -- a ) _SDOA-RREG + ;
@@ -527,7 +530,7 @@ _SDOC-OFFER ROFFER-SIZE 0 FILL
 : _SDOC-OWNER-DATA-VALID?  ( data -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP _SDOA.MAGIC @ _SDOC-OWNER-DATA-MAGIC =
-    OVER _SDOA.VFS @ 0<> AND
+    OVER _SDOA.PLACE @ 0<> AND
     OVER _SDOA.RID RID-PRESENT? AND
     OVER _SDOA.CONTEXT @ DUP 0<> SWAP CTX-VALID? AND AND
     OVER _SDOA.RREG @ DUP 0<> SWAP RREG-VALID? AND AND
@@ -574,17 +577,16 @@ VARIABLE _SDAO-STATE
     ROPOOL-MEMBER-SIZE +
         SDOC-STATE-SIZE ROPOOL-MEMBER-SIZE - 0 FILL
     _SDOC-STATE-MAGIC _SDAO-STATE @ _SDS.MAGIC !
-    _SDAO-DATA @ _SDOA.VFS @ _SDAO-STATE @ _SDS.VFS !
     _SDAO-DATA @ _SDOA.RID _SDAO-STATE @ _SDS.RID RID-COPY
     _SDAO-DATA @ _SDOA.CONTEXT @ _SDAO-STATE @ _SDS.CONTEXT !
     _SDAO-DATA @ _SDOA.RREG @ _SDAO-STATE @ _SDS.RREG !
     _SDAO-DATA @ _SDOA.CREG @ _SDAO-STATE @ _SDS.CREG !
     S" /daybook.md" DUP _SDAO-STATE @ _SDS.PATH-U !
         _SDAO-STATE @ _SDS.PATH SWAP CMOVE
-    _SDAO-DATA @ _SDOA.VFS @ _SDAO-STATE @ _SDS.REPLACE VREPL-INIT
+    S" /daybook.md" _SDAO-DATA @ _SDOA.PLACE @ DUP PLACE-WRITABLE?
+        _SDAO-STATE @ _SDS.REPLACE PLACE-VREPL!
         IF SDOC-S-INVALID _SDOC-STATE-FAIL EXIT THEN
-    S" /daybook.md" _SDAO-STATE @ _SDS.REPLACE VREPL-DERIVE-PATHS!
-        IF SDOC-S-INVALID _SDOC-STATE-FAIL EXIT THEN
+    _SDAO-STATE @ _SDS.REPLACE VREPL.VFS @ _SDAO-STATE @ _SDS.VFS !
     _SDOC-F-CONFIGURED _SDAO-STATE @ _SDS.FLAGS !
     _SDAO-STATE @ _SDOC-RECOVER DUP IF _SDOC-STATE-FAIL EXIT THEN DROP
     _SDAO-STATE @ _SDOC-READ DUP IF _SDOC-STATE-FAIL EXIT THEN DROP
@@ -594,7 +596,7 @@ VARIABLE _SDAO-STATE
     SDOC-S-OK _SDAO-DATA @ _SDOA.INIT-STATUS !
     RACQ-S-OK ;
 
-VARIABLE _SDA-VFS
+VARIABLE _SDA-PLACE
 VARIABLE _SDA-RID
 VARIABLE _SDA-CONTEXT
 VARIABLE _SDA-RREG
@@ -654,8 +656,8 @@ VARIABLE _SDA-STATUS
     DUP RACQ-S-INVALID = IF DROP SDOC-S-INVALID EXIT THEN
     DROP SDOC-S-RESOURCE ;
 
-: _SDOC-ACTIVATE-LOCKED  ( vfs rid context rreg creg -- instance status )
-    _SDA-CREG ! _SDA-RREG ! _SDA-CONTEXT ! _SDA-RID ! _SDA-VFS !
+: _SDOC-ACTIVATE-LOCKED  ( place rid context rreg creg -- instance status )
+    _SDA-CREG ! _SDA-RREG ! _SDA-CONTEXT ! _SDA-RID ! _SDA-PLACE !
     _SDOC-LIVE @ IF 0 SDOC-S-BUSY EXIT THEN
     \ A failed activation rollback retains its exact token and pool until a
     \ later activation can retry cleanup; never overwrite those handles.
@@ -663,7 +665,7 @@ VARIABLE _SDA-STATUS
         _SDOC-ACTIVATE-RELEASE
         _SDOC-POOL ROPOOL-VALID? IF 0 SDOC-S-BUSY EXIT THEN
     THEN
-    _SDA-VFS @ 0= _SDA-RID @ RID-PRESENT? 0= OR
+    _SDA-PLACE @ 0= _SDA-RID @ RID-PRESENT? 0= OR
     _SDA-CREG @ 0= OR IF 0 SDOC-S-INVALID EXIT THEN
     _SDA-CONTEXT @ CTX-VALID? 0= IF 0 SDOC-S-INVALID EXIT THEN
     _SDA-CONTEXT @ CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
@@ -675,7 +677,7 @@ VARIABLE _SDA-STATUS
     THEN
     _SDOC-OWNER-DATA _SDOC-OWNER-DATA-SIZE 0 FILL
     _SDOC-OWNER-DATA-MAGIC _SDOC-OWNER-DATA _SDOA.MAGIC !
-    _SDA-VFS @ _SDOC-OWNER-DATA _SDOA.VFS !
+    _SDA-PLACE @ _SDOC-OWNER-DATA _SDOA.PLACE !
     _SDA-RID @ _SDOC-OWNER-DATA _SDOA.RID RID-COPY
     _SDA-CONTEXT @ _SDOC-OWNER-DATA _SDOA.CONTEXT !
     _SDA-RREG @ _SDOC-OWNER-DATA _SDOA.RREG !
@@ -712,7 +714,7 @@ VARIABLE _SDA-STATUS
     THEN
     _SDA-INSTANCE @ DUP _SDOC-LIVE ! SDOC-S-OK ;
 
-: SDOC-ACTIVATE  ( vfs rid context rreg creg -- instance status )
+: SDOC-ACTIVATE  ( place rid context rreg creg -- instance status )
     ['] _SDOC-ACTIVATE-LOCKED _SDOC-GUARD WITH-GUARD ;
 
 VARIABLE _SDAC-CONTEXT

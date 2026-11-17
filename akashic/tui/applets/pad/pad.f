@@ -59,6 +59,7 @@ REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../utils/fs/link-path.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/clipboard.f
@@ -229,10 +230,8 @@ _PAD-CURRENT-STATE _PAD-IO-CAP CMP-FIELD: _PAD-IO-BUF
 \ read or written (_PAD-DERIVE).
 _PAD-CURRENT-STATE CMP-CELL: _PAD-SET        \ the place set
 _PAD-CURRENT-STATE CMP-CELL: _PAD-IO-PLACE   \ place of the path in hand
-_PAD-CURRENT-STATE CMP-CELL: _PAD-IO-VFS     \ volume the descriptor is on
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PATH-PLACE \ place the next path names
 _PAD-CURRENT-STATE VREPL-SIZE CMP-FIELD: _PAD-REPL
-_PAD-CURRENT-STATE VREPL-PATH-MAX 1+ CMP-FIELD: _PAD-VOL-BUF
 
 \ ---- Activation-local shared Daybook session ----
 \ Service pointers and capability descriptors are borrowed from Desk.  Stable
@@ -892,11 +891,9 @@ VARIABLE _PPP-START
     LOOP
     SWAP _PPP-START @ + SWAP _PPP-START @ - _PAD-PLAIN-NAME? ;
 
-\ _PAD-PLACES! ( set -- )
-\   The place set Pad works in.  The replacement descriptor is on no
-\   volume until a document is read or written.
+\ _PAD-PLACES! ( set -- )   The place set Pad works in.
 : _PAD-PLACES!  ( set -- )
-    _PAD-SET !  0 _PAD-IO-VFS !  0 _PAD-IO-PLACE !  0 _PAD-PATH-PLACE ! ;
+    _PAD-SET !  0 _PAD-IO-PLACE !  0 _PAD-PATH-PLACE ! ;
 
 \ The place a path with none of its own is in: the active document's,
 \ or the set's home.
@@ -942,30 +939,15 @@ VARIABLE _PPP-START
 
 \ _PAD-DERIVE ( path-a path-u write? -- status )
 \   Point the replacement descriptor at the document PATH names in
-\   _PAD-IO-PLACE: bind the path to its volume, move the descriptor to
-\   that volume when it is on another, and derive the replacement's
-\   companion paths.  A document that is to be written needs a writable
-\   place.  Nonzero when the document cannot be used: -1 when its folder
-\   is not there, _PAD-E-READ-ONLY-PLACE when it would be written in a
-\   read-only place, -3 or the descriptor's status otherwise.
+\   _PAD-IO-PLACE (PLACE-VREPL!).  A document that is to be written needs
+\   a writable place.  Nonzero when the document cannot be used: -1 when
+\   its folder is not there, _PAD-E-READ-ONLY-PLACE when it would be
+\   written in a read-only place, -3 otherwise.
 : _PAD-DERIVE  ( path-a path-u write? -- status )
-    >R _PAD-IO-PLACE @ _PAD-VOL-BUF VREPL-PATH-MAX R> IF
-        PLACE-BIND-WRITE
-    ELSE
-        PLACE-BIND
-    THEN                                                ( vfs len ior )
-    ?DUP IF
-        NIP NIP VFS-IOR-REASON
-        DUP VFS-R-READONLY = IF DROP _PAD-E-READ-ONLY-PLACE EXIT THEN
-        DUP VFS-R-NOENT = SWAP VFS-R-NOTDIR = OR IF -1 ELSE -3 THEN EXIT
-    THEN
-    SWAP DUP _PAD-IO-VFS @ <> IF
-        DUP _PAD-REPL VREPL-INIT VREPL-S-OK <> IF 2DROP -3 EXIT THEN
-        _PAD-IO-VFS !
-    ELSE
-        DROP
-    THEN
-    _PAD-VOL-BUF SWAP _PAD-REPL VREPL-DERIVE-PATHS! ;
+    >R _PAD-IO-PLACE @ R> _PAD-REPL PLACE-VREPL! ?DUP 0= IF 0 EXIT THEN
+    VFS-IOR-REASON
+    DUP VFS-R-READONLY = IF DROP _PAD-E-READ-ONLY-PLACE EXIT THEN
+    DUP VFS-R-NOENT = SWAP VFS-R-NOTDIR = OR IF -1 ELSE -3 THEN ;
 
 : _PAD-VREPL-USABLE?  ( status -- flag )
     DUP VREPL-S-OK =
@@ -1265,7 +1247,7 @@ VARIABLE _PSHO-NEW
 \ Cleanup still runs for every owned fd and buffer; an ordinary short or
 \ zero transfer remains the more specific -5.
 : _PAD-LOAD-FILE-BODY  ( -- ior )
-    _PAD-REPL VREPL-TARGET$ _PAD-IO-VFS @ VFS-OPEN
+    _PAD-REPL VREPL-TARGET$ _PAD-REPL VREPL.VFS @ VFS-OPEN
     DUP 0= IF
         DROP -1 EXIT
     THEN
@@ -1731,7 +1713,7 @@ VARIABLE _PBUILD-DIAG-U
     _PAD-OUTPUT-RESET _PAD-DIAG-RESET
     S" Build & Install" _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
     _PAD-ACTIVE @ _PAD-BUF-ENTRY
-    DUP _PBE-FNAME-A + @ SWAP _PBE-FNAME-L + @
+    DUP _PBE-FNAME-A + @ OVER _PBE-FNAME-L + @ ROT _PBE-PLACE + @
     ABUILD-INSTALL _PBUILD-STATUS ! _PBUILD-ENTRY !
     _PBUILD-STATUS @ 0= IF
         S" Installed: " _PAD-OUTPUT-APPEND

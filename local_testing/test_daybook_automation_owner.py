@@ -109,7 +109,7 @@ CREATE T-PAGE DBAO-DUE-SIZE 4 * ALLOT
     OW DBAO-STORE _DBAS.REPL VREPL-STAGE$ T-RM
     OW DBAO-STORE _DBAS.REPL VREPL-BACKUP$ T-RM
     OW DBAO-STORE _DBAS.REPL VREPL-MARKER$ T-RM ;
-: O-INIT  ( -- ) OW DBAO-SIZE 0 FILL TV @ T-PATH OW DBAO-INIT DROP ;
+: O-INIT  ( -- ) OW DBAO-SIZE 0 FILL TV-PLACE T-PATH OW DBAO-INIT DROP ;
 \ An open owner over no file, and the base draft: a daily reminder at
 \ 09:00 UTC from 2026-10-11, created as key 1.
 : O-FRESH  ( -- )

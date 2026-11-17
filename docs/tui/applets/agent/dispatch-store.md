@@ -42,7 +42,7 @@ once a run is trimmed.
 ## Operations
 
 ```forth
-ADST-INIT         ( vfs path path-u store -- status )
+ADST-INIT         ( place path path-u store -- status )
 ADST-OPEN         ( store -- status )
 ADST-CLOSE        ( store -- status )
 ADST-STATE@       ( store -- state )

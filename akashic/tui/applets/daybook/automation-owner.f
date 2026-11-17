@@ -47,7 +47,7 @@
 \  The owner is caller-serialized.
 \
 \  Public API:
-\    DBAO-INIT        ( vfs path path-u owner -- status )
+\    DBAO-INIT        ( place path path-u owner -- status )
 \    DBAO-OPEN        ( owner -- status )
 \    DBAO-CLOSE       ( owner -- status )
 \    DBAO-STORE       ( owner -- store )
@@ -199,8 +199,8 @@ _DBAO-TEXT 8 + TZ-STRING-MAX + 7 + -8 AND CONSTANT DBAO-SIZE
 \ =====================================================================
 
 \ Configures OWNER, DBAO-SIZE cell-aligned bytes, to keep its schedules
-\ in the file at PATH in VFS.  The owner starts closed.
-: DBAO-INIT  ( vfs path path-u owner -- status )
+\ in the file at PATH in PLACE.  The owner starts closed.
+: DBAO-INIT  ( place path path-u owner -- status )
     DUP 0= OVER 7 AND OR IF 2DROP 2DROP DBAO-S-INVALID EXIT THEN
     DUP DBAO-VALID? IF 2DROP 2DROP DBAO-S-STATE EXIT THEN
     DUP DBAO-SIZE 0 FILL

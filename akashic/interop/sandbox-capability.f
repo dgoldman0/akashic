@@ -1797,11 +1797,11 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
 
 \ Gives a bound instance installed modules: REGISTRY names the callers
 \ that ask for them, and the module store keeps them in the catalog and
-\ pack files at those absolute paths of VFS, in one directory.  The
+\ pack files at those paths of PLACE, in one folder.  The
 \ binding opens the store now and owns it and its module table until
 \ unbind.  A store in recovery opens and serves what it could read.
 : SBOX-CAPABILITY-MODULES
-  ( registry vfs catalog catalog-u pack pack-u instance -- status )
+  ( registry place catalog catalog-u pack pack-u instance -- status )
     DUP _SBXC-OURS? 0= IF DROP _SBXC-DROP6 SBOX-CAPABILITY-S-INVALID EXIT THEN
     CINST-STATE
     DUP _SBXC-BOUND? 0= IF DROP _SBXC-DROP6 SBOX-CAPABILITY-S-STATE EXIT THEN

@@ -15,8 +15,12 @@ ABUILD-CATALOG!  ( catalog -- )
 The build operation is:
 
 ```forth
-ABUILD-INSTALL  ( project-path-a project-path-u -- entry status )
+ABUILD-INSTALL  ( project-path-a project-path-u place -- entry status )
 ```
+
+The project's manifest and its source are read in PLACE, the place the
+project is in. The image and the installed manifest are published in the
+catalog's place (`ACAT-PLACE`), where the loader reads them.
 
 On success, `entry` is the resulting app-catalog entry and `status` is `ABUILD-S-OK`. The pointer is owned by the catalog and remains stable only until the next catalog mutation. On failure, the builder returns `0 status` and owns no result buffers.
 

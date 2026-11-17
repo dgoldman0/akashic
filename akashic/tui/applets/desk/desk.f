@@ -494,15 +494,13 @@ VARIABLE _DXIO-RESET-STATUS
 : DESK-RECOVERY?  ( -- flag )
     _DESK-PRACTICE-ACTIVATION PACT-RECOVERY? ;
 
-\ The instance under the home of the Practice's places, for the stores
-\ that still take an instance; 0 when there is no usable home, and each
-\ store then opens as a service that says why.
-: _DESK-HOME-VFS  ( -- vfs | 0 )
+\ The home of the Practice's places, where Desk's stores keep their
+\ records; 0 when the set has none.  A store whose home is unavailable
+\ opens as a service that says why.
+: _DESK-HOME  ( -- place | 0 )
     DESK-CONTEXT ?DUP 0= IF 0 EXIT THEN
     CTX.PLACES @ ?DUP 0= IF 0 EXIT THEN
-    PLSET-HOME DUP 0= IF EXIT THEN
-    DUP PLACE-STATUS IF DROP 0 EXIT THEN
-    PLACE-VFS ;
+    PLSET-HOME ;
 
 : DESK-CATALOG  ( -- catalog | 0 )
     _DESK-CATALOG @ ;
@@ -515,7 +513,7 @@ VARIABLE _DXIO-RESET-STATUS
     THEN ;
 
 : _DESK-PACKAGE-RESOLVER  ( entry context -- desc status )
-    DROP ACE-MANIFEST$ ALOAD-PATH ;
+    DROP ACE-MANIFEST$ _DESK-CATALOG @ ACAT-PLACE ALOAD-PATH ;
 
 : _DESK-PACKAGE-RELEASER  ( desc context -- )
     DROP ALOAD-DESC-FREE ;
@@ -1418,8 +1416,9 @@ VARIABLE _DSBI-STATUS
 
 \ Desk hosts the shared sandbox capability when its caller configured one,
 \ registered beside the applets so the request bus reaches it like any
-\ other component.  Its installed modules live on the current filesystem;
-\ when the store cannot open, the sandbox still runs without them.
+\ other component.  Its installed modules live in the home of the
+\ Practice's places; when the store cannot open, the sandbox still runs
+\ without them.
 : _DESK-SBOX-INIT  ( -- status )
     0 _DESK-SANDBOX !
     SBOX-CAPABILITY-S-STATE _DESK-SBOX-MODULES-STATUS !
@@ -1454,7 +1453,7 @@ VARIABLE _DSBI-STATUS
         _DSBI-INST @ CINST-FREE 0 _DSBI-INST !
         SBOX-CAPABILITY-S-INVALID EXIT
     THEN
-    _DESK-REGISTRY @ VFS-CUR _DESK-SBOX-CATALOG$ _DESK-SBOX-PACK$
+    _DESK-REGISTRY @ _DESK-HOME _DESK-SBOX-CATALOG$ _DESK-SBOX-PACK$
         _DSBI-INST @ SBOX-CAPABILITY-MODULES _DESK-SBOX-MODULES-STATUS !
     _DSBI-INST @ _DESK-SANDBOX !
     0 _DSBI-INST !
@@ -1469,7 +1468,7 @@ VARIABLE _DSBI-STATUS
     0 _DESK-SANDBOX ! ;
 
 : _DESK-CATALOG-INIT  ( -- )
-    VFS-CUR ACAT-NEW _DCI-STATUS ! _DCI-CAT !
+    _DESK-HOME ACAT-NEW _DCI-STATUS ! _DCI-CAT !
     _DCI-STATUS @ ACAT-S-OK <> ABORT" desk: catalog allocation failed"
     _DCI-CAT @ _DESK-CATALOG !
     _DCI-CAT @ ACAT-ACTIVATE DUP
@@ -1492,7 +1491,7 @@ VARIABLE _DSBI-STATUS
     _DESK-CATALOG @ ABUILD-CATALOG! ;
 
 : _DESK-BIND-AGENT-STORE  ( -- )
-    VFS-CUR ?DUP 0= IF EXIT THEN
+    _DESK-HOME ?DUP 0= IF EXIT THEN
     AVFSSTORE-NEW DUP IF
         NIP _DESK-AGENT-RUNTIME @ ARUNTIME.STORE-STATUS ! EXIT
     THEN
@@ -1571,28 +1570,28 @@ VARIABLE _DMF-EFFECTS
         _DESK-DAYBOOK-STATUS ! DROP EXIT
     THEN
     DROP _DESK-RREG !
-    _DESK-HOME-VFS _DESK-DAYBOOK-RID DESK-CONTEXT
+    _DESK-HOME _DESK-DAYBOOK-RID DESK-CONTEXT
         _DESK-RREG @ _DESK-REGISTRY @ SDOC-ACTIVATE
     DUP _DESK-DAYBOOK-STATUS ! IF
         DROP EXIT
     THEN
     _DESK-DAYBOOK-OWNER ! ;
 
-\ Opens Daybook's reminders over the Practice filesystem.  A store Desk
-\ cannot use still opens a service, which says why.
+\ Opens Daybook's reminders in the home of the Practice's places.  A
+\ store Desk cannot use still opens a service, which says why.
 : _DESK-REMINDERS-INIT  ( -- )
-    _DESK-HOME-VFS _DESK-REMINDERS DBSVC-OPEN DROP ;
+    _DESK-HOME _DESK-REMINDERS DBSVC-OPEN DROP ;
 
-\ Opens scheduled runs over the Practice filesystem: the Agent's
+\ Opens scheduled runs in the home of the Practice's places: the Agent's
 \ dispatcher over its runtime, the broker over the Practice's
 \ permissions with the dispatcher as its handler, and the broker's client
 \ for Daybook's service.  A store either cannot use still opens, and says
 \ why; in recovery there is no Practice, so no broker, and Daybook's
 \ service has no client: scheduled runs are unavailable.
 : _DESK-SCHEDULES-INIT  ( -- )
-    _DESK-AGENT-RUNTIME @ _DESK-HOME-VFS _DESK-AGENT-DISPATCH ADISP-INIT DROP
+    _DESK-AGENT-RUNTIME @ _DESK-HOME _DESK-AGENT-DISPATCH ADISP-INIT DROP
     _DESK-AGENT-DISPATCH _DESK-SCHEDULE-HANDLER DSAG-HANDLER-INIT
-    _DESK-HOME-VFS DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
+    _DESK-HOME DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
     _DESK-BROKER SBRK-VALID? 0= IF EXIT THEN
     _DESK-SCHEDULE-HANDLER _DESK-BROKER SBRK-HANDLER!
     _DESK-BROKER SBRK-CLIENT _DESK-REMINDERS DBSVC-CLIENT! ;

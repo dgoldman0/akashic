@@ -39,7 +39,8 @@ CREATE _dsc-practice-store PHEADVFS-SIZE ALLOT
 : _dsc-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
 
 : _dsc-practice-slot?  ( path-a path-u -- flag )
-    VFS-CUR VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
+    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
 
 : _dsc-practice-present?  ( -- flag )
     S" /practice-head-a.bin" _dsc-practice-slot?
@@ -47,7 +48,7 @@ CREATE _dsc-practice-store PHEADVFS-SIZE ALLOT
 
 : _dsc-practice-provision  ( -- )
     _dsc-practice-present? IF EXIT THEN
-    VFS-CUR _dsc-practice-store PHEADVFS-INIT
+    PLACES-DEFAULT PLSET-HOME _dsc-practice-store PHEADVFS-INIT
         PHEADVFS-S-OK <> ABORT" Practice store init failed"
     _dsc-practice-out _dsc-practice-store PHEADVFS-LOAD
         PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"

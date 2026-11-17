@@ -31,7 +31,7 @@ PRELUDE = RAM_VFS + rf"""
 {NOW} CONSTANT T-NOW
 CREATE PS-RAW SPERM-SIZE 7 + ALLOT  PS-RAW 7 + -8 AND CONSTANT PS
 : P-PATH  ( -- a u ) S" /schedule-perms.bin" ;
-: P-INIT  ( -- status ) PS SPERM-SIZE 0 FILL TV @ P-PATH PS SPERM-INIT ;
+: P-INIT  ( -- status ) PS SPERM-SIZE 0 FILL TV-PLACE P-PATH PS SPERM-INIT ;
 : P-WIPE  ( -- )
     P-PATH T-RM
     PS _SPERM.REPL VREPL-STAGE$ T-RM
@@ -154,8 +154,8 @@ def run(forth, lines: list[str], max_steps: int = 4_000_000_000) -> list[list[in
 def test_lifecycle_and_its_refusals(forth):
     rows = run(forth, [
         "P-FRESH PS SPERM-STATE@ . GEN . COUNT. P-PATH T-THERE? . CR",
-        "TV @ P-PATH PS 1+ SPERM-INIT . TV @ P-PATH 0 SPERM-INIT . "
-        "TV @ P-PATH PS SPERM-INIT . 0 P-PATH PS SPERM-INIT . CR",
+        "TV-PLACE P-PATH PS 1+ SPERM-INIT . TV-PLACE P-PATH 0 SPERM-INIT . "
+        "TV-PLACE P-PATH PS SPERM-INIT . 0 P-PATH PS SPERM-INIT . CR",
         "PS SPERM-OPEN . PS SPERM-CLOSE . PS SPERM-STATE@ . "
         "RQ PR1 1 PS SPERM-GRANT . . RID1 PS SPERM-REVOKE . RID1 PS SPERM-FIND . "
         "PR1 MATCH. CR",

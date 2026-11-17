@@ -118,7 +118,7 @@ def test_desk_hosts_one_capability_bound_to_its_callers_policy() -> None:
     )
 
 
-def test_desk_gives_the_capability_module_storage_beside_its_files() -> None:
+def test_desk_gives_the_capability_module_storage_in_its_home() -> None:
     source = _source()
     init = _definition(source, "_DESK-SBOX-INIT")
 
@@ -127,7 +127,7 @@ def test_desk_gives_the_capability_module_storage_beside_its_files() -> None:
     publish = init.index("_DSBI-INST @ _DESK-SANDBOX !")
     assert register < modules < publish
     assert re.search(
-        r"_DESK-REGISTRY\s+@\s+VFS-CUR\s+"
+        r"_DESK-REGISTRY\s+@\s+_DESK-HOME\s+"
         r"_DESK-SBOX-CATALOG\$\s+_DESK-SBOX-PACK\$\s+"
         r"_DSBI-INST\s+@\s+SBOX-CAPABILITY-MODULES\s+"
         r"_DESK-SBOX-MODULES-STATUS\s+!",

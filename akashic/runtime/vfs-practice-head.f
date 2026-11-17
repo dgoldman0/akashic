@@ -3,7 +3,7 @@
 \ =====================================================================
 \  Each slot contains a fixed, checksummed envelope around the pointer-
 \  free PHEAD record.  Saves replace only the inactive slot and publish
-\  the new in-memory generation after VFS-SYNC succeeds.
+\  the new in-memory generation after the place's sync succeeds.
 \
 \  This is a corruption/torn-write boundary, not an authentication
 \  boundary.  Practice activation must still authenticate committed
@@ -13,7 +13,7 @@
 \  tokens, and runtime pointers have no representation in this format.
 \
 \  Public API:
-\    PHEADVFS-INIT          ( vfs store -- status )
+\    PHEADVFS-INIT          ( place store -- status )
 \    PHEADVFS-SAVE          ( head store -- status )
 \    PHEADVFS-LOAD          ( destination store -- status )
 \    PHEADVFS-LOAD-VALIDATED
@@ -31,6 +31,7 @@ PROVIDED akashic-runtime-vfs-practice-head
 REQUIRE practice-head.f
 REQUIRE ../math/crc.f
 REQUIRE ../utils/fs/vfs.f
+REQUIRE ../utils/fs/places.f
 REQUIRE ../utils/generation-pair.f
 
 0 CONSTANT PHEADVFS-S-OK
@@ -62,7 +63,7 @@ CREATE _PHEADVFS-MAGIC
 48 CONSTANT _PHSV-H-FLAGS
 56 CONSTANT _PHSV-H-RESERVED
 
-0   CONSTANT _PHSV-VFS
+0   CONSTANT _PHSV-PLACE
 8   CONSTANT _PHSV-FLAGS
 16  CONSTANT _PHSV-REJECTED-GENERATION
 24  CONSTANT _PHSV-REJECTED-STATUS
@@ -72,7 +73,7 @@ _PHSV-CANDIDATE-A GPAIR-CANDIDATE-SIZE +
     CONSTANT _PHSV-CANDIDATE-B
 _PHSV-CANDIDATE-B GPAIR-CANDIDATE-SIZE + CONSTANT PHEADVFS-SIZE
 
-: PHEADVFS.VFS          ( store -- a ) _PHSV-VFS + ;
+: PHEADVFS.PLACE        ( store -- a ) _PHSV-PLACE + ;
 : PHEADVFS.FLAGS        ( store -- a ) _PHSV-FLAGS + ;
 : PHEADVFS.REJECTED-GENERATION  ( store -- a )
     _PHSV-REJECTED-GENERATION + ;
@@ -224,11 +225,15 @@ VARIABLE _PHR-STATUS
 : _PHEADVFS-READ-SLOT  ( path-a path-u store -- head generation status )
     _PHR-STORE ! _PHR-PATH-U ! _PHR-PATH-A !
     0 _PHR-FD ! 0 _PHR-BUFFER ! 0 _PHR-HEAD !
-    _PHR-PATH-A @ _PHR-PATH-U @ _PHR-STORE @ PHEADVFS.VFS @ VFS-OPEN
-    _PHR-FD !
-    _PHR-FD @ 0= IF
-        0 0 PHEADVFS-S-NOT-FOUND EXIT
+    _PHR-PATH-A @ _PHR-PATH-U @ VFS-FF-READ _PHR-STORE @ PHEADVFS.PLACE @
+        PLACE-OPEN ?DUP IF
+        NIP VFS-IOR-REASON VFS-R-NOENT = IF
+            0 0 PHEADVFS-S-NOT-FOUND
+        ELSE
+            0 0 PHEADVFS-S-IO
+        THEN EXIT
     THEN
+    _PHR-FD !
     _PHR-FD @ VFS-SIZE PHEADVFS-SNAPSHOT-SIZE <> IF
         _PHR-FD @ VFS-CLOSE
         0 0 PHEADVFS-S-INVALID EXIT
@@ -289,7 +294,7 @@ VARIABLE _PHL-RESULT
 
 : PHEADVFS-LOAD  ( destination store -- status )
     OVER 0= OVER 0= OR IF 2DROP PHEADVFS-S-INVALID EXIT THEN
-    DUP PHEADVFS.VFS @ 0= IF 2DROP PHEADVFS-S-INVALID EXIT THEN
+    DUP PHEADVFS.PLACE @ 0= IF 2DROP PHEADVFS-S-INVALID EXIT THEN
     _PHL-STORE ! _PHL-DESTINATION !
     _PHL-STORE @ _PHEADVFS.PAIR GPAIR-RESET
         GPAIR-S-OK <> IF PHEADVFS-S-INVALID EXIT THEN
@@ -489,7 +494,7 @@ VARIABLE _PHV-CHECK-STATUS
     _PHV-VALIDATOR @ 0= OR _PHV-STORE @ 0= OR IF
         PHEADVFS-S-INVALID EXIT
     THEN
-    _PHV-STORE @ PHEADVFS.VFS @ 0= IF PHEADVFS-S-INVALID EXIT THEN
+    _PHV-STORE @ PHEADVFS.PLACE @ 0= IF PHEADVFS-S-INVALID EXIT THEN
     _PHV-REJECTED @ PHEAD-SIZE 0 FILL
     _PHV-STORE @ _PHEADVFS.PAIR GPAIR-RESET
         GPAIR-S-OK <> IF PHEADVFS-S-INVALID EXIT THEN
@@ -566,15 +571,18 @@ VARIABLE _PHW-OUTCOME
     IF _PHEADVFS-PATH-B ELSE _PHEADVFS-PATH-A THEN
     _PHW-PATH-U ! _PHW-PATH-A ! ;
 
+: _PHEADVFS-OPEN-SLOT  ( -- fd ior )
+    _PHW-PATH-A @ _PHW-PATH-U @ VFS-FF-READ VFS-FF-WRITE OR
+        _PHW-STORE @ PHEADVFS.PLACE @ PLACE-OPEN ;
+
+\ The slot open for writing, made when it is not there; 0 when it cannot
+\ be opened, as in a read-only place.
 : _PHEADVFS-OPEN-WRITE  ( -- fd | 0 )
-    _PHW-PATH-A @ _PHW-PATH-U @ _PHW-STORE @ PHEADVFS.VFS @ VFS-OPEN
-    DUP 0= IF
-        DROP
-        _PHW-PATH-A @ _PHW-PATH-U @
-        _PHW-STORE @ PHEADVFS.VFS @ VFS-CREATE
-        0= IF 0 EXIT THEN
-        _PHW-PATH-A @ _PHW-PATH-U @ _PHW-STORE @ PHEADVFS.VFS @ VFS-OPEN
-    THEN ;
+    _PHEADVFS-OPEN-SLOT ?DUP 0= IF EXIT THEN
+    VFS-IOR-REASON VFS-R-NOENT <> IF DROP 0 EXIT THEN DROP
+    _PHW-PATH-A @ _PHW-PATH-U @ _PHW-STORE @ PHEADVFS.PLACE @ PLACE-CREATE
+    NIP IF 0 EXIT THEN
+    _PHEADVFS-OPEN-SLOT IF DROP 0 THEN ;
 
 : _PHEADVFS-SAVE-CALLBACK
   ( head slot generation pair store -- detail )
@@ -606,16 +614,18 @@ VARIABLE _PHW-OUTCOME
     _PHW-FD @ VFS-CLOSE
     _PHW-BUFFER @ FREE
     _PHW-ACTUAL @ _PHW-LENGTH @ <> IF PHEADVFS-S-IO EXIT THEN
-    _PHW-STORE @ PHEADVFS.VFS @ VFS-SYNC IF PHEADVFS-S-IO EXIT THEN
+    _PHW-STORE @ PHEADVFS.PLACE @ PLACE-SYNC IF PHEADVFS-S-IO EXIT THEN
     _PHW-PAIR @ GPAIR-SAVE-DURABLE! GPAIR-S-OK <> IF
         PHEADVFS-S-INVALID EXIT
     THEN
     PHEADVFS-S-OK ;
 
-: PHEADVFS-INIT  ( vfs store -- status )
+\ PHEADVFS-INIT ( place store -- status )
+\   Keep the head's two slots in PLACE.
+: PHEADVFS-INIT  ( place store -- status )
     OVER 0= OVER 0= OR IF 2DROP PHEADVFS-S-INVALID EXIT THEN
     DUP PHEADVFS-SIZE 0 FILL
-    SWAP OVER PHEADVFS.VFS !
+    SWAP OVER PHEADVFS.PLACE !
     >R
     ['] _PHEADVFS-EQUAL ['] _PHEADVFS-SAVE-CALLBACK
         R@ R@ _PHEADVFS.PAIR GPAIR-INIT
@@ -624,7 +634,7 @@ VARIABLE _PHW-OUTCOME
 
 : PHEADVFS-SAVE  ( head store -- status )
     OVER 0= OVER 0= OR IF 2DROP PHEADVFS-S-INVALID EXIT THEN
-    DUP PHEADVFS.VFS @ 0= IF 2DROP PHEADVFS-S-INVALID EXIT THEN
+    DUP PHEADVFS.PLACE @ 0= IF 2DROP PHEADVFS-S-INVALID EXIT THEN
     _PHW-STORE ! _PHW-HEAD !
     _PHW-STORE @ _PHEADVFS.PAIR GPAIR-VALID? 0= IF
         PHEADVFS-S-INVALID EXIT
@@ -662,7 +672,7 @@ VARIABLE _PHX-STORE
     _PHX-HEAD @ 0= _PHX-STORE @ 0= OR IF
         PHEADVFS-S-INVALID EXIT
     THEN
-    _PHX-STORE @ PHEADVFS.VFS @ 0= IF PHEADVFS-S-INVALID EXIT THEN
+    _PHX-STORE @ PHEADVFS.PLACE @ 0= IF PHEADVFS-S-INVALID EXIT THEN
     _PHX-STORE @ PHEADVFS-RECOVERY? 0= IF PHEADVFS-S-INVALID EXIT THEN
     _PHX-HEAD @ PHEAD-VALID? 0= IF PHEADVFS-S-INVALID EXIT THEN
     _PHX-HEAD @ PHEAD-READONLY? IF PHEADVFS-S-READONLY EXIT THEN

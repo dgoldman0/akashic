@@ -44,7 +44,7 @@ CREATE PS-RAW SPERM-SIZE 7 + ALLOT  PS-RAW 7 + -8 AND CONSTANT PS
 : P-PATH  ( -- a u ) S" /schedule-perms.bin" ;
 \ No permission file, and nothing left of a replacement.
 : P-WIPE  ( -- )
-    PS SPERM-SIZE 0 FILL TV @ P-PATH PS SPERM-INIT DROP
+    PS SPERM-SIZE 0 FILL TV-PLACE P-PATH PS SPERM-INIT DROP
     P-PATH T-RM
     PS _SPERM.REPL VREPL-STAGE$ T-RM
     PS _SPERM.REPL VREPL-BACKUP$ T-RM
@@ -56,7 +56,7 @@ CREATE PS-RAW SPERM-SIZE 7 + ALLOT  PS-RAW 7 + -8 AND CONSTANT PS
 : BK-FRESH  ( -- )
     B SBRK-VALID? IF B SBRK-FINI THEN
     FRESH P-WIPE T-NOW EPOCH-SET
-    TV @ HD ROOT @ B SBRK-INIT DROP
+    TV-PLACE HD ROOT @ B SBRK-INIT DROP
     DS H DSAG-HANDLER-INIT H B SBRK-HANDLER! ;
 \ A pump of Desk's loop: the runtime, the dispatcher, then the broker.
 : TICK  ( -- ) STEP B SBRK-TICK ;
@@ -299,7 +299,7 @@ def test_closing_the_broker_cancels_runs_in_flight(forth):
         "B SBRK-FINI B SBRK-VALID? . DS ADISP-BUSY? . HELD? . RUNS . "
         "R0 ADST-R.OUTCOME @ . R0 ADST-R.REASON @ . CR",
         # A broker opened again asks the Agent about runs it does not know.
-        "TV @ HD ROOT @ B SBRK-INIT . H B SBRK-HANDLER! KEY1 STAND . ANS. "
+        "TV-PLACE HD ROOT @ B SBRK-INIT . H B SBRK-HANDLER! KEY1 STAND . ANS. "
         "KEY2 STAND . CR",
     ])
     assert ints(rows[0]) == [S_STARTED, S_WAITING, -1, -1]

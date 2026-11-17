@@ -58,7 +58,7 @@ CREATE PS-RAW SPERM-SIZE 7 + ALLOT  PS-RAW 7 + -8 AND CONSTANT PS
 : P-PATH  ( -- a u ) S" /schedule-perms.bin" ;
 \ No permission file, and nothing left of a replacement.
 : P-WIPE  ( -- )
-    PS SPERM-SIZE 0 FILL TV @ P-PATH PS SPERM-INIT DROP
+    PS SPERM-SIZE 0 FILL TV-PLACE P-PATH PS SPERM-INIT DROP
     P-PATH T-RM
     PS _SPERM.REPL VREPL-STAGE$ T-RM
     PS _SPERM.REPL VREPL-BACKUP$ T-RM
@@ -139,13 +139,13 @@ VARIABLE FH-VETTED
 : B-FRESH  ( -- )
     B SBRK-VALID? IF B SBRK-FINI THEN
     T-OPS-RESET HD-INIT P-WIPE FH-RESET
-    TV @ HD ROOT @ B SBRK-INIT DROP FH-ON ;
+    TV-PLACE HD ROOT @ B SBRK-INIT DROP FH-ON ;
 \ A broker over a damaged permission file.
 : B-DAMAGED  ( -- status )
     B SBRK-VALID? IF B SBRK-FINI THEN
     T-OPS-RESET HD-INIT P-WIPE FH-RESET
     TBUF 64 7 FILL 64 TLEN ! P-PATH T-PUT-AT
-    TV @ HD ROOT @ B SBRK-INIT FH-ON ;
+    TV-PLACE HD ROOT @ B SBRK-INIT FH-ON ;
 
 \ An Agent run's operands in OPS: five minutes, 4096 bytes disclosed and
 \ 16384 kept, the scripted provider's gpt-test, and a short prompt.
@@ -241,18 +241,18 @@ def test_lifecycle_and_its_refusals(forth):
     rows = run(forth, [
         "B-FRESH B SBRK-VALID? . BS SPERM-STATE@ . BC SDSP-CLIENT-VALID? . "
         "B SBRK-ASKING . . B SBRK-ACTIVE? . RUNS . CR",
-        "TV @ HD ROOT @ 0 SBRK-INIT . TV @ HD ROOT @ B 1+ SBRK-INIT . "
-        "TV @ HD ROOT @ B SBRK-INIT . CR",
+        "TV-PLACE HD ROOT @ 0 SBRK-INIT . TV-PLACE HD ROOT @ B 1+ SBRK-INIT . "
+        "TV-PLACE HD ROOT @ B SBRK-INIT . CR",
         # Closed, its client answers nothing.
         "B SBRK-FINI B SBRK-VALID? . BC SDSP-CLIENT-VALID? . "
         "1 R-ASK RQ BC SDSP-CHECK . . CR",
         # The root's head made invalid, no root, a root that is not the
         # head's, and a root that is not valid.
-        "HD PHEAD.ID 32 0 FILL TV @ HD ROOT @ B SBRK-INIT . HD-INIT "
-        "TV @ HD 0 B SBRK-INIT . TV @ HD2 ROOT @ B SBRK-INIT . "
-        "ROOT @ CTX.EPOCH @ 0 ROOT @ CTX.EPOCH ! TV @ HD ROOT @ B SBRK-INIT . "
+        "HD PHEAD.ID 32 0 FILL TV-PLACE HD ROOT @ B SBRK-INIT . HD-INIT "
+        "TV-PLACE HD 0 B SBRK-INIT . TV-PLACE HD2 ROOT @ B SBRK-INIT . "
+        "ROOT @ CTX.EPOCH @ 0 ROOT @ CTX.EPOCH ! TV-PLACE HD ROOT @ B SBRK-INIT . "
         "ROOT @ CTX.EPOCH ! B SBRK-VALID? . CR",
-        "TV @ HD ROOT @ B SBRK-INIT . B SBRK-VALID? . CR",
+        "TV-PLACE HD ROOT @ B SBRK-INIT . B SBRK-VALID? . CR",
         # A damaged permission file blocks the store, not the broker.
         "B-DAMAGED . B SBRK-VALID? . BS SPERM-STATE@ . BC SDSP-CLIENT-VALID? . CR",
     ])
@@ -682,7 +682,7 @@ def test_closing_cancels_what_is_in_flight(forth):
         "3 R-ASK RQ BC SDSP-ASK 2DROP "
         "B SBRK-FINI FH. FH-REASON @ . B SBRK-VALID? . BC SDSP-CLIENT-VALID? . CR",
         # The permissions stay on disk.
-        "TV @ HD ROOT @ B SBRK-INIT . BS SPERM-COUNT@ . RUNS . B SBRK-ASKING . . "
+        "TV-PLACE HD ROOT @ B SBRK-INIT . BS SPERM-COUNT@ . RUNS . B SBRK-ASKING . . "
         "FH-DONE CR",
     ])
     assert rows == [

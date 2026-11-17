@@ -137,7 +137,7 @@ next open finds the run still in flight and ends it as indeterminate.
 
 ```forth
 ADISP-SIZE    ( -- bytes )
-ADISP-INIT    ( runtime vfs dispatch -- status )
+ADISP-INIT    ( runtime place dispatch -- status )
 ADISP-FINI    ( dispatch -- )
 ADISP-VALID?  ( dispatch -- flag )
 ADISP-STORE   ( dispatch -- store )
@@ -152,7 +152,7 @@ ADISP-PUMP    ( dispatch -- )
 ```
 
 `ADISP-INIT` configures a dispatcher for a runtime, with its run store at
-`/agent-dispatch.bin` in the VFS. It opens the store, and it ends as
+`/agent-dispatch.bin` in the place. It opens the store, and it ends as
 interrupted any run the store shows still in flight: the Agent was running
 it when it last stopped. The status is the store's (`ADST-S-`). The
 dispatcher works whatever state the store is in, so a store that cannot be

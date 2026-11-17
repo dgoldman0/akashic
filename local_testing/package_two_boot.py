@@ -12,6 +12,7 @@ from akashic_tui import (
     MEGAPAD_ROOT,
     MP64FS,
     MachineSession,
+    TEST_ROOT_PLACE,
     build_image,
 )
 
@@ -22,10 +23,11 @@ REQUIRE tui/app-loader.f
 REQUIRE tui/app-catalog.f
 REQUIRE tui/draw.f
 REQUIRE utils/fs/drivers/vfs-mp64fs.f
-
+""" + TEST_ROOT_PLACE + r"""
 VARIABLE _cold-fails
 VARIABLE _cold-checks
 VARIABLE _cold-vfs
+VARIABLE _cold-place
 CREATE _cold-bd /BLOCK-DEVICE ALLOT
 CREATE _cold-volume /VOLUME ALLOT
 VARIABLE _cold-cat
@@ -40,7 +42,7 @@ VARIABLE _cold-latest
     0= IF 1 _cold-fails +! ." ASSERT " _cold-checks @ . CR THEN ;
 
 : _cold-resolver  ( entry context -- desc status )
-    DROP ACE-MANIFEST$ ALOAD-PATH ;
+    DROP ACE-MANIFEST$ _cold-cat @ ACAT-PLACE ALOAD-PATH ;
 
 : _cold-cycle  ( -- )
     _cold-desc @ APP.COMP-DESC @ CINST-NEW
@@ -61,8 +63,9 @@ VARIABLE _cold-latest
     _cold-bd _cold-volume VOL-RAW THROW
     2097152 A-XMEM ARENA-NEW IF -1 THROW THEN
     _cold-volume VMP-NEW ?DUP IF THROW THEN
-        DUP _cold-vfs ! VFS-USE
-    _cold-vfs @ ACAT-NEW
+        _cold-vfs !
+    _cold-vfs @ S" cold" _t-root-place _cold-place !
+    _cold-place @ ACAT-NEW
     DUP ACAT-S-OK = _cold-assert DROP DUP _cold-cat !
     ACAT-ACTIVATE ACAT-S-OK = _cold-assert
     _cold-cat @ ACAT-COUNT 1 = _cold-assert

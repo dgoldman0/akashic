@@ -65,12 +65,12 @@ moves, so a look with nothing due reads no schedule records.
 
 ## The service
 
-Desk opens one service over its Practice filesystem, at
+Desk opens one service in the home of the Practice's places, at
 `/daybook-automations.bin`, ticks it, and lends it to Daybook alone.
 
 ```forth
 DBSVC-SIZE        ( -- bytes )
-DBSVC-OPEN        ( vfs service -- status )
+DBSVC-OPEN        ( place service -- status )
 DBSVC-CLOSE       ( service -- )
 DBSVC-CLIENT!     ( client service -- )
 DBSVC-TICK        ( service -- notice? )

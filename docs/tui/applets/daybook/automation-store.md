@@ -153,7 +153,7 @@ commit.
 ## Words
 
 ```forth
-DBAS-INIT          ( vfs path path-u store -- status )
+DBAS-INIT          ( place path path-u store -- status )
 DBAS-OPEN          ( store -- status )
 DBAS-CLOSE         ( store -- status )
 DBAS-COMMIT        ( store -- status )
