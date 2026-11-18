@@ -263,6 +263,9 @@ WALL_CLOCK_READS = {
     "akashic/tui/applets/agent/dispatch.f": (
         {"DT-NOW-MS": 1}, "a scheduled run's record says when it ran, read only once set",
     ),
+    "akashic/utils/fs/user-volume.f": (
+        {"EPOCH@": 1}, "the ext4 writer's clock stamps inode times, which are calendar instants",
+    ),
     "akashic/node/node.f": ({"DT-NOW-S": 1}, "block timestamp"),
     "akashic/web/response.f": ({"DT-NOW-S": 1}, "HTTP Date header"),
     "akashic/web/server.f": ({"DT-NOW-S": 1}, "log stamp"),
