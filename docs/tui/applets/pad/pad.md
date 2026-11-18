@@ -43,6 +43,11 @@ The smoke profile builds a bootable MP64FS image from Pad's transitive
 events through the guest, and captures terminal text, cells, and PNG output in
 `local_testing/out/`.
 
+`local_testing/test_pad_contracts.py` runs the `pad-contracts` profile as a
+test with the same limits, so the test selection tool runs it whenever Pad or
+a module it loads changes. It writes its captures into the test's temporary
+folder instead.
+
 For a shared live machine that a person can watch while another process drives
 it, see [`local_testing/README.md`](../../../../local_testing/README.md).
 

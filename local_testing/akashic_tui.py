@@ -12692,7 +12692,9 @@ VARIABLE _pc-close-calls
     _PAD-REPL VREPL-TARGET$ _pc-vfs @ VFS-RESOLVE 0<> _pc-assert
     _PAD-REPL VREPL-BACKUP$ _pc-vfs @ VFS-RESOLVE 0= _pc-assert
     _PAD-REPL VREPL-MARKER$ _pc-vfs @ VFS-RESOLVE 0= _pc-assert
-    _pc-loaded @ _PAD-BUF-CLOSE
+    \ A failed open leaves the original buffer active, and closing it
+    \ would fail every later check that relies on that buffer.
+    _pc-loaded @ _pc-orig @ <> IF _pc-loaded @ _PAD-BUF-CLOSE THEN
     _PAD-ACTIVE @ _pc-orig @ = _pc-assert
     S" keep" _pc-text= _pc-assert
 
