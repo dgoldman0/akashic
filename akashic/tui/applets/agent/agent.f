@@ -1555,6 +1555,8 @@ CREATE AGENT-COMP-DESC COMP-DESC ALLOT
 
 : _AGENT-COMP-SETUP  ( -- )
     AGENT-COMP-DESC COMP-DESC-INIT
+    \ The Agent keeps its conversations in its home.
+    PLACES-NEED-HOME AGENT-COMP-DESC COMP.PLACE-NEEDS !
     S" org.akashic.agent"
     AGENT-COMP-DESC COMP.ID-U ! AGENT-COMP-DESC COMP.ID-A !
     S" 1.0.0"

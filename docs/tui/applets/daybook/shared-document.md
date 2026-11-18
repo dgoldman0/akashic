@@ -60,6 +60,7 @@ SDOC-REF        ( instance destination-rref -- status )
 SDOC-VALID?     ( instance -- flag )
 SDOC-SERVICE    ( -- offer | 0 )
 SDOC-POOL       ( -- resource-owner-pool | 0 )
+SDOC-PATH$      ( -- a u )   \ the owner's file, a path in its place
 
 SDOC-COMP-DESC   ( -- descriptor-address ) \ CREATE data address
 SDOC-CAP-SNAPSHOT ( -- capability )

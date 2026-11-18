@@ -80,6 +80,7 @@ REQUIRE ../../../net/tls-trust-registry.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
+REQUIRE ../../../utils/fs/held-files.f
 REQUIRE ../daybook/automation-service.f
 REQUIRE agent-access-policy.f
 REQUIRE schedule-agent.f
@@ -909,6 +910,9 @@ VARIABLE _DHR-FIRST
         _DESK-SANDBOX @ SBOX-CAPABILITY-OWNER-DRAIN _DHR-REMEMBER
     THEN
     _DHR-INST @ _DESK-XIO-RELEASE-OWNER _DHR-REMEMBER
+    \ The applet has shut down, so its place set goes with what else Desk
+    \ lent it.
+    _DHR-INST @ _DESK-PRACTICE-ACTIVATION PACT-PLACES-RELEASE
     _DHR-FIRST @ ;
 
 \ A launcher row shows its catalog entry's state, which Desk changes as it
@@ -1211,6 +1215,18 @@ VARIABLE _DSSA-ENTRY
     DROP
     _DESK-BUS @ ;
 
+\ The service that lends Daybook's document.
+: _DESK-DAYBOOK-SERVICE$  ( -- a u )  S" org.akashic.resource.daybook" ;
+
+\ The files that keep the documents Desk hosts, each with the service
+\ that lends its document, filled from what each owner says of its own
+\ file.  Desk lends the table under org.akashic.fs.held, so an applet
+\ that opens such a file by its path reaches the document through its
+\ owner (utils/fs/held-files.f).
+CREATE _DESK-HELD HELD-SIZE ALLOT  _DESK-HELD HELD-INIT
+
+: _DESK-SERVICE-HELD@  ( caller -- table )  DROP _DESK-HELD ;
+
 : _DESK-SERVICE-DAYBOOK@  ( caller -- service | 0 )
     DROP
     _DESK-DAYBOOK-STATUS @ 0=
@@ -1325,6 +1341,8 @@ VARIABLE _DSSA-ENTRY
         ['] _DESK-SERVICE-OWNERS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.interop.endpoint" _DESK-ANY ['] _DESK-SERVICE-ENDPOINT@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.fs.held" _DESK-ANY ['] _DESK-SERVICE-HELD@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.fs.places" _DESK-ANY ['] _DESK-SERVICE-PLACES@
         _DESK-SERVICE+ ;
@@ -1557,10 +1575,11 @@ VARIABLE _DMF-EFFECTS
 : _DESK-DAYBOOK-RID!  ( -- )
     SHA3-256-BEGIN
     DESK-PRACTICE PHEAD.ID RID-SIZE SHA3-256-ADD
-    S" org.akashic.resource.daybook" SHA3-256-ADD
+    _DESK-DAYBOOK-SERVICE$ SHA3-256-ADD
     _DESK-DAYBOOK-RID SHA3-256-END ;
 
 : _DESK-DAYBOOK-INIT  ( -- )
+    _DESK-DAYBOOK-SERVICE$ _DESK-HELD HELD-RELEASE
     0 _DESK-RREG !
     0 _DESK-DAYBOOK-OWNER !
     SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
@@ -1575,7 +1594,12 @@ VARIABLE _DMF-EFFECTS
     DUP _DESK-DAYBOOK-STATUS ! IF
         DROP EXIT
     THEN
-    _DESK-DAYBOOK-OWNER ! ;
+    _DESK-DAYBOOK-OWNER !
+    \ The owner keeps the document in its file of the home.  Without the
+    \ record an applet could write that file directly, so the document
+    \ is not lent until Desk holds it.
+    SDOC-PATH$ _DESK-HOME _DESK-DAYBOOK-SERVICE$ _DESK-HELD HELD-HOLD
+    ?DUP IF _DESK-DAYBOOK-STATUS ! THEN ;
 
 \ Opens Daybook's reminders in the home of the Practice's places.  A
 \ store Desk cannot use still opens a service, which says why.
@@ -1861,6 +1885,7 @@ VARIABLE _DIFI-XIO-STATUS
     SDOC-S-OK <> ABORT" desk: shared document activation cleanup failed" ;
 
 : _DESK-DAYBOOK-DEACTIVATE  ( -- )
+    _DESK-DAYBOOK-SERVICE$ _DESK-HELD HELD-RELEASE
     _DESK-DAYBOOK-OWNER @ ?DUP 0= IF EXIT THEN
     \ A failed final anchor release preserves the exact live owner and token.
     \ Finish that retry while Desk still owns the borrowed runtime graph.

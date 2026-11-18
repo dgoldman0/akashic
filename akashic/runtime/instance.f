@@ -29,7 +29,7 @@ PROVIDED akashic-runtime-instance
  96 CONSTANT _CD-INTENTS-A
 104 CONSTANT _CD-INTENTS-N
 112 CONSTANT _CD-FLAGS
-120 CONSTANT _CD-RESERVED
+120 CONSTANT _CD-PLACE-NEEDS         \ PLACES-NEED- bits (utils/fs/places.f)
 128 CONSTANT COMP-DESC
 
 : COMP.MAGIC          ( desc -- a ) _CD-MAGIC + ;
@@ -47,6 +47,10 @@ PROVIDED akashic-runtime-instance
 : COMP.INTENTS-A      ( desc -- a ) _CD-INTENTS-A + ;
 : COMP.INTENTS-N      ( desc -- a ) _CD-INTENTS-N + ;
 : COMP.FLAGS          ( desc -- a ) _CD-FLAGS + ;
+\ What the component needs of the place set it works in: the PLACES-NEED-
+\ bits that utils/fs/places.f defines.  0, the default, asks for nothing
+\ beyond the origin's shipped files.
+: COMP.PLACE-NEEDS    ( desc -- a ) _CD-PLACE-NEEDS + ;
 
 : COMP-DESC-INIT  ( desc -- )
     DUP COMP-DESC 0 FILL

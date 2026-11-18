@@ -395,6 +395,72 @@ VARIABLE _PGR-ACCESS
     REPEAT
     _PLSET-CHANGED ;
 
+\ What a holder needs of the set it is given, which a component states
+\ in its descriptor (COMP.PLACE-NEEDS, runtime/instance.f).  The origin
+\ is always granted, read-only, for the holder's shipped files.
+1 CONSTANT PLACES-NEED-HOME       \ write its own records in the home
+2 CONSTANT PLACES-NEED-DOCUMENTS  \ write the documents place
+4 CONSTANT PLACES-NEED-LIST       \ see every place, read-only unless
+                                  \ another need lets it write there
+
+VARIABLE _PDV-NEEDS
+VARIABLE _PDV-FROM
+VARIABLE _PDV-TO
+VARIABLE _PDV-PLACE    \ the place of FROM being derived
+VARIABLE _PDV-ACCESS   \ the access the needs give it, -1 for none
+
+: _PDV-WIDEN  ( access -- )
+    DUP _PDV-ACCESS @ > IF _PDV-ACCESS ! ELSE DROP THEN ;
+
+: _PDV-ORIGIN?     ( -- flag ) _PDV-PLACE @ _PDV-FROM @ PLSET-ORIGIN = ;
+: _PDV-DOCUMENTS?  ( -- flag ) _PDV-PLACE @ _PDV-FROM @ PLSET-DOCUMENTS = ;
+: _PDV-HOME?       ( -- flag )
+    _PDV-NEEDS @ PLACES-NEED-HOME AND 0<>
+    _PDV-PLACE @ _PDV-FROM @ PLSET-HOME = AND ;
+
+\ The access the needs give _PDV-PLACE: never wider than FROM grants it.
+: _PDV-ACCESS-OF  ( -- )
+    -1 _PDV-ACCESS !
+    _PDV-ORIGIN? IF PLACE-READ-ONLY _PDV-WIDEN THEN
+    _PDV-NEEDS @ PLACES-NEED-LIST AND IF PLACE-READ-ONLY _PDV-WIDEN THEN
+    _PDV-HOME? IF _PDV-PLACE @ _PG.ACCESS @ _PDV-WIDEN THEN
+    _PDV-NEEDS @ PLACES-NEED-DOCUMENTS AND 0<> _PDV-DOCUMENTS? AND IF
+        _PDV-PLACE @ _PG.ACCESS @ _PDV-WIDEN
+    THEN ;
+
+\ Grant _PDV-PLACE in TO at _PDV-ACCESS and carry over the marks it has
+\ in FROM: the origin and the documents place always, the home only for
+\ PLACES-NEED-HOME.
+: _PDV-GRANT  ( -- ior )
+    _PDV-ACCESS @ _PDV-PLACE @ _PG.DECL @ _PDV-TO @ PLSET-GRANT
+    ?DUP IF NIP EXIT THEN                       ( place )
+    _PDV-ORIGIN? IF DUP _PDV-TO @ PLSET-ORIGIN! THEN
+    _PDV-DOCUMENTS? IF DUP _PDV-TO @ PLSET-DOCUMENTS! THEN
+    _PDV-HOME? IF DUP _PDV-TO @ PLSET-HOME! THEN
+    DROP 0 ;
+
+\ PLSET-DERIVE ( needs set -- set' ior )
+\   A new set for one holder, made from SET by what NEEDS asks: the home
+\   at the access SET grants it for PLACES-NEED-HOME, the documents place
+\   likewise for PLACES-NEED-DOCUMENTS, every place read-only for
+\   PLACES-NEED-LIST, and the origin read-only always.  Places keep SET's
+\   order; a place no need names is left out.  The caller frees the new
+\   set with PLSET-FREE.
+: PLSET-DERIVE  ( needs set -- set' ior )
+    _PDV-FROM ! _PDV-NEEDS !
+    _PDV-FROM @ _PLSET? 0= IF 0 VFS-E-INVALID EXIT THEN
+    PLSET-NEW ?DUP IF EXIT THEN  _PDV-TO !
+    _PDV-FROM @ _PS.FIRST @
+    BEGIN ?DUP WHILE
+        _PDV-PLACE !
+        _PDV-ACCESS-OF
+        _PDV-ACCESS @ 0< 0= IF
+            _PDV-GRANT ?DUP IF _PDV-TO @ PLSET-FREE 0 SWAP EXIT THEN
+        THEN
+        _PDV-PLACE @ _PG.NEXT @
+    REPEAT
+    _PDV-TO @ 0 ;
+
 \ PLSET-REVISION ( set -- n )
 \   Moves when the set's membership, marks or access change and when any
 \   volume or declaration changes, so a list of places knows to redraw.

@@ -48,14 +48,21 @@ default set and marks all three.
 An applet obtains its set through the service lookup it already uses,
 `CINST-SERVICE`, under the id `org.akashic.fs.places`. Desk's endpoint
 receives the asking instance, passes it to one runtime word,
-`PACT-PLACES`, and returns the answer. That word is where a Practice
-takes effect: today it answers the activation's set for every caller, and
-the Practice permission work replaces its body with a set per applet,
-deciding there which places an applet sees and whether it may write. Desk
-names no applet. The context field `CTX.PLACES` holds the activation's
-set. An applet that runs with no endpoint at all, as a standalone shell
-run does, takes the registry's default set; an applet whose endpoint
-answers nothing has no places.
+`PACT-PLACES`, and returns the answer. That word gives each instance a set
+of its own, made from the activation's set the first time the instance
+asks (`PLSET-DERIVE`), by what its component's descriptor says it needs
+(`COMP.PLACE-NEEDS`): the home to write its records in
+(`PLACES-NEED-HOME`), the documents place to write
+(`PLACES-NEED-DOCUMENTS`), and every place to read (`PLACES-NEED-LIST`).
+The origin comes with every set, read-only, for the applet's shipped
+files, and a place no need names is left out. The set lasts until Desk
+releases the instance (`PACT-PLACES-RELEASE`) or the activation ends, and
+it is narrowed with the activation's set. A Practice's own choice of
+places for each applet (Part 5b of the release plan) belongs in the same
+word. Desk names no applet. The context field `CTX.PLACES` holds the
+activation's set, which Desk's own stores use. An applet that runs with
+no endpoint at all, as a standalone shell run does, takes the registry's
+default set; an applet whose endpoint answers nothing has no places.
 
 Code asks for the home, the origin, the documents place or the listed
 places and never spells a place's name, so the same code serves every
@@ -76,10 +83,15 @@ a folder of its own under the records place, so a store writes its own
 files and no other's. File Explorer and Pad write the documents place and
 read the records place. A document that another applet owns, such as
 Daybook's, reaches Pad only through that owner's service in Desk, by its
-identity: Pad asks Desk's resource registry whether a file holds a
-document Desk hosts and opens such a file through its owner, so no applet
-spells another applet's file. A source rule holds applet code to the
-place words for every write.
+identity: Desk keeps a table of the files that keep the documents it
+hosts, filled from what each owner says of its own file
+(`utils/fs/held-files.f`), and lends it under `org.akashic.fs.held`. Pad
+asks it before it opens or saves a file by its path and opens such a file
+through its owner, so no applet spells another applet's file. A source
+rule, `local_testing/test_applet_writes_through_places.py`, holds applet
+code to the place words for every write: no applet module creates,
+removes or renames an entry by a path on a volume, or binds a store's
+file there, except Streams' and Library's stores until slice 7.
 
 The grants bind every route the system offers: File Explorer, Pad and
 every store. Applets outside the sandbox run as native code with every
@@ -117,6 +129,7 @@ PLSET-FREE      ( set -- )
 PLSET-GRANT     ( access decl set -- place ior )
 PLSET-HOME!  PLSET-ORIGIN!  PLSET-DOCUMENTS!   ( place set -- )
 PLSET-READ-ONLY!  ( set -- )
+PLSET-DERIVE    ( needs set -- set' ior )
 PLACES-DEFAULT! ( set -- )
 PLACES-DEFAULT  ( -- set | 0 )
 ```
@@ -127,7 +140,13 @@ failed, and `PVOL-DETACH` returns a volume to missing. `PLACES-CHECK`
 answers the first required place that is unavailable, with its status, or
 0 0. `PLSET-GRANT` refuses an access wider than the declaration's and a
 second grant of the same place. `PLSET-READ-ONLY!` narrows every member,
-which is what recovery does.
+which is what recovery does. `PLSET-DERIVE` makes one holder's set from
+another by what NEEDS asks, a sum of `PLACES-NEED-HOME`,
+`PLACES-NEED-DOCUMENTS` and `PLACES-NEED-LIST`: the home and the documents
+place at the access the set grants them, every place read-only for the
+list, and the origin read-only always. It keeps the set's order, carries
+over the origin and documents marks, and marks the home only for
+`PLACES-NEED-HOME`; the activation uses it for each applet instance.
 
 Applet side, where a `place` is the handle a set gives out:
 
@@ -347,9 +366,9 @@ every file under `akashic/` to it.
 6. File Explorer across volumes. It begins with the grants of "Who may
    write a file": a set per applet from what each applet's descriptor
    says it needs, File Explorer and Pad writing the documents place and
-   reading the records place, the registry lookup in place of Pad's
-   spelling of Daybook's path, and the source rule (Decided, 2026-11-18).
-   Done ahead of it: the run confirmed
+   reading the records place, the held-files table in place of Pad's
+   spelling of Daybook's path, and the source rule (Decided, 2026-11-18);
+   these are done. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
    now lands that sync and takes other writes, keeping the file's record
    until its last close.
@@ -498,6 +517,16 @@ shipping form's places.
   recovery with every place of its set read-only; with the volume, a
   document saved in the documents place passes the host's `e2fsck` and a
   second boot reads it back (`local_testing/test_user_volume.py`).
+- Each applet instance works in a set of its own, made by `PACT-PLACES`
+  with `PLSET-DERIVE` from what its descriptor says it needs and freed when
+  Desk releases the instance (`local_testing/test_places.py` and the
+  `practice-contracts` profile). Pad and File Explorer write the documents
+  place and read every other; Daybook, Grid, the Agent, Library, Sound Lab
+  and Streams write their home. Desk lends the held-files table
+  (`utils/fs/held-files.f`, `local_testing/test_held_files.py`), which it
+  fills from Daybook's owner (`SDOC-PATH$`), and Pad finds the shared
+  document's file there; `pad-resource-contracts` covers it. The source
+  rule is `local_testing/test_applet_writes_through_places.py`.
 
 What slice 4 leaves:
 

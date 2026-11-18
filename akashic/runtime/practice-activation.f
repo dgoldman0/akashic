@@ -10,8 +10,12 @@
 \  a read-only Practice and a home that cannot be written narrow every
 \  place of it to read-only.  A set with no usable home starts in
 \  recovery: nothing falls back to another place.  PACT-PLACES answers
-\  the set a component works in, and is the one word a Practice's choice
-\  of places per component will replace.
+\  the set a component instance works in: the part of the activation's
+\  set its descriptor says it needs (COMP.PLACE-NEEDS, PLSET-DERIVE),
+\  made once for the instance and freed by PACT-PLACES-RELEASE or when
+\  the activation ends.  Ownership of a file follows from these grants
+\  (docs/utils/fs/places.md, "Who may write a file"), and a Practice's
+\  own choice of places per component belongs in the same word.
 \
 \  The validator declares its trust level explicitly.  The built-in
 \  validator is structural only: CRC plus PHEAD-VALID? is not authentication.
@@ -25,6 +29,7 @@
 PROVIDED akashic-runtime-pact
 
 REQUIRE context.f
+REQUIRE instance.f
 REQUIRE vfs-practice-head.f
 REQUIRE ../utils/fs/places.f
 
@@ -62,7 +67,8 @@ REQUIRE ../utils/fs/places.f
 104 CONSTANT _PACT-HEAD-GENERATION
 112 CONSTANT _PACT-REJECTED-GENERATION
 120 CONSTANT _PACT-FLAGS
-128 CONSTANT _PACT-HEAD
+128 CONSTANT _PACT-GRANTS
+136 CONSTANT _PACT-HEAD
 _PACT-HEAD PHEAD-SIZE + CONSTANT _PACT-REJECTED-HEAD
 _PACT-REJECTED-HEAD PHEAD-SIZE + CONSTANT _PACT-STORE
 _PACT-STORE PHEADVFS-SIZE + CONSTANT PACT-SIZE
@@ -83,6 +89,7 @@ _PACT-STORE PHEADVFS-SIZE + CONSTANT PACT-SIZE
 : PACT.HEAD-GENERATION      ( pact -- a ) _PACT-HEAD-GENERATION + ;
 : PACT.REJECTED-GENERATION  ( pact -- a ) _PACT-REJECTED-GENERATION + ;
 : PACT.FLAGS                ( pact -- a ) _PACT-FLAGS + ;
+: _PACT.GRANTS              ( pact -- a ) _PACT-GRANTS + ;
 : PACT-HEAD                 ( pact -- head ) _PACT-HEAD + ;
 : PACT-REJECTED-HEAD        ( pact -- head ) _PACT-REJECTED-HEAD + ;
 : PACT-STORE                ( pact -- store ) _PACT-STORE + ;
@@ -153,8 +160,26 @@ VARIABLE _PACT-VS-PACT
     _PACT-VS-TRUST @ _PACT-VS-PACT @ PACT.TRUST !
     PACT-S-OK ;
 
+\ A grant: the place set one component instance works in, made from the
+\ activation's set (PACT-PLACES).  Grants are heap records listed on the
+\ activation and found by the instance's ID, which no later instance
+\ repeats.
+: _PAG.NEXT  ( grant -- a ) ;
+: _PAG.ID    ( grant -- a )  8 + ;
+: _PAG.SET   ( grant -- a ) 16 + ;
+24 CONSTANT _PAG-SIZE
+
+\ Free every grant of the activation, with its set.
+: _PACT-GRANTS-FREE  ( pact -- )
+    DUP _PACT.GRANTS @  0 ROT _PACT.GRANTS !
+    BEGIN ?DUP WHILE
+        DUP _PAG.NEXT @ SWAP
+        DUP _PAG.SET @ PLSET-FREE  FREE
+    REPEAT ;
+
 : PACT-DEACTIVATE  ( pact -- )
     DUP 0= IF DROP EXIT THEN
+    DUP _PACT-GRANTS-FREE
     DUP PACT.CONTEXT @ ?DUP IF CTX-FREE THEN
     0 OVER PACT.CONTEXT !
     0 OVER PACT.PLACES !
@@ -187,6 +212,10 @@ VARIABLE _PACT-A-CTX-FLAGS
 \ (docs/utils/fs/places.md).
 : _PACT-NARROW  ( -- )
     _PACT-A-SET @ PLSET-READ-ONLY!
+    _PACT-A-PACT @ _PACT.GRANTS @
+    BEGIN ?DUP WHILE
+        DUP _PAG.SET @ PLSET-READ-ONLY!  _PAG.NEXT @
+    REPEAT
     PACT-F-PLACES-READONLY _PACT-A-PACT @ PACT.FLAGS ! ;
 
 : _PACT-ENTER-RECOVERY  ( -- )
@@ -273,10 +302,58 @@ VARIABLE _PACT-A-CTX-FLAGS
     _PACT-A-CTX-FLAGS @ _PACT-A-CONTEXT @ CTX.FLAGS !
     _PACT-A-PACT @ PACT.STATUS @ ;
 
+VARIABLE _PPL-INST
+VARIABLE _PPL-PACT
+
+\ The grant of the instance with ID on the activation, or 0.
+: _PACT-GRANT-FIND  ( id pact -- grant | 0 )
+    _PACT.GRANTS @
+    BEGIN DUP WHILE
+        2DUP _PAG.ID @ = IF NIP EXIT THEN
+        _PAG.NEXT @
+    REPEAT
+    NIP ;
+
+\ The places the instance's component says it needs.
+: _PACT-NEEDS  ( instance -- needs )
+    CINST-DESC DUP COMP-DESC-VALID? IF COMP.PLACE-NEEDS @ ELSE DROP 0 THEN ;
+
 \ PACT-PLACES ( instance pact -- set | 0 )
 \   The place set the runtime instance INSTANCE works in under this
-\   activation: today the activation's set for every instance.  A
-\   Practice's choice of places for each component belongs here.
+\   activation: the part of the activation's set its component's
+\   descriptor says it needs, made the first time the instance asks and
+\   kept for it until PACT-PLACES-RELEASE or the activation ends.  0
+\   when the activation is not active, for no instance, or when the set
+\   cannot be made.
 : PACT-PLACES  ( instance pact -- set | 0 )
-    NIP DUP PACT-ACTIVE? 0= IF DROP 0 EXIT THEN
-    PACT.PLACES @ ;
+    DUP PACT-ACTIVE? 0= IF 2DROP 0 EXIT THEN
+    _PPL-PACT ! DUP _PPL-INST ! 0= IF 0 EXIT THEN
+    _PPL-INST @ CINST.ID @ _PPL-PACT @ _PACT-GRANT-FIND ?DUP IF
+        _PAG.SET @ EXIT
+    THEN
+    _PPL-INST @ _PACT-NEEDS _PPL-PACT @ PACT.PLACES @ PLSET-DERIVE
+    IF DROP 0 EXIT THEN                                ( set )
+    _PAG-SIZE ALLOCATE IF DROP PLSET-FREE 0 EXIT THEN  ( set grant )
+    TUCK _PAG.SET !
+    _PPL-INST @ CINST.ID @ OVER _PAG.ID !
+    _PPL-PACT @ _PACT.GRANTS @ OVER _PAG.NEXT !
+    DUP _PPL-PACT @ _PACT.GRANTS !
+    _PAG.SET @ ;
+
+VARIABLE _PPR-ID
+
+\ PACT-PLACES-RELEASE ( instance pact -- )
+\   Free the set PACT-PLACES made for INSTANCE, once the instance has
+\   ended and nothing of it uses its places.
+: PACT-PLACES-RELEASE  ( instance pact -- )
+    OVER 0= OVER PACT-VALID? 0= OR IF 2DROP EXIT THEN
+    SWAP CINST.ID @ _PPR-ID !
+    _PACT.GRANTS                                   ( link )
+    BEGIN DUP @ WHILE
+        DUP @ _PAG.ID @ _PPR-ID @ = IF
+            DUP @ DUP _PAG.NEXT @ ROT !               ( grant )
+            DUP _PAG.SET @ PLSET-FREE  FREE  EXIT
+        THEN
+        @ _PAG.NEXT
+    REPEAT
+    DROP ;

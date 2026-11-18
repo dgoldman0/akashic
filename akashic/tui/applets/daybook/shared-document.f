@@ -38,6 +38,13 @@ REQUIRE ../../../utils/fs/place-replace.f
 REQUIRE ../../../concurrency/guard.f
 REQUIRE ../../../text/utf8.f
 
+\ SDOC-PATH$ ( -- a u )
+\   The file the owner keeps Daybook's document in, a path in the place
+\   it is given.  Desk records it in its held-files table, so an applet
+\   that opens this file by its path reaches the document through its
+\   owner instead (utils/fs/held-files.f).
+: SDOC-PATH$  ( -- a u )  S" /daybook.md" ;
+
 \ =====================================================================
 \  Public status and bounds
 \ =====================================================================
@@ -135,7 +142,7 @@ VARIABLE _SDOC-LIVE
     OVER _SDS.FLAGS @ _SDOC-F-CONFIGURED AND 0<> AND
     OVER _SDS.VFS @ 0<> AND
     OVER _SDS.RID RID-PRESENT? AND
-    OVER _SDS-PATH$ S" /daybook.md" STR-STR= AND
+    OVER _SDS-PATH$ SDOC-PATH$ STR-STR= AND
     SWAP _SDS.REPLACE VREPL-CONFIGURED? AND ;
 
 : _SDOC-STATE-VALID?  ( instance -- flag )
@@ -586,9 +593,9 @@ VARIABLE _SDAO-STATE
     _SDAO-DATA @ _SDOA.CONTEXT @ _SDAO-STATE @ _SDS.CONTEXT !
     _SDAO-DATA @ _SDOA.RREG @ _SDAO-STATE @ _SDS.RREG !
     _SDAO-DATA @ _SDOA.CREG @ _SDAO-STATE @ _SDS.CREG !
-    S" /daybook.md" DUP _SDAO-STATE @ _SDS.PATH-U !
+    SDOC-PATH$ DUP _SDAO-STATE @ _SDS.PATH-U !
         _SDAO-STATE @ _SDS.PATH SWAP CMOVE
-    S" /daybook.md" _SDAO-DATA @ _SDOA.PLACE @ DUP PLACE-WRITABLE?
+    SDOC-PATH$ _SDAO-DATA @ _SDOA.PLACE @ DUP PLACE-WRITABLE?
         _SDAO-STATE @ _SDS.REPLACE PLACE-VREPL!
         IF SDOC-S-INVALID _SDOC-STATE-FAIL EXIT THEN
     _SDAO-STATE @ _SDS.REPLACE VREPL.VFS @ _SDAO-STATE @ _SDS.VFS !

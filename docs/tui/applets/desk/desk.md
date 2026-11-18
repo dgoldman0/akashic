@@ -388,6 +388,8 @@ endpoint:
 | `org.akashic.daybook.automations` | Daybook's automation service (`DBSVC`), lent to Daybook alone |
 | `org.akashic.runtime.resource-owners` | Desk's [resource owner directory](../../../interop/resource-owners.md), lent to Library alone |
 | `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
+| `org.akashic.fs.held` | The files that keep the documents Desk hosts ([held files](../../../utils/fs/held-files.md)), filled from each owner's own file, so an applet reaches such a file through its owner |
+| `org.akashic.fs.places` | The asking instance's own place set, made by `PACT-PLACES` from what its descriptor needs and released with the instance ([places](../../../utils/fs/places.md)) |
 
 The endpoint does not expose the owner instance or a pool independently. A
 resource session validates the named offer, copies its RID and pool, retains

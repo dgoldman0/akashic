@@ -1635,6 +1635,8 @@ CREATE FEXP-COMP-DESC COMP-DESC ALLOT
 : _FEXP-COMP-SETUP  ( -- )
     _FEXP-CAP-SETUP
     FEXP-COMP-DESC COMP-DESC-INIT
+    \ File Explorer writes the documents place and reads every other.
+    PLACES-NEED-DOCUMENTS PLACES-NEED-LIST OR FEXP-COMP-DESC COMP.PLACE-NEEDS !
     S" org.akashic.fexplorer"
     FEXP-COMP-DESC COMP.ID-U ! FEXP-COMP-DESC COMP.ID-A !
     S" 1.0.0"

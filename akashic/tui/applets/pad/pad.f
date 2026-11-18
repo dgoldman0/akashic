@@ -77,6 +77,7 @@ REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/resource.f
 REQUIRE ../../../interop/place-resource.f
 REQUIRE ../../../utils/fs/places.f
+REQUIRE ../../../utils/fs/held-files.f
 REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource-session.f
 
@@ -114,7 +115,7 @@ _PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
 -8  CONSTANT _PAD-E-SHARED-UNAVAILABLE
 -9  CONSTANT _PAD-E-STALE
 -10 CONSTANT _PAD-E-SHARED-FAILED
--11 CONSTANT _PAD-E-DAYBOOK-PROTECTED
+-11 CONSTANT _PAD-E-HELD             \ the file keeps a document its owner writes
 -12 CONSTANT _PAD-E-READ-ONLY-PLACE
 -13 CONSTANT _PAD-E-NO-PLACE        \ a bare path, and no documents place
 
@@ -233,6 +234,7 @@ _PAD-CURRENT-STATE _PAD-IO-CAP CMP-FIELD: _PAD-IO-BUF
 _PAD-CURRENT-STATE CMP-CELL: _PAD-SET        \ the place set
 _PAD-CURRENT-STATE CMP-CELL: _PAD-IO-PLACE   \ place of the path in hand
 _PAD-CURRENT-STATE CMP-CELL: _PAD-PATH-PLACE \ place the next path names
+_PAD-CURRENT-STATE CMP-CELL: _PAD-TYPED-PATH \ the next path is one a person typed
 _PAD-CURRENT-STATE VREPL-SIZE CMP-FIELD: _PAD-REPL
 
 \ ---- Activation-local shared Daybook session ----
@@ -366,12 +368,15 @@ VARIABLE _PAD-SHARED-COMMIT-XT
     DUP _PAD-CURRENT-INSTANCE !
     CINST-STATE _PAD-CURRENT-STATE ! ;
 
+\ The service that lends the shared document Pad's session edits.
+: _PAD-SHARED-SERVICE$  ( -- a u )  S" org.akashic.resource.daybook" ;
+
 : _PAD-SHARED-INIT  ( -- )
     0 _PAD-SHARED-SNAPSHOT-A !
     0 _PAD-SHARED-SNAPSHOT-U ! 0 _PAD-SHARED-STALE !
     _PAD-SHARED-CANDIDATE-REF RREF-INIT
     _PAD-SHARED-CANDIDATE-BIND LBIND-INIT
-    S" org.akashic.resource.daybook" _PAD-CURRENT-INSTANCE @
+    _PAD-SHARED-SERVICE$ _PAD-CURRENT-INSTANCE @
         _PAD-RESOURCE-SESSION RSES-INIT DROP
     ['] _PAD-SHARED-ADVANCE _PAD-RESOURCE-SESSION RSES.ADVANCE-XT ! ;
 
@@ -895,15 +900,20 @@ VARIABLE _PPP-START
 
 \ _PAD-PLACES! ( set -- )   The place set Pad works in.
 : _PAD-PLACES!  ( set -- )
-    _PAD-SET !  0 _PAD-IO-PLACE !  0 _PAD-PATH-PLACE ! ;
+    _PAD-SET !  0 _PAD-IO-PLACE !  0 _PAD-PATH-PLACE !  0 _PAD-TYPED-PATH ! ;
 
-\ The place a path with none of its own is in: the active document's,
-\ so its own path, its links and its saves stay in its place, or else the
-\ set's documents place, where a person's documents go.  A set that
-\ declares none has no such place, and Pad then asks for one rather than
-\ choosing another.
+\ Whether the path _PAD-CANON-PATH has in hand is one a person typed.
+VARIABLE _PCA-TYPED
+
+\ The place a path with none of its own is in.  A path a person typed
+\ goes to the set's documents place, where a person's documents go.  A
+\ path Pad holds or derives, as a document's own path for its saves, a
+\ link in it or a build's diagnostic, stays in the active document's
+\ place, and goes to the documents place when no document is active.  A
+\ set that declares no documents place has none, and Pad then asks for
+\ one rather than choosing another.
 : _PAD-DEFAULT-PLACE  ( -- place | 0 )
-    _PAD-ACTIVE @ 0< 0= IF
+    _PCA-TYPED @ 0= _PAD-ACTIVE @ 0< 0= AND IF
         _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-PLACE + @ ?DUP IF EXIT THEN
     THEN
     _PAD-SET @ DUP IF PLSET-DOCUMENTS THEN ;
@@ -918,6 +928,7 @@ VARIABLE _PPP-START
 \   `.` or `..` component is refused.
 : _PAD-CANON-PATH  ( path-a path-u -- canon-a canon-u ior )
     _PCA-U ! _PCA-A !
+    _PAD-TYPED-PATH @ _PCA-TYPED !  0 _PAD-TYPED-PATH !
     _PAD-PATH-PLACE @ DUP _PAD-IO-PLACE !  0 _PAD-PATH-PLACE !
     0= IF
         _PCA-A @ _PCA-U @ _PAD-SET @ IRES-PLACE-PARSE     ( a u place status )
@@ -1015,10 +1026,32 @@ VARIABLE _PFB-U
     LOOP
     -1 ;
 
-\ Daybook's document is /daybook.md in the home, where records go.
-: _PAD-DAYBOOK-PATH?  ( path-a path-u -- flag )
-    S" /daybook.md" STR-STR=
-    _PAD-IO-PLACE @ _PAD-SET @ PLSET-HOME = AND ;
+\ The files that keep the documents Desk hosts (utils/fs/held-files.f),
+\ which Desk lends under org.akashic.fs.held; 0 outside Desk.
+: _PAD-HELD  ( -- table | 0 )
+    _PAD-CURRENT-INSTANCE @ ?DUP 0= IF 0 EXIT THEN
+    DUP CINST.ENDPOINT @ 0= IF DROP 0 EXIT THEN
+    >R S" org.akashic.fs.held" R> CINST-SERVICE ;
+
+\ _PAD-HELD-BY ( path-a path-u -- svc-a svc-u | 0 0 )
+\   The service whose document the file at PATH in _PAD-IO-PLACE keeps.
+: _PAD-HELD-BY  ( path-a path-u -- svc-a svc-u | 0 0 )
+    _PAD-HELD ?DUP 0= IF 2DROP 0 0 EXIT THEN
+    >R _PAD-IO-PLACE @ R> HELD-HOLDER ;
+
+\ _PAD-SHARED-PATH? ( path-a path-u -- flag )
+\   Whether the file at PATH in _PAD-IO-PLACE keeps the shared document
+\   Pad's session edits, which Pad then reaches through that session.
+: _PAD-SHARED-PATH?  ( path-a path-u -- flag )
+    _PAD-HELD-BY DUP 0= IF 2DROP 0 EXIT THEN
+    _PAD-SHARED-SERVICE$ STR-STR= ;
+
+\ _PAD-HELD-ELSEWHERE? ( path-a path-u -- flag )
+\   Whether the file keeps a document Pad has no session for, which only
+\   its owner may write.
+: _PAD-HELD-ELSEWHERE?  ( path-a path-u -- flag )
+    _PAD-HELD-BY DUP 0= IF 2DROP 0 EXIT THEN
+    _PAD-SHARED-SERVICE$ STR-STR= 0= ;
 
 VARIABLE _PSRQ-BIND
 VARIABLE _PSRQ-CAP
@@ -1080,6 +1113,18 @@ VARIABLE _PSHO-NEW
     _PSHO-NEW @ IF _PSHO-IDX @ _PAD-BUF-CLOSE THEN
     _PSHO-ORIG @ DUP 0>= IF _PAD-BUF-SWITCH ELSE DROP THEN ;
 
+\ _PAD-SHARED-NAME! ( index -- )
+\   Name the shared document's buffer by the file its owner keeps it in,
+\   as Desk's held-files table records it, and give the buffer that
+\   file's place in this instance's set, so a save of the buffer resolves
+\   to the document again.
+: _PAD-SHARED-NAME!  ( index -- )
+    >R _PAD-SHARED-SERVICE$ _PAD-HELD ?DUP 0= IF 2DROP R> DROP EXIT THEN
+    HELD-FILE                                ( path-a path-u name-a name-u )
+    _PAD-SET @ ?DUP IF PLSET-FIND ELSE 2DROP 0 THEN
+    R@ _PAD-BUF-ENTRY _PBE-PLACE + !
+    R> _PAD-FILENAME! ;
+
 : _PAD-SHARED-OPEN-CANDIDATE  ( -- ior )
     _PAD-SHARED-USABLE? 0= IF
         _PAD-E-SHARED-UNAVAILABLE EXIT
@@ -1134,7 +1179,7 @@ VARIABLE _PSHO-NEW
         _PAD-TXTA @ TXTA-SET-TEXT
     _PSHO-IDX @ _PAD-BUF-ENTRY >R
     R@ _PBE-UNDO + @ ?DUP IF UNDO-CLEAR THEN
-    S" /daybook.md" _PSHO-IDX @ _PAD-FILENAME!
+    _PSHO-IDX @ _PAD-SHARED-NAME!
     0 R@ _PBE-INODE + !
     0 R@ _PBE-DIRTY + !
     0 R@ _PBE-CURSOR + !
@@ -1233,23 +1278,24 @@ VARIABLE _PSHO-NEW
     THEN
     _PIO-NAME-U ! _PIO-NAME-A !
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + @ IF
-        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-SHARED-PATH? IF
             _PAD-SHARED-SAVE EXIT
         THEN
         \ Saving a shared buffer elsewhere is an explicit export.  Only after
         \ the VFS commit succeeds does it become an ordinary Pad buffer.
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-HELD-ELSEWHERE? IF _PAD-E-HELD EXIT THEN
         _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
         _PAD-NAME-ACTIVE!
         0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + !
         _PAD-SHARED-DETACH-BUFFER
     ELSE
-        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
+        _PIO-NAME-A @ _PIO-NAME-U @ _PAD-SHARED-PATH? IF
             _PAD-RESOURCE-MODE @ DUP RSES-M-BLOCKED =
                 SWAP RSES-M-STALE = OR IF
                 _PAD-E-SHARED-UNAVAILABLE EXIT
             THEN
             _PAD-RESOURCE-MODE @ RSES-M-ACTIVE = IF
-                _PAD-E-DAYBOOK-PROTECTED EXIT
+                _PAD-E-HELD EXIT
             THEN
         THEN
         _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DO-SAVE-TO ?DUP IF EXIT THEN
@@ -1338,11 +1384,12 @@ VARIABLE _POP-ORIG
         NIP NIP DUP _PAD-E-NO-PLACE <> IF DROP -3 THEN EXIT
     THEN
     _PIO-NAME-U ! _PIO-NAME-A !
-    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-SHARED-PATH? IF
         _PAD-RESOURCE-MODE @ RSES-M-DIRECT <> IF
             _PAD-OPEN-SHARED-LATEST EXIT
         THEN
     THEN
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-HELD-ELSEWHERE? IF _PAD-E-HELD EXIT THEN
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DERIVE-OPEN
     DUP -1 = IF EXIT THEN
     IF -3 EXIT THEN
@@ -1379,6 +1426,10 @@ VARIABLE _POP-ORIG
     DUP 0= IF DROP EXIT THEN
     DUP _PAD-E-NO-PLACE = IF
         DROP S" No documents place: name one, vfs://<place>/<path>"
+        2800 ASHELL-TOAST-WARNING EXIT
+    THEN
+    DUP _PAD-E-HELD = IF
+        DROP S" A shared document lives in this file; open it from its owner"
         2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST-WARNING EXIT THEN
@@ -1458,8 +1509,8 @@ VARIABLE _POP-ORIG
         DROP S" No documents place: name one, vfs://<place>/<path>"
         2800 ASHELL-TOAST-WARNING EXIT
     THEN
-    DUP _PAD-E-DAYBOOK-PROTECTED = IF
-        DROP S" /daybook.md is owned by the shared Daybook resource"
+    DUP _PAD-E-HELD = IF
+        DROP S" A shared document lives in this file; its owner saves it"
         2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DROP S" Save failed" 2000 ASHELL-TOAST-ERROR ;
@@ -2186,11 +2237,15 @@ VARIABLE _PPSUB-MODE
     _PPSUB-U @ 0= _PPSUB-MODE @ _PAD-PRM-REPLACE-WITH <> AND IF EXIT THEN
     _PPSUB-MODE @ CASE
         _PAD-PRM-OPEN OF
+            -1 _PAD-TYPED-PATH !
             _PPSUB-A @ _PPSUB-U @ _PAD-OPEN-PATH
+            0 _PAD-TYPED-PATH !
             _PAD-REPORT-OPEN-RESULT
         ENDOF
         _PAD-PRM-SAVE-AS OF
+            -1 _PAD-TYPED-PATH !
             _PPSUB-A @ _PPSUB-U @ _PAD-SAVE-CURRENT-AS
+            0 _PAD-TYPED-PATH !
             DUP IF _PAD-REPORT-SAVE-ERROR
             ELSE DROP S" Saved" 1500 ASHELL-TOAST THEN
         ENDOF
@@ -2842,6 +2897,8 @@ CREATE PAD-COMP-DESC COMP-DESC ALLOT
 : _PAD-COMP-SETUP  ( -- )
     _PAD-CAP-SETUP
     PAD-COMP-DESC COMP-DESC-INIT
+    \ Pad writes the documents place and reads every other.
+    PLACES-NEED-DOCUMENTS PLACES-NEED-LIST OR PAD-COMP-DESC COMP.PLACE-NEEDS !
     S" org.akashic.pad"
     PAD-COMP-DESC COMP.ID-U ! PAD-COMP-DESC COMP.ID-A !
     S" 1.0.0"

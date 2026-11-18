@@ -5162,6 +5162,8 @@ VARIABLE _STM-COMP-SETUP-DESC
 : STREAMS-COMP-SETUP  ( comp-desc -- )
     _STM-COMP-SETUP-DESC !
     _STM-CAP-SETUP _STM-COMP-SETUP-DESC @ COMP-DESC-INIT
+    \ Streams keeps its drafts, sources and observations in its home.
+    PLACES-NEED-HOME _STM-COMP-SETUP-DESC @ COMP.PLACE-NEEDS !
     S" org.akashic.streams"
         _STM-COMP-SETUP-DESC @ COMP.ID-U !
         _STM-COMP-SETUP-DESC @ COMP.ID-A !

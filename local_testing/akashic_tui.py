@@ -10310,6 +10310,15 @@ VARIABLE _pc-avolume
 VARIABLE _pc-adecl
 VARIABLE _pc-aset
 VARIABLE _pc-first-epoch
+\ Two components: one keeps its records in its home, one lists the
+\ places it is given.  CREATE does not align, so the descriptors are
+\ placed on a cell boundary inside a larger buffer.
+CREATE _pc-desc-raw COMP-DESC 2* 7 + ALLOT
+: _pc-desc-home  ( -- desc )  _pc-desc-raw 7 + -8 AND ;
+: _pc-desc-list  ( -- desc )  _pc-desc-home COMP-DESC + ;
+VARIABLE _pc-inst-home
+VARIABLE _pc-inst-list
+VARIABLE _pc-hset
 
 : _pc-semantic-validator  ( head data -- status )
     @ DUP -1 = IF 2DROP 91 EXIT THEN
@@ -10362,7 +10371,24 @@ VARIABLE _pc-first-epoch
         PACT-TRUST-STRUCTURAL _pc-pact PACT-VALIDATOR!
         PACT-S-OK = _pc-assert
     _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
-    0 _pc-pact PACT-PLACES _pc-aset @ = _pc-assert
+    \ No instance is given no places.  Each instance is given what its
+    \ component needs of the set, once, and keeps it until released.
+    0 _pc-pact PACT-PLACES 0= _pc-assert
+    _pc-desc-home COMP-DESC-INIT
+    PLACES-NEED-HOME _pc-desc-home COMP.PLACE-NEEDS !
+    _pc-desc-list COMP-DESC-INIT
+    PLACES-NEED-LIST _pc-desc-list COMP.PLACE-NEEDS !
+    _pc-desc-home CINST-NEW 0= _pc-assert _pc-inst-home !
+    _pc-desc-list CINST-NEW 0= _pc-assert _pc-inst-list !
+    _pc-inst-home @ _pc-pact PACT-PLACES DUP _pc-hset !
+    DUP 0<> _pc-assert  DUP _pc-aset @ <> _pc-assert
+    PLSET-HOME DUP 0<> _pc-assert PLACE-WRITABLE? _pc-assert
+    _pc-inst-home @ _pc-pact PACT-PLACES _pc-hset @ = _pc-assert
+    _pc-inst-list @ _pc-pact PACT-PLACES
+    DUP PLSET-HOME 0= _pc-assert
+    PLSET-FIRST DUP 0<> _pc-assert PLACE-WRITABLE? 0= _pc-assert
+    _pc-inst-list @ _pc-pact PACT-PLACES-RELEASE
+    _pc-inst-list @ _pc-pact PACT-PLACES PLSET-FIRST 0<> _pc-assert
     _pc-aset @ PLSET-HOME PLACE-WRITABLE? _pc-assert
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-FALLBACK? _pc-assert
@@ -10399,6 +10425,8 @@ VARIABLE _pc-first-epoch
     S" x" _pc-aset @ PLSET-HOME PLACE-CREATE
         VFS-IOR-REASON VFS-R-READONLY = _pc-assert DROP
     _pc-pact PACT.FLAGS @ PACT-F-PLACES-READONLY = _pc-assert
+    _pc-inst-home @ _pc-pact PACT-PLACES PLSET-HOME
+        PLACE-WRITABLE? 0= _pc-assert
     _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0= _pc-assert
     \ A store that keeps its file through a replacement is bound for
     \ reading and refuses to replace; asking to write is refused binding.
@@ -10420,6 +10448,7 @@ VARIABLE _pc-first-epoch
     _pc-pact PACT-READONLY? _pc-assert
     _pc-pact PACT.CONTEXT @ CTX.PLACES @ _pc-aset @ = _pc-assert
     _pc-pact PACT-DEACTIVATE
+    _pc-inst-home @ CINST-FREE  _pc-inst-list @ CINST-FREE
     _pc-aset @ PLSET-FREE
     _pc-avfs @ VFS-DESTROY ;
 
@@ -12873,6 +12902,9 @@ CREATE _pr-io 256 ALLOT
     DROP FREE R> ;
 
 VARIABLE _pr-service-a VARIABLE _pr-service-u
+\ The files that keep the documents this stand-in for Desk hosts, which
+\ it lends as Desk does (utils/fs/held-files.f).
+CREATE _pr-held HELD-SIZE ALLOT  _pr-held HELD-INIT
 
 : _pr-service  ( id-a id-u caller ignored -- service | 0 )
     2DROP _pr-service-u ! _pr-service-a !
@@ -12891,6 +12923,10 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
     _pr-service-a @ _pr-service-u @
         S" org.akashic.resource.daybook" STR-STR= IF
         SDOC-SERVICE EXIT
+    THEN
+    _pr-service-a @ _pr-service-u @
+        S" org.akashic.fs.held" STR-STR= IF
+        _pr-held EXIT
     THEN
     0 ;
 
@@ -13015,6 +13051,9 @@ VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
     103 _pr-rid _pr-id!
     _pr-place @ _pr-rid _pr-context @ _pr-rreg @ _pr-creg @
         SDOC-ACTIVATE DUP SDOC-S-OK = _pr-assert DROP _pr-owner !
+    _pr-held HELD-CLEAR
+    SDOC-PATH$ _pr-place @ S" org.akashic.resource.daybook" _pr-held
+        HELD-HOLD 0= _pr-assert
     _pr-policy CPOLICY-INIT
     _pr-creg @ _pr-policy CBUS-NEW DUP 0= _pr-assert DROP _pr-bus !
     _pr-bus @ _pr-context @ CTX.QUEUE !
@@ -13217,7 +13256,7 @@ VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
     S" cannot clobber Daybook" _PAD-TXTA @ TXTA-SET-TEXT
     -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     S" /daybook.md" _PAD-SAVE-CURRENT-AS
-        _PAD-E-DAYBOOK-PROTECTED = _pr-assert
+        _PAD-E-HELD = _pr-assert
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0<> _pr-assert
     S" # Daybook\n\n> 2026-07-13 | post-commit Pad edit\n"
         S" /daybook.md" _pr-file= _pr-assert

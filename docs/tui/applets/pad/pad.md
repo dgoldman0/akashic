@@ -198,18 +198,26 @@ built: applets are machine code, and this system compiles none."
 ## File I/O
 
 Pad works in the place set it is given (`CINST-PLACES`,
-`docs/utils/fs/places.md`). A document is a place and a path in it, and a
-tab keeps both. A typed path is in the active document's place, or in the
-set's documents place, where a person's documents go, when there is none;
-the full form `vfs://<place>/<path>` names another place of the set. A new
-untitled document belongs to the documents place too. When the set
-declares no documents place, Pad refuses a path with no place of its own
-and says "No documents place: name one, vfs://<place>/<path>", rather
-than choosing another place. The sidebar lists the set's places, and
-`pad.toml` is read from the set's origin. For each read and write Pad
-binds the document to its volume (`PLACE-BIND`, `PLACE-BIND-WRITE`) and
-points its one replacement descriptor there, so a read-only place refuses
-a save with "This place is read-only".
+`docs/utils/fs/places.md`). Its descriptor asks for the documents place to
+write and every other place to read (`PLACES-NEED-DOCUMENTS`,
+`PLACES-NEED-LIST`), so under Desk the records place, where the applets
+keep their own files, is read-only to Pad. A document is a place and a
+path in it, and a tab keeps both. A path a person types into the command
+bar, to open or to save as, is in the set's documents place, where a
+person's documents go; the full form `vfs://<place>/<path>` names another
+place of the set. A path Pad holds or derives, a tab's own path for its
+saves, a link in a document or a build's diagnostic, stays in the active
+document's place. A new untitled document belongs to the documents place
+too. When the set declares no documents place, Pad refuses a path with no
+place of its own and says "No documents place: name one,
+vfs://<place>/<path>", rather than choosing another place. The sidebar
+lists the set's places, and `pad.toml` is read from the set's origin. For
+each read and write Pad binds the document to its volume (`PLACE-BIND`,
+`PLACE-BIND-WRITE`) and points its one replacement descriptor there, so a
+read-only place refuses a save with "This place is read-only". An open
+binds for writing when the place is writable, as each store binds its
+file, so recovery can settle a save a crash interrupted before the
+document is read.
 
 Pad uses the abstract VFS API rather than KDOS directory internals. It
 canonicalizes every path, rejects traversal and reserved replacement names,
@@ -235,7 +243,7 @@ owner's neutral `ROFFER`; the session validates and copies its exact RID and
 owning pool rather than discovering a global pool service. Daybook remains the
 semantic owner. An attached endpoint with a missing or invalid shared service
 is treated as broken runtime wiring and blocks the shared resource; it never
-silently falls back to `/daybook.md`.
+silently falls back to writing the owner's file.
 
 Daybook's `Edit Source in Pad` action sends an exact semantic `RREF`. Pad uses
 the common `resource-session.f` client to retain the owner, attach the exact
@@ -253,9 +261,16 @@ the newer owner bytes. A successful owner commit remains authoritative even if
 Pad cannot advance its local binding afterward: Pad clears the unusable session
 and requires a reload instead of claiming that an already-durable write failed.
 
-Within the shared Desk runtime, opening `/daybook.md` resolves the current
-semantic owner snapshot, and an ordinary buffer cannot Save As over that
-canonical path. Save As from the shared tab to any other path is an explicit
+Pad names no other applet's file. Desk lends, under `org.akashic.fs.held`,
+the table of the files that keep the documents it hosts
+(`utils/fs/held-files.f`), filled from what each owner says of its own file,
+and Pad asks it before it opens or saves a file by its path. Within the
+shared Desk runtime, opening the file that keeps the shared document resolves
+the current semantic owner snapshot, and the shared tab is named by that file
+in its place of Pad's set, so the tab's saves reach the document again. An
+ordinary buffer cannot Save As over that file, and a file that keeps a
+document Pad has no session for is refused to open or save, since only its
+owner writes it. Save As from the shared tab to any other path is an explicit
 export and converts that tab back to an ordinary VFS buffer. Other Pad tabs and
 their Save All behavior remain independent of a stale shared tab.
 

@@ -169,6 +169,41 @@ def test_a_set_marks_where_a_persons_documents_go():
     ], [0, -1, -1, -1, -1, -1, -1, 0])
 
 
+def test_a_holder_is_given_what_it_needs_of_a_set():
+    expect([
+        ': T  P-OTHER @ SET @ PLSET-DOCUMENTS!',
+        # Nothing asked: the origin alone, read-only, for shipped files.
+        '     0 SET @ PLSET-DERIVE R. >R',
+        '     R@ PLSET-FIRST DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
+        '     DUP R@ PLSET-ORIGIN = .  PLACE-NEXT .',
+        '     R@ PLSET-HOME .  R@ PLSET-DOCUMENTS .  R> PLSET-FREE',
+        # Its records: the home at the access the set grants it, then the
+        # origin, in the set's order, as places of the new set.
+        '     PLACES-NEED-HOME SET @ PLSET-DERIVE R. >R',
+        '     R@ PLSET-FIRST DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
+        '     DUP R@ PLSET-HOME = .  DUP P-DOCS @ <> .',
+        '     PLACE-NEXT DUP PLACE-NAME TYPE SPACE DUP R@ PLSET-ORIGIN = .',
+        '     PLACE-NEXT .  R@ PLSET-DOCUMENTS .  R> PLSET-FREE',
+        # Documents and the list: every place, writable only where
+        # documents go, and no home of its own.
+        '     PLACES-NEED-DOCUMENTS PLACES-NEED-LIST OR SET @ PLSET-DERIVE R. >R',
+        '     R@ PLSET-FIRST DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
+        '     PLACE-NEXT DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
+        '     PLACE-NEXT DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
+        '     R@ PLSET-DOCUMENTS = .  R@ PLSET-HOME .  R> PLSET-FREE',
+        # A narrowed set narrows what is derived from it.
+        '     SET @ PLSET-READ-ONLY!  PLACES-NEED-HOME SET @ PLSET-DERIVE R. >R',
+        '     R@ PLSET-FIRST PLACE-WRITABLE? .  R> PLSET-FREE',
+        # Something that is no set.
+        '     0 0 PLSET-DERIVE R. . ;',
+        'T',
+    ], [0, "all", 0, -1, 0, 0, 0,
+        0, "docs", -1, -1, -1, "all", -1, 0, 0,
+        0, "docs", 0, "all", 0, "other", -1, -1, 0,
+        0, 0,
+        INVALID, 0])
+
+
 def test_paths_start_at_the_folder():
     expect([
         ': T  S" a.txt" P-DOCS @ PLACE-RESOLVE R. S" /docs/a.txt" VA @ VFS-RESOLVE = .',
