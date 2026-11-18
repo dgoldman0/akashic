@@ -956,6 +956,14 @@ VARIABLE _PPP-START
     DUP VFS-R-READONLY = IF DROP _PAD-E-READ-ONLY-PLACE EXIT THEN
     DUP VFS-R-NOENT = SWAP VFS-R-NOTDIR = OR IF -1 ELSE -3 THEN ;
 
+\ _PAD-DERIVE-OPEN ( path-a path-u -- status )
+\   Point the replacement at a document Pad opens: bound for writing when
+\   its place is writable, as each store binds its file, so that recovery
+\   can settle a save a crash interrupted before the document is read; on
+\   a read-only place it is bound for reading, and recovery only reports.
+: _PAD-DERIVE-OPEN  ( path-a path-u -- status )
+    _PAD-IO-PLACE @ PLACE-WRITABLE? _PAD-DERIVE ;
+
 : _PAD-VREPL-USABLE?  ( status -- flag )
     DUP VREPL-S-OK =
     OVER VREPL-S-ROLLED-BACK = OR
@@ -1315,7 +1323,7 @@ VARIABLE _PSHO-NEW
 \ Load a file from path into the active buffer.
 : _PAD-LOAD-FILE  ( fname-a fname-u -- ior )
     _PIO-NAME-U ! _PIO-NAME-A !
-    _PIO-NAME-A @ _PIO-NAME-U @ 0 _PAD-DERIVE
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DERIVE-OPEN
     DUP IF EXIT THEN DROP
     _PAD-REPL VREPL-RECOVER DUP _PAD-VREPL-USABLE? 0= IF
         DROP -6 EXIT
@@ -1335,7 +1343,7 @@ VARIABLE _POP-ORIG
             _PAD-OPEN-SHARED-LATEST EXIT
         THEN
     THEN
-    _PIO-NAME-A @ _PIO-NAME-U @ 0 _PAD-DERIVE
+    _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DERIVE-OPEN
     DUP -1 = IF EXIT THEN
     IF -3 EXIT THEN
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-FIND-BUFFER DUP 0>= IF
