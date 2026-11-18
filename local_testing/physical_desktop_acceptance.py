@@ -40,6 +40,12 @@ and the boot mounts that volume and loads them from it
 (utils/fs/system-volume.f).  The journey is the same one.  The build needs
 the pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names.
 
+With --user-volume the build also writes a fresh ext4 user volume of
+--user-volume-mib MiB (64 by default) beside the boot image, attached as the
+fourth storage unit, and the boot mounts it and declares the shipping form's
+places: documents and records on it, records the home, and a read-only origin
+(utils/fs/user-volume.f).  The build needs the same pinned e2fsprogs.
+
 With --token-modules the image is first built and booted from source in the
 simulator, which records what the interpreter does with each source file,
 and the Desktop then loads those files from their token forms (MegaPad's
@@ -179,6 +185,8 @@ def child(args) -> int:
         "system_volume": args.system_volume,
         "token_modules": args.token_modules,
         "keep_module_source": args.keep_module_source,
+        "user_volume": args.user_volume,
+        "user_volume_mib": args.user_volume_mib,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -206,6 +214,8 @@ def child(args) -> int:
         sys.argv.append("--token-modules")
     if args.keep_module_source:
         sys.argv.append("--keep-module-source")
+    if args.user_volume:
+        sys.argv += ["--user-volume", "--user-volume-mib", str(args.user_volume_mib)]
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -248,6 +258,8 @@ def supervise(args) -> int:
         command.append("--token-modules")
     if args.keep_module_source:
         command.append("--keep-module-source")
+    if args.user_volume:
+        command += ["--user-volume", "--user-volume-mib", str(args.user_volume_mib)]
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -269,6 +281,8 @@ def supervise(args) -> int:
         kind += ", modules from their token forms"
     if args.keep_module_source:
         kind += ", their source beside them"
+    if args.user_volume:
+        kind += f", a {args.user_volume_mib} MiB user volume"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -411,6 +425,12 @@ def main() -> int:
                         help="with --token-modules and --system-volume, "
                              "write each module's source on the system "
                              "volume as well, beside its token file")
+    parser.add_argument("--user-volume", action="store_true",
+                        help="build a fresh ext4 user volume beside the boot "
+                             "image, attached as the fourth storage unit, "
+                             "and declare the shipping form's places on it")
+    parser.add_argument("--user-volume-mib", type=int, default=64,
+                        help="the user volume's size in MiB (default: 64)")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

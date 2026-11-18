@@ -606,9 +606,13 @@ VARIABLE _PHW-OUTCOME
         _PHW-BUFFER @ FREE PHEADVFS-S-IO EXIT
     THEN
     _PHW-FD @ VFS-REWIND
-    0 _PHW-FD @ VFS-TRUNCATE IF
-        _PHW-FD @ VFS-CLOSE _PHW-BUFFER @ FREE
-        PHEADVFS-S-IO EXIT
+    \ A slot that is empty, as one just made is, has nothing to cut, and
+    \ ext4's writer refuses a truncate that changes nothing.
+    _PHW-FD @ VFS-SIZE IF
+        0 _PHW-FD @ VFS-TRUNCATE IF
+            _PHW-FD @ VFS-CLOSE _PHW-BUFFER @ FREE
+            PHEADVFS-S-IO EXIT
+        THEN
     THEN
     _PHW-BUFFER @ _PHW-LENGTH @ _PHW-FD @ VFS-WRITE _PHW-ACTUAL !
     _PHW-FD @ VFS-CLOSE

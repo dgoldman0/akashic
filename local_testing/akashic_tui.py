@@ -666,6 +666,85 @@ SYSTEM_VOLUME_BOOT_LINES = (
     "    SYSVOL-SOURCE MODULE-SOURCE! ;",
     SYSTEM_VOLUME_BOOT_ENTRY,
 )
+# With --user-volume the build adds the user volume, the ext4 volume on the
+# machine's fourth storage unit, unit 3, and declares the shipping form's
+# places (docs/utils/fs/places.md): a read-only place over the root of the
+# volume that holds the profile's shipped files, which is the origin, and
+# two writable places on the user volume, documents and records, in folders
+# of their own, records being the home.  That volume is the system volume
+# when the build has one and the boot volume otherwise.  utils/fs/
+# user-volume.f mounts the user volume and reports it to the registry; a
+# boot without its image, or with one the driver refuses, goes on, and Desk
+# starts in recovery because its home is missing.  The layout below is the
+# only place it is written: the boot lines declare it and the user image is
+# built with its folders.
+USER_VOLUME_MODULE = "utils/fs/user-volume.f"
+USER_VOLUME_ARENA_BYTES = 524288
+USER_VOLUME_DEFAULT_MIB = 64
+USER_VOLUME_BLOCK_BYTES = 1024
+USER_VOLUME_LABEL = "AKASHIC-USER"
+# (name, folder, label) of the places the shipping form declares.
+USER_VOLUME_ORIGIN = ("system", "/", "System")
+USER_VOLUME_DOCUMENTS = ("documents", "/documents", "Documents")
+USER_VOLUME_RECORDS = ("records", "/records", "Records")
+USER_VOLUME_FOLDERS = (USER_VOLUME_DOCUMENTS[1], USER_VOLUME_RECORDS[1])
+
+
+def _user_volume_boot_lines(system_volume: bool) -> tuple[str, ...]:
+    """The lines that load and mount the user volume and declare the
+    shipping form's places over it, in PLACES_BOOT_LINES' place.  The boot
+    says how the mount went and goes on whatever it answered: only a missing
+    origin stops it."""
+
+    origin_name, origin_folder, origin_label = USER_VOLUME_ORIGIN
+    documents_name, documents_folder, documents_label = USER_VOLUME_DOCUMENTS
+    records_name, records_folder, records_label = USER_VOLUME_RECORDS
+    if system_volume:
+        # The system volume's module mounted it before this; composition
+        # reports it to the registry, where the origin is declared over it.
+        origin_volume = [
+            '    S" system" PLACES-VOLUME ABORT" PLACES FAIL volume"',
+            "    SYSVOL-VFS OVER PVOL-ATTACH ABORT\" PLACES FAIL system volume\"",
+        ]
+    else:
+        origin_volume = ['    S" boot" PLACES-VOLUME ABORT" PLACES FAIL volume"']
+    return (
+        f"REQUIRE {USER_VOLUME_MODULE}",
+        ": _boot-user-volume  ( -- )",
+        f"    {USER_VOLUME_ARENA_BYTES} USERVOL-MOUNT ?DUP IF",
+        '        ." USER VOLUME UNAVAILABLE ior=" . CR TX-FLUSH',
+        "    ELSE",
+        '        ." USER VOLUME ATTACHED" CR',
+        "    THEN ;",
+        "_boot-user-volume",
+        "VARIABLE _boot-origin  VARIABLE _boot-documents",
+        "VARIABLE _boot-records  VARIABLE _boot-places",
+        f": {PLACES_BOOT_ENTRY}  ( -- )",
+        *origin_volume,
+        f'    >R S" {origin_name}" S" {origin_folder}" PLACE-READ-ONLY R> PLACES-DECLARE',
+        '        ABORT" PLACES FAIL place"  _boot-origin !',
+        f'    S" {origin_label}" _boot-origin @ PLACE-LABEL! ABORT" PLACES FAIL label"',
+        "    -1 _boot-origin @ PLACE-REQUIRED!",
+        "    PLACES-CHECK ?DUP IF",
+        '        NIP ." PLACES FAIL origin ior=" . CR TX-FLUSH ABORT',
+        "    THEN DROP",
+        '    S" user" PLACES-VOLUME ABORT" PLACES FAIL volume"',
+        f'    >R S" {documents_name}" S" {documents_folder}" PLACE-WRITABLE R@ PLACES-DECLARE',
+        '        ABORT" PLACES FAIL place"  _boot-documents !',
+        f'    S" {records_name}" S" {records_folder}" PLACE-WRITABLE R> PLACES-DECLARE',
+        '        ABORT" PLACES FAIL place"  _boot-records !',
+        f'    S" {documents_label}" _boot-documents @ PLACE-LABEL! ABORT" PLACES FAIL label"',
+        f'    S" {records_label}" _boot-records @ PLACE-LABEL! ABORT" PLACES FAIL label"',
+        '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
+        "    PLACE-WRITABLE _boot-documents @ _boot-places @ PLSET-GRANT",
+        '        ABORT" PLACES FAIL grant"  DROP',
+        "    PLACE-WRITABLE _boot-records @ _boot-places @ PLSET-GRANT",
+        '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-HOME!',
+        "    PLACE-READ-ONLY _boot-origin @ _boot-places @ PLSET-GRANT",
+        '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-ORIGIN!',
+        "    _boot-places @ PLACES-DEFAULT! ;",
+        PLACES_BOOT_ENTRY,
+    )
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -829,6 +908,27 @@ CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
         PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
 _boot-practice-provision
 """
+# A build whose home can be missing, as one with the user volume, provisions
+# only a home that is there: a missing one is not blank media, and Desk
+# starts in recovery and says why (docs/utils/fs/places.md).
+_DESK_PRACTICE_PROVISION_HEAD = (
+    ": _boot-practice-provision  ( -- )\n"
+    "    _boot-practice-present? IF EXIT THEN\n"
+)
+_DESK_PRACTICE_PROVISION_HOME_GUARD = (
+    ": _boot-practice-provision  ( -- )\n"
+    "    PLACES-DEFAULT PLSET-HOME PLACE-STATUS IF EXIT THEN\n"
+    "    _boot-practice-present? IF EXIT THEN\n"
+)
+
+
+def _with_practice_home_guard(autoexec: str) -> str:
+    """AUTOEXEC with Desk's Practice provisioning left out while the home
+    is unavailable.  An autoexec without that provisioning is unchanged."""
+
+    return autoexec.replace(
+        _DESK_PRACTICE_PROVISION_HEAD, _DESK_PRACTICE_PROVISION_HOME_GUARD
+    )
 
 _DESK_SANDBOX_POLICY = r"""\ The product Desktop offers the shared sandbox under this policy.  A run
 \ gets ten seconds and twenty milliseconds of each fifty-millisecond tick.
@@ -27229,9 +27329,11 @@ def _without_places_boot_lines(lines: list[str]) -> list[str]:
     return lines
 
 
-def _with_mp64fs_vfs_platform(autoexec: str) -> str:
+def _with_mp64fs_vfs_platform(
+    autoexec: str, places_lines: tuple[str, ...] = PLACES_BOOT_LINES
+) -> str:
     """Compose the eager MP64FS VFS, and declare the build's places over
-    it, before any applet module is loaded."""
+    it with PLACES_LINES, before any applet module is loaded."""
     lines = _without_places_boot_lines(autoexec.splitlines())
     token_lines = [_forth_line_tokens(line) for line in lines]
     userland_lines = [
@@ -27274,7 +27376,7 @@ def _with_mp64fs_vfs_platform(autoexec: str) -> str:
     ):
         insert_index += 1
     lines[insert_index:insert_index] = [
-        MP64FS_VFS_PLATFORM_BOOT_LINE, *PLACES_BOOT_LINES
+        MP64FS_VFS_PLATFORM_BOOT_LINE, *places_lines
     ]
     suffix = "\n" if autoexec.endswith("\n") else ""
     return "\n".join(lines) + suffix
@@ -28291,6 +28393,22 @@ def _system_image_for(image_path: Path) -> Path | None:
     return system if system.is_file() else None
 
 
+def user_image_path(image_path: Path) -> Path:
+    """The user volume's image built beside the boot disk's IMAGE_PATH."""
+
+    return image_path.with_name(f"{image_path.stem}-user{image_path.suffix}")
+
+
+def _user_image_for(image_path: Path) -> Path | None:
+    """The user volume a launch of IMAGE_PATH attaches as the fourth storage
+    unit, or None.  A --user-volume build writes it beside the boot image and
+    a build without the option removes it, so its presence is what the last
+    build of IMAGE_PATH chose."""
+
+    user = user_image_path(image_path)
+    return user if user.is_file() else None
+
+
 # The system volume's ext4 geometry.  The pinned profile fixes the rest
 # (local_testing/fixtures/ext4-profile/manifest.json): 256-byte inodes, a
 # 4 MiB journal, the feature set the driver is qualified against, and one
@@ -28353,8 +28471,9 @@ def _system_volume_toolchain() -> tuple[dict, dict[str, str], dict]:
     tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
     if not tool_dir_value:
         raise RuntimeError(
-            "--system-volume builds an ext4 image with the pinned e2fsprogs; "
-            "set AKASHIC_E2FSPROGS_TOOL_DIR to the folder that holds them"
+            "--system-volume and --user-volume build ext4 images with the "
+            "pinned e2fsprogs; set AKASHIC_E2FSPROGS_TOOL_DIR to the folder "
+            "that holds them"
         )
     manifest_path = ext4_profile.DEFAULT_MANIFEST
     manifest = ext4_profile.load_manifest(manifest_path)
@@ -28367,6 +28486,109 @@ def _system_volume_toolchain() -> tuple[dict, dict[str, str], dict]:
     return manifest, env, tools
 
 
+def _write_ext4_image(
+    target: Path,
+    spec: dict,
+    inodes: int,
+    volume_bytes: int,
+    toolchain: tuple[dict, dict[str, str], dict],
+    *,
+    directories: list[str],
+    source_paths: tuple[str, ...],
+    staged: dict[str, bytes],
+    what: str,
+) -> None:
+    """Write an ext4 image of VOLUME_BYTES to TARGET from SPEC, the
+    geometry and identity of one of the ext4 profile's images, with INODES
+    inodes: DIRECTORIES made, each of SOURCE_PATHS written at its path from
+    the source root, each of STAGED written from its bytes, every file with
+    the same permission bits.  The host's e2fsck then checks it and the
+    driver's admission facts are checked against its superblock.  WHAT names
+    the volume in an error.
+
+    TOOLCHAIN (:func:`_system_volume_toolchain`) makes it, with the
+    arguments, feature set and fixed time of the ext4 fixtures' profile.
+    """
+
+    import generate_ext4_profile_fixtures as ext4_profile
+
+    manifest, env, tools = toolchain
+    context = dict(spec)
+    context.update(
+        tool_dir=Path(tools["mke2fs"]["path"]).parent,
+        image=target,
+        feature_names=",".join(ext4_profile.profile_feature_names(manifest, spec)),
+    )
+
+    def run(
+        argv: list[str], step: str, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            argv, env=env, cwd=cwd, text=True, capture_output=True, check=False
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{step} failed for {what} {target}:\n"
+                + result.stdout
+                + result.stderr
+            )
+        return result
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as image:
+        image.truncate(volume_bytes)
+    # The profile's arguments end with the image and its block count.  The
+    # inode count goes before them: mke2fs would otherwise scale a group's
+    # inodes down with a volume smaller than one group.
+    mkfs_argv = ext4_profile.render_argv(manifest["generator"]["mkfs_argv"], context)
+    run([*mkfs_argv[:-2], "-N", str(inodes), *mkfs_argv[-2:]], "mke2fs")
+    # debugfs splits a command on spaces, so it runs in the source root and
+    # takes each source file by its path from there.  It gives a written
+    # file its host file's permission bits, which follow the checkout; every
+    # file is set to the same ones.
+    commands = [f"mkdir /{directory}" for directory in directories]
+    for path in (*source_paths, *staged):
+        if any(character.isspace() for character in path):
+            raise RuntimeError(f"path holds white space: {path!r}")
+    for path in source_paths:
+        commands.append(f"write {path} /{path}")
+        commands.append(f"sif /{path} mode 0100644")
+    with tempfile.TemporaryDirectory(prefix="akashic-ext4-volume-") as scratch:
+        for number, (path, content) in enumerate(staged.items()):
+            if any(character.isspace() for character in scratch):
+                raise RuntimeError(f"scratch path holds white space: {scratch!r}")
+            staged_file = Path(scratch) / f"{number}.ft"
+            staged_file.write_bytes(content)
+            commands.append(f"write {staged_file} /{path}")
+            commands.append(f"sif /{path} mode 0100644")
+        script = Path(scratch) / "populate.debugfs"
+        script.write_text("\n".join(commands) + "\n", encoding="utf-8")
+        populated = run(
+            [tools["debugfs"]["path"], "-w", "-f", str(script), str(target)],
+            "debugfs",
+            SOURCE_ROOT,
+        )
+    # debugfs reports a command that failed on stderr and still exits zero.
+    complaints = [
+        line
+        for line in populated.stderr.splitlines()
+        if line.strip() and not line.startswith("debugfs ")
+    ]
+    if complaints:
+        raise RuntimeError(
+            f"debugfs could not populate {what} {target}:\n"
+            + "\n".join(complaints[:20])
+        )
+    run([tools["e2fsck"]["path"], "-f", "-n", str(target)], "e2fsck")
+    # The facts the driver's admission checks, as the fixtures are checked.
+    try:
+        ext4_profile.validate_observed_superblock(
+            manifest, spec, ext4_profile.read_superblock(target)
+        )
+    except ext4_profile.ProfileError as error:
+        raise RuntimeError(str(error)) from error
+
+
 def _build_system_image(
     modules: tuple[str, ...],
     target: Path,
@@ -28377,10 +28599,13 @@ def _build_system_image(
     boot_id: int = 0,
     keep_source: bool = False,
     loaded_before: frozenset[str] = frozenset(),
+    extra_sources: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Write the system volume to TARGET: an ext4 image that holds each of
     MODULES as a plain file at its module path, the repository's text
-    unchanged.
+    unchanged.  EXTRA_SOURCES are other files of the source root it holds
+    at their paths, such as a profile's resources when the volume is its
+    origin.
 
     With TOKEN_FILES the volume holds each module's token form instead, at
     the module's path with a t added, built for the system whose BOOT-ID is
@@ -28432,6 +28657,7 @@ def _build_system_image(
     source_modules = modules if not token_files or keep_source else ()
     held = {
         **{module: texts[module] for module in source_modules},
+        **{path: (SOURCE_ROOT / path).read_bytes() for path in extra_sources},
         **{
             module + TOKEN_FORM_SUFFIX: form
             for module, form in (token_forms | name_files).items()
@@ -28461,80 +28687,20 @@ def _build_system_image(
         "hash_seed": str(uuid.UUID(bytes=digest[16:], version=4)),
         "label": SYSTEM_VOLUME_LABEL,
     }
-    context = dict(spec)
-    context.update(
-        tool_dir=Path(tools["mke2fs"]["path"]).parent,
-        image=target,
-        feature_names=",".join(ext4_profile.profile_feature_names(manifest, spec)),
+    _write_ext4_image(
+        target,
+        spec,
+        inodes,
+        volume_bytes,
+        toolchain,
+        directories=directories,
+        source_paths=(*source_modules, *extra_sources),
+        staged={
+            module + TOKEN_FORM_SUFFIX: form
+            for module, form in (token_forms | name_files).items()
+        },
+        what="the system volume",
     )
-
-    def run(
-        argv: list[str], what: str, cwd: Path | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
-            argv, env=env, cwd=cwd, text=True, capture_output=True, check=False
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"{what} failed for the system volume {target}:\n"
-                + result.stdout
-                + result.stderr
-            )
-        return result
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as image:
-        image.truncate(volume_bytes)
-    # The profile's arguments end with the image and its block count.  The
-    # inode count goes before them: mke2fs would otherwise scale a group's
-    # inodes down with a volume smaller than one group.
-    mkfs_argv = ext4_profile.render_argv(manifest["generator"]["mkfs_argv"], context)
-    run([*mkfs_argv[:-2], "-N", str(inodes), *mkfs_argv[-2:]], "mke2fs")
-    # debugfs splits a command on spaces, so it runs in the source root and
-    # takes each module by its path from there.  It gives a written file its
-    # host file's permission bits, which follow the checkout; every module is
-    # set to the same ones.
-    commands = [f"mkdir /{directory}" for directory in directories]
-    for module in modules:
-        if any(character.isspace() for character in module):
-            raise RuntimeError(f"module path holds white space: {module!r}")
-    for module in source_modules:
-        commands.append(f"write {module} /{module}")
-        commands.append(f"sif /{module} mode 0100644")
-    with tempfile.TemporaryDirectory(prefix="akashic-system-volume-") as scratch:
-        for number, (module, form) in enumerate((token_forms | name_files).items()):
-            if any(character.isspace() for character in scratch):
-                raise RuntimeError(f"scratch path holds white space: {scratch!r}")
-            staged = Path(scratch) / f"{number}.ft"
-            staged.write_bytes(form)
-            commands.append(f"write {staged} /{module}{TOKEN_FORM_SUFFIX}")
-            commands.append(f"sif /{module}{TOKEN_FORM_SUFFIX} mode 0100644")
-        script = Path(scratch) / "populate.debugfs"
-        script.write_text("\n".join(commands) + "\n", encoding="utf-8")
-        populated = run(
-            [tools["debugfs"]["path"], "-w", "-f", str(script), str(target)],
-            "debugfs",
-            SOURCE_ROOT,
-        )
-    # debugfs reports a command that failed on stderr and still exits zero.
-    complaints = [
-        line
-        for line in populated.stderr.splitlines()
-        if line.strip() and not line.startswith("debugfs ")
-    ]
-    if complaints:
-        raise RuntimeError(
-            f"debugfs could not populate the system volume {target}:\n"
-            + "\n".join(complaints[:20])
-        )
-    run([tools["e2fsck"]["path"], "-f", "-n", str(target)], "e2fsck")
-    # The facts the driver's admission checks, as the fixtures are checked.
-    try:
-        ext4_profile.validate_observed_superblock(
-            manifest, spec, ext4_profile.read_superblock(target)
-        )
-    except ext4_profile.ProfileError as error:
-        raise RuntimeError(str(error)) from error
     return {
         "path": target,
         "bytes": volume_bytes,
@@ -28548,6 +28714,75 @@ def _build_system_image(
         "name_files": len(name_files),
         "absent": tuple(absent),
         "directories": len(directories),
+        "uuid": spec["uuid"],
+    }
+
+
+def _build_user_image(
+    target: Path,
+    volume_bytes: int,
+    toolchain: tuple[dict, dict[str, str], dict],
+    *,
+    documents: dict[str, bytes],
+) -> dict[str, object]:
+    """Write the user volume to TARGET: a fresh ext4 image of VOLUME_BYTES in
+    the format the staged writer takes, 1 KiB blocks and 256-byte inodes with
+    the ext4 profile's features, holding the folders the shipping form's
+    places name and, in the documents folder, DOCUMENTS by name.
+
+    Every block group carries one inode for each 16 KiB of a full group, as
+    the driver's admission requires, and the volume has at least two groups,
+    16 MiB: the driver takes the backup superblock of the second group as
+    its witness when it checks the journal.  The volume's identity follows
+    from its size and content.  Returns facts for the build's report.
+    """
+
+    block_bytes = USER_VOLUME_BLOCK_BYTES
+    group_bytes = 8 * block_bytes * block_bytes
+    if volume_bytes % (1 << 20) or volume_bytes < 2 * group_bytes:
+        raise ValueError(
+            f"a user volume is a whole number of MiB of at least "
+            f"{2 * group_bytes >> 20} MiB, not {volume_bytes} bytes"
+        )
+    manifest, _env, _tools = toolchain
+    block_count = volume_bytes // block_bytes
+    groups = -(-block_count // (8 * block_bytes))
+    inodes = groups * (group_bytes // _SYSTEM_VOLUME_INODE_RATIO_BYTES)
+    folder = USER_VOLUME_DOCUMENTS[1].strip("/")
+    staged = {f"{folder}/{name}": content for name, content in sorted(documents.items())}
+    identity = hashlib.sha256(f"user\n{volume_bytes}\n".encode())
+    for path, content in staged.items():
+        identity.update(f"{path}\0{hashlib.sha256(content).hexdigest()}\n".encode())
+    digest = identity.digest()
+    spec = {
+        "id": "user volume",
+        "profile": "primary",
+        "block_size": block_bytes,
+        "inode_size": manifest["profiles"]["primary"]["inode_size"],
+        "blocks_per_group": 8 * block_bytes,
+        "block_count": block_count,
+        "expected_groups": groups,
+        "expected_inodes": inodes,
+        "uuid": str(uuid.UUID(bytes=digest[:16], version=4)),
+        "hash_seed": str(uuid.UUID(bytes=digest[16:], version=4)),
+        "label": USER_VOLUME_LABEL,
+    }
+    _write_ext4_image(
+        target,
+        spec,
+        inodes,
+        volume_bytes,
+        toolchain,
+        directories=[folder.strip("/") for folder in USER_VOLUME_FOLDERS],
+        source_paths=(),
+        staged=staged,
+        what="the user volume",
+    )
+    return {
+        "path": target,
+        "bytes": volume_bytes,
+        "groups": groups,
+        "documents": len(staged),
         "uuid": spec["uuid"],
     }
 
@@ -28730,7 +28965,7 @@ def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
         image_path,
         _settings_image_for(profile, image_path),
         _system_image_for(image_path),
-        None,
+        _user_image_for(image_path),
     )
     services = {
         unit.host_name: None
@@ -28810,6 +29045,8 @@ def build_image(
     system_volume: bool = False,
     token_modules: bool = False,
     keep_module_source: bool = False,
+    user_volume: bool = False,
+    user_volume_mib: int = USER_VOLUME_DEFAULT_MIB,
 ) -> Path:
     """Build PROFILE_NAME's boot image and the images of its other disks.
 
@@ -28831,6 +29068,16 @@ def build_image(
     system volume's source as well, beside the token files: the volume of a
     system that edits its own modules, where KDOS loads the source of a
     token file whose source has changed.
+
+    With USER_VOLUME the build writes the user volume beside the boot image
+    (:func:`user_image_path`), a fresh ext4 image of USER_VOLUME_MIB MiB with
+    the folders of the shipping form's places, and autoexec.f mounts it and
+    declares those places in place of the one place over the boot volume:
+    the origin, read-only over the root of the volume that holds the
+    profile's shipped files, and documents and records on the user volume,
+    records being the home.  With a system volume as well, the profile's
+    resources move onto the system volume, the origin's volume.  The sample
+    files move into the user volume's documents.
     """
     if keep_module_source and not (token_modules and system_volume):
         raise ValueError(
@@ -28851,6 +29098,8 @@ def build_image(
                     safe_mode=safe_mode,
                     settings_safe_mode=settings_safe_mode,
                     system_volume=system_volume,
+                    user_volume=user_volume,
+                    user_volume_mib=user_volume_mib,
                 )
             token_files = _record_token_files(recorded, PROFILES[profile_name])
         if not token_files:
@@ -28884,7 +29133,9 @@ def build_image(
         return form
 
     profile, backend = _profile_backend(profile_name, backend)
-    system_volume_toolchain = _system_volume_toolchain() if system_volume else None
+    system_volume_toolchain = (
+        _system_volume_toolchain() if system_volume or user_volume else None
+    )
     if settings_safe_mode and DESK_SYSTEM_SETTINGS not in profile.settings_files:
         raise RuntimeError(
             "--settings-safe-mode needs a profile whose settings disk holds "
@@ -28900,13 +29151,25 @@ def build_image(
     )
     uses_app_shell = APP_SHELL_MODULE in profile_modules
     composition_roots = profile.roots
+    if user_volume and not uses_app_shell:
+        raise RuntimeError("--user-volume needs a profile that composes the app shell")
     if uses_app_shell:
-        composition_roots = (MP64FS_VFS_PLATFORM_MODULE,) + tuple(
+        platform_roots = (MP64FS_VFS_PLATFORM_MODULE,)
+        if user_volume:
+            platform_roots += (USER_VOLUME_MODULE,)
+        composition_roots = platform_roots + tuple(
             root
             for root in profile.roots
-            if _normalize_module(root) != MP64FS_VFS_PLATFORM_MODULE
+            if _normalize_module(root) not in platform_roots
         )
-        autoexec = _with_mp64fs_vfs_platform(autoexec)
+        autoexec = _with_mp64fs_vfs_platform(
+            autoexec,
+            _user_volume_boot_lines(system_volume)
+            if user_volume
+            else PLACES_BOOT_LINES,
+        )
+        if user_volume:
+            autoexec = _with_practice_home_guard(autoexec)
     modules = (
         dependency_order(composition_roots)
         if profile.linked
@@ -28929,6 +29192,11 @@ def build_image(
     if safe_mode:
         autoexec = _with_safe_mode(autoexec, modules)
     samples = _sample_files(modules, system_volume=system_volume)
+    # With the user volume the samples are documents there, and the boot
+    # volume holds none of them.
+    user_documents = samples if user_volume else {}
+    if user_volume:
+        samples = {}
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
     )
@@ -28939,6 +29207,12 @@ def build_image(
             "be enabled together"
         )
     resources = set(profile.resources)
+    # With both volumes the origin is the system volume, which then holds
+    # the profile's resources in the boot volume's place.
+    origin_resources: tuple[str, ...] = ()
+    if user_volume and system_volume:
+        origin_resources = tuple(sorted(resources))
+        resources = set()
     linked_chunks = (
         _linked_chunks(
             deployed_modules,
@@ -29267,12 +29541,25 @@ def build_image(
             boot_id=boot_id,
             keep_source=keep_module_source,
             loaded_before=frozenset(deployed_modules),
+            extra_sources=origin_resources,
         )
-        if system_volume_toolchain is not None
+        if system_volume
         else None
     )
     if system is None:
         system_image_path(target).unlink(missing_ok=True)
+    user = (
+        _build_user_image(
+            user_image_path(target),
+            user_volume_mib << 20,
+            system_volume_toolchain,
+            documents=user_documents,
+        )
+        if user_volume
+        else None
+    )
+    if user is None:
+        user_image_path(target).unlink(missing_ok=True)
 
     info = fs.info()
     if info["free_sectors"] * 512 < profile.minimum_free_bytes:
@@ -29346,6 +29633,13 @@ def build_image(
                 else ""
             )
             if system is not None
+            else ""
+        )
+        + (
+            f"\n  user volume: {user['path']}, ext4, {user['bytes']:,} bytes "
+            f"in {USER_VOLUME_BLOCK_BYTES}-byte blocks, {user['groups']} groups, "
+            f"{user['documents']} documents"
+            if user is not None
             else ""
         )
         + (
@@ -30009,6 +30303,7 @@ def smoke(
         storage_image=image_path,
         settings_image=_settings_image_for(profile, image_path),
         system_image=_system_image_for(image_path),
+        user_image=_user_image_for(image_path),
         cols=cols,
         rows=rows,
         batch_steps=500_000,
@@ -35814,12 +36109,15 @@ def _megapad_launcher(mode: str) -> list[str]:
 
 def _storage_unit_arguments(profile: Profile, image_path: Path) -> tuple[str, ...]:
     """The options that attach the disks built beside IMAGE_PATH: PROFILE's
-    settings disk and, when the build wrote one, the system volume."""
+    settings disk and, when the build wrote them, the system and user
+    volumes."""
     settings = _settings_image_for(profile, image_path)
     system = _system_image_for(image_path)
+    user = _user_image_for(image_path)
     return (
         *(() if settings is None else ("--settings-storage", str(settings))),
         *(() if system is None else ("--system-storage", str(system))),
+        *(() if user is None else ("--user-storage", str(user))),
     )
 
 
@@ -36033,6 +36331,13 @@ def accept_physical_desktop(
         journey = applet_journey(
             profile_name.removeprefix("desktop-apt1-"), ready_markers,
             paced_link=terminal_link_pace is not None,
+            # With the user volume the samples are documents there, in a
+            # place that is not the home.
+            documents_place=(
+                USER_VOLUME_DOCUMENTS[0]
+                if _user_image_for(image_path) is not None
+                else None
+            ),
         )
     command = _session_server_command(
         profile_name,
@@ -38039,6 +38344,25 @@ def _parser() -> argparse.ArgumentParser:
                 "that is out of date"
             ),
         )
+        command.add_argument(
+            "--user-volume",
+            action="store_true",
+            help=(
+                "build a fresh ext4 user volume beside the boot image, attach "
+                "it as the fourth storage unit, and declare the shipping "
+                "form's places: documents and records there, records the "
+                "home, and a read-only origin (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
+            ),
+        )
+        command.add_argument(
+            "--user-volume-mib",
+            type=_positive_integer,
+            default=USER_VOLUME_DEFAULT_MIB,
+            help=(
+                "the user volume's size in MiB, a whole number of at least 16 "
+                f"(default: {USER_VOLUME_DEFAULT_MIB})"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -38200,6 +38524,8 @@ def main() -> int:
         system_volume=args.system_volume,
         token_modules=args.token_modules,
         keep_module_source=args.keep_module_source,
+        user_volume=args.user_volume,
+        user_volume_mib=args.user_volume_mib,
     )
     if args.command == "build":
         return 0

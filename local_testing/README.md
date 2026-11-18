@@ -370,6 +370,46 @@ token forms on the emulator and accounts for every byte of the two
 dictionaries that differs. That last one is four emulator boots and runs
 alone.
 
+### The user volume
+
+`build`, `smoke`, `serve` and `accept` take `--user-volume`, and
+`physical_desktop_acceptance.py` takes it as well. The build then writes a
+fresh ext4 user volume beside the boot image, `<image>-user.img`, which a
+launch attaches as the fourth storage unit, unit 3. `--user-volume-mib N`
+sets its size, 64 MiB by default and a whole number of at least 16. The
+volume is in the format ext4's staged writer takes, 1 KiB blocks and 256-byte
+inodes with the pinned profile's features, and holds two folders,
+`/documents` and `/records`, with the sample documents in `/documents`. The
+build checks it with the pinned `e2fsck` and needs the same
+`AKASHIC_E2FSPROGS_TOOL_DIR` as `--system-volume`.
+
+The profile then loads `utils/fs/user-volume.f` with the ext4 driver, in its
+linked chunks or from the system volume, and its `autoexec.f` mounts the
+volume and declares the shipping form's places in place of the one place over
+the boot volume: a read-only origin over the root of the volume that holds
+the profile's shipped files, and documents and records on the user volume,
+records being the home. With `--system-volume` as well, that origin is the
+system volume, and the profile's resources move onto it from the boot volume.
+The boot says `USER VOLUME ATTACHED`, or `USER VOLUME UNAVAILABLE` with the
+reason, and goes on either way; without its home Desk starts in recovery. A
+build without the option removes the user volume's image again and builds
+what it built before. [`docs/utils/fs/user-volume.md`](../docs/utils/fs/user-volume.md)
+describes the module, the volume and the places.
+
+Desk with Pad runs its journey on the user volume; there Pad opens the sample
+`notes.md` by its locator in the documents place, since Pad's own default
+place is the home:
+
+```bash
+python3 local_testing/physical_desktop_acceptance.py --applet pad --user-volume \
+  --akashic-root . --megapad-root ../megapad \
+  --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
+```
+
+`test_user_volume.py` mounts, refuses and misses the volume, boots Desk with
+Pad in the three outcomes of the boot policy, and saves a document that the
+host's `e2fsck` passes and a second boot reads back.
+
 ## Integrated Library Rabbit/Burrow qualification
 
 The integrated executable closure was qualified at Akashic

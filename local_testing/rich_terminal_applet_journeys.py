@@ -443,8 +443,13 @@ class PadAloneJourney(_AppletJourney):
         LINK_FOLLOWED,
     ) = range(14)
 
-    def __init__(self, ready_markers: tuple[str, ...]):
+    def __init__(
+        self, ready_markers: tuple[str, ...], *, notes_path: str = styled_text.NOTES_PATH
+    ):
         super().__init__(ready_markers)
+        # What Pad's Open prompt is given for notes.md: a path in Pad's
+        # home, or a locator in the place that holds the sample documents.
+        self._notes_path = notes_path
         self._editor_bounds: tuple[int, int, int, int] | None = None
         # The caret each input was sent from, by the stage the input leads
         # to.  A stage a caret move leads to waits for the caret to leave
@@ -638,16 +643,16 @@ class PadAloneJourney(_AppletJourney):
                 )
             _require_cell_text_in(offer, PAD_OPEN_PROMPT_MARKER, bounds, _WHERE)
             return self._step("pad-open-prompt-shown", "send_text",
-                              styled_text.NOTES_PATH, self.PATH_TYPED, offer,
+                              self._notes_path, self.PATH_TYPED, offer,
                               generation, sender)
         if self.stage == self.PATH_TYPED:
             if prompt is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's Open prompt closed before its path was entered"
                 )
-            if prompt.content.text != styled_text.NOTES_PATH:
+            if prompt.content.text != self._notes_path:
                 return self._wait("the typed path in Pad's Open prompt")
-            if prompt.content.caret != len(styled_text.NOTES_PATH):
+            if prompt.content.caret != len(self._notes_path):
                 raise PhysicalDesktopAcceptanceError(
                     f"Pad's Open prompt has its caret at {prompt.content.caret}"
                 )
@@ -3386,11 +3391,18 @@ class ObservatoryJourney(_AppletJourney):
 
 
 def applet_journey(
-    name: str, ready_markers: tuple[str, ...], *, paced_link: bool = False
+    name: str,
+    ready_markers: tuple[str, ...],
+    *,
+    paced_link: bool = False,
+    documents_place: str | None = None,
 ) -> FrameBoundJourney:
     """The journey for Desk holding only the applet NAME, or for the check
     NAME of Desk holding one applet.  On a PACED_LINK, File Explorer's also
-    checks that the screen answers input while a picture uploads."""
+    checks that the screen answers input while a picture uploads.  With
+    DOCUMENTS_PLACE, the name of the place that holds the sample documents
+    when it is not the home, as on the user volume, Pad's journey opens
+    notes.md there by its locator."""
 
     journeys = {
         "pad": PadAloneJourney,
@@ -3408,4 +3420,9 @@ def applet_journey(
         raise ValueError(f"no journey for Desk with only {name!r}")
     if name == "fexp":
         return FexpAloneJourney(ready_markers, paced_link=paced_link)
+    if name == "pad" and documents_place is not None:
+        return PadAloneJourney(
+            ready_markers,
+            notes_path=f"vfs://{documents_place}{styled_text.NOTES_PATH}",
+        )
     return journeys[name](ready_markers)

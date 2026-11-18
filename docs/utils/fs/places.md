@@ -14,9 +14,10 @@ REQUIRE utils/fs/places.f
 A **volume** is one mounted VFS instance with a name and a state. The
 module that mounts it reports the outcome to the registry: attached, with
 the instance, or refused, with the reason. `tui/platform/mp64fs-vfs.f`
-reports `boot`, `utils/fs/system-volume.f` will report `system`, and
-`utils/fs/user-volume.f` will report `user`. The settings volume is
-mounted for one read and destroyed, so it never enters the registry.
+reports `boot` and `utils/fs/user-volume.f` reports `user`; the system
+volume is `system`, which composition reports after
+`utils/fs/system-volume.f` mounts it. The settings volume is mounted for
+one read and destroyed, so it never enters the registry.
 
 A **place** is a folder of a volume with a name, a label and an access.
 The name identifies it in the resource form, a person reads the label,
@@ -309,7 +310,8 @@ every file under `akashic/` to it.
    place themselves, and narrowing a set no longer marks its volumes. The
    slice begins in the replacement and copy libraries: names follow each
    volume's limit and paths the VFS's, and a copy syncs only where a
-   replacement does.
+   replacement does. Done but for the last two steps of recovery, which
+   "What slice 4 leaves" lists.
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
@@ -331,8 +333,10 @@ emulator or the simulator").
 
 ## Status
 
-Slices 1, 2 and 3 are in the tree. The linked build declares one place
-and everything below runs on it.
+Slices 1, 2 and 3 are in the tree, and slice 4 is but for what "What
+slice 4 leaves" lists. The linked build declares one place and
+everything below runs on it; a build with `--user-volume` declares the
+shipping form's places.
 
 - `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
   `local_testing/test_places.py` on two RAM volumes.
@@ -402,36 +406,72 @@ and everything below runs on it.
   from one word, `VFS-BARRIER`: a sync, except on a binding with
   `VFS-CAP-DURABLE-MUTATIONS`, so a copy to ext4 syncs no more than a save
   there does.
+- A replacement bound for reading is read-only: `PLACE-VREPL!` marks it
+  (`VREPL-READ-ONLY!`), it refuses to replace with `VREPL-S-READ-ONLY`, and
+  its recovery changes nothing. The stores that keep their file through
+  `PLACE-VREPL!` answer that refusal with a read-only status of their own
+  (`SPERM-S-READ-ONLY`, `ADST-S-READ-ONLY`, `DBAS-S-READ-ONLY`,
+  `SBOX-STORE-S-READ-ONLY`, `ACAT-S-READONLY`), and Daybook, Grid and the
+  shared document word it as a read-only place.
+- `utils/fs/user-volume.f` mounts the ext4 volume on `USER-UNIT` through
+  the staged writer and reports it as `user`: attached, refused with the
+  driver's reason, or missing when the unit holds no medium
+  ([user-volume.md](user-volume.md)). The image builder's `--user-volume`
+  writes a fresh user volume beside the boot image, attaches it as unit 3
+  on every launch path, and declares the shipping form's places: `system`,
+  read-only over the root of the volume that holds the shipped files and
+  required, as origin; `documents` over `/documents`; and `records` over
+  `/records`, the home. The sample documents ship in `/documents`. Desk
+  with Pad passes its journey there, opening `notes.md` by its locator in
+  the documents place.
+- The boot policy runs as decided: a boot without its origin stops with a
+  message, here the system volume's own; a boot without the user volume
+  goes on, provisions no Practice in the missing home, and Desk starts in
+  recovery with every place of its set read-only; with the volume, a
+  document saved in the documents place passes the host's `e2fsck` and a
+  second boot reads it back (`local_testing/test_user_volume.py`).
 
-What slices 2 and 3 leave:
+What slice 4 leaves:
 
-- Narrowing a set still marks the volumes under its places read-only.
-  Each store binds its file through its place when it opens, for writing
-  only when the place is writable, but a store bound for reading still
-  writes through its instance if asked, so the mark is what refuses that
-  write. In slice 4 the mark goes, and a store on a read-only place
-  refuses each change itself, with an answer that says why (Decided,
-  2026-11-17). The refusal is written once, in the layers the stores
-  share: a replacement bound for reading refuses to replace, the
-  `PLACE-` words bind for writing only on a writable place, and Streams
-  and Library open their repositories read-only.
-- Streams and Library keep repositories with fixed layouts from the
-  volume's root (`/streams/...`, `/library/...`, `/streams-*.bin`) whose
-  paths their persistence layer and their own checks compare literally,
-  and they open them on the volume under their home. In every build so
-  far the home's folder is that volume's root, so their files stay where
-  they were. Before they move to the user volume in slice 7, each binds
-  its folder in its home once when it opens and composes its paths under
-  that folder, through one helper both share, and the persistence layer
-  keeps taking an instance and a path (Decided, 2026-11-17).
+- Narrowing a set still marks the volumes under its places read-only. The
+  stores that keep their file through `PLACE-VREPL!`, the Practice head and
+  the Agent's conversation store refuse changes on a read-only place
+  themselves now, but Streams and Library open their repositories with the
+  volume under their home and would write through it. They open read-only
+  once the persistence store both share (`persistence/store.f`) takes a
+  read-only mode that refuses provisioning, a transaction's begin and
+  staging, and their repositories and Streams' other stores pass their
+  home's access to it; the mark goes then (Decided, 2026-11-17).
+- Desk's recovery fails closed: with no usable home it starts no applet and
+  opens none of the stores it gives its home, and shows that the Practice
+  is in recovery. The decided recovery, in which applets run over read-only
+  places and each store opens as a service that says why, needs Desk to
+  compose its applets and stores in recovery as well; the stores' read-only
+  answers are tested on read-only places meanwhile.
+- Pad takes a bare path in its set's home, which the shipping form makes
+  records. Which place Pad's documents default to when the home is not
+  where documents live is open; meanwhile a document is named by its
+  locator, `vfs://documents/...`.
+- The system volume is reported to the registry by composition. It moves
+  into `utils/fs/system-volume.f` when the shipping form is the default
+  build, since that module is part of every build with a system volume.
+- With records as the home, the other writers meet ext4 in a build with
+  the user volume (slice 7). The Agent's conversation store saves its
+  first, absent slot with a truncate that changes nothing, which ext4's
+  writer refuses, so Desk shows `history error`; the Practice head no
+  longer truncates an empty slot. The Agent saves every 500 ms while a
+  256 KiB save takes 2 to 5 s. Streams and Library keep repositories with
+  fixed layouts from the volume's root (`/streams/...`, `/library/...`,
+  `/streams-*.bin`) whose paths their persistence layer and their own
+  checks compare literally; before they move to the user volume, each
+  binds its folder in its home once when it opens and composes its paths
+  under that folder, through one helper both share, and the persistence
+  layer keeps taking an instance and a path (Decided, 2026-11-17).
 - File Explorer copies and moves files only and refuses a folder on its
   clipboard. Copying a folder is a walk that calls the copy for each file,
   which the tests make and no applet makes yet.
-- Power cuts during a copy's stage write and rename are qualified in
-  slice 8.
-- Starting Desk with a home that is missing has run only as the
-  activation's own case; the stores' answers with no home are exercised
-  when the user volume attaches (slice 4).
+- File Explorer across volumes is slice 6, and power cuts during a save,
+  a copy's stage write and its rename are qualified in slice 8.
 
 ## Open
 
