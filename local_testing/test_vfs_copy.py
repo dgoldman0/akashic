@@ -120,6 +120,13 @@ HELPERS = (
     '    VA @ V.CWD @ CWD-A @ = AND  VB @ V.CWD @ CWD-B @ = AND ;',
     ': R.  ( ior -- )  VFS-IOR-REASON . ;',
     ': RP.  ( ior -- )  DUP R.  VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> . ;',
+    # A path of one name of N bytes in the root, and one of LEN bytes in
+    # folders of 199-byte names.
+    'CREATE LN 4200 ALLOT',
+    ': NAME-PATH  ( n -- a u )  LN 4200 110 FILL  47 LN C!  LN SWAP 1+ ;',
+    # Every change the binding makes is durable when it returns, as on
+    # ext4's staged writer, so a copy needs no sync between its steps.
+    ': T-DURABLE  T-BINDING VB.CAPS DUP @ VFS-CAP-DURABLE-MUTATIONS OR SWAP ! ;',
 )
 
 PLACES = (
@@ -273,9 +280,10 @@ def test_a_copy_refuses_what_it_cannot_copy():
         '     S" /f" VA @ S" /d/no/x" VB @ SCR 4096 VFS-COPY R.',
         '     S" /f" VA @ S" /f/x" VA @ SCR 4096 VFS-COPY R.',
         # The replacement library names the stage, and refuses a relative
-        # path, a name over 23 bytes and a name in its reserved namespace.
+        # path, a name over the VFS's 255 bytes and a name in its reserved
+        # namespace.
         '     S" /f" VA @ S" x" VB @ SCR 4096 VFS-COPY R.',
-        '     S" /f" VA @ S" /abcdefghijklmnopqrstuvwxy" VB @ SCR 4096 VFS-COPY R.',
+        '     S" /f" VA @ 256 NAME-PATH VB @ SCR 4096 VFS-COPY R.',
         '     S" /f" VA @ S" /.s-abc" VB @ SCR 4096 VFS-COPY R.',
         '     S" /f" VA @ S" /x" VB @ SCR 1 VFS-COPY R.',
         '     S" /f" VA @ S" /x" 0 SCR 4096 VFS-COPY R.',
@@ -285,6 +293,40 @@ def test_a_copy_refuses_what_it_cannot_copy():
         'T',
     ], [ISDIR, NOENT, NOENT, NOTDIR, INVALID, INVALID, INVALID, INVALID,
         INVALID, INVALID, INVALID, 0, INVALID, FALSE, TRUE])
+
+
+def test_a_copy_takes_the_names_and_paths_its_volume_takes():
+    """The RAM volume sets no name limit of its own: a name of 255 bytes
+    copies, and so does a file in a folder whose path is longer than 255
+    bytes."""
+    expect([
+        ': T  NOTE-STATE  BIG 10 S" /f" VA @ PUT',
+        '     S" /f" VA @ 255 NAME-PATH VB @ SCR 4096 VFS-COPY R.',
+        '     255 NAME-PATH VB @ BIG 10 SAME? .',
+        # /d/<200 bytes>/<100 bytes>: a path of 304 bytes.
+        '     LN 4200 111 FILL  S" /d/" LN SWAP CMOVE  47 LN 203 + C!',
+        '     S" /d" VB @ VFS-CD? THROW  LN 3 + 200 VB @ VFS-MKDIR THROW',
+        '     S" /" VB @ VFS-CD? THROW',
+        '     S" /f" VA @ LN 304 VB @ SCR 4096 VFS-COPY R.',
+        '     LN 304 VB @ BIG 10 SAME? .  STATE-KEPT? . ;',
+        'T',
+    ], [0, TRUE, 0, TRUE, TRUE])
+
+
+def test_a_copy_takes_its_barriers_only_where_the_binding_needs_them():
+    """A copy syncs after its stage and after its rename on a binding whose
+    changes need a sync to be durable, and not at all where every change is
+    durable when it returns; a move across volumes then syncs neither."""
+    expect([
+        ': T  BIG 10 S" /f" VA @ PUT  VB @ F-VFS !  0 SYNCS !',
+        '     S" /f" VA @ S" /x" VB @ SCR 4096 VFS-COPY R.  SYNCS @ .',
+        '     T-DURABLE  0 SYNCS !',
+        '     S" /f" VA @ S" /y" VB @ SCR 4096 VFS-COPY R.  SYNCS @ .',
+        '     VA @ F-VFS !  0 SYNCS !',
+        '     S" /f" VA @ S" /z" VB @ SCR 4096 VFS-MOVE R.  SYNCS @ .',
+        '     S" /y" VB @ BIG 10 SAME? .  S" /f" VA @ HAS? . ;',
+        'T',
+    ], [0, 2, 0, 0, 0, 0, TRUE, FALSE])
 
 
 # =====================================================================
@@ -564,6 +606,24 @@ def test_the_boot_volume_takes_and_gives_copies_and_moves():
     assert fs.read_file("in.bin", parent=folder) == pattern(32, 9000)
     assert fs.read_file("src2.bin", parent=folder) == source
     assert names(fs) == ["d", "in.bin", "src2.bin"]
+
+
+def test_the_boot_volume_takes_names_of_23_bytes_and_no_longer():
+    """MP64FS reports names of at most 23 bytes, and a copy follows it: 23
+    bytes copy to the boot volume and 24 are refused before anything is
+    written, where the RAM volume takes both."""
+    machine, storage = boot_machine(boot_image(2048, {}))
+    got = boot_words(machine, [
+        ': T  VM @ VFS-NAME-LIMIT .  VA @ VFS-NAME-LIMIT .',
+        '     BIG 10 S" /f" VA @ PUT',
+        '     S" /f" VA @ 23 NAME-PATH VM @ SCR 4096 VFS-COPY R.',
+        '     S" /f" VA @ 24 NAME-PATH VM @ SCR 4096 VFS-COPY R.',
+        '     S" /f" VA @ 24 NAME-PATH VB @ SCR 4096 VFS-COPY R. ;',
+        'T',
+    ])
+    assert got == f"23 255 0 {INVALID} 0", got
+    fs = MP64FS(bytearray(storage.image_bytes))
+    assert names(fs) == ["d", "n" * 23]
 
 
 def test_the_boot_volume_running_out_of_space_keeps_no_stage():

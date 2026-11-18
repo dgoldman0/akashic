@@ -545,9 +545,21 @@ VFS-RENAME     ( new-a new-u inode vfs -- ior )
 VFS-RM         ( path-a path-u vfs -- ior )
 ```
 
-Names are nonempty, at most 255 bytes, contain neither `/` nor NUL, and cannot
-be exactly `.` or `..`. Their memory span must be non-null and non-wrapping.
-Leading or trailing dots in other names are legal.
+Names are nonempty, at most `VFS-NAME-MAX` (255) bytes, contain neither `/`
+nor NUL, and cannot be exactly `.` or `..`. Their memory span must be non-null
+and non-wrapping. Leading or trailing dots in other names are legal. A volume
+may take shorter names than the VFS does: its binding then refuses a longer one
+with `VFS-E-NAMETOOLONG` and reports its limit through `STATFS`.
+
+```forth
+VFS-NAME-LIMIT ( vfs -- n )
+```
+
+`VFS-NAME-LIMIT` answers the `VSF.NAMEMAX` the volume's `STATFS` reports, or
+`VFS-NAME-MAX` when the binding has no `STATFS`, its call fails, or the field
+lies outside 1 to 255. MP64FS reports 23 bytes, the name its directory entry
+holds; ext4 reports 255. Code that names files for a volume it did not mount,
+as the replacement and copy libraries do, asks this word.
 
 Before a namespace mutation, the VFS finds the dentry that holds the new name
 in its parent the way resolution finds a child. `VFS-MKFILE?`, `VFS-MKDIR`,
@@ -661,11 +673,14 @@ exceed zero in that case. With a nonzero capacity, `actual` cannot exceed it.
 The stable fields are `VSF.BSIZE`, `VSF.FRSIZE`, `VSF.BLOCKS`, `VSF.BFREE`,
 `VSF.BAVAIL`, `VSF.FILES`, `VSF.FFREE`, `VSF.NAMEMAX`, `VSF.FLAGS`,
 `VSF.FSID-LO`, and `VSF.FSID-HI`. `VSF.RESERVED` is zero for ABI 1.
+`VSF.NAMEMAX` is the longest entry name the volume takes, which
+`VFS-NAME-LIMIT` reads.
 
 ## Sync and eviction
 
 ```forth
 VFS-SYNC       ( vfs -- ior )
+VFS-BARRIER    ( vfs -- ior )
 VFS-FSYNC      ( fd -- ior )
 VFS-SET-HWM    ( n vfs -- )
 ```
@@ -675,6 +690,12 @@ metadata, journal, and flush ordering. Only after success does the generic
 cache clear dirty observations. `VFS-FSYNC` delegates one vnode durability
 operation and clears that vnode's dirty flag only on success. Read-only policy
 does not forbid sync of state dirtied before the policy change.
+
+`VFS-BARRIER` is the step a multi-step save or copy takes between two changes
+whose order must survive a power cut. It answers 0 at once on a binding with
+`VFS-CAP-DURABLE-MUTATIONS`, whose every completed change is already on the
+medium, and is `VFS-SYNC` on any other. The checked replacement and the copy
+library both take their barriers through it.
 
 The dentry slab grows in 64-slot pages. Growth uses checked allocation; an
 exhausted arena returns `VFS-E-NOMEM` without publishing a partial namespace
@@ -885,7 +906,8 @@ Storage that a removed file or a rename's victim still held at the cut is
 freed by the mount's recovery.
 
 A caller reads the bit with `VFS-CAPS@`. Where it is set, steps whose order
-must survive a power cut need no `VFS-SYNC` between them, and with
+must survive a power cut need no `VFS-SYNC` between them (`VFS-BARRIER` makes
+that choice), and with
 `VFS-CAP-RENAME-REPLACE` a file can be replaced by renaming a finished copy
 over it; [`vfs-replace.f`](vfs-replace.md) publishes a save that way. Of the
 bindings in this tree only ext4's staged-write binding sets the bit, for the

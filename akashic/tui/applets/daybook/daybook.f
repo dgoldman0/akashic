@@ -833,9 +833,12 @@ DEFER _DB-AGENDA-SYNC-D
         3000 ASHELL-TOAST-WARNING
     ELSE _DB-SOURCE-BLOCKED @ IF
         S" Reload a valid Daybook source before saving" 2600 ASHELL-TOAST-WARNING
+    ELSE _DB-RESOURCE-MODE @ RSES-M-DIRECT =
+         _DB-SAVE-IOR @ VREPL-S-READ-ONLY = AND IF
+        S" Daybook's place is read-only" 2600 ASHELL-TOAST-WARNING
     ELSE
         S" Daybook save failed" 2200 ASHELL-TOAST-ERROR
-    THEN THEN THEN ;
+    THEN THEN THEN THEN ;
 
 : _DB-COMMIT  ( -- )
     -1 _DB-DIRTY ! 0 _DB-DISCARD-ARMED !
@@ -2312,6 +2315,7 @@ VARIABLE _DB-SOURCE-VALUE
     \ The exact pool lease lives inside this component state.  Release it
     \ before any UI teardown that can throw during close or launch rollback.
     _DB-SHARED-FINI
+    _DB-REPLACE VREPL-FINI DROP
     _DB-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
     _DB-PROMPT @ ?DUP IF PRM-FREE THEN
     _DB-PROMPT-RGN @ ?DUP IF RGN-FREE THEN

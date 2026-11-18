@@ -247,6 +247,22 @@ def build_snapshot() -> None:
         "SPACE ;",
         ": T-REFUSE-RENAME 78 T-NOTE 2DROP 2DROP 2DROP DROP VFS-E-IO ;",
         ": T-REFUSE-UNLINK 85 T-NOTE 2DROP VFS-E-IO ;",
+        # A STATFS on the test's binding that reports names of at most 23
+        # bytes, as MP64FS's does.  The RAM binding reports none, so its
+        # names may be as long as the VFS takes.
+        ": T-STATFS-23 2DROP DUP VFS-STATFS-SIZE 0 FILL "
+        "23 SWAP VSF.NAMEMAX ! 0 ;",
+        ": T-NAMEMAX-23 ['] T-STATFS-23 _TV-OPS VFS-OP-STATFS CELLS + ! "
+        "_TV-BINDING VB.CAPS DUP @ VFS-CAP-STATFS OR SWAP ! ;",
+        # A path buffer longer than VFS-PATH-MAX, and a word that makes a
+        # path of LEN bytes in it: names of 199 bytes joined by slashes,
+        # with a last slash at LAST-SLASH.
+        "CREATE _LONG 4200 ALLOT",
+        ": T-LONG-PATH ( len last-slash -- a u ) >R _LONG 4200 97 FILL "
+        "4200 0 DO 47 _LONG I + C! 200 +LOOP 47 _LONG R> + C! _LONG SWAP ;",
+        # The path of one name of N bytes in the root.
+        ": T-NAME-PATH ( n -- a u ) _LONG 4200 97 FILL 47 _LONG C! "
+        "_LONG SWAP 1+ ;",
     ]
     sources = [
         EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
@@ -370,17 +386,55 @@ def check(name: str, forth: list[str], expected: str) -> None:
 
 def test_paths_must_be_distinct_normalized_same_parent_and_mp64fs_safe():
     check(
-        "paths must be distinct, normalized, same-parent, and MP64FS-safe",
+        "paths must be distinct, normalized and same-parent",
         [
             "T-VFS-NEW CONSTANT _V _V _TR VREPL-INIT DROP",
             ': TP1 S" /a" S" /a" S" /a.b" S" /a.m" '
             '_TR VREPL-PATHS! . ; TP1',
             ': TP2 S" /a" S" /x/a.s" S" /a.b" S" /a.m" '
             '_TR VREPL-PATHS! . ; TP2',
-            ': TP3 S" /this-component-is-over-23" S" /a.s" S" /a.b" '
-            'S" /a.m" _TR VREPL-PATHS! . ; TP3',
+            ': TP3 S" /a/../b" S" /a.s" S" /a.b" S" /a.m" '
+            '_TR VREPL-PATHS! . ; TP3',
         ],
         "3 3 3 ",
+    )
+
+
+def test_names_follow_the_volume_and_paths_the_vfs():
+    """A name may be as long as its volume takes: the RAM binding gives no
+    limit, so 255 bytes, and a binding whose STATFS reports 23 takes 23.  A
+    path may be VFS-PATH-MAX bytes, 4,096."""
+    check(
+        "names follow the volume and paths the VFS",
+        [
+            "T-VFS-NEW CONSTANT _V _V _TR VREPL-INIT DROP",
+            # 26 bytes, then 255 and 256, on a volume that sets no limit.
+            ': TN1 S" /this-component-is-over-23" S" /a.s" S" /a.b" '
+            'S" /a.m" _TR VREPL-PATHS! . ; TN1',
+            ": TN2 255 T-NAME-PATH _TR VREPL-DERIVE-PATHS! . ; TN2",
+            ": TN3 256 T-NAME-PATH _TR VREPL-DERIVE-PATHS! . ; TN3",
+            # The volume now reports 23: 26 bytes is refused, 23 taken.
+            "T-NAMEMAX-23 _V _TR VREPL-INIT DROP",
+            "TN1",
+            ': TN4 S" /abcdefghijklmnopqrstuvw" _TR VREPL-DERIVE-PATHS! . '
+            '; TN4',
+            ': TN5 S" /abcdefghijklmnopqrstuvwx" _TR VREPL-DERIVE-PATHS! . '
+            '; TN5',
+        ],
+        "0 0 3 3 0 3 ",
+    )
+    check(
+        "a path follows VFS-PATH-MAX",
+        [
+            "T-VFS-NEW CONSTANT _V _V _TR VREPL-INIT DROP",
+            # 4,000 and 4,096 bytes, each in a folder that leaves room for
+            # a stage name, are taken; 4,097 bytes are refused.
+            ": TL1 4000 3800 T-LONG-PATH _TR VREPL-DERIVE-PATHS! . "
+            "_TR VREPL-TARGET$ NIP . _TR VREPL-STAGE$ NIP . ; TL1",
+            ": TL2 4096 4000 T-LONG-PATH _TR VREPL-DERIVE-PATHS! . ; TL2",
+            ": TL3 4097 4000 T-LONG-PATH _TR VREPL-DERIVE-PATHS! . ; TL3",
+        ],
+        "0 4000 3824 0 3 ",
     )
 
 
@@ -399,33 +453,29 @@ def test_derived_companions_are_deterministic_distinct_and_mp64fs_safe():
             ': TD3 S" /nested/abcdefghijklmnopqrstuvx" '
             '_TR3 VREPL-DERIVE-PATHS! . ; TD3',
             ': TDT S" /nested/abcdefghijklmnopqrstuvw" '
-            '_TR VREPL.TARGET _TR VREPL.TARGET-LEN @ COMPARE 0= . ; TDT',
-            "_TR VREPL.STAGE _TR VREPL.STAGE-LEN @ TYPE SPACE",
-            "_TR VREPL.STAGE-LEN @ . _TR VREPL.BACKUP-LEN @ . "
-            "_TR VREPL.MARKER-LEN @ .",
-            "_TR VREPL.TARGET-BASE @ . _TR VREPL.STAGE-BASE @ . "
-            "_TR VREPL.BACKUP-BASE @ . _TR VREPL.MARKER-BASE @ .",
-            "_TR VREPL.STAGE _TR VREPL.STAGE-BASE @ + 1+ C@ EMIT SPACE "
-            "_TR VREPL.BACKUP _TR VREPL.BACKUP-BASE @ + 1+ C@ EMIT "
-            "SPACE _TR VREPL.MARKER _TR VREPL.MARKER-BASE @ + 1+ "
-            "C@ EMIT SPACE",
-            "_TR VREPL.STAGE _TR VREPL.STAGE-LEN @ "
-            "_TR VREPL.BACKUP _TR VREPL.BACKUP-LEN @ COMPARE 0<> . "
-            "_TR VREPL.STAGE _TR VREPL.STAGE-LEN @ "
-            "_TR VREPL.MARKER _TR VREPL.MARKER-LEN @ COMPARE 0<> . "
-            "_TR VREPL.BACKUP _TR VREPL.BACKUP-LEN @ "
-            "_TR VREPL.MARKER _TR VREPL.MARKER-LEN @ COMPARE 0<> .",
-            "_TR VREPL.STAGE _TR VREPL.STAGE-LEN @ _TR2 VREPL.STAGE "
-            "_TR2 VREPL.STAGE-LEN @ COMPARE 0= . "
-            "_TR VREPL.BACKUP _TR VREPL.BACKUP-LEN @ _TR2 VREPL.BACKUP "
-            "_TR2 VREPL.BACKUP-LEN @ COMPARE 0= . "
-            "_TR VREPL.MARKER _TR VREPL.MARKER-LEN @ _TR2 VREPL.MARKER "
-            "_TR2 VREPL.MARKER-LEN @ COMPARE 0= .",
-            "_TR VREPL.STAGE _TR VREPL.STAGE-LEN @ _TR3 VREPL.STAGE "
-            "_TR3 VREPL.STAGE-LEN @ COMPARE 0<> .",
+            '_TR VREPL-TARGET$ COMPARE 0= . ; TDT',
+            "_TR VREPL-STAGE$ TYPE SPACE",
+            "_TR VREPL-STAGE$ NIP . _TR VREPL-BACKUP$ NIP . "
+            "_TR VREPL-MARKER$ NIP .",
+            "_TR VREPL.BASE @ .",
+            "_TR VREPL-STAGE$ DROP _TR VREPL.BASE @ + 1+ C@ EMIT SPACE "
+            "_TR VREPL-BACKUP$ DROP _TR VREPL.BASE @ + 1+ C@ EMIT SPACE "
+            "_TR VREPL-MARKER$ DROP _TR VREPL.BASE @ + 1+ C@ EMIT SPACE",
+            "_TR VREPL-STAGE$ _TR VREPL-BACKUP$ COMPARE 0<> . "
+            "_TR VREPL-STAGE$ _TR VREPL-MARKER$ COMPARE 0<> . "
+            "_TR VREPL-BACKUP$ _TR VREPL-MARKER$ COMPARE 0<> .",
+            "_TR VREPL-STAGE$ _TR2 VREPL-STAGE$ COMPARE 0= . "
+            "_TR VREPL-BACKUP$ _TR2 VREPL-BACKUP$ COMPARE 0= . "
+            "_TR VREPL-MARKER$ _TR2 VREPL-MARKER$ COMPARE 0= .",
+            "_TR VREPL-STAGE$ _TR3 VREPL-STAGE$ COMPARE 0<> .",
+            "_TR VREPL-FOLDER$ TYPE SPACE _TR VREPL-TARGET-NAME$ TYPE SPACE "
+            "_TR VREPL-STAGE-NAME$ TYPE SPACE",
+            ': TDF S" /doc.txt" _TR2 VREPL-DERIVE-PATHS! . '
+            '_TR2 VREPL-FOLDER$ TYPE SPACE ; TDF',
         ],
         "0 0 0 -1 /nested/.s-oerpusoag7zz5eenay2w "
-        "31 31 31 8 8 8 8 s b m -1 -1 -1 -1 -1 -1 -1 ",
+        "31 31 31 8 s b m -1 -1 -1 -1 -1 -1 -1 "
+        "/nested abcdefghijklmnopqrstuvw .s-oerpusoag7zz5eenay2w 0 / ",
     )
 
 
@@ -437,10 +487,9 @@ def test_derivation_rejects_reserved_targets_and_parent_length_overflow():
             ': TDR1 S" /.s-user" _TR VREPL-DERIVE-PATHS! . ; TDR1',
             ': TDR2 S" /.b-user" _TR VREPL-DERIVE-PATHS! . ; TDR2',
             ': TDR3 S" /.m-user" _TR VREPL-DERIVE-PATHS! . ; TDR3',
-            "CREATE _LONG 256 ALLOT",
-            ": TDR4 _LONG 250 97 FILL 47 _LONG C! "
-            "11 1 DO 47 _LONG I 24 * + C! LOOP "
-            "_LONG 250 _TR VREPL-DERIVE-PATHS! . ; TDR4",
+            # A folder of 4,080 bytes leaves no room for the stage's
+            # 23-byte name within VFS-PATH-MAX.
+            ": TDR4 4090 4080 T-LONG-PATH _TR VREPL-DERIVE-PATHS! . ; TDR4",
         ],
         "3 3 3 3 ",
     )
@@ -1104,3 +1153,79 @@ def test_recover_unmarked_stage_without_target_restores_absence():
 
 if __name__ == "__main__":
     run_file_tests(__file__)
+
+
+def test_read_only_replacement_refuses_and_changes_nothing():
+    """A replacement marked read-only answers VREPL-S-READ-ONLY to a save
+    and writes nothing; marked writable again, it saves."""
+    check(
+        "a read-only replacement refuses to replace",
+        [
+            "T-SETUP T-OLD-TARGET DROP T-SYNC T-TRACE",
+            "-1 _TR VREPL-READ-ONLY! .",
+            'S" new" _TR VREPL-REPLACE . T-TRACED',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+            "0 _TR VREPL-READ-ONLY! .",
+            'S" new" _TR VREPL-REPLACE .',
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 10 none old 0 0 0 0 0 new 0 0 0 ",
+    )
+
+
+def test_read_only_recovery_reports_and_changes_nothing():
+    """Recovery of a read-only replacement changes nothing.  It answers OK
+    where the target as found is the committed file, stale stage and all,
+    and VREPL-S-READ-ONLY where only a change settles the state: a marker,
+    or a backup in place of a missing target."""
+    check(
+        "a stale stage beside the target is left, and the target stands",
+        [
+            "T-SETUP T-OLD-TARGET DROP T-NEW-STAGE DROP T-SYNC",
+            "-1 _TR VREPL-READ-ONLY! DROP T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "0 none old -1 0 0 ",
+    )
+    check(
+        "a marker needs a change, so recovery says so and leaves it",
+        [
+            "T-SETUP T-OLD-TARGET DROP T-NEW-STAGE DROP -1 T-MARK DROP",
+            "-1 _TR VREPL-READ-ONLY! DROP T-TRACE",
+            "_TR VREPL-RECOVER . T-TRACED",
+            "T-ARTIFACTS",
+            "0 _TR VREPL-READ-ONLY! DROP _TR VREPL-RECOVER .",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "10 none -1 0 -1 1 old 0 0 0 ",
+    )
+    check(
+        "a backup in place of the target needs a change too",
+        [
+            "T-SETUP T-OLD-BACKUP DROP T-SYNC",
+            "-1 _TR VREPL-READ-ONLY! DROP",
+            "_TR VREPL-RECOVER .",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+            "0 _TR VREPL-READ-ONLY! DROP _TR VREPL-RECOVER .",
+            'S" /doc.txt" T-SHOW T-ARTIFACTS',
+        ],
+        "10 <absent> 0 -1 0 1 old 0 0 0 ",
+    )
+
+
+def test_fini_gives_back_the_paths_and_init_makes_it_ready_again():
+    check(
+        "FINI clears the descriptor; INIT and the paths make it ready again",
+        [
+            "T-SETUP",
+            "_TR VREPL.PATHS @ 0<> . _TR VREPL-CONFIGURED? .",
+            "_TR VREPL-FINI . _TR VREPL-VALID? . _TR VREPL.PATHS @ .",
+            "_TR VREPL-FINI .",
+            "_TV @ _TR VREPL-INIT . "
+            ': TFI S" /doc.txt" _TR VREPL-DERIVE-PATHS! . ; TFI',
+            "T-OLD-TARGET DROP T-SYNC",
+            'S" new" _TR VREPL-REPLACE . S" /doc.txt" T-SHOW',
+        ],
+        "-1 -1 0 0 0 3 0 0 0 new ",
+    )

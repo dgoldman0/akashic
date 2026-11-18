@@ -34,18 +34,26 @@ kilobytes of memory. In order, a copy:
 2. removes the stage an earlier copy to the same name left, then creates
    the stage in the destination folder and writes the source into it, as
    much of the scratch as a step moves;
-3. closes the stage and syncs the destination instance;
+3. closes the stage and takes a barrier on the destination instance;
 4. reopens the stage and compares it with the source, half of the scratch
    from each at a time, after checking that both are still the size the
    copy wrote;
-5. renames the stage to the final name with `VFS-RN-NOREPLACE` and syncs
-   the destination instance again.
+5. renames the stage to the final name with `VFS-RN-NOREPLACE` and takes a
+   barrier on the destination instance again.
+
+A barrier is `VFS-BARRIER` ([vfs.md](vfs.md#sync-and-eviction)), the word a
+checked replacement takes its barriers from: a `VFS-SYNC` on a binding whose
+changes reach the medium only at a sync, as MP64FS's do, and nothing on one
+with `VFS-CAP-DURABLE-MUTATIONS`, as ext4's staged writer has, where every
+completed change is already on the medium. A copy to MP64FS therefore syncs
+twice and a copy to ext4 not at all.
 
 The rename is the commit. Before it the final name does not exist; after
 it the final name holds every byte, read back. A name that another writer
 took while the copy ran is refused by the rename itself, so the copy never
 replaces a file. A failure before the rename closes the copy's files,
-removes the stage and syncs, so the destination holds nothing of the copy.
+removes the stage and takes a barrier, so the destination holds nothing of
+the copy.
 If the stage cannot be removed either, as on a volume that a fault has
 turned read-only, it stays as a hidden file until the same copy runs again.
 
@@ -64,12 +72,15 @@ the stage's name that is not a regular file keeps the name, refusing the
 copy with `VFS-E-EXISTS`. Nothing sweeps stages at mount; [places.md](places.md)
 leaves that out until a measurement shows a need.
 
-The replacement library's path rule also bounds what a copy can write: an
-absolute path of at most 255 bytes whose folder leaves room for the
-23-byte stage name, components of at most 23 bytes, which is MP64FS's
-limit, and no final name in the reserved `.s-`, `.b-` and `.m-`
+The replacement library's path rule also bounds what a copy can write, and
+it follows the destination volume: an absolute path of at most
+`VFS-PATH-MAX` (4,096) bytes whose folder leaves room for the 23-byte stage
+name, names no longer than the volume takes (`VFS-NAME-LIMIT`: 255 bytes on
+ext4, 23 on MP64FS), and no final name in the reserved `.s-`, `.b-` and `.m-`
 namespace. A destination that breaks the rule answers `VFS-E-INVALID`
-before anything is written.
+before anything is written. A file whose name is longer than 23 bytes
+therefore copies and moves between ext4 volumes and within one, and is
+refused on its way to MP64FS.
 
 ### Stepping a copy
 
@@ -81,7 +92,9 @@ starts the copy with `VCOPY-INIT`, and calls `VCOPY-STEP` once a tick until
 that syncs and reopens the stage, `⌈n/(s/2)⌉` comparing steps and the step
 that renames: ten steps for 10,000 bytes through 4,096 bytes of scratch.
 Between steps the copy keeps the source and the stage open, which holds
-their entries however long it waits. The comparison reads the source
+their entries however long it waits, and its record holds the replacement
+descriptor that names the final path and the stage, whose paths it gives
+back when the copy ends either way. The comparison reads the source
 again, so another writer's change to bytes already copied fails it, and a
 change of the source's size fails the check before it. The record and the
 scratch belong to the copy until it ends.
@@ -98,10 +111,10 @@ record that was never started answers `VFS-E-INVALID` to both.
 `VFS-MOVE` moves a regular file, named by its own name rather than through
 a final link, and takes the same destinations a copy takes. Inside one
 instance it is one `VFS-RENAME-AT` with `VFS-RN-NOREPLACE` into the
-destination folder, then a sync: the file keeps its storage and no stage is
-written. Across two instances it checks the source, copies it as `VFS-COPY`
-does, then removes the source and syncs the source's instance. A move
-whose copy fails leaves the source as it was.
+destination folder, then a barrier: the file keeps its storage and no stage
+is written. Across two instances it checks the source, copies it as
+`VFS-COPY` does, then removes the source and takes a barrier on the source's
+instance. A move whose copy fails leaves the source as it was.
 
 ## Answers
 
@@ -109,11 +122,11 @@ Every word answers a VFS ior, 0 for success. An answer that carries
 `VFS-IOR-F-PARTIAL` means the destination file stands though a later step
 failed:
 
-- the sync after a copy's rename, so the copy may not have reached the
+- the barrier after a copy's rename, so the copy may not have reached the
   medium yet;
-- a move's removal of its source, or the sync after it, so the source may
+- a move's removal of its source, or the barrier after it, so the source may
   still be there; a move inside one instance, whose rename succeeded,
-  answers this way when only its sync failed.
+  answers this way when only its barrier failed.
 
 Every other failure leaves no destination file and the source as it was,
 and never carries the flag, whatever flags a binding set on the failure it
@@ -125,7 +138,7 @@ reported. The answers a caller sees most:
 | `VFS-E-NOENT` | The source, or the destination's folder, does not exist |
 | `VFS-E-NOTDIR` | A folder on the destination path is a file |
 | `VFS-E-ISDIR` | The source is a folder |
-| `VFS-E-INVALID` | The destination path breaks the replacement library's rule, the scratch is under two bytes, an instance or the record is 0, or a stage is the source |
+| `VFS-E-INVALID` | The destination path breaks the replacement library's rule for its volume, the scratch is under two bytes, an instance or the record is 0, or a stage is the source |
 | `VFS-E-BUSY` | `VCOPY-INIT` was given a record whose copy is still running |
 | `VFS-E-NOSPC` | The destination ran out of space |
 | `VFS-E-CORRUPT` | The stage did not read back as the source, or the source changed size while the copy ran |
@@ -167,7 +180,10 @@ during the copy, a destination that runs out of space midway, a stage that
 does not read back, failed syncs before and after the rename, a failed
 rename, a throwing write, cancel, a retried copy after a stage a crash left,
 a move whose delete fails, a move inside one volume, and a folder copied by
-a walk that calls `VFS-COPY` for each file.
+a walk that calls `VFS-COPY` for each file. It also counts the syncs a copy
+takes on the RAM binding (two) and on the same binding declared durable
+(none), copies a name of 255 bytes and a path of 304, and copies a name of 23
+bytes to the boot volume while refusing one of 24.
 `local_testing/test_vfs_copy_ext4.py` runs copies and moves to, from and
 within the 64 MiB ext4 fixture volume, including one that runs out of space
 on a volume with 39 free blocks, and checks the medium with the pinned

@@ -59,8 +59,15 @@ error.
 `VMP-BINDING` is the public validated descriptor and `VMP-OPS` is its
 27-slot operation table. The descriptor has `VFS-BF-NEEDS-VOLUME` and
 advertises probe, mount, unmount, directory enumeration, open/release,
-read/write, create/mkdir, unlink/rmdir, rename, truncate, getattr, syncfs, and
-fsync.
+read/write, create/mkdir, unlink/rmdir, rename, truncate, getattr, syncfs,
+fsync, and statfs.
+
+`STATFS` reports 512-byte blocks, the volume's sectors as its blocks and the
+bitmap's clear sectors as free, its 128 directory entries as files and the
+empty ones as free, and a name limit of 23 bytes. Create and rename refuse a
+longer name with `VFS-E-NAMETOOLONG`, and `VFS-NAME-LIMIT` gives the 23 to
+code that names files on a volume it did not mount, such as the replacement
+and copy libraries.
 
 MP64FS directory slots are reusable and have no generation number. Therefore
 the binding intentionally does **not** advertise `VFS-CAP-STABLE-HANDLES` or
@@ -176,7 +183,8 @@ cell-aligned context and span whole sectors.
 | next 12 sectors | 128 directory entries × 48 bytes |
 | remaining sectors | file extents |
 
-A directory entry stores a 24-byte NUL-padded name, primary sector/count,
+A directory entry stores a 24-byte NUL-padded name, which holds a name of at
+most 23 bytes (`_VMP-NAME-MAX`), primary sector/count,
 used-byte count, type, parent slot, and optional secondary sector/count.
 Directory parent `0xFF` denotes the VFS root. The u16 extent starts make sector
 65,535 the final representable LBA, so 65,536 sectors is marker 1's natural
@@ -201,5 +209,6 @@ _VMP-RENAME          ( name-a name-u dentry parent victim flags vfs -- ior )
 _VMP-TRUNCATE        ( dentry vfs -- ior )
 _VMP-SYNCFS          ( vfs -- ior )
 _VMP-FSYNC           ( dentry vfs -- ior )
+_VMP-STATFS          ( statfs-buffer bytes vfs -- ior )
 _VMP-UNMOUNT         ( flags vfs -- ior )
 ```

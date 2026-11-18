@@ -86,7 +86,8 @@ REQUIRE ../../../interop/resource-session.f
 
 65536 CONSTANT _PAD-BUF-CAP       \ gap-buffer capacity per buffer
 2097152 CONSTANT _PAD-ARENA-SIZE   \ 2 MiB XMEM arena for editor buffers
-  256 CONSTANT _PAD-FNAME-CAP     \ filename capacity per slot
+\ A document's path in its place, as long as the resource form carries.
+IRES-VFS-PATH-MAX CONSTANT _PAD-FNAME-CAP  \ path capacity per slot
 _PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
   128 CONSTANT _PAD-STATUS-CAP    \ status scratch
  4096 CONSTANT _PAD-IO-CAP        \ file I/O scratch
@@ -251,10 +252,10 @@ _PAD-CURRENT-STATE _PAD-STATUS-CAP CMP-FIELD: _PAD-STXT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-STXT-L
 
 \ ---- Path scratch for inode-to-path ----
-_PAD-CURRENT-STATE 512 CMP-FIELD: _PAD-PATH-BUF
+_PAD-CURRENT-STATE IRES-VFS-PATH-MAX CMP-FIELD: _PAD-PATH-BUF
 
 \ ---- The path a followed link names ----
-_PAD-CURRENT-STATE VREPL-PATH-MAX 1+ CMP-FIELD: _PAD-LINK-BUF
+_PAD-CURRENT-STATE IRES-VFS-PATH-MAX CMP-FIELD: _PAD-LINK-BUF
 
 \ =====================================================================
 \  S4b -- Theme
@@ -924,12 +925,12 @@ VARIABLE _PPP-START
         THEN
     THEN
     _PAD-IO-PLACE @ 0= IF 0 0 -1 EXIT THEN
-    _PCA-U @ 0= _PCA-U @ VREPL-PATH-MAX > OR IF 0 0 -1 EXIT THEN
+    _PCA-U @ 0= _PCA-U @ IRES-VFS-PATH-MAX > OR IF 0 0 -1 EXIT THEN
     _PCA-A @ C@ [CHAR] / = IF
         _PCA-A @ _PAD-PATH-BUF _PCA-U @ MOVE
         _PCA-U @
     ELSE
-        _PCA-U @ 1+ VREPL-PATH-MAX > IF 0 0 -1 EXIT THEN
+        _PCA-U @ 1+ IRES-VFS-PATH-MAX > IF 0 0 -1 EXIT THEN
         _PCA-A @ _PAD-PATH-BUF 1+ _PCA-U @ MOVE
         [CHAR] / _PAD-PATH-BUF C!
         _PCA-U @ 1+
@@ -961,7 +962,7 @@ VARIABLE _PFN-I
 
 : _PAD-FILENAME!  ( fname-a fname-u index -- )
     _PFN-I ! _PFN-U ! _PFN-A !
-    _PFN-U @ DUP _PAD-FNAME-CAP >= ABORT" pad: filename too long"
+    _PFN-U @ DUP _PAD-FNAME-CAP > ABORT" pad: filename too long"
     DUP _PFN-N !
     _PFN-I @ _PAD-BUF-ENTRY _PBE-FNAME-L + !
     _PFN-A @
@@ -1407,7 +1408,7 @@ VARIABLE _POP-ORIG
         _PAD-ACTIVE @ _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
         SWAP _PBE-FNAME-L + @
     THEN
-    _PAD-LINK-BUF VREPL-PATH-MAX LPATH-RESOLVE
+    _PAD-LINK-BUF IRES-VFS-PATH-MAX LPATH-RESOLVE
     CASE
         LPATH-S-OK OF
             _PAD-LINK-BUF SWAP _PAD-OPEN-PATH _PAD-REPORT-OPEN-RESULT
@@ -1445,7 +1446,7 @@ VARIABLE _POP-ORIG
     DROP
     OVER 0= IF 2DROP EXIT THEN
     OVER IN.TYPE @ VFS-T-FILE <> IF 2DROP EXIT THEN
-    DUP >R _PAD-PATH-BUF VREPL-PATH-MAX PLACE-PATH IF
+    DUP >R _PAD-PATH-BUF IRES-VFS-PATH-MAX PLACE-PATH IF
         DROP R> DROP
         S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
@@ -2608,6 +2609,9 @@ VARIABLE _PSW-BYTE
     \ Free command-bar allocations (outer region is caller-owned)
     _PAD-PROMPT @ ?DUP IF PRM-FREE THEN
     _PAD-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
+
+    \ Give back the paths the replacement descriptor holds.
+    _PAD-REPL VREPL-FINI DROP
 
     \ Zero handles
     0 _PAD-TXTA !

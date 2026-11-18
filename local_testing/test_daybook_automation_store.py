@@ -20,6 +20,7 @@ from native_forth import NativeForth
 
 
 OK, INVALID, NOMEM, IO, BLOCKED, STATE, ENTROPY = range(7)
+READ_ONLY = 22
 CLOSED, READY, BLOCKED_STATE = range(3)
 R_CORRUPT, R_FUTURE, R_UNCERTAIN, R_IO = 1, 2, 3, 4
 
@@ -54,6 +55,13 @@ TV-OPS TV-BINDING VB.OPS !
     >R S" tv" S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW
     PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;
 TV @ T-PLACE CONSTANT TV-PLACE
+\ The same root as a read-only place, as a set narrowed in recovery holds
+\ it.  A store there binds its file for reading.
+: T-RO-PLACE  ( -- place )
+    S" tv" PLACES-VOLUME THROW
+    >R S" tv-ro" S" /" PLACE-READ-ONLY R> PLACES-DECLARE THROW
+    PLSET-NEW THROW >R PLACE-READ-ONLY SWAP R> PLSET-GRANT THROW ;
+T-RO-PLACE CONSTANT TV-RO-PLACE
 
 : T-PATH  ( -- a u ) S" /daybook-automations.bin" ;
 : T-RM  ( a u -- ) TV @ VFS-RM DROP ;
@@ -335,6 +343,26 @@ def test_a_missing_file_is_an_empty_store(forth):
         [OK, 1, -1, 0],
         [OK, 1, 0, 0, 0, -1],
         [OK, OK, 2],
+    ]
+
+
+def test_a_store_on_a_read_only_place_refuses_changes_and_says_so(forth):
+    """On a read-only place the store opens and reads its file; its
+    replacement refuses each change, and the store answers that its place
+    is read-only, reloads what the file holds and stays ready."""
+    rows = run(forth, [
+        "T-FRESH ST DBAS-OPEN . ST DBAS-COMMIT . ST DBAS-GENERATION@ . "
+        "T-FILE-SUM T-FILE ! CR",
+        "ST DBAS-CLOSE DROP ST DBAS-SIZE 0 FILL "
+        "TV-RO-PLACE T-PATH ST DBAS-INIT . ST DBAS-OPEN . "
+        "ST DBAS-STATE@ . ST DBAS-GENERATION@ . CR",
+        "ST DBAS-COMMIT . ST DBAS-STATE@ . ST DBAS-GENERATION@ . "
+        "T-FILE-SUM T-FILE @ = . T-LEFTOVERS . CR",
+    ])
+    assert rows == [
+        [OK, OK, 1],
+        [OK, OK, READY, 1],
+        [READ_ONLY, READY, 1, -1, 0],
     ]
 
 

@@ -37,6 +37,7 @@
 \    SPERM-INIT         ( place path path-u store -- status )
 \    SPERM-OPEN         ( store -- status )
 \    SPERM-CLOSE        ( store -- status )
+\    SPERM-FINI         ( store -- status )
 \    SPERM-STATE@       ( store -- state )
 \    SPERM-REASON@      ( store -- reason )
 \    SPERM-GENERATION@  ( store -- n )
@@ -70,6 +71,7 @@ REQUIRE ../interop/scheduled-dispatch.f
 5 CONSTANT SPERM-S-STATE
 6 CONSTANT SPERM-S-ENTROPY
 7 CONSTANT SPERM-S-NOT-FOUND
+8 CONSTANT SPERM-S-READ-ONLY      \ the store's place takes no changes
 
 \ Store states.
 0 CONSTANT SPERM-CLOSED
@@ -81,6 +83,7 @@ REQUIRE ../interop/scheduled-dispatch.f
 2 CONSTANT SPERM-R-FUTURE       \ a newer format than this code reads
 3 CONSTANT SPERM-R-UNCERTAIN    \ a replacement's outcome is unknown
 4 CONSTANT SPERM-R-IO           \ the file could not be read into memory
+5 CONSTANT SPERM-R-READ-ONLY    \ a save cut off waits for a writable place
 
 \ =====================================================================
 \  Records
@@ -392,6 +395,7 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
 \ blocks the store.
 : _SPERM-RECOVER  ( store -- )
     DUP _SPERM.REPL ['] VREPL-RECOVER CATCH IF DROP VREPL-S-RECOVERY THEN
+    DUP VREPL-S-READ-ONLY = IF DROP SPERM-R-READ-ONLY SWAP _SPERM-BLOCK! EXIT THEN
     DUP VREPL-S-OK = OVER VREPL-S-ROLLED-BACK = OR
     SWAP VREPL-S-COMMITTED-CLEANUP = OR
     IF DROP ELSE SPERM-R-UNCERTAIN SWAP _SPERM-BLOCK! THEN ;
@@ -422,10 +426,14 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
     ROT DROP SPERM-S-OK ;
 
 \ The store after a replacement: one generation on, unchanged and
-\ reloaded, or blocked when nobody can tell which.
+\ reloaded, or blocked when nobody can tell which.  A store on a
+\ read-only place is refused by its replacement and reloads.
 : _SPERM-REPLACED  ( vrepl-status store -- status )
     OVER VREPL-S-OK = 2 PICK VREPL-S-COMMITTED-CLEANUP = OR IF
         NIP 1 SWAP _SPERM.GENERATION +! SPERM-S-OK EXIT
+    THEN
+    OVER VREPL-S-READ-ONLY = IF
+        NIP SPERM-S-READ-ONLY SWAP _SPERM-RELOAD EXIT
     THEN
     OVER VREPL-S-IO = 2 PICK VREPL-S-CONFLICT = OR
     2 PICK VREPL-S-BUSY = OR 2 PICK VREPL-S-INVALID = OR IF
@@ -459,7 +467,8 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
     DUP SPERM-SIZE 0 FILL
     >R
     ROT DUP PLACE-WRITABLE? R@ _SPERM.REPL PLACE-VREPL! IF
-        R> SPERM-SIZE 0 FILL SPERM-S-INVALID EXIT
+        R> DUP _SPERM.REPL VREPL-FINI DROP SPERM-SIZE 0 FILL
+        SPERM-S-INVALID EXIT
     THEN
     R@ _SPERM.REPL VREPL.VFS @ R@ _SPERM.VFS !
     _SPERM-MAGIC$ _SPERM-FORMAT CREC-TAG-POSITIVE ['] _SPERM-ENCODE
@@ -468,7 +477,8 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
     SPERM-HEADER-SIZE 1 62 LSHIFT 8 R@ _SPERM.SPEC CREC-SPEC-FRAMED! OR
     R@ _SPERM.SPEC CREC-SPEC-SEAL OR
     R@ _SPERM.WORK CREC-WORK-INIT OR IF
-        R> SPERM-SIZE 0 FILL SPERM-S-INVALID EXIT
+        R> DUP _SPERM.REPL VREPL-FINI DROP SPERM-SIZE 0 FILL
+        SPERM-S-INVALID EXIT
     THEN
     R@ DUP _SPERM.SELF !
     _SPERM-MAGIC R@ _SPERM.MAGIC !
@@ -483,6 +493,15 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
     0 OVER _SPERM.GENERATION !
     0 OVER _SPERM.REASON !
     SPERM-CLOSED SWAP _SPERM.STATE !
+    SPERM-S-OK ;
+
+\ Closes the store and gives back its file's binding.  SPERM-INIT
+\ configures it again.
+: SPERM-FINI  ( store -- status )
+    DUP SPERM-VALID? 0= IF DROP SPERM-S-INVALID EXIT THEN
+    DUP SPERM-CLOSE DROP
+    DUP _SPERM.REPL VREPL-FINI DROP
+    SPERM-SIZE 0 FILL
     SPERM-S-OK ;
 
 \ Recovers the file and reads it.  Returns OK when the store is READY, or

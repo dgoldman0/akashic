@@ -2,12 +2,17 @@
 \  vfs-replace.f - Checked, recoverable replacement for VFS files
 \ =====================================================================
 \  This module protects an existing file while new bytes are staged.  A
-\  replacement owns four caller-reserved, absolute paths in one directory:
+\  replacement owns four absolute paths in one directory:
 \
 \      target       application-visible file
 \      stage        fully written and read-back-verified candidate
 \      backup       old target while publication is in progress
 \      marker       fixed-size, checksummed rollback intent
+\
+\  A path follows its volume's rules: each name at most as long as the
+\  volume takes (VFS-NAME-LIMIT), the whole at most VFS-PATH-MAX bytes.
+\  The descriptor keeps the four paths end to end in one block allocated
+\  at their lengths, which VREPL-FINI gives back.
 \
 \  Every replacement recovers, runs the precondition, writes the stage and
 \  reads it back.  The filesystem under the target then decides how the
@@ -20,23 +25,29 @@
 \  and the backup and the marker are never created.
 \
 \  Any other binding, as MP64FS and the RAM binding, publishes through the
-\  marker and the backup.  VFS-SYNC barriers separate stage, intent,
+\  marker and the backup.  Barriers (VFS-BARRIER) separate stage, intent,
 \  rotation, commit, and cleanup.  A durable marker means recovery rolls
-\  back.  Marker removal followed by a successful sync is the commit point;
-\  an orphan backup after that point is cleanup state and the target wins.
-\  This is crash-recoverable ordering over the VFS contract, not a claim of
-\  sector-atomic power-loss behavior.  In particular, MP64FS writes cached
-\  bitmap and directory regions separately.  Torn/corrupt metadata below
-\  the VFS layer can still require filesystem repair.
+\  back.  Marker removal followed by a successful barrier is the commit
+\  point; an orphan backup after that point is cleanup state and the
+\  target wins.  This is crash-recoverable ordering over the VFS contract,
+\  not a claim of sector-atomic power-loss behavior.  In particular, MP64FS
+\  writes cached bitmap and directory regions separately.  Torn/corrupt
+\  metadata below the VFS layer can still require filesystem repair.
 \
 \  One recovery serves both.  Recover/replace hold one VFS-TRANSACTION
 \  across all phases, and every phase works on the descriptor's own VFS.
 \
+\  A replacement marked read-only (VREPL-READ-ONLY!) changes nothing: it
+\  refuses to replace, and its recovery only says whether the target as
+\  found is the committed file.
+\
 \  Public API:
 \    VREPL-INIT              ( vfs replacement -- status )
+\    VREPL-FINI              ( replacement -- status )
 \    VREPL-PATHS!            ( ta tu sa su ba bu ma mu repl -- status )
 \    VREPL-DERIVE-PATHS!     ( target-a target-u repl -- status )
 \    VREPL-PRECONDITION!     ( xt data replacement -- status )
+\    VREPL-READ-ONLY!        ( flag replacement -- status )
 \    VREPL-RECOVER           ( replacement -- status )
 \    VREPL-REPLACE           ( data length replacement -- status )
 \
@@ -69,19 +80,21 @@ REQUIRE ../../concurrency/guard.f
 7 CONSTANT VREPL-S-RECOVERY
 8 CONSTANT VREPL-S-MARKER-CORRUPT
 9 CONSTANT VREPL-S-UNCERTAIN
+10 CONSTANT VREPL-S-READ-ONLY
+11 CONSTANT VREPL-S-NOMEM
 
 1 CONSTANT VREPL-F-CONFIGURED
 2 CONSTANT VREPL-F-BUSY
+4 CONSTANT VREPL-F-READ-ONLY
 
 1 CONSTANT _VREPL-MF-ORIGINAL
 
-255 CONSTANT VREPL-PATH-MAX
-23  CONSTANT VREPL-NAME-MAX       \ MP64FS directory-entry limit
-256 CONSTANT _VREPL-PATH-CAP
-
 \ =====================================================================
-\  Descriptor (1152 bytes)
+\  Descriptor (96 bytes)
 \ =====================================================================
+\  The four paths share one folder, so each path's final name starts at
+\  the same offset, BASE.  They lie end to end in the block PATHS points
+\  at: target, stage, backup, marker.
 
 0x565245504C303031 CONSTANT _VREPL-DESC-MAGIC  \ "VREPL001"
 
@@ -94,17 +107,10 @@ REQUIRE ../../concurrency/guard.f
  48 CONSTANT _VR-D-STAGE-LEN
  56 CONSTANT _VR-D-BACKUP-LEN
  64 CONSTANT _VR-D-MARKER-LEN
- 72 CONSTANT _VR-D-TARGET-BASE
- 80 CONSTANT _VR-D-STAGE-BASE
- 88 CONSTANT _VR-D-BACKUP-BASE
- 96 CONSTANT _VR-D-MARKER-BASE
-104 CONSTANT _VR-D-LAST-STATUS
-112 CONSTANT _VR-D-RESERVED     \ 16 bytes
-128 CONSTANT _VR-D-TARGET
-384 CONSTANT _VR-D-STAGE
-640 CONSTANT _VR-D-BACKUP
-896 CONSTANT _VR-D-MARKER
-1152 CONSTANT VREPL-SIZE
+ 72 CONSTANT _VR-D-BASE
+ 80 CONSTANT _VR-D-LAST-STATUS
+ 88 CONSTANT _VR-D-PATHS
+96 CONSTANT VREPL-SIZE
 
 : VREPL.MAGIC          ( r -- a ) _VR-D-MAGIC + ;
 : VREPL.VFS            ( r -- a ) _VR-D-VFS + ;
@@ -115,27 +121,36 @@ REQUIRE ../../concurrency/guard.f
 : VREPL.STAGE-LEN      ( r -- a ) _VR-D-STAGE-LEN + ;
 : VREPL.BACKUP-LEN     ( r -- a ) _VR-D-BACKUP-LEN + ;
 : VREPL.MARKER-LEN     ( r -- a ) _VR-D-MARKER-LEN + ;
-: VREPL.TARGET-BASE    ( r -- a ) _VR-D-TARGET-BASE + ;
-: VREPL.STAGE-BASE     ( r -- a ) _VR-D-STAGE-BASE + ;
-: VREPL.BACKUP-BASE    ( r -- a ) _VR-D-BACKUP-BASE + ;
-: VREPL.MARKER-BASE    ( r -- a ) _VR-D-MARKER-BASE + ;
+: VREPL.BASE           ( r -- a ) _VR-D-BASE + ;
 : VREPL.LAST-STATUS    ( r -- a ) _VR-D-LAST-STATUS + ;
-: VREPL.TARGET         ( r -- a ) _VR-D-TARGET + ;
-: VREPL.STAGE          ( r -- a ) _VR-D-STAGE + ;
-: VREPL.BACKUP         ( r -- a ) _VR-D-BACKUP + ;
-: VREPL.MARKER         ( r -- a ) _VR-D-MARKER + ;
+: VREPL.PATHS          ( r -- a ) _VR-D-PATHS + ;
 
 : VREPL-TARGET$  ( r -- a u )
-    DUP VREPL.TARGET SWAP VREPL.TARGET-LEN @ ;
+    DUP VREPL.PATHS @ SWAP VREPL.TARGET-LEN @ ;
 
 : VREPL-STAGE$  ( r -- a u )
-    DUP VREPL.STAGE SWAP VREPL.STAGE-LEN @ ;
+    DUP VREPL-TARGET$ + SWAP VREPL.STAGE-LEN @ ;
 
 : VREPL-BACKUP$  ( r -- a u )
-    DUP VREPL.BACKUP SWAP VREPL.BACKUP-LEN @ ;
+    DUP VREPL-STAGE$ + SWAP VREPL.BACKUP-LEN @ ;
 
 : VREPL-MARKER$  ( r -- a u )
-    DUP VREPL.MARKER SWAP VREPL.MARKER-LEN @ ;
+    DUP VREPL-BACKUP$ + SWAP VREPL.MARKER-LEN @ ;
+
+\ The folder of a path whose final name starts at BASE: "/" for the root.
+: _VREPL-PARENT-LEN  ( base-offset -- u )
+    DUP 1 = IF DROP 1 ELSE 1- THEN ;
+
+\ VREPL-FOLDER$ ( r -- a u )   The folder the four paths are in.
+: VREPL-FOLDER$  ( r -- a u )
+    DUP VREPL.PATHS @ SWAP VREPL.BASE @ _VREPL-PARENT-LEN ;
+
+\ The final name of one of the descriptor's paths.
+: _VREPL-NAME-OF  ( r a u -- a' u' )  ROT VREPL.BASE @ TUCK - >R + R> ;
+
+\ VREPL-TARGET-NAME$ and VREPL-STAGE-NAME$ ( r -- a u )   Final names.
+: VREPL-TARGET-NAME$  ( r -- a u )  DUP VREPL-TARGET$ _VREPL-NAME-OF ;
+: VREPL-STAGE-NAME$   ( r -- a u )  DUP VREPL-STAGE$ _VREPL-NAME-OF ;
 
 : VREPL-VALID?  ( r -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -147,7 +162,7 @@ REQUIRE ../../concurrency/guard.f
     VREPL.FLAGS @ VREPL-F-CONFIGURED AND 0<> ;
 
 \ =====================================================================
-\  Configuration and bounded path validation
+\  Configuration and path validation
 \ =====================================================================
 
 GUARD _vrepl-guard
@@ -155,21 +170,40 @@ GUARD _vrepl-guard
 VARIABLE _VRI-VFS
 VARIABLE _VRI-R
 
+\ A descriptor that is valid already gives its paths back first, so one
+\ descriptor can be pointed at another volume.  Memory that was never a
+\ descriptor must not happen to hold one's magic and VFS cell.
 : _VREPL-INIT  ( vfs replacement -- status )
     _VRI-R ! _VRI-VFS !
     _VRI-VFS @ 0= _VRI-R @ 0= OR IF VREPL-S-INVALID EXIT THEN
+    _VRI-R @ VREPL-VALID? IF
+        _VRI-R @ VREPL.FLAGS @ VREPL-F-BUSY AND IF VREPL-S-BUSY EXIT THEN
+        _VRI-R @ VREPL.PATHS @ ?DUP IF FREE THEN
+    THEN
     _VRI-R @ VREPL-SIZE 0 FILL
     _VREPL-DESC-MAGIC _VRI-R @ VREPL.MAGIC !
     _VRI-VFS @ _VRI-R @ VREPL.VFS !
     VREPL-S-OK ;
 
+: _VREPL-FINI  ( replacement -- status )
+    DUP VREPL-VALID? 0= IF DROP VREPL-S-INVALID EXIT THEN
+    DUP VREPL.FLAGS @ VREPL-F-BUSY AND IF DROP VREPL-S-BUSY EXIT THEN
+    DUP VREPL.PATHS @ ?DUP IF FREE THEN
+    VREPL-SIZE 0 FILL
+    VREPL-S-OK ;
+
 VARIABLE _VPC-A
 VARIABLE _VPC-U
+\ The longest name the descriptor's volume takes, read before validation.
+VARIABLE _VPV-LIMIT
+
+: _VREPL-LIMIT!  ( replacement -- )
+    VREPL.VFS @ VFS-NAME-LIMIT _VPV-LIMIT ! ;
 
 : _VREPL-COMPONENT-VALID?  ( a u -- flag )
     _VPC-U ! _VPC-A !
     _VPC-U @ 0= IF 0 EXIT THEN
-    _VPC-U @ VREPL-NAME-MAX > IF 0 EXIT THEN
+    _VPC-U @ _VPV-LIMIT @ > IF 0 EXIT THEN
     _VPC-U @ 1 = IF
         _VPC-A @ C@ [CHAR] . = IF 0 EXIT THEN
     THEN
@@ -186,7 +220,7 @@ VARIABLE _VPV-SPLIT
 
 : _VREPL-PATH-VALID?  ( a u -- base-offset flag )
     _VPV-U ! _VPV-A !
-    _VPV-U @ 2 < _VPV-U @ VREPL-PATH-MAX > OR IF 0 0 EXIT THEN
+    _VPV-U @ 2 < _VPV-U @ VFS-PATH-MAX > OR IF 0 0 EXIT THEN
     _VPV-A @ C@ [CHAR] / <> IF 0 0 EXIT THEN
     1 _VPV-START ! 0 _VPV-SPLIT !
     _VPV-U @ 1 DO
@@ -205,9 +239,6 @@ VARIABLE _VPV-SPLIT
     THEN
     _VPV-SPLIT @ 1+ -1 ;
 
-: _VREPL-PARENT-LEN  ( base-offset -- u )
-    DUP 1 = IF DROP 1 ELSE 1- THEN ;
-
 VARIABLE _VPP-TA
 VARIABLE _VPP-TU
 VARIABLE _VPP-SA
@@ -223,6 +254,44 @@ VARIABLE _VPP-BBASE
 VARIABLE _VPP-MBASE
 VARIABLE _VPP-PLEN
 
+\ The companions' final names, which _VREPL-INSTALL puts in the
+\ target's folder.
+VARIABLE _VIN-SA   VARIABLE _VIN-SU
+VARIABLE _VIN-BA   VARIABLE _VIN-BU
+VARIABLE _VIN-MA   VARIABLE _VIN-MU
+VARIABLE _VIN-AT
+
+: _VREPL-PUT  ( a u -- )  >R _VIN-AT @ R@ CMOVE  R> _VIN-AT +! ;
+
+\ The target's folder with its slash, which leads each companion path.
+: _VREPL-PUT-FOLDER  ( -- )  _VPP-TA @ _VPP-TBASE @ _VREPL-PUT ;
+
+\ _VREPL-INSTALL ( -- status )
+\   Give the descriptor _VPP-R the target _VPP-TA/_VPP-TU, whose final
+\   name starts at _VPP-TBASE, and the three companions named in _VIN-*,
+\   each in the target's folder.  The paths go into a new block sized to
+\   them, written before the block the descriptor held is given back, so
+\   the target may lie in that old block.
+: _VREPL-INSTALL  ( -- status )
+    _VPP-TU @ _VPP-TBASE @ 3 * +
+    _VIN-SU @ + _VIN-BU @ + _VIN-MU @ +
+    ALLOCATE IF DROP VREPL-S-NOMEM EXIT THEN
+    DUP _VIN-AT !                                   ( block )
+    _VPP-TA @ _VPP-TU @ _VREPL-PUT
+    _VREPL-PUT-FOLDER  _VIN-SA @ _VIN-SU @ _VREPL-PUT
+    _VREPL-PUT-FOLDER  _VIN-BA @ _VIN-BU @ _VREPL-PUT
+    _VREPL-PUT-FOLDER  _VIN-MA @ _VIN-MU @ _VREPL-PUT
+    _VPP-R @ VREPL.PATHS @ ?DUP IF FREE THEN
+    _VPP-R @ VREPL.PATHS !
+    _VPP-TU @ _VPP-R @ VREPL.TARGET-LEN !
+    _VPP-TBASE @ _VIN-SU @ + _VPP-R @ VREPL.STAGE-LEN !
+    _VPP-TBASE @ _VIN-BU @ + _VPP-R @ VREPL.BACKUP-LEN !
+    _VPP-TBASE @ _VIN-MU @ + _VPP-R @ VREPL.MARKER-LEN !
+    _VPP-TBASE @ _VPP-R @ VREPL.BASE !
+    _VPP-R @ VREPL.FLAGS @ VREPL-F-CONFIGURED OR
+    _VPP-R @ VREPL.FLAGS !
+    VREPL-S-OK ;
+
 : _VREPL-SAME-PARENT?  ( a u base-offset -- flag )
     _VREPL-PARENT-LEN
     DUP _VPP-PLEN @ <> IF DROP 2DROP 0 EXIT THEN
@@ -231,13 +300,17 @@ VARIABLE _VPP-PLEN
 : _VREPL-SAME-PATH?  ( a1 u1 a2 u2 -- flag )
     COMPARE 0= ;
 
+\ The descriptor may be configured: it is valid and no operation runs.
+: _VREPL-CONFIGURABLE  ( replacement -- status )
+    DUP VREPL-VALID? 0= IF DROP VREPL-S-INVALID EXIT THEN
+    VREPL.FLAGS @ VREPL-F-BUSY AND IF VREPL-S-BUSY EXIT THEN
+    VREPL-S-OK ;
+
 : _VREPL-PATHS!  ( ta tu sa su ba bu ma mu repl -- status )
     _VPP-R ! _VPP-MU ! _VPP-MA ! _VPP-BU ! _VPP-BA !
     _VPP-SU ! _VPP-SA ! _VPP-TU ! _VPP-TA !
-    _VPP-R @ VREPL-VALID? 0= IF VREPL-S-INVALID EXIT THEN
-    _VPP-R @ VREPL.FLAGS @ VREPL-F-BUSY AND IF
-        VREPL-S-BUSY EXIT
-    THEN
+    _VPP-R @ _VREPL-CONFIGURABLE ?DUP IF EXIT THEN
+    _VPP-R @ _VREPL-LIMIT!
     _VPP-TA @ _VPP-TU @ _VREPL-PATH-VALID? 0= IF
         DROP VREPL-S-INVALID EXIT
     THEN _VPP-TBASE !
@@ -278,21 +351,10 @@ VARIABLE _VPP-PLEN
     _VPP-BA @ _VPP-BU @ _VPP-MA @ _VPP-MU @ _VREPL-SAME-PATH? IF
         VREPL-S-INVALID EXIT
     THEN
-    _VPP-TA @ _VPP-R @ VREPL.TARGET _VPP-TU @ CMOVE
-    _VPP-SA @ _VPP-R @ VREPL.STAGE _VPP-SU @ CMOVE
-    _VPP-BA @ _VPP-R @ VREPL.BACKUP _VPP-BU @ CMOVE
-    _VPP-MA @ _VPP-R @ VREPL.MARKER _VPP-MU @ CMOVE
-    _VPP-TU @ _VPP-R @ VREPL.TARGET-LEN !
-    _VPP-SU @ _VPP-R @ VREPL.STAGE-LEN !
-    _VPP-BU @ _VPP-R @ VREPL.BACKUP-LEN !
-    _VPP-MU @ _VPP-R @ VREPL.MARKER-LEN !
-    _VPP-TBASE @ _VPP-R @ VREPL.TARGET-BASE !
-    _VPP-SBASE @ _VPP-R @ VREPL.STAGE-BASE !
-    _VPP-BBASE @ _VPP-R @ VREPL.BACKUP-BASE !
-    _VPP-MBASE @ _VPP-R @ VREPL.MARKER-BASE !
-    _VPP-R @ VREPL.FLAGS @ VREPL-F-CONFIGURED OR
-    _VPP-R @ VREPL.FLAGS !
-    VREPL-S-OK ;
+    _VPP-SA @ _VPP-SBASE @ + _VIN-SA !  _VPP-SU @ _VPP-SBASE @ - _VIN-SU !
+    _VPP-BA @ _VPP-BBASE @ + _VIN-BA !  _VPP-BU @ _VPP-BBASE @ - _VIN-BU !
+    _VPP-MA @ _VPP-MBASE @ + _VIN-MA !  _VPP-MU @ _VPP-MBASE @ - _VIN-MU !
+    _VREPL-INSTALL ;
 
 \ Derive MP64FS-safe companion components from SHA3-256(full target path).
 \ The reserved names are exactly 23 bytes and carry 100 digest bits:
@@ -303,13 +365,11 @@ VARIABLE _VPP-PLEN
 \
 \ Keeping companions independent of target basename length avoids suffix
 \ overflow and makes recovery stable across descriptor re-instantiation.
+\ Every volume takes names of 23 bytes.
 
 23 CONSTANT VREPL-DERIVED-NAME-LEN
 
-CREATE _VDP-TARGET _VREPL-PATH-CAP ALLOT
-CREATE _VDP-STAGE  _VREPL-PATH-CAP ALLOT
-CREATE _VDP-BACKUP _VREPL-PATH-CAP ALLOT
-CREATE _VDP-MARKER _VREPL-PATH-CAP ALLOT
+CREATE _VDP-NAMES VREPL-DERIVED-NAME-LEN 3 * ALLOT
 CREATE _VDP-DIGEST SHA3-256-LEN ALLOT
 
 \ RFC 4648 lowercase alphabet.  Twenty symbols encode the first 100 bits.
@@ -319,13 +379,6 @@ CREATE _VDP-B32
   113 C, 114 C, 115 C, 116 C, 117 C, 118 C, 119 C, 120 C,
   121 C, 122 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
 
-VARIABLE _VDP-A
-VARIABLE _VDP-U
-VARIABLE _VDP-R
-VARIABLE _VDP-BASE
-VARIABLE _VDP-TOTAL
-VARIABLE _VDP-ROLE
-VARIABLE _VDP-DEST
 VARIABLE _VDP-B32-SRC
 VARIABLE _VDP-B32-DST
 VARIABLE _VDP-B32-ACC
@@ -356,44 +409,37 @@ VARIABLE _VDP-PREFIX
     _VDP-PREFIX @ 1+ C@ [CHAR] b = OR
     _VDP-PREFIX @ 1+ C@ [CHAR] m = OR ;
 
-: _VREPL-DERIVE-BUILD  ( role destination -- )
-    _VDP-DEST ! _VDP-ROLE !
-    _VDP-TARGET _VDP-DEST @ _VDP-BASE @ CMOVE
-    _VDP-DEST @ _VDP-BASE @ +
-    46  OVER     C!             \ .
-    _VDP-ROLE @ OVER 1+ C!
-    45  OVER 2 + C!             \ -
-    _VDP-DIGEST OVER 3 + _VREPL-DERIVE-BASE32
-    DROP ;
+\ _VREPL-DERIVE-NAME ( role index -- a u )
+\   The INDEXth derived name, for the role letter ROLE, from the digest.
+: _VREPL-DERIVE-NAME  ( role index -- a u )
+    VREPL-DERIVED-NAME-LEN * _VDP-NAMES + >R
+    46 R@ C!  R@ 1+ C!  45 R@ 2 + C!          \ .<role>-
+    _VDP-DIGEST R@ 3 + _VREPL-DERIVE-BASE32
+    R> VREPL-DERIVED-NAME-LEN ;
 
 : _VREPL-DERIVE-PATHS!  ( target-a target-u replacement -- status )
-    _VDP-R ! _VDP-U ! _VDP-A !
-    _VDP-R @ VREPL-VALID? 0= IF VREPL-S-INVALID EXIT THEN
-    _VDP-R @ VREPL.FLAGS @ VREPL-F-BUSY AND IF
-        VREPL-S-BUSY EXIT
-    THEN
-    _VDP-A @ _VDP-U @ _VREPL-PATH-VALID? 0= IF
+    _VPP-R ! _VPP-TU ! _VPP-TA !
+    _VPP-R @ _VREPL-CONFIGURABLE ?DUP IF EXIT THEN
+    _VPP-R @ _VREPL-LIMIT!
+    _VPP-TA @ _VPP-TU @ _VREPL-PATH-VALID? 0= IF
         DROP VREPL-S-INVALID EXIT
-    THEN _VDP-BASE !
-    _VDP-BASE @ VREPL-DERIVED-NAME-LEN + DUP _VDP-TOTAL !
-    VREPL-PATH-MAX > IF VREPL-S-INVALID EXIT THEN
-    _VDP-A @ _VDP-TARGET _VDP-U @ CMOVE
+    THEN _VPP-TBASE !
+    _VPP-TBASE @ VREPL-DERIVED-NAME-LEN + VFS-PATH-MAX > IF
+        VREPL-S-INVALID EXIT
+    THEN
+    VREPL-DERIVED-NAME-LEN _VPV-LIMIT @ > IF VREPL-S-INVALID EXIT THEN
     \ The three role prefixes are a reserved same-directory transaction
     \ namespace.  A target there could masquerade as a companion.
-    _VDP-U @ _VDP-BASE @ - 3 >= IF
-        _VDP-TARGET _VDP-BASE @ + _VREPL-DERIVED-PREFIX? IF
+    _VPP-TU @ _VPP-TBASE @ - 3 >= IF
+        _VPP-TA @ _VPP-TBASE @ + _VREPL-DERIVED-PREFIX? IF
             VREPL-S-INVALID EXIT
         THEN
     THEN
-    _VDP-TARGET _VDP-U @ _VDP-DIGEST SHA3-256-HASH
-    115 _VDP-STAGE  _VREPL-DERIVE-BUILD
-    98  _VDP-BACKUP _VREPL-DERIVE-BUILD
-    109 _VDP-MARKER _VREPL-DERIVE-BUILD
-    _VDP-TARGET _VDP-U @
-    _VDP-STAGE  _VDP-TOTAL @
-    _VDP-BACKUP _VDP-TOTAL @
-    _VDP-MARKER _VDP-TOTAL @
-    _VDP-R @ _VREPL-PATHS! ;
+    _VPP-TA @ _VPP-TU @ _VDP-DIGEST SHA3-256-HASH
+    115 0 _VREPL-DERIVE-NAME _VIN-SU ! _VIN-SA !
+    98  1 _VREPL-DERIVE-NAME _VIN-BU ! _VIN-BA !
+    109 2 _VREPL-DERIVE-NAME _VIN-MU ! _VIN-MA !
+    _VREPL-INSTALL ;
 
 VARIABLE _VRPRE-XT
 VARIABLE _VRPRE-DATA
@@ -401,12 +447,18 @@ VARIABLE _VRPRE-R
 
 : _VREPL-PRECONDITION!  ( xt data replacement -- status )
     _VRPRE-R ! _VRPRE-DATA ! _VRPRE-XT !
-    _VRPRE-R @ VREPL-VALID? 0= IF VREPL-S-INVALID EXIT THEN
-    _VRPRE-R @ VREPL.FLAGS @ VREPL-F-BUSY AND IF
-        VREPL-S-BUSY EXIT
-    THEN
+    _VRPRE-R @ _VREPL-CONFIGURABLE ?DUP IF EXIT THEN
     _VRPRE-XT @ _VRPRE-R @ VREPL.PRE-XT !
     _VRPRE-DATA @ _VRPRE-R @ VREPL.PRE-DATA !
+    VREPL-S-OK ;
+
+: _VREPL-READ-ONLY!  ( flag replacement -- status )
+    DUP _VREPL-CONFIGURABLE ?DUP IF NIP NIP EXIT THEN
+    VREPL.FLAGS SWAP IF
+        DUP @ VREPL-F-READ-ONLY OR
+    ELSE
+        DUP @ VREPL-F-READ-ONLY INVERT AND
+    THEN SWAP !
     VREPL-S-OK ;
 
 \ =====================================================================
@@ -420,6 +472,9 @@ VARIABLE _VRO-ORIGINAL
 VARIABLE _VRO-MUTATED
 
 : _VRO-VFS  ( -- vfs ) _VRO-R @ VREPL.VFS @ ;
+
+: _VRO-READ-ONLY?  ( -- flag )
+    _VRO-R @ VREPL.FLAGS @ VREPL-F-READ-ONLY AND 0<> ;
 
 : _VRO-RESOLVE-NOFOLLOW  ( path-a path-u -- inode|0 )
     VFS-RP-NOFOLLOW-FINAL _VRO-VFS VFS-RESOLVE-POLICY?
@@ -447,8 +502,7 @@ VARIABLE _VRO-MUTATED
 \ resolves to a directory.  Intermediate links retain ordinary VFS traversal
 \ semantics; only a transaction role's terminal name is never followed.
 : _VRO-PARENT-VALID?  ( -- flag )
-    _VRO-R @ DUP VREPL.TARGET
-    SWAP VREPL.TARGET-BASE @ _VREPL-PARENT-LEN
+    _VRO-R @ VREPL-FOLDER$
     VFS-RP-FOLLOW-FINAL _VRO-VFS VFS-RESOLVE-POLICY?
     IF DROP 0 EXIT THEN
     DUP 0= IF DROP 0 EXIT THEN
@@ -466,25 +520,10 @@ VARIABLE _VRO-MUTATED
     _VRO-R @ VREPL-BACKUP$ _VRO-REGULAR-OR-ABSENT? 0= IF 0 EXIT THEN
     _VRO-R @ VREPL-MARKER$ _VRO-REGULAR-OR-ABSENT? ;
 
-: _VRO-TARGET-NAME$  ( -- a u )
-    _VRO-R @ DUP VREPL.TARGET
-    SWAP VREPL.TARGET-BASE @ DUP >R +
-    _VRO-R @ VREPL.TARGET-LEN @ R> - ;
-
-: _VRO-STAGE-NAME$  ( -- a u )
-    _VRO-R @ DUP VREPL.STAGE
-    SWAP VREPL.STAGE-BASE @ DUP >R +
-    _VRO-R @ VREPL.STAGE-LEN @ R> - ;
+: _VRO-TARGET-NAME$  ( -- a u )  _VRO-R @ VREPL-TARGET-NAME$ ;
 
 : _VRO-BACKUP-NAME$  ( -- a u )
-    _VRO-R @ DUP VREPL.BACKUP
-    SWAP VREPL.BACKUP-BASE @ DUP >R +
-    _VRO-R @ VREPL.BACKUP-LEN @ R> - ;
-
-: _VRO-MARKER-NAME$  ( -- a u )
-    _VRO-R @ DUP VREPL.MARKER
-    SWAP VREPL.MARKER-BASE @ DUP >R +
-    _VRO-R @ VREPL.MARKER-LEN @ R> - ;
+    _VRO-R @ DUP VREPL-BACKUP$ _VREPL-NAME-OF ;
 
 VARIABLE _VRPL-RN-IN
 VARIABLE _VRPL-RN-FLAGS
@@ -688,19 +727,16 @@ VARIABLE _VRM-FD
 
 \ What the filesystem under the target promises about a power cut.  With
 \ VFS-CAP-DURABLE-MUTATIONS each completed mutation is already on the
-\ medium, so the barrier between two steps stands without a VFS-SYNC.  With
-\ VFS-CAP-RENAME-REPLACE as well, a rename over the target is one such
-\ mutation and can publish the stage by itself.
-: _VRO-DURABLE?  ( -- flag )
-    _VRO-VFS VFS-CAPS@ VFS-CAP-DURABLE-MUTATIONS AND 0<> ;
-
+\ medium, so the barrier between two steps (VFS-BARRIER) needs no sync.
+\ With VFS-CAP-RENAME-REPLACE as well, a rename over the target is one
+\ such mutation and can publish the stage by itself.
 : _VRO-RENAME-PUBLISHES?  ( -- flag )
-    _VRO-DURABLE?
-    _VRO-VFS VFS-CAPS@ VFS-CAP-RENAME-REPLACE AND 0<> AND ;
+    _VRO-VFS VFS-CAPS@
+    DUP VFS-CAP-DURABLE-MUTATIONS AND 0<>
+    SWAP VFS-CAP-RENAME-REPLACE AND 0<> AND ;
 
 : _VRO-SYNC  ( -- status )
-    _VRO-DURABLE? IF VREPL-S-OK EXIT THEN
-    _VRO-VFS VFS-SYNC IF VREPL-S-IO ELSE VREPL-S-OK THEN ;
+    _VRO-VFS VFS-BARRIER IF VREPL-S-IO ELSE VREPL-S-OK THEN ;
 
 : _VRO-REMOVE-STAGE?  ( -- status )
     _VRO-STAGE? IF
@@ -791,7 +827,19 @@ VARIABLE _VRM-FD
     THEN
     VREPL-S-OK ;
 
+\ A read-only replacement changes nothing.  The target as found is the
+\ committed file, or the committed absence of one, unless a save was cut
+\ off where only a change settles it: a marker stands, or a backup stands
+\ in place of a missing target.  Those answer VREPL-S-READ-ONLY.  Stale
+\ companions beside a committed target stay where they are.
+: _VREPL-RECOVER-READ-ONLY  ( -- status )
+    _VRO-NAMESPACE-VALID? 0= IF VREPL-S-RECOVERY EXIT THEN
+    _VRO-MARKER? IF VREPL-S-READ-ONLY EXIT THEN
+    _VRO-TARGET? 0= _VRO-BACKUP? 0<> AND IF VREPL-S-READ-ONLY EXIT THEN
+    VREPL-S-OK ;
+
 : _VREPL-RECOVER-BODY  ( -- status )
+    _VRO-READ-ONLY? IF _VREPL-RECOVER-READ-ONLY EXIT THEN
     _VRO-NAMESPACE-VALID? 0= IF VREPL-S-RECOVERY EXIT THEN
     _VRO-MARKER? IF
         _VREPL-RECOVER-MARKED
@@ -865,6 +913,7 @@ VARIABLE _VRM-FD
     VREPL-S-OK ;
 
 : _VREPL-REPLACE-BODY  ( -- status )
+    _VRO-READ-ONLY? IF VREPL-S-READ-ONLY EXIT THEN
     _VREPL-RECOVER-BODY DUP VREPL-S-OK <>
     OVER VREPL-S-ROLLED-BACK <> AND IF EXIT THEN DROP
     _VREPL-PRECHECK DUP IF EXIT THEN DROP
@@ -968,14 +1017,23 @@ VARIABLE _VRCL-REPLACE-R
     DUP IF THROW THEN DROP ;
 
 ' _VREPL-INIT          CONSTANT _vrepl-init-xt
+' _VREPL-FINI          CONSTANT _vrepl-fini-xt
 ' _VREPL-PATHS!        CONSTANT _vrepl-paths-xt
 ' _VREPL-DERIVE-PATHS! CONSTANT _vrepl-derive-paths-xt
 ' _VREPL-PRECONDITION! CONSTANT _vrepl-precondition-xt
+' _VREPL-READ-ONLY!    CONSTANT _vrepl-read-only-xt
 ' _VREPL-RECOVER-PUBLIC CONSTANT _vrepl-recover-xt
 ' _VREPL-REPLACE-PUBLIC CONSTANT _vrepl-replace-xt
 
 : VREPL-INIT
     _vrepl-init-xt _vrepl-guard WITH-GUARD ;
+
+\ VREPL-FINI ( replacement -- status )
+\   Give back the block that holds the descriptor's paths and clear the
+\   descriptor, which VREPL-INIT then makes ready again.  An owner calls
+\   it before it lets go of a descriptor.
+: VREPL-FINI
+    _vrepl-fini-xt _vrepl-guard WITH-GUARD ;
 
 : VREPL-PATHS!
     _vrepl-paths-xt _vrepl-guard WITH-GUARD ;
@@ -985,6 +1043,12 @@ VARIABLE _VRCL-REPLACE-R
 
 : VREPL-PRECONDITION!
     _vrepl-precondition-xt _vrepl-guard WITH-GUARD ;
+
+\ VREPL-READ-ONLY! ( flag replacement -- status )
+\   Mark the replacement read-only, or writable again with 0.  A
+\   read-only replacement refuses to replace with VREPL-S-READ-ONLY.
+: VREPL-READ-ONLY!
+    _vrepl-read-only-xt _vrepl-guard WITH-GUARD ;
 
 : VREPL-RECOVER
     _vrepl-recover-xt _vrepl-guard WITH-GUARD ;

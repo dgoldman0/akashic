@@ -446,16 +446,11 @@ VARIABLE _PGR-ACCESS
     DUP _PLACE? 0= IF DROP 0 EXIT THEN
     _PG.DECL @ _PD-ROOT? DROP ;
 
-CREATE _PL-STATFS VFS-STATFS-SIZE ALLOT
-
 \ PLACE-NAME-LIMIT ( place -- n )
-\   The longest entry name the place's volume takes.  A volume that does
-\   not say takes the VFS's own limit.
-: _PL-NAME-LIMIT  ( place -- n )
-    PLACE-VFS ?DUP 0= IF 255 EXIT THEN
-    _PL-STATFS VFS-STATFS-SIZE ROT VFS-STATFS IF 255 EXIT THEN
-    _PL-STATFS VSF.NAMEMAX @ DUP 1 < OVER 255 > OR IF DROP 255 THEN ;
-: PLACE-NAME-LIMIT  ( place -- n )  ['] _PL-NAME-LIMIT VFS-TRANSACTION ;
+\   The longest entry name the place's volume takes (VFS-NAME-LIMIT), and
+\   the VFS's own limit while the volume is not attached.
+: PLACE-NAME-LIMIT  ( place -- n )
+    PLACE-VFS ?DUP IF VFS-NAME-LIMIT ELSE VFS-NAME-MAX THEN ;
 
 \ =====================================================================
 \  Paths inside a place

@@ -4,12 +4,17 @@
 \  Megapad-64 / KDOS Forth      Prefix: VCOPY- VFS- PLACE- / _VCP- _VC.
 \
 \  A copy writes the file under a stage name in the destination folder,
-\  syncs, reads the stage back against the source in halves of the
-\  caller's scratch, and only then renames the stage to its final name
-\  and syncs again.  The rename is the commit: before it the final name
-\  does not exist, and a failure removes the stage.  The file passes
-\  through the scratch a chunk at a time, so it never needs to fit in
-\  memory, and the copy refuses a final name that exists.
+\  takes a barrier, reads the stage back against the source in halves of
+\  the caller's scratch, and only then renames the stage to its final
+\  name and takes another barrier.  The rename is the commit: before it
+\  the final name does not exist, and a failure removes the stage.  The
+\  file passes through the scratch a chunk at a time, so it never needs
+\  to fit in memory, and the copy refuses a final name that exists.  A
+\  barrier is VFS-BARRIER, the one a checked replacement takes: a sync,
+\  except on a binding whose every change is durable when it returns.
+\
+\  The destination follows its volume's rules, as a replacement's paths
+\  do: names as long as the volume takes, and a path of VFS-PATH-MAX.
 \
 \  The stage's name is the reserved `.s-` name that VREPL-DERIVE-PATHS!
 \  (vfs-replace.f) derives from the final path.  A stage a crash leaves
@@ -19,8 +24,8 @@
 \  VCOPY-STEP moves one chunk, so an applet can step a long copy from its
 \  tick; VFS-COPY runs the steps to the end.  VFS-MOVE renames inside one
 \  instance, and across two it copies, then removes the source and
-\  syncs.  PLACE-COPY and PLACE-MOVE bind both paths in their places
-\  first, so a read-only place refuses to be written.
+\  takes a barrier.  PLACE-COPY and PLACE-MOVE bind both paths in their
+\  places first, so a read-only place refuses to be written.
 \
 \  Public API:
 \    VCOPY-SIZE   ( -- n )   bytes of a copy record
@@ -31,9 +36,9 @@
 \    PLACE-COPY  PLACE-MOVE  ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
 \
 \  An answer that carries VFS-IOR-F-PARTIAL means the destination file
-\  stands though a later step failed: the sync after the copy's rename,
-\  or a move's removal of its source.  Every other failure leaves no
-\  destination file and the source as it was.
+\  stands though a later step failed: the barrier after the copy's
+\  rename, or a move's removal of its source.  Every other failure leaves
+\  no destination file and the source as it was.
 \
 \  These words take this module's guard, then the replacement library's
 \  to name the stage, then the VFS's, the order every replacement takes.
@@ -72,7 +77,8 @@ REQUIRE ../../concurrency/guard.f
 : _VC.POS        ( copy -- a ) 56 + ;
 : _VC.SCRATCH-A  ( copy -- a ) 64 + ;
 : _VC.SCRATCH-U  ( copy -- a ) 72 + ;
-\ A replacement descriptor that holds the final path and the stage's.
+\ A replacement descriptor that holds the final path and the stage's
+\ while a copy runs.  Its paths are given back when the copy ends.
 : _VC.REPL       ( copy -- a ) 80 + ;
 80 CONSTANT _VCOPY-HEADER
 
@@ -87,18 +93,11 @@ VARIABLE _VCP-C
 : _VCP-SRC   ( -- vfs )   _VCP-C @ _VC.SRC-VFS @ ;
 : _VCP-DST   ( -- vfs )   _VCP-C @ _VC.DST-VFS @ ;
 
-\ The last component of a path whose last component starts at BASE.
-: _VCP-COMPONENT  ( path-a path-u base -- a u )  ROT OVER + -ROT - ;
-
-: _VCP-NAME$  ( -- a u )
-    _VCP-REPL DUP VREPL-TARGET$ ROT VREPL.TARGET-BASE @ _VCP-COMPONENT ;
-
-: _VCP-STAGE-NAME$  ( -- a u )
-    _VCP-REPL DUP VREPL-STAGE$ ROT VREPL.STAGE-BASE @ _VCP-COMPONENT ;
+: _VCP-NAME$        ( -- a u )  _VCP-REPL VREPL-TARGET-NAME$ ;
+: _VCP-STAGE-NAME$  ( -- a u )  _VCP-REPL VREPL-STAGE-NAME$ ;
 
 \ The folder that holds the final name and the stage, "/" for the root.
-: _VCP-FOLDER$  ( -- a u )
-    _VCP-REPL DUP VREPL.TARGET SWAP VREPL.TARGET-BASE @ _VREPL-PARENT-LEN ;
+: _VCP-FOLDER$  ( -- a u )  _VCP-REPL VREPL-FOLDER$ ;
 
 \ _VCP-NAME-PATH ( dst-a dst-u dst-vfs copy -- ior )
 \   Point COPY at the final path DST on DST-VFS and derive its stage.
@@ -109,6 +108,9 @@ VARIABLE _VCP-C
     _VC.REPL VREPL-INIT IF 2DROP VFS-E-INVALID EXIT THEN
     _VCP-REPL VREPL-DERIVE-PATHS! IF VFS-E-INVALID EXIT THEN
     0 ;
+
+\ _VCP-RELEASE ( -- )   Give back the paths of the copy's descriptor.
+: _VCP-RELEASE  ( -- )  _VCP-REPL VREPL-FINI DROP ;
 
 \ =====================================================================
 \  Answers
@@ -163,13 +165,14 @@ VARIABLE _VCX-IOR
     _VCP-REPL VREPL-STAGE$ _VCP-DST VFS-RM
     DUP VFS-IOR-REASON VFS-R-NOENT = IF DROP 0 THEN ;
 
-: _VCX-SYNC  ( -- ior )  _VCP-DST VFS-SYNC ;
+: _VCX-SYNC  ( -- ior )  _VCP-DST VFS-BARRIER ;
 
 \ _VCP-DROP ( -- ior )
 \   Close the copy's files and remove its stage, so the destination
-\   holds nothing of it.  Each step is tried whatever the one before
-\   answered, and the first failure is the answer.  A stage that cannot
-\   be removed stays a hidden file until the same copy is tried again.
+\   holds nothing of it, then take a barrier.  Each step is tried
+\   whatever the one before answered, and the first failure is the
+\   answer.  A stage that cannot be removed stays a hidden file until the
+\   same copy is tried again.
 : _VCP-DROP  ( -- ior )
     0 _VCX-IOR !
     _VCP-C @ _VC.SRC-FD _VCX-CLOSE
@@ -252,8 +255,10 @@ VARIABLE _VCI-CWD
     _VCI-XA @ _VCP-C @ _VC.SCRATCH-A !
     _VCI-XU @ _VCP-C @ _VC.SCRATCH-U !
     \ The stage is named before the VFS's guard is taken.
-    _VCI-DA @ _VCI-DU @ _VCI-DV @ _VCP-C @ _VCP-NAME-PATH ?DUP IF EXIT THEN
-    ['] _VCI-BODY VFS-TRANSACTION ;
+    _VCI-DA @ _VCI-DU @ _VCI-DV @ _VCP-C @ _VCP-NAME-PATH ?DUP IF
+        _VCP-RELEASE EXIT
+    THEN
+    ['] _VCI-BODY VFS-TRANSACTION DUP IF _VCP-RELEASE THEN ;
 
 \ =====================================================================
 \  Stepping a copy
@@ -275,11 +280,11 @@ VARIABLE _VCS-HALF
     _VCS-N @ _VCP-C @ _VC.POS +!
     -1 0 ;
 
-\ Every byte is in the stage: close it, sync, and open it again to read
-\ it back against the source from the start.
+\ Every byte is in the stage: close it, take a barrier, and open it
+\ again to read it back against the source from the start.
 : _VCS-WRITTEN  ( -- more? ior )
     _VCP-C @ _VC.STAGE-FD _VCS-FD-CLOSE ?DUP IF 0 SWAP EXIT THEN
-    _VCP-DST VFS-SYNC ?DUP IF 0 SWAP EXIT THEN
+    _VCP-DST VFS-BARRIER ?DUP IF 0 SWAP EXIT THEN
     _VCP-REPL VREPL-STAGE$ VFS-FF-READ _VCP-DST VFS-OPEN?
     ?DUP IF NIP 0 SWAP EXIT THEN
     DUP _VCP-C @ _VC.STAGE-FD !
@@ -308,7 +313,7 @@ VARIABLE _VCS-HALF
     -1 0 ;
 
 \ The stage reads back as the source: rename it to the final name, which
-\ must still be free, and sync.  The rename is the commit.
+\ must still be free, and take a barrier.  The rename is the commit.
 : _VCS-PUBLISH  ( -- more? ior )
     _VCP-C @ _VC.SRC-FD _VCS-FD-CLOSE ?DUP IF 0 SWAP EXIT THEN
     _VCP-C @ _VC.STAGE-FD _VCS-FD-CLOSE ?DUP IF 0 SWAP EXIT THEN
@@ -317,7 +322,7 @@ VARIABLE _VCS-HALF
     >R _VCP-NAME$ R@ R> IN.PARENT @ VFS-RN-NOREPLACE _VCP-DST VFS-RENAME-AT
     ?DUP IF 0 SWAP EXIT THEN
     _VCOPY-PUBLISHED _VCP-C @ _VC.STATE !
-    _VCP-DST VFS-SYNC ?DUP IF 0 SWAP EXIT THEN
+    _VCP-DST VFS-BARRIER ?DUP IF 0 SWAP EXIT THEN
     _VCOPY-IDLE _VCP-C @ _VC.STATE !
     0 0 ;
 
@@ -341,7 +346,7 @@ VARIABLE _VCS-HALF
     ENDCASE ;
 
 \ A failure before the rename gives the copy up.  A failure after it,
-\ in the sync, leaves the copy standing, and the answer says so.
+\ in the barrier, leaves the copy standing, and the answer says so.
 : _VCS-BODY  ( -- more? ior )
     ['] _VCS-WORK CATCH IF 0 VFS-E-IO THEN
     DUP 0= IF EXIT THEN
@@ -355,17 +360,20 @@ VARIABLE _VCS-HALF
 : _VCP-VALID?  ( copy -- flag )
     DUP 0= IF EXIT THEN  _VC.MAGIC @ _VCOPY-MAGIC = ;
 
+\ A copy that has ended, either way, gives its paths back outside the
+\ VFS's guard, in the order every replacement takes the two guards.
 : _VCP-STEP  ( copy -- more? ior )
     DUP _VCP-C !
     _VCP-VALID? 0= IF 0 VFS-E-INVALID EXIT THEN
     _VCP-C @ _VC.STATE @ _VCOPY-IDLE = IF 0 0 EXIT THEN
-    ['] _VCS-BODY VFS-TRANSACTION ;
+    ['] _VCS-BODY VFS-TRANSACTION
+    OVER 0= IF _VCP-RELEASE THEN ;
 
 : _VCP-CANCEL  ( copy -- ior )
     DUP _VCP-C !
     _VCP-VALID? 0= IF VFS-E-INVALID EXIT THEN
     _VCP-C @ _VC.STATE @ _VCOPY-IDLE = IF 0 EXIT THEN
-    ['] _VCP-DROP VFS-TRANSACTION ;
+    ['] _VCP-DROP VFS-TRANSACTION _VCP-RELEASE ;
 
 \ =====================================================================
 \  Copying and moving to the end
@@ -407,7 +415,7 @@ VARIABLE _VMV-MOVED
     >R _VCP-NAME$ _VMV-FD @ FD.INODE @ R> VFS-RN-NOREPLACE _VMV-DV @
     VFS-RENAME-AT ?DUP IF EXIT THEN
     -1 _VMV-MOVED !
-    _VMV-DV @ VFS-SYNC ;
+    _VMV-DV @ VFS-BARRIER ;
 
 : _VMV-RENAME  ( -- ior )
     0 _VMV-FD !  0 _VMV-MOVED !
@@ -420,7 +428,7 @@ VARIABLE _VMV-MOVED
 \ Across instances, once the copy stands: the source goes, durably.
 : _VMV-REMOVE-BODY  ( -- ior )
     _VMV-SA @ _VMV-SU @ _VMV-SV @ VFS-RM ?DUP IF EXIT THEN
-    _VMV-SV @ VFS-SYNC ;
+    _VMV-SV @ VFS-BARRIER ;
 
 : _VMV-REMOVE  ( -- ior )
     ['] _VMV-REMOVE-BODY _VCP-CAUGHT DUP IF _VCP-STANDS THEN ;
@@ -433,8 +441,8 @@ VARIABLE _VMV-MOVED
         \ The destination is named as a copy's is, so a move and a copy
         \ take the same destinations.
         _VMV-DA @ _VMV-DU @ _VMV-DV @ _VCP-RECORD _VCP-NAME-PATH
-        ?DUP IF EXIT THEN
-        ['] _VMV-RENAME VFS-TRANSACTION EXIT
+        ?DUP IF _VCP-RELEASE EXIT THEN
+        ['] _VMV-RENAME VFS-TRANSACTION _VCP-RELEASE EXIT
     THEN
     ['] _VMV-CHECK VFS-TRANSACTION ?DUP IF EXIT THEN
     _VMV-SA @ _VMV-SU @ _VMV-SV @ _VMV-DA @ _VMV-DU @ _VMV-DV @
@@ -445,10 +453,9 @@ VARIABLE _VMV-MOVED
 \  Copying and moving between places
 \ =====================================================================
 
-\ The volume paths the places bind.  A final path longer than the
-\ replacement library takes cannot be copied, so its buffer stops there.
+\ The volume paths the places bind.
 CREATE _VCPL-SRC  VFS-PATH-MAX ALLOT
-CREATE _VCPL-DST  VREPL-PATH-MAX 1+ ALLOT
+CREATE _VCPL-DST  VFS-PATH-MAX ALLOT
 
 VARIABLE _VCPL-SA  VARIABLE _VCPL-SN  VARIABLE _VCPL-SP
 VARIABLE _VCPL-DA  VARIABLE _VCPL-DN  VARIABLE _VCPL-DP
@@ -466,7 +473,7 @@ VARIABLE _VCPL-DV  VARIABLE _VCPL-DU
 : _VCPL-BIND  ( xt -- ior )
     >R _VCPL-SA @ _VCPL-SN @ _VCPL-SP @ _VCPL-SRC VFS-PATH-MAX R> EXECUTE
     ?DUP IF NIP NIP EXIT THEN _VCPL-SU ! _VCPL-SV !
-    _VCPL-DA @ _VCPL-DN @ _VCPL-DP @ _VCPL-DST VREPL-PATH-MAX
+    _VCPL-DA @ _VCPL-DN @ _VCPL-DP @ _VCPL-DST VFS-PATH-MAX
     PLACE-BIND-WRITE ?DUP IF NIP NIP EXIT THEN _VCPL-DU ! _VCPL-DV !
     0 ;
 
@@ -519,7 +526,7 @@ VARIABLE _VCPL-DV  VARIABLE _VCPL-DU
 
 \ VFS-MOVE ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
 \   Move a file: one rename inside an instance; across two, a copy, then
-\   the source's removal and a sync.
+\   the source's removal and a barrier.
 : VFS-MOVE      _vcopy-move-xt _vcopy-guard WITH-GUARD ;
 
 \ PLACE-COPY ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )

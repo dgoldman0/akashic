@@ -50,6 +50,7 @@
 \    DBAO-INIT        ( place path path-u owner -- status )
 \    DBAO-OPEN        ( owner -- status )
 \    DBAO-CLOSE       ( owner -- status )
+\    DBAO-FINI        ( owner -- status )
 \    DBAO-STORE       ( owner -- store )
 \    DBAO-FIND        ( rid owner -- schedule|0 )
 \    DBAO-ACTION      ( rid owner -- action|0 )
@@ -84,6 +85,7 @@ DBAS-S-IO      CONSTANT DBAO-S-IO
 DBAS-S-BLOCKED CONSTANT DBAO-S-BLOCKED
 DBAS-S-STATE   CONSTANT DBAO-S-STATE
 DBAS-S-ENTROPY CONSTANT DBAO-S-ENTROPY
+DBAS-S-READ-ONLY CONSTANT DBAO-S-READ-ONLY   \ the store's place takes no changes
  7 CONSTANT DBAO-S-CLOCK       \ the clock is not set
  8 CONSTANT DBAO-S-NOT-FOUND
  9 CONSTANT DBAO-S-CONFLICT    \ a stale revision, a reused create key, or
@@ -217,6 +219,14 @@ _DBAO-TEXT 8 + TZ-STRING-MAX + 7 + -8 AND CONSTANT DBAO-SIZE
 : DBAO-CLOSE  ( owner -- status )
     DUP DBAO-VALID? 0= IF DROP DBAO-S-INVALID EXIT THEN
     DBAO-STORE DBAS-CLOSE ;
+
+\ Closes the store and gives back its file's binding.  DBAO-INIT
+\ configures the owner again.
+: DBAO-FINI  ( owner -- status )
+    DUP DBAO-VALID? 0= IF DROP DBAO-S-INVALID EXIT THEN
+    DUP DBAO-STORE DBAS-FINI DROP
+    DBAO-SIZE 0 FILL
+    DBAO-S-OK ;
 
 \ The schedule RID names, or 0.  Records stay put until the next
 \ operation.

@@ -76,11 +76,11 @@ REQUIRE ../../../text/utf8.f
  112 CONSTANT _SDS-CONTEXT
  120 CONSTANT _SDS-RREG
  128 CONSTANT _SDS-CREG
- 136 CONSTANT _SDS-PATH                   \ VREPL path capacity
+ 136 CONSTANT _SDS-PATH                   \ 256 bytes: the document's path
  392 CONSTANT _SDS-REPLACE                \ VREPL-SIZE bytes
-1544 CONSTANT _SDS-IO-U
-1552 CONSTANT _SDS-IO
-1552 SDOC-MAX-BYTES + CONSTANT SDOC-STATE-SIZE
+_SDS-REPLACE VREPL-SIZE + CONSTANT _SDS-IO-U
+_SDS-IO-U 8 + CONSTANT _SDS-IO
+_SDS-IO SDOC-MAX-BYTES + CONSTANT SDOC-STATE-SIZE
 
 : _SDS.MAGIC    ( state -- a ) _SDS-MAGIC + ;
 : _SDS.FLAGS    ( state -- a ) _SDS-FLAGS + ;
@@ -122,6 +122,7 @@ VARIABLE _SDOC-LIVE
 0 _SDOC-LIVE !
 
 : _SDOC-STATE-FINI  ( state -- )
+    DUP _SDS.REPLACE VREPL-FINI DROP
     SDOC-STATE-SIZE 0 FILL ;
 
 : _SDOC-STATE-LOCAL?  ( instance -- flag )
@@ -409,8 +410,12 @@ VARIABLE _SDPH-THROW
     _SDH-STATUS @ VREPL-S-MARKER-CORRUPT = OR IF
         _SDH-STATE @ _SDS.FLAGS DUP @ _SDOC-F-BLOCKED OR SWAP !
     THEN
-    S" Document publication failed" _SDH-STATUS @
-        _SDH-REQUEST @ CBR-ERROR!
+    \ A document on a read-only place is refused by its replacement.
+    _SDH-STATUS @ VREPL-S-READ-ONLY = IF
+        S" The document's place is read-only"
+    ELSE
+        S" Document publication failed"
+    THEN _SDH-STATUS @ _SDH-REQUEST @ CBR-ERROR!
     _SDH-STATUS @ VREPL-S-BUSY = IF
         CBUS-S-BUSY
     ELSE

@@ -124,7 +124,7 @@ The public geometry words are:
 
 ```forth
 CVAULT-CONFIG-SIZE             ( -- 104 )
-CVAULT-SIZE                    ( -- 3472 )
+CVAULT-SIZE                    ( -- 2416 )
 CVAULT-PLAINTEXT-HEADER-SIZE   ( -- 128 )
 CVAULT-SECRET-CAPACITY-MAX     ( -- 65408 )
 CVAULT-ROOT-MAX                ( -- 187 )

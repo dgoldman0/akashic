@@ -22,6 +22,9 @@ REQUIRE ../../bitset.f
 512  CONSTANT _VMP-SECTOR
 128  CONSTANT _VMP-MAX-FILES
 48   CONSTANT _VMP-ENTRY-SIZE
+\ A directory entry holds 24 name bytes, the last of them the NUL that
+\ ends a full name, so a name is at most 23 bytes.
+23   CONSTANT _VMP-NAME-MAX
 12   CONSTANT _VMP-DIR-SECTORS
 16    CONSTANT _VMP-MAX-BMAP-SECTORS
 65536 CONSTANT _VMP-MAX-SECTORS
@@ -1227,7 +1230,7 @@ VARIABLE _VMSY-IN
         DUP _VMSY-V @ V.ROOT @ <> IF
             DUP IN.BID @ _VMSY-CTX @ _VMP-DIRENT
             DUP 24 0 FILL
-            OVER IN.NAME @ _VFS-STR-GET 23 MIN
+            OVER IN.NAME @ _VFS-STR-GET _VMP-NAME-MAX MIN
             >R OVER R> CMOVE
             0 OVER 40 + L!              \ content changed: CRC unknown
             DROP DROP
@@ -1255,10 +1258,13 @@ VARIABLE _VMCR-SLOT
 VARIABLE _VMCR-NSEC
 VARIABLE _VMFS-CTX
 
+\ A directory slot is free while its name is empty.
+: _VMP-SLOT-FREE?  ( slot ctx -- flag )  _VMP-DIRENT C@ 0= ;
+
 : _VMP-FIND-FREE-SLOT  ( ctx -- slot | -1 )
     _VMFS-CTX ! -1
     _VMP-MAX-FILES 0 DO
-        I _VMFS-CTX @ _VMP-DIRENT C@ 0= IF
+        I _VMFS-CTX @ _VMP-SLOT-FREE? IF
             DROP I LEAVE
         THEN
     LOOP ;
@@ -1268,7 +1274,9 @@ VARIABLE _VMFS-CTX
     _VMCR-V !  _VMCR-IN !
     _VMCR-V @ _VMP-IO-V !
     _VMCR-V @ V.BCTX @  _VMCR-CTX !
-    _VMCR-IN @ IN.NAME @ _VFS-STR-GET NIP 23 > IF VFS-E-NAMETOOLONG EXIT THEN
+    _VMCR-IN @ IN.NAME @ _VFS-STR-GET NIP _VMP-NAME-MAX > IF
+        VFS-E-NAMETOOLONG EXIT
+    THEN
     \ Find free dir slot
     _VMCR-CTX @ _VMP-FIND-FREE-SLOT  _VMCR-SLOT !
     _VMCR-SLOT @ -1 = IF VFS-E-NOSPC EXIT THEN  \ directory full
@@ -1295,7 +1303,7 @@ VARIABLE _VMFS-CTX
     DUP _VMP-ENTRY-SIZE 0 FILL
     \ Copy name from inode's string handle
     _VMCR-IN @ IN.NAME @  _VFS-STR-GET     ( de addr len )
-    23 MIN                                  ( de addr len' )
+    _VMP-NAME-MAX MIN                       ( de addr len' )
     >R OVER R> CMOVE                        ( de )
     \ Set fields
     _VMCR-IN @ IN.BDATA @   OVER 24 + W!   \ start_sector
@@ -1463,7 +1471,7 @@ VARIABLE _VMRN-PID
     _VMRN-U ! _VMRN-A !
     _VMRN-V @ _VMP-READY? 0= IF VFS-E-BUSY EXIT THEN
     _VMRN-U @ 0= IF VFS-E-INVALID EXIT THEN
-    _VMRN-U @ 23 > IF VFS-E-NAMETOOLONG EXIT THEN
+    _VMRN-U @ _VMP-NAME-MAX > IF VFS-E-NAMETOOLONG EXIT THEN
     _VMRN-PARENT @ IN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
     _VMRN-PARENT @ _VMRN-V @ V.ROOT @ = IF
         _VMP-ROOT-PARENT
@@ -1496,6 +1504,28 @@ VARIABLE _VMRN-PID
 : _VMP-SYNCFS  ( vfs -- ior )       0 SWAP _VMP-SYNC ;
 : _VMP-FSYNC   ( inode vfs -- ior ) _VMP-SYNC ;
 
+\ STATFS: 512-byte blocks, of which the bitmap's clear ones are free, one
+\ directory of 128 entries, and names of at most 23 bytes.
+VARIABLE _VMSF-OUT
+VARIABLE _VMSF-CTX
+
+: _VMP-STATFS  ( buffer bytes vfs -- ior )
+    NIP DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
+    V.BCTX @ _VMSF-CTX !  _VMSF-OUT !
+    _VMSF-OUT @ VFS-STATFS-SIZE 0 FILL
+    _VMP-SECTOR _VMSF-OUT @ VSF.BSIZE !
+    _VMP-SECTOR _VMSF-OUT @ VSF.FRSIZE !
+    _VMSF-CTX @ _VMP-C.TOTAL + @ DUP _VMSF-OUT @ VSF.BLOCKS !
+    _VMSF-CTX @ _VMP-BITSET BITSET-COUNT-SET? 0= IF
+        2DROP VFS-E-CORRUPT EXIT
+    THEN
+    - DUP _VMSF-OUT @ VSF.BFREE !  _VMSF-OUT @ VSF.BAVAIL !
+    _VMP-MAX-FILES _VMSF-OUT @ VSF.FILES !
+    0 _VMP-MAX-FILES 0 DO I _VMSF-CTX @ _VMP-SLOT-FREE? IF 1+ THEN LOOP
+    _VMSF-OUT @ VSF.FFREE !
+    _VMP-NAME-MAX _VMSF-OUT @ VSF.NAMEMAX !
+    0 ;
+
 VARIABLE _VMP-UM-V
 : _VMP-UNMOUNT  ( flags vfs -- ior )
     _VMP-UM-V ! DROP
@@ -1514,7 +1544,7 @@ VFS-CAP-READ OR VFS-CAP-WRITE OR
 VFS-CAP-CREATE OR VFS-CAP-MKDIR OR
 VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR
 VFS-CAP-RENAME OR VFS-CAP-TRUNCATE OR VFS-CAP-GETATTR OR
-VFS-CAP-SYNCFS OR VFS-CAP-FSYNC OR
+VFS-CAP-SYNCFS OR VFS-CAP-FSYNC OR VFS-CAP-STATFS OR
 VFS-CAP-ATOMIC-RENAME OR VFS-CAP-CROSSDIR-RENAME OR
 VFS-CAP-RENAME-REPLACE OR
 CONSTANT VMP-CAPS
@@ -1538,6 +1568,7 @@ VMP-OPS VFS-OPS-SIZE 0 FILL
 ' _VMP-GETATTR   VMP-OPS VFS-OP-GETATTR  CELLS + !
 ' _VMP-SYNCFS    VMP-OPS VFS-OP-SYNCFS   CELLS + !
 ' _VMP-FSYNC     VMP-OPS VFS-OP-FSYNC    CELLS + !
+' _VMP-STATFS    VMP-OPS VFS-OP-STATFS   CELLS + !
 
 CREATE VMP-BINDING
 VFS-BINDING-MAGIC ,

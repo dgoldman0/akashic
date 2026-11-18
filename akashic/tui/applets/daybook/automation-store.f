@@ -42,6 +42,7 @@
 \    DBAS-INIT         ( place path path-u store -- status )
 \    DBAS-OPEN         ( store -- status )
 \    DBAS-CLOSE        ( store -- status )
+\    DBAS-FINI         ( store -- status )
 \    DBAS-COMMIT       ( store -- status )
 \    DBAS-REVERT       ( store -- status )
 \    DBAS-STATE@       ( store -- state )
@@ -92,6 +93,9 @@ REQUIRE ../../../interop/scheduled-action.f
 4 CONSTANT DBAS-S-BLOCKED
 5 CONSTANT DBAS-S-STATE
 6 CONSTANT DBAS-S-ENTROPY
+\ The owner (automation-owner.f) passes this store's statuses through and
+\ numbers its own from 7 to 21, so a later one of the store's follows them.
+22 CONSTANT DBAS-S-READ-ONLY   \ the store's place takes no changes
 
 \ Store states.
 0 CONSTANT DBAS-CLOSED
@@ -103,6 +107,7 @@ REQUIRE ../../../interop/scheduled-action.f
 2 CONSTANT DBAS-R-FUTURE       \ a newer format than this code reads
 3 CONSTANT DBAS-R-UNCERTAIN    \ a replacement's outcome is unknown
 4 CONSTANT DBAS-R-IO           \ the file could not be read into memory
+5 CONSTANT DBAS-R-READ-ONLY    \ a save cut off waits for a writable place
 
 \ Schedule states.
 1 CONSTANT DBAS-ENABLED
@@ -984,6 +989,7 @@ _DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
 \ blocks the store.
 : _DBAS-RECOVER  ( store -- )
     DUP _DBAS.REPL ['] VREPL-RECOVER CATCH IF DROP VREPL-S-RECOVERY THEN
+    DUP VREPL-S-READ-ONLY = IF DROP DBAS-R-READ-ONLY SWAP _DBAS-BLOCK! EXIT THEN
     DUP VREPL-S-OK = OVER VREPL-S-ROLLED-BACK = OR
     SWAP VREPL-S-COMMITTED-CLEANUP = OR
     IF DROP ELSE DBAS-R-UNCERTAIN SWAP _DBAS-BLOCK! THEN ;
@@ -1022,6 +1028,10 @@ _DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
 : _DBAS-REPLACED  ( vrepl-status store -- status )
     OVER VREPL-S-OK = 2 PICK VREPL-S-COMMITTED-CLEANUP = OR IF
         NIP 1 SWAP _DBAS.GENERATION +! DBAS-S-OK EXIT
+    THEN
+    \ A store on a read-only place is refused by its replacement.
+    OVER VREPL-S-READ-ONLY = IF
+        NIP DBAS-S-READ-ONLY SWAP _DBAS-RELOAD EXIT
     THEN
     OVER VREPL-S-IO = 2 PICK VREPL-S-CONFLICT = OR
     2 PICK VREPL-S-BUSY = OR 2 PICK VREPL-S-INVALID = OR IF
@@ -1070,7 +1080,8 @@ _DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
     DUP DBAS-SIZE 0 FILL
     >R
     ROT DUP PLACE-WRITABLE? R@ _DBAS.REPL PLACE-VREPL! IF
-        R> DBAS-SIZE 0 FILL DBAS-S-INVALID EXIT
+        R> DUP _DBAS.REPL VREPL-FINI DROP DBAS-SIZE 0 FILL
+        DBAS-S-INVALID EXIT
     THEN
     R@ _DBAS.REPL VREPL.VFS @ R@ _DBAS.VFS !
     _DBAS-MAGIC$ _DBAS-FORMAT CREC-TAG-POSITIVE ['] _DBAS-ENCODE ['] _DBAS-VALIDATE
@@ -1079,7 +1090,8 @@ _DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
     DBAS-HEADER-SIZE 1 62 LSHIFT 8 R@ _DBAS.SPEC CREC-SPEC-FRAMED! OR
     R@ _DBAS.SPEC CREC-SPEC-SEAL OR
     R@ _DBAS.WORK CREC-WORK-INIT OR IF
-        R> DBAS-SIZE 0 FILL DBAS-S-INVALID EXIT
+        R> DUP _DBAS.REPL VREPL-FINI DROP DBAS-SIZE 0 FILL
+        DBAS-S-INVALID EXIT
     THEN
     R@ DUP _DBAS.SELF !
     _DBAS-MAGIC R@ _DBAS.MAGIC !
@@ -1094,6 +1106,15 @@ _DBAS-CURSOR BSLOT-CURSOR-SIZE + CONSTANT DBAS-SIZE
     0 OVER _DBAS.GENERATION !
     0 OVER _DBAS.REASON !
     DBAS-CLOSED SWAP _DBAS.STATE !
+    DBAS-S-OK ;
+
+\ Closes the store and gives back its file's binding.  DBAS-INIT
+\ configures it again.
+: DBAS-FINI  ( store -- status )
+    DUP DBAS-VALID? 0= IF DROP DBAS-S-INVALID EXIT THEN
+    DUP DBAS-CLOSE DROP
+    DUP _DBAS.REPL VREPL-FINI DROP
+    DBAS-SIZE 0 FILL
     DBAS-S-OK ;
 
 \ Recovers the file and reads it.  Returns OK when the store is READY, or

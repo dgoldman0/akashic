@@ -21,7 +21,7 @@ from test_daybook_automation_owner import NOW
 from test_daybook_automation_store import RAM_VFS
 
 
-OK, INVALID, NOMEM, IO, BLOCKED, STATE, ENTROPY, NOT_FOUND = range(8)
+OK, INVALID, NOMEM, IO, BLOCKED, STATE, ENTROPY, NOT_FOUND, READ_ONLY = range(9)
 CLOSED, READY, BLOCKED_STATE = range(3)
 R_CORRUPT, R_FUTURE, R_UNCERTAIN, R_IO = 1, 2, 3, 4
 APPROVED, NONE, WITHDRAWN, CHANGED, PRACTICE, UNAVAILABLE = range(1, 7)
@@ -149,6 +149,22 @@ def run(forth, lines: list[str], max_steps: int = 4_000_000_000) -> list[list[in
     assert "??" not in output, output[-3000:]
     return [[int(token) for token in line.split()]
             for line in output.replace("\r", "").split("\n") if line.strip()]
+
+
+def test_a_store_on_a_read_only_place_refuses_a_grant_and_says_so(forth):
+    """On a read-only place the store opens over no file; its replacement
+    refuses the grant, and the store answers that its place is read-only,
+    keeps no permission, writes nothing and stays ready."""
+    rows = run(forth, [
+        "PS SPERM-SIZE 0 FILL P-WIPE TV-RO-PLACE P-PATH PS SPERM-INIT . "
+        "PS SPERM-OPEN . PS SPERM-STATE@ . CR",
+        "A-OPS 1 R-ASK PR1 T-NOW GRANT . COUNT. PS SPERM-STATE@ . "
+        "GEN . P-PATH T-THERE? . CR",
+    ])
+    assert rows == [
+        [OK, OK, READY],
+        [READ_ONLY, 0, READY, 0, 0],
+    ]
 
 
 def test_lifecycle_and_its_refusals(forth):

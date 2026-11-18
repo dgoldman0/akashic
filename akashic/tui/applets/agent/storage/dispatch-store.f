@@ -36,6 +36,7 @@
 \    ADST-INIT         ( place path path-u store -- status )
 \    ADST-OPEN         ( store -- status )
 \    ADST-CLOSE        ( store -- status )
+\    ADST-FINI         ( store -- status )
 \    ADST-STATE@       ( store -- state )
 \    ADST-REASON@      ( store -- reason )
 \    ADST-GENERATION@  ( store -- n )
@@ -77,6 +78,7 @@ REQUIRE ../../../../interop/scheduled-dispatch.f
 7 CONSTANT ADST-S-EXISTING     \ a run with the key asks for the same
 8 CONSTANT ADST-S-CONFLICT     \ a run with the key asks for something else
 9 CONSTANT ADST-S-NOT-FOUND
+10 CONSTANT ADST-S-READ-ONLY     \ the store's place takes no changes
 
 \ Store states.
 0 CONSTANT ADST-CLOSED
@@ -88,6 +90,7 @@ REQUIRE ../../../../interop/scheduled-dispatch.f
 2 CONSTANT ADST-R-FUTURE       \ a newer format than this code reads
 3 CONSTANT ADST-R-UNCERTAIN    \ a replacement's outcome is unknown
 4 CONSTANT ADST-R-IO           \ the file could not be read into memory
+5 CONSTANT ADST-R-READ-ONLY    \ a save cut off waits for a writable place
 
 \ A run's phase.
 1 CONSTANT ADST-ACCEPTED       \ recorded; its provider may have started
@@ -523,6 +526,7 @@ _ADST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT ADST-SIZE
 \ blocks the store.
 : _ADST-RECOVER  ( store -- )
     DUP _ADST.REPL ['] VREPL-RECOVER CATCH IF DROP VREPL-S-RECOVERY THEN
+    DUP VREPL-S-READ-ONLY = IF DROP ADST-R-READ-ONLY SWAP _ADST-BLOCK! EXIT THEN
     DUP VREPL-S-OK = OVER VREPL-S-ROLLED-BACK = OR
     SWAP VREPL-S-COMMITTED-CLEANUP = OR
     IF DROP ELSE ADST-R-UNCERTAIN SWAP _ADST-BLOCK! THEN ;
@@ -553,10 +557,14 @@ _ADST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT ADST-SIZE
     ROT DROP ADST-S-OK ;
 
 \ The store after a replacement: one generation on, unchanged and
-\ reloaded, or blocked when nobody can tell which.
+\ reloaded, or blocked when nobody can tell which.  A store on a
+\ read-only place is refused by its replacement and reloads.
 : _ADST-REPLACED  ( vrepl-status store -- status )
     OVER VREPL-S-OK = 2 PICK VREPL-S-COMMITTED-CLEANUP = OR IF
         NIP 1 SWAP _ADST.GENERATION +! ADST-S-OK EXIT
+    THEN
+    OVER VREPL-S-READ-ONLY = IF
+        NIP ADST-S-READ-ONLY SWAP _ADST-RELOAD EXIT
     THEN
     OVER VREPL-S-IO = 2 PICK VREPL-S-CONFLICT = OR
     2 PICK VREPL-S-BUSY = OR 2 PICK VREPL-S-INVALID = OR IF
@@ -589,7 +597,8 @@ _ADST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT ADST-SIZE
     DUP ADST-SIZE 0 FILL
     >R
     ROT DUP PLACE-WRITABLE? R@ _ADST.REPL PLACE-VREPL! IF
-        R> ADST-SIZE 0 FILL ADST-S-INVALID EXIT
+        R> DUP _ADST.REPL VREPL-FINI DROP ADST-SIZE 0 FILL
+        ADST-S-INVALID EXIT
     THEN
     R@ _ADST.REPL VREPL.VFS @ R@ _ADST.VFS !
     _ADST-MAGIC$ _ADST-FORMAT CREC-TAG-POSITIVE ['] _ADST-ENCODE
@@ -598,7 +607,8 @@ _ADST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT ADST-SIZE
     ADST-HEADER-SIZE 1 62 LSHIFT 8 R@ _ADST.SPEC CREC-SPEC-FRAMED! OR
     R@ _ADST.SPEC CREC-SPEC-SEAL OR
     R@ _ADST.WORK CREC-WORK-INIT OR IF
-        R> ADST-SIZE 0 FILL ADST-S-INVALID EXIT
+        R> DUP _ADST.REPL VREPL-FINI DROP ADST-SIZE 0 FILL
+        ADST-S-INVALID EXIT
     THEN
     R@ DUP _ADST.SELF !
     _ADST-MAGIC R@ _ADST.MAGIC !
@@ -613,6 +623,15 @@ _ADST-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT ADST-SIZE
     0 OVER _ADST.GENERATION !
     0 OVER _ADST.REASON !
     ADST-CLOSED SWAP _ADST.STATE !
+    ADST-S-OK ;
+
+\ Closes the store and gives back its file's binding.  ADST-INIT
+\ configures it again.
+: ADST-FINI  ( store -- status )
+    DUP ADST-VALID? 0= IF DROP ADST-S-INVALID EXIT THEN
+    DUP ADST-CLOSE DROP
+    DUP _ADST.REPL VREPL-FINI DROP
+    ADST-SIZE 0 FILL
     ADST-S-OK ;
 
 \ Recovers the file and reads it.  Returns OK when the store is READY, or

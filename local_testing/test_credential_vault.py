@@ -370,7 +370,7 @@ def _assert_geometry(
     assert crec_header_size == 64
     assert crec_spec_size == 112
     assert crec_work_size == 136
-    assert vrepl_size == 1152
+    assert vrepl_size == 96
     assert private_max == 16
 
     private_set_size = mspan_header_size + private_max * mspan_entry_size
@@ -384,8 +384,8 @@ def _assert_geometry(
     assert private_set_size == 272
     assert vfs_spec_crec_offset == 328
     assert vfs_spec_size == 440
-    assert vfs_store_crec_offset == 1224
-    assert vfs_store_size == 1416
+    assert vfs_store_crec_offset == 168
+    assert vfs_store_size == 360
 
     spec_layout = _flat(snapshot)
     assert (
@@ -520,7 +520,7 @@ def _assert_geometry(
         vfs_spec_offset,
         vfs_store_offset,
         vault_size,
-    ) == (768, 1024, 1280, 1536, 1616, 2056, 3472)
+    ) == (768, 1024, 1280, 1536, 1616, 2056, 2416)
 
     layout = _flat(source)
     for expression in (

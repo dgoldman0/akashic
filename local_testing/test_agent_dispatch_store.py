@@ -23,7 +23,7 @@ from test_daybook_automation_store import RAM_VFS
 
 
 (OK, INVALID, NOMEM, IO, BLOCKED, STATE, ENTROPY, EXISTING, CONFLICT,
- NOT_FOUND) = range(10)
+ NOT_FOUND, READ_ONLY) = range(11)
 CLOSED, READY, BLOCKED_STATE = range(3)
 R_CORRUPT, R_FUTURE, R_UNCERTAIN, R_IO = 1, 2, 3, 4
 ACCEPTED, ENDED = 1, 2
@@ -210,6 +210,22 @@ def test_lifecycle_and_its_refusals(forth):
         [READY, 0, 0, 0, 1, 32, -1],
         [INVALID, INVALID, STATE, STATE],
         [STATE, OK, CLOSED, STATE, 0, 0, STATE, STATE, STATE, 0, STATE],
+    ]
+
+
+def test_a_store_on_a_read_only_place_refuses_a_run_and_says_so(forth):
+    """On a read-only place the store opens over no file; its replacement
+    refuses the run, and the store answers that its place is read-only,
+    keeps no run, writes nothing and stays ready."""
+    rows = run(forth, [
+        "AS ADST-SIZE 0 FILL A-WIPE TV-RO-PLACE A-PATH AS ADST-INIT . "
+        "AS ADST-OPEN . AS ADST-STATE@ . CR",
+        "A-OPS 1 1 R-OCC T-NOW ACC . COUNT. AS ADST-STATE@ . GEN . "
+        "A-PATH T-THERE? . CR",
+    ])
+    assert rows == [
+        [OK, OK, READY],
+        [READ_ONLY, 0, READY, 0, 0],
     ]
 
 

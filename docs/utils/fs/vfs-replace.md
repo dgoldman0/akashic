@@ -29,9 +29,20 @@ Publication by one rename creates neither the backup nor the marker. Their
 names stay reserved, since recovery inspects all four on every filesystem.
 
 Paths are copied into the descriptor, cannot contain empty, `.` or `..`
-components, and must be pairwise distinct. A path is at most 255 bytes and
-each component is at most 23 bytes. The component bound deliberately matches
-MP64FS, whose directory entry can persist at most 23 name bytes.
+components, and must be pairwise distinct. They follow the rules of the
+volume the descriptor works on: a path is at most `VFS-PATH-MAX` (4,096) bytes,
+and each name in it at most as long as the volume takes, which
+`VFS-NAME-LIMIT` reads from the volume's `STATFS`. On ext4 a name may be 255
+bytes; on MP64FS, whose directory entry holds 23 name bytes, it may be 23. A
+path that breaks its volume's rule is refused with `VREPL-S-INVALID` when the
+paths are set, before anything is written.
+
+The descriptor is `VREPL-SIZE`, 96 bytes, and keeps the four paths end to end
+in one block of heap memory allocated at their lengths when they are set. A
+new set of paths replaces the block, and `VREPL-FINI` gives it back; an owner
+calls `VREPL-FINI` before it lets go of a descriptor, as a store does when it
+closes for good and an applet when it shuts down. A path of the full 4,096
+bytes therefore costs its bytes only in the descriptors that hold one.
 
 The four paths are private to one replacement descriptor. Applications must
 not open them as ordinary resources or share them between targets.
@@ -52,8 +63,9 @@ resource owner is the only semantic writer to the target and its companions.
 
 `VREPL-DERIVE-PATHS!` reserves the `.s-`, `.b-`, and `.m-` filename prefixes
 and derives fixed 23-byte companion names in the target directory from
-SHA3-256 of the full target path. This avoids overflowing MP64FS when the
-target already has a 23-byte basename. Derivation is stable, not a claim of
+SHA3-256 of the full target path. Every volume takes a name of 23 bytes, so the
+companions fit wherever the target does, whatever the length of the target's
+own name. Derivation is stable, not a claim of
 collision-proof identity: owners must register one descriptor per canonical
 target and must not permit two live descriptors to claim the same companions.
 A target using a reserved prefix is rejected so it cannot masquerade as an
@@ -115,21 +127,25 @@ with the record in place, and the descriptor's close drains it.
 Every other binding, MP64FS and the RAM binding among them, publishes through
 the steps built for a filesystem without a journal:
 
-5. `VFS-SYNC` the stage.
-6. Create, read back, and `VFS-SYNC` the marker. It records whether the target
-   existed, the new length and CRC-32, the first 128 bits of SHA3-256 over the
-   target path, and a CRC-32 of the marker record.
-7. If a target existed, rename it to the backup name and `VFS-SYNC`.
-8. Rename the stage to the target name and `VFS-SYNC`.
-9. Remove the marker and `VFS-SYNC`. This successful sync is the commit point.
-10. Remove the backup and `VFS-SYNC` as post-commit cleanup.
+5. Take a barrier after the stage.
+6. Create and read back the marker, then take a barrier. It records whether
+   the target existed, the new length and CRC-32, the first 128 bits of
+   SHA3-256 over the target path, and a CRC-32 of the marker record.
+7. If a target existed, rename it to the backup name and take a barrier.
+8. Rename the stage to the target name and take a barrier.
+9. Remove the marker and take a barrier. This successful barrier is the
+   commit point.
+10. Remove the backup and take a barrier as post-commit cleanup.
+
+A barrier is `VFS-BARRIER` ([vfs.md](vfs.md#sync-and-eviction)): a `VFS-SYNC`
+on these bindings, whose changes reach the medium only at a sync.
 
 Before the commit point, a durable marker means recovery rolls back. After
 the commit point, no marker means the visible target wins and any remaining
 backup is cleanup state.
 
 This ordering is not a claim that the underlying filesystem is power-loss
-atomic. `VFS-SYNC` dispatches the selected binding's `SYNCFS` operation. A
+atomic. A barrier there dispatches the binding's `SYNCFS` operation. A
 disk-backed binding owns the durability semantics of `SYNCFS`, per-file
 `FSYNC`, and lifecycle `UNMOUNT`; each successful durability path must finish
 at a successful `VOL-FLUSH`. MP64FS writes its cached bitmap and directory
@@ -145,8 +161,10 @@ writes and a deterministic recovery policy for every state it publishes.
 
 A binding that sets `VFS-CAP-DURABLE-MUTATIONS` without
 `VFS-CAP-RENAME-REPLACE` has no rename that can take the target as its
-victim. It publishes through the marker and the backup, and the routine
-leaves out the syncs, since each step is on the medium when it returns.
+victim. It publishes through the marker and the backup, and each barrier
+answers at once without a sync, since each step is on the medium when it
+returns. The copy library ([vfs-copy.md](vfs-copy.md)) takes its barriers
+through the same word, so a save and a copy order their steps by one rule.
 
 ### Cost on ext4
 
@@ -200,6 +218,26 @@ a sync at 4.6 times their 64 MiB cost on a 256 MiB volume, through
 computation that grows with the volume, so both publications are expected
 to cost more there; neither was run on a larger volume.
 
+## A replacement bound for reading
+
+`VREPL-READ-ONLY!` marks a descriptor read-only, and `PLACE-VREPL!` marks the
+one it binds for reading ([places.md](places.md)): a store that keeps its
+file through a replacement on a read-only place holds such a descriptor. A
+read-only replacement changes nothing. `VREPL-REPLACE` answers
+`VREPL-S-READ-ONLY` before it looks at the files, and `VREPL-RECOVER` only says
+whether the target as found is the committed file:
+
+| State found | Recovery's answer on a read-only replacement |
+|---|---|
+| no companion, or a stage or backup beside the target, or a stage alone | `VREPL-S-OK`; the stale companions stay |
+| a marker | `VREPL-S-READ-ONLY`; only a rollback settles it |
+| a backup where the target is missing | `VREPL-S-READ-ONLY`; only restoring it settles it |
+| a namespace that breaks the contract | `VREPL-S-RECOVERY`, as on a writable replacement |
+
+A store that receives `VREPL-S-READ-ONLY` says so in its own answer, so a
+person sees that the place is read-only rather than that the save failed. The
+same descriptor marked writable again recovers and saves as usual.
+
 ## Recovery states
 
 `VREPL-RECOVER` is safe to run at activation before opening the target. One
@@ -235,12 +273,15 @@ Allocate `VREPL-SIZE` bytes for each descriptor.
 
 ```forth
 CREATE document-save VREPL-SIZE ALLOT
+document-save VREPL-SIZE 0 FILL
 
 my-vfs document-save VREPL-INIT THROW
 
 S" /notes.txt" document-save VREPL-DERIVE-PATHS! THROW
 
 text-address text-length document-save VREPL-REPLACE
+
+document-save VREPL-FINI DROP
 ```
 
 ### `VREPL-INIT`
@@ -249,7 +290,22 @@ text-address text-length document-save VREPL-REPLACE
 VREPL-INIT  ( vfs replacement -- status )
 ```
 
-Initialize a caller-owned descriptor for one VFS.
+Initialize a caller-owned descriptor for one VFS. A descriptor that is valid
+already gives back the block its paths hold first, so a descriptor can be
+pointed at another volume; memory that was never a descriptor must not happen
+to hold a descriptor's magic and volume cells, which a cleared buffer never
+does. A descriptor in the middle of an operation answers `VREPL-S-BUSY`.
+
+### `VREPL-FINI`
+
+```forth
+VREPL-FINI  ( replacement -- status )
+```
+
+Give back the block that holds the descriptor's paths and clear the
+descriptor, which `VREPL-INIT` then makes ready again. It answers
+`VREPL-S-INVALID` for memory that holds no valid descriptor, which changes
+nothing, and `VREPL-S-BUSY` during an operation.
 
 ### `VREPL-DERIVE-PATHS!`
 
@@ -266,11 +322,12 @@ stage, backup, and marker in the same directory:
 .m-<20 lowercase base32 characters>
 ```
 
-Each companion component is exactly the MP64FS limit of 23 bytes and encodes
-the first 100 SHA3-256 bits. Derivation fails if the parent plus 23 bytes would
-exceed the 255-byte VFS path bound. Re-instantiating a descriptor with the
-same target produces the same paths, which allows activation-time recovery
-without persisting descriptor memory.
+Each companion component is 23 bytes, a name every volume takes, and
+encodes the first 100 SHA3-256 bits. Derivation fails if the parent plus 23
+bytes would exceed `VFS-PATH-MAX`, or if the volume takes names shorter than
+23 bytes. Re-instantiating a descriptor with the same target produces the
+same paths, which allows activation-time recovery without persisting
+descriptor memory.
 
 The truncated digest provides a 100-bit chosen-target second-preimage space,
 not absolute uniqueness. If a valid marker names a different target, recovery
@@ -291,6 +348,20 @@ Validate and copy the four reserved paths. Configuration is rejected while
 an operation is active. This manual form remains available for bindings or
 owners with their own artifact namespace; all four paths must still be
 pairwise distinct and share one parent.
+
+### Reading the paths
+
+```forth
+VREPL-TARGET$       ( replacement -- a u )
+VREPL-STAGE$  VREPL-BACKUP$  VREPL-MARKER$   ( replacement -- a u )
+VREPL-FOLDER$       ( replacement -- a u )
+VREPL-TARGET-NAME$  VREPL-STAGE-NAME$        ( replacement -- a u )
+```
+
+The four paths, the folder they share (`/` for the root), and the final names
+of the target and the stage. The strings lie in the descriptor's block and
+last until its paths are set again or it is given back. The copy library names
+its stage and its destination's folder through these words.
 
 ### `VREPL-PRECONDITION!`
 
@@ -313,6 +384,16 @@ an authoritative revision compare it here. This hook is a precondition, not
 a substitute for routing every semantic writer through the same owner.
 `VFS-TRANSACTION` excludes unrelated callers of guarded public VFS words, but
 an unguarded build or code bypassing the public API has no such boundary.
+
+### `VREPL-READ-ONLY!`
+
+```forth
+VREPL-READ-ONLY!  ( flag replacement -- status )
+```
+
+Mark the descriptor read-only with a true flag, or writable with 0. Setting
+the paths keeps the mark. "A replacement bound for reading" above gives what a
+read-only descriptor answers.
 
 ### `VREPL-RECOVER`
 
@@ -350,6 +431,8 @@ ordinary, status-failure, and exception paths before returning or rethrowing.
 | `VREPL-S-RECOVERY` | 7 | Ambiguous state retained for recovery/inspection |
 | `VREPL-S-MARKER-CORRUPT` | 8 | Marker is short, corrupt, or belongs to another target |
 | `VREPL-S-UNCERTAIN` | 9 | Sync failed while removing the commit marker |
+| `VREPL-S-READ-ONLY` | 10 | The replacement is read-only, and the operation needed a change |
+| `VREPL-S-NOMEM` | 11 | No heap memory was left for the descriptor's paths |
 
 `VREPL-S-COMMITTED-CLEANUP` is a committed save: the resource owner should
 advance its revision and schedule `VREPL-RECOVER` to remove the backup.

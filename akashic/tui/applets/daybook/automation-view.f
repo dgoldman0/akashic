@@ -1256,6 +1256,7 @@ _DBAV-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT DBAV-SIZE
         DBAO-S-DELETED OF S" That automation was deleted" ENDOF
         DBAO-S-BLOCKED OF S" Automations are unavailable" ENDOF
         DBAO-S-IO OF S" Could not save automations" ENDOF
+        DBAO-S-READ-ONLY OF S" Automations are read-only here" ENDOF
         DBAO-S-BUSY OF S" A run of it is already in progress" ENDOF
         DBAO-S-REVIEW OF S" Review its last run first" ENDOF
         DBAO-S-APPROVAL OF S" It is not approved yet; Y asks Desk" ENDOF
@@ -1291,6 +1292,7 @@ _DBAV-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT DBAV-SIZE
         DBAV-S-CHANGED OF 3 ENDOF
         DBAO-S-DELETED OF 3 ENDOF
         DBAO-S-BLOCKED OF 3 ENDOF
+        DBAO-S-READ-ONLY OF 3 ENDOF
         DBAO-S-BUSY OF 3 ENDOF
         DBAO-S-REVIEW OF 3 ENDOF
         DBAO-S-APPROVAL OF 3 ENDOF

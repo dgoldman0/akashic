@@ -389,6 +389,19 @@ and everything below runs on it.
 - File Explorer keeps its clipboard as a place and a path, and its paste
   copies with `PLACE-COPY`, or after a cut moves with `PLACE-MOVE`, into
   any place of its set, on its volume or another.
+- Names and paths follow each volume (slice 4). The replacement library
+  takes a name as long as its volume takes, `VFS-NAME-LIMIT` from the
+  volume's `VSF.NAMEMAX`, and a path of `VFS-PATH-MAX`, 4,096 bytes; the
+  MP64FS binding reports its 23 bytes through `STATFS`. A descriptor keeps
+  its paths in a block sized to them, which `VREPL-FINI` gives back, so the
+  4,096-byte limit costs memory only where a path is that long. The stage's
+  name stays 23 bytes. Copies, moves and Pad's saves follow the same rule:
+  a long name copies and saves on ext4 and is refused on MP64FS. Pad keeps a
+  document's path at the 512 bytes the resource form carries.
+- A checked replacement and a copy take every barrier between their steps
+  from one word, `VFS-BARRIER`: a sync, except on a binding with
+  `VFS-CAP-DURABLE-MUTATIONS`, so a copy to ext4 syncs no more than a save
+  there does.
 
 What slices 2 and 3 leave:
 
@@ -411,33 +424,11 @@ What slices 2 and 3 leave:
   its folder in its home once when it opens and composes its paths under
   that folder, through one helper both share, and the persistence layer
   keeps taking an instance and a path (Decided, 2026-11-17).
-- A copy's destination follows the replacement library's path rule,
-  since the stage's name comes from `VREPL-DERIVE-PATHS!`: components of
-  at most 23 bytes, MP64FS's limit, and a path of at most 255. A move
-  takes the same destinations, so a file whose name is longer than 23
-  bytes can be neither copied nor moved, even within an ext4 volume,
-  whose names may be 255 bytes. At the start of slice 4 the rule follows
-  the volume (Decided, 2026-11-17): a name may be as long as the volume's
-  own limit, `VSF.NAMEMAX`, which the MP64FS binding then reports as its
-  23 bytes, and a path as long as the VFS's `VFS-PATH-MAX`, 4,096 bytes.
-  Each replacement keeps its paths at the length they need rather than
-  reserving that maximum for each of them. The stage's own name stays
-  23 bytes, so it fits every volume. Pad's saves follow the same rule.
-- A copy syncs twice on every binding, after its stage and after the
-  rename, where a checked replacement leaves out its syncs on a binding
-  with `VFS-CAP-DURABLE-MUTATIONS`, whose changes are on the medium when
-  each call returns. In slice 4 both take their barriers from one word
-  that syncs only where a binding lacks that capability (Decided,
-  2026-11-17).
 - File Explorer copies and moves files only and refuses a folder on its
   clipboard. Copying a folder is a walk that calls the copy for each file,
   which the tests make and no applet makes yet.
 - Power cuts during a copy's stage write and rename are qualified in
   slice 8.
-- `PLACE-NAME-LIMIT` asks the volume, and the MP64FS binding gives no
-  answer yet, so the limit there is the VFS's 255 and the binding's own
-  refusal of a name over 23 bytes stands until the binding reports its
-  limit in slice 4.
 - Starting Desk with a home that is missing has run only as the
   activation's own case; the stores' answers with no home are exercised
   when the user volume attaches (slice 4).

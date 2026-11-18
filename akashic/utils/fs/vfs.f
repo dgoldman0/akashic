@@ -75,6 +75,9 @@ VFS-ATTR-SIZE CONSTANT VFS-SETATTR-REQ-SIZE
 \ Path resolution has one bounded expansion workspace and follows at most
 \ forty symbolic links, matching the conventional POSIX traversal ceiling.
 4096 CONSTANT VFS-PATH-MAX
+\ An entry name is at most 255 bytes, ext4's limit.  A volume may take
+\ fewer, and says so through STATFS (VFS-NAME-LIMIT).
+255  CONSTANT VFS-NAME-MAX
 40   CONSTANT VFS-SYMLINK-MAX
 
 \ Final-component policy for VFS-RESOLVE-POLICY?.  Intermediate symbolic
@@ -1704,7 +1707,7 @@ VARIABLE _VFC-H
 : _VFS-VALID-NAME?  ( c-addr u -- flag )
     DUP 0= IF 2DROP FALSE EXIT THEN
     DUP 0< IF 2DROP FALSE EXIT THEN
-    DUP 255 > IF 2DROP FALSE EXIT THEN
+    DUP VFS-NAME-MAX > IF 2DROP FALSE EXIT THEN
     OVER 0= IF 2DROP FALSE EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP FALSE EXIT THEN
     DUP 1 = IF
@@ -3110,6 +3113,16 @@ VARIABLE _VSF-V
     VFS-OP-STATFS _VSF-V @ _VFS-XT EXECUTE
     _VSF-V @ _VFS-RESULT ;
 
+CREATE _VNL-STATFS VFS-STATFS-SIZE ALLOT
+
+\ VFS-NAME-LIMIT ( vfs -- n )
+\   The longest entry name the volume takes: the NAMEMAX its STATFS
+\   answers, or VFS-NAME-MAX when it answers none in 1 to VFS-NAME-MAX.
+: VFS-NAME-LIMIT  ( vfs -- n )
+    >R _VNL-STATFS VFS-STATFS-SIZE R> VFS-STATFS IF VFS-NAME-MAX EXIT THEN
+    _VNL-STATFS VSF.NAMEMAX @
+    DUP 1 < OVER VFS-NAME-MAX > OR IF DROP VFS-NAME-MAX THEN ;
+
 \ =====================================================================
 \  VFS-CREATE -- path-aware file creation
 \ =====================================================================
@@ -3296,6 +3309,15 @@ VARIABLE _VSY-IOR    \ accumulated ior
     REPEAT
     _VSY-V @ V.FLAGS @ VFS-F-DIRTY INVERT AND _VSY-V @ V.FLAGS !
     0 _VSY-V @ _VFS-RESULT ;
+
+\ VFS-BARRIER ( vfs -- ior )
+\   Make the volume's completed changes durable before the next ones: a
+\   VFS-SYNC, which a binding with VFS-CAP-DURABLE-MUTATIONS does not
+\   need, since each of its changes is on the medium when its call
+\   returns.  A save or a copy takes the barriers between its steps here.
+: VFS-BARRIER  ( vfs -- ior )
+    DUP VFS-CAPS@ VFS-CAP-DURABLE-MUTATIONS AND IF DROP 0 EXIT THEN
+    VFS-SYNC ;
 
 VARIABLE _VFY-FD
 VARIABLE _VFY-V
@@ -3519,12 +3541,14 @@ GUARD _vfs-guard
 ' VFS-SETXATTR     CONSTANT _vfs-setxattr-xt
 ' VFS-REMOVEXATTR  CONSTANT _vfs-removexattr-xt
 ' VFS-STATFS       CONSTANT _vfs-statfs-xt
+' VFS-NAME-LIMIT   CONSTANT _vfs-name-limit-xt
 ' VFS-RM           CONSTANT _vfs-rm-xt
 ' VFS-DIR          CONSTANT _vfs-dir-xt
 ' VFS-CD?          CONSTANT _vfs-cdq-xt
 ' VFS-CD           CONSTANT _vfs-cd-xt
 ' VFS-STAT         CONSTANT _vfs-stat-xt
 ' VFS-SYNC         CONSTANT _vfs-sync-xt
+' VFS-BARRIER      CONSTANT _vfs-barrier-xt
 ' VFS-FSYNC        CONSTANT _vfs-fsync-xt
 ' VFS-SET-HWM      CONSTANT _vfs-set-hwm-xt
 ' VFS-INODE-PATH   CONSTANT _vfs-inode-path-xt
@@ -3571,12 +3595,14 @@ GUARD _vfs-guard
 : VFS-SETXATTR     _vfs-setxattr-xt _vfs-guard WITH-GUARD ;
 : VFS-REMOVEXATTR  _vfs-removexattr-xt _vfs-guard WITH-GUARD ;
 : VFS-STATFS       _vfs-statfs-xt   _vfs-guard WITH-GUARD ;
+: VFS-NAME-LIMIT   _vfs-name-limit-xt _vfs-guard WITH-GUARD ;
 : VFS-RM           _vfs-rm-xt       _vfs-guard WITH-GUARD ;
 : VFS-DIR          _vfs-dir-xt      _vfs-guard WITH-GUARD ;
 : VFS-CD?          _vfs-cdq-xt      _vfs-guard WITH-GUARD ;
 : VFS-CD           _vfs-cd-xt       _vfs-guard WITH-GUARD ;
 : VFS-STAT         _vfs-stat-xt     _vfs-guard WITH-GUARD ;
 : VFS-SYNC         _vfs-sync-xt     _vfs-guard WITH-GUARD ;
+: VFS-BARRIER      _vfs-barrier-xt  _vfs-guard WITH-GUARD ;
 : VFS-FSYNC        _vfs-fsync-xt    _vfs-guard WITH-GUARD ;
 : VFS-SET-HWM      _vfs-set-hwm-xt  _vfs-guard WITH-GUARD ;
 : VFS-INODE-PATH   _vfs-inode-path-xt _vfs-guard WITH-GUARD ;
