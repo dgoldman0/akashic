@@ -235,6 +235,30 @@ root paths, identity, guard, and workspace remain reusable. A rejection before
 guard acquisition removes nothing. Callers must establish their independent
 durable authority fence before resetting staging roots.
 
+## A store in a read-only place
+
+`PSTORE-READ-ONLY! ( flag store -- status )` marks a store read-only, or
+writable again with 0, between operations; `PSTORE-READ-ONLY? ( store --
+flag )` answers it. A repository passes the access of the place that holds
+its files, so a store in a read-only place refuses every change itself and
+the volume under the place needs no mark. A read-only store opens and reads
+as any other. `PSTORE-PROVISION`, `PSTORE-STAGING-RESET` and `PSTORE-BEGIN`
+answer `PERSIST-S-READ-ONLY` and touch nothing, so a store whose files do not
+exist stays absent: `PSTORE-OPEN` returns `PERSIST-S-ABSENT` and nothing is
+created. `PERSIST-S-READ-ONLY` is 16, past the statuses 11 to 15 that the
+layers above add as their own, and `PERSIST-STATUS?` accepts it with 0 to 10.
+
+`PSTORE-BEGIN-READ ( store work -- status )` begins a transaction that only
+reads, on any store. It sees the current root as `PSTORE-BEGIN`'s transaction
+does and reconciles nothing, since its reads stop at that root's bounds.
+`PSTORE-READ-PAGE-TX`, `PSTORE-READ-RECORD-TX`, `PSTORE-ROOT-SLOT@` and
+`PSTORE-READ-PAGE-SNAPSHOT-TX` work in it; the staging words and
+`PSTORE-COMMIT` answer `PERSIST-S-READ-ONLY` and leave it owned, and
+`PSTORE-ABORT` ends it. The cold audits of Library's index and Streams'
+operational spool run in one, so they audit a read-only store too.
+`PCOMPACT-BEGIN` and `PCOMPACT-RECOVER` answer `PERSIST-S-READ-ONLY` when the
+builder store is read-only, before any root or bank is touched.
+
 At begin, physical suffixes are truncated back to the committed root before a
 proposal is copied. Record and page proposal bounds advance only after direct
 readback and byte comparison. Commit syncs page and segment data before root

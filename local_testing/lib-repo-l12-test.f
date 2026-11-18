@@ -280,6 +280,53 @@ CREATE _LR12-raw 64 ALLOT
     _LR12-inspection LRI.RAW-REQUIRED @ = _LR12-assert
     _LR12-stack ;
 
+\ A repository in a read-only place that does not exist yet is absent and
+\ stays so: provisioning and bootstrap answer READ-ONLY and create nothing.
+: _LR12-read-only-absent  ( -- )
+    -1 _LR12-repository-a LIBRARY-REPOSITORY-READ-ONLY!
+        LIBRARY-REPOSITORY-S-OK _LR12-status
+    _LR12-repository-a LIBRARY-REPOSITORY-READ-ONLY? _LR12-assert
+    _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-LOAD
+        LIBRARY-REPOSITORY-S-ABSENT _LR12-status
+    _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-PROVISION
+        LIBRARY-REPOSITORY-S-READ-ONLY _LR12-status
+    _LR12-bootstrap _LR12-repository-a _LR12-work-a
+        LIBRARY-REPOSITORY-BOOTSTRAP
+        LIBRARY-REPOSITORY-S-READ-ONLY _LR12-status
+    S" /library" _LR12-vfs @ VFS-RESOLVE? 0<> _LR12-assert DROP
+    _LR12-repository-a LIBRARY-REPOSITORY-PROVISIONED? 0= _LR12-assert
+    0 _LR12-repository-a LIBRARY-REPOSITORY-READ-ONLY!
+        LIBRARY-REPOSITORY-S-OK _LR12-status
+    _LR12-repository-a LIBRARY-REPOSITORY-READ-ONLY? 0= _LR12-assert
+    _LR12-stack ;
+
+\ A read-only repository that exists loads, through its cold audit, and
+\ refuses every change; compaction's refusal leaves it unblocked.
+: _LR12-read-only-present  ( -- )
+    -1 _LR12-repository-a LIBRARY-REPOSITORY-READ-ONLY!
+        LIBRARY-REPOSITORY-S-OK _LR12-status
+    _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-LOAD
+        LIBRARY-REPOSITORY-S-OK _LR12-status
+    _LR12-repository-a LIBRARY-REPOSITORY-GENERATION@ 1 = _LR12-assert
+    _LR12-repository-a _LR12-work-a
+        LIBRARY-REPOSITORY-COMPACTION-BEGIN
+        LIBRARY-REPOSITORY-S-READ-ONLY _LR12-status
+    _LR12-work-a LIBRARY-REPOSITORY-COMPACTION-STATE@
+        PCOMPACT-STATE-IDLE = _LR12-assert
+    _LR12-repository-a LIBRARY-REPOSITORY-BLOCKED? 0= _LR12-assert
+    _LR12-bootstrap _LR12-repository-a _LR12-work-a
+        LIBRARY-REPOSITORY-BOOTSTRAP
+        LIBRARY-REPOSITORY-S-READ-ONLY _LR12-status
+    _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-PROVISION
+        LIBRARY-REPOSITORY-S-READ-ONLY _LR12-status
+    77 ['] _LR12-owner-ok _LR12-repository-a _LR12-work-a
+        LIBRARY-REPOSITORY-WITH-OWNER
+        LIBRARY-REPOSITORY-S-OK _LR12-status
+    _LR12-repository-a LIBRARY-REPOSITORY-GENERATION@ 1 = _LR12-assert
+    0 _LR12-repository-a LIBRARY-REPOSITORY-READ-ONLY!
+        LIBRARY-REPOSITORY-S-OK _LR12-status
+    _LR12-stack ;
+
 : _LR12-second-owner  ( -- )
     _LR12-repository-a _LR12-work-a LIBRARY-REPOSITORY-FINI
         LIBRARY-REPOSITORY-S-OK _LR12-status
@@ -366,9 +413,11 @@ CREATE _LR12-raw 64 ALLOT
     _LR12-init-preflight-contracts
     _LR12-repository-a-init
     _LR12-owner-contracts
+    _LR12-read-only-absent
     _LR12-cold-provision-bootstrap
     _LR12-maintenance
     _LR12-compaction-abort
+    _LR12-read-only-present
     _LR12-second-owner
     _LR12-finish
     _LR12-fails @ IF

@@ -16,6 +16,8 @@
 \      ( target-a target-u vfs store -- status )
 \    STREAMS-DRAFT-STORE-INIT
 \      ( vfs store -- status )
+\    STREAMS-DRAFT-STORE-READ-ONLY!
+\      ( flag store -- status )
 \    STREAMS-DRAFT-STORE-RECOVER
 \      ( store -- status )
 \    STREAMS-DRAFT-STORE-SAVE
@@ -50,6 +52,7 @@ REQUIRE ../../../concurrency/guard.f
 6 CONSTANT SDSTORE-S-IO
 7 CONSTANT SDSTORE-S-RECOVERY
 8 CONSTANT SDSTORE-S-BUSY
+9 CONSTANT SDSTORE-S-READ-ONLY
 
 \ =====================================================================
 \  Versioned record envelope
@@ -176,6 +179,7 @@ _SDS-REPLACE VREPL-SIZE + CONSTANT STREAMS-DRAFT-STORE-SIZE
         VREPL-S-MARKER-CORRUPT OF SDSTORE-S-RECOVERY ENDOF
         VREPL-S-UNCERTAIN OF SDSTORE-S-RECOVERY ENDOF
         VREPL-S-NOMEM OF SDSTORE-S-IO ENDOF
+        VREPL-S-READ-ONLY OF SDSTORE-S-READ-ONLY ENDOF
         SDSTORE-S-RECOVERY SWAP
     ENDCASE ;
 
@@ -215,6 +219,16 @@ VARIABLE _SDSI-TARGET-U
 
 : STREAMS-DRAFT-STORE-INIT  ( vfs store -- status )
     _sds-init-xt _streams-draft-store-guard WITH-GUARD ;
+
+\ Mark the store read-only, or writable again with 0, as the place that
+\ holds its file is.  A read-only store loads; a save answers
+\ SDSTORE-S-READ-ONLY.
+: _STREAMS-DRAFT-STORE-READ-ONLY!  ( flag store -- status )
+    DUP STREAMS-DRAFT-STORE-VALID? 0= IF 2DROP SDSTORE-S-INVALID EXIT THEN
+    STREAMS-DRAFT-STORE.REPLACE VREPL-READ-ONLY! _SDSTORE-VREPL>STATUS ;
+' _STREAMS-DRAFT-STORE-READ-ONLY! CONSTANT _sds-read-only-xt
+: STREAMS-DRAFT-STORE-READ-ONLY!  ( flag store -- status )
+    _sds-read-only-xt _streams-draft-store-guard WITH-GUARD ;
 
 VARIABLE _SDSR-STORE
 VARIABLE _SDSR-VSTATUS

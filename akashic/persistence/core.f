@@ -24,6 +24,13 @@ REQUIRE ../utils/memory-span.f
  8 CONSTANT PERSIST-S-UNCERTAIN
  9 CONSTANT PERSIST-S-NOT-FOUND
 10 CONSTANT PERSIST-S-FAULT
+\ A read-only store refuses every change with this status.  It sits past
+\ 11..15, which the layers above add to these statuses as their own.
+16 CONSTANT PERSIST-S-READ-ONLY
+
+: PERSIST-STATUS?  ( status -- flag )
+    DUP PERSIST-S-OK >= OVER PERSIST-S-FAULT <= AND
+    SWAP PERSIST-S-READ-ONLY = OR ;
 
 4096 CONSTANT PERSIST-PAGE-SIZE
 64   CONSTANT PERSIST-RECORD-HEADER-SIZE

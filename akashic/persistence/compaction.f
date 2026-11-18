@@ -37,7 +37,7 @@ REQUIRE store.f
 7 CONSTANT PCOMPACT-STATE-UNCERTAIN
 
 : _PCOMPACT-STATUS?  ( status -- flag )
-    DUP PERSIST-S-OK >= SWAP PERSIST-S-FAULT <= AND ;
+    PERSIST-STATUS? ;
 
 : _PCOMPACT-DROP3  ( x1 x2 x3 -- ) 2DROP DROP ;
 : _PCOMPACT-DROP9  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 -- )
@@ -477,6 +477,12 @@ PSEG-WORK-SIZE _PCW-SEGMENT-WORK + CONSTANT PCOMPACT-WORK-SIZE
     DUP _PCW.STATE @ PCOMPACT-STATE-FINALIZED < IF DROP 0 EXIT THEN
     _PCW.TARGET-ROOT ;
 
+\ Compaction rewrites both banks and both root slots, so it neither begins
+\ nor recovers over a builder store marked read-only: the repository marks
+\ both of its stores so in a read-only place.
+: _PCOMPACT-READ-ONLY?  ( compact -- flag )
+    _PCC.BUILDER @ PSTORE-READ-ONLY? ;
+
 \ ---------------------------------------------------------------------
 \  Physical-bank helpers
 \ ---------------------------------------------------------------------
@@ -599,6 +605,7 @@ PSEG-WORK-SIZE _PCW-SEGMENT-WORK + CONSTANT PCOMPACT-WORK-SIZE
         DROP R> DROP PERSIST-S-INVALID EXIT
     THEN
     R@ _PCW.BUSY @ IF DROP R> DROP PERSIST-S-BUSY EXIT THEN
+    DUP _PCOMPACT-READ-ONLY? IF DROP R> DROP PERSIST-S-READ-ONLY EXIT THEN
     R@ _PCW.STATE @ DUP PCOMPACT-STATE-IDLE <>
         SWAP PCOMPACT-STATE-CLEANED <> AND IF
         DROP R> DROP PERSIST-S-BUSY EXIT
@@ -939,6 +946,7 @@ PSEG-WORK-SIZE _PCW-SEGMENT-WORK + CONSTANT PCOMPACT-WORK-SIZE
         DROP R> DROP PERSIST-S-INVALID EXIT
     THEN
     R@ _PCW.BUSY @ IF DROP R> DROP PERSIST-S-BUSY EXIT THEN
+    DUP _PCOMPACT-READ-ONLY? IF DROP R> DROP PERSIST-S-READ-ONLY EXIT THEN
     R@ _PCOMPACT-RESET-OPERATION
     1 R@ _PCW.BUSY !
     PERSIST-S-INVALID R@ _PCW.STATUS !

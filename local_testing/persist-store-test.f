@@ -108,6 +108,14 @@ GUARD _PSTC-guard-i0
 GUARD _PSTC-guard-i1
 GUARD _PSTC-guard-i2
 GUARD _PSTC-guard-i3
+CREATE _PSTC-ro-store PSTORE-SIZE ALLOT
+CREATE _PSTC-ro-work PSTORE-WORK-SIZE ALLOT
+CREATE _PSTC-ro-buffer 512 ALLOT
+CREATE _PSTC-ro-identity PERSIST-IDENTITY-SIZE ALLOT
+GUARD _PSTC-ro-guard
+VARIABLE _PSTC-ro-size
+VARIABLE _PSTC-ro-fd
+VARIABLE _PSTC-ro-scratch
 
 : _PSTC-assert  ( flag -- )
     1 _PSTC-checks +!
@@ -667,6 +675,95 @@ GUARD _PSTC-guard-i3
     _PSTC-work-b PSTORE-PAGE-PAYLOAD$
         _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE COMPARE 0= _PSTC-assert _PSTC-stack ;
 
+\ The segment file's length, which a reconciling begin truncates.
+: _PSTC-ro-segment-size  ( -- bytes )
+    _PSTC-store-b PSTORE-SEGMENT-FILE@ _PSTC-work-b _PSW.SEGMENT-WORK
+        PSEG-FILE-SIZE? SWAP _PSTC-ro-scratch ! PERSIST-S-OK _PSTC-status
+    _PSTC-ro-scratch @ ;
+
+\ A read-only store reads its committed state, in a transaction too, and
+\ changes nothing: provisioning, a staging reset, a transaction that may
+\ stage and every staging word answer READ-ONLY, and a failed
+\ transaction's suffix stays until a writable begin reconciles it.
+: _PSTC-read-only  ( -- )
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-record-2 20 _PSTC-ref-2 _PSTC-store-b _PSTC-work-b
+        PSTORE-APPEND-RECORD PERSIST-S-OK _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+    _PSTC-ro-segment-size _PSTC-ro-size !
+
+    -1 _PSTC-store-b PSTORE-READ-ONLY! PERSIST-S-OK _PSTC-status
+    _PSTC-store-b PSTORE-READ-ONLY? _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-PROVISION
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-STAGING-RESET
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-store-b PSTORE-STATUS@ PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-store-b PSTORE-GENERATION@ 1 = _PSTC-assert
+    0 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-PAGE-PAYLOAD$
+        _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE COMPARE 0= _PSTC-assert
+    _PSTC-ref _PSTC-store-b _PSTC-work-b PSTORE-READ-RECORD
+        PERSIST-S-OK _PSTC-status
+    _PSTC-work-b PSTORE-RECORD-PAYLOAD$ _PSTC-record 20 COMPARE 0=
+        _PSTC-assert _PSTC-stack
+
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN-READ PERSIST-S-OK _PSTC-status
+    _PSTC-ro-segment-size _PSTC-ro-size @ = _PSTC-assert
+    0 _PSTC-store-b _PSTC-work-b PSTORE-READ-PAGE-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-ref _PSTC-store-b _PSTC-work-b PSTORE-READ-RECORD-TX
+        PERSIST-S-OK _PSTC-status
+    _PSTC-record 20 _PSTC-ref-2 _PSTC-store-b _PSTC-work-b
+        PSTORE-APPEND-RECORD PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE _PSTC-store-b _PSTC-work-b
+        PSTORE-APPEND-PAGE SWAP _PSTC-ro-scratch !
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-ro-scratch @ -1 = _PSTC-assert
+    _PSTC-page PERSIST-PAGE-PAYLOAD-SIZE 0 _PSTC-store-b _PSTC-work-b
+        PSTORE-WRITE-PAGE-TX PERSIST-S-READ-ONLY _PSTC-status
+    0 _PSTC-store-b _PSTC-work-b PSTORE-APPLICATION-ROOT!
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-COMMIT
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-TX-READY? _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+    _PSTC-ro-segment-size _PSTC-ro-size @ = _PSTC-assert
+    _PSTC-store-b PSTORE-GENERATION@ 1 = _PSTC-assert _PSTC-stack
+
+    \ A reading transaction on a writable store reconciles nothing either;
+    \ the next transaction that may stage does.
+    0 _PSTC-store-b PSTORE-READ-ONLY! PERSIST-S-OK _PSTC-status
+    _PSTC-store-b PSTORE-READ-ONLY? 0= _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN-READ PERSIST-S-OK _PSTC-status
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+    _PSTC-ro-segment-size _PSTC-ro-size @ = _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
+    _PSTC-ro-segment-size _PSTC-ro-size @ < _PSTC-assert
+    _PSTC-store-b _PSTC-work-b PSTORE-ABORT PERSIST-S-OK _PSTC-status
+
+    \ A read-only store over files that do not exist finds no root and
+    \ creates none of them.
+    _PSTC-ro-identity PERSIST-IDENTITY-SIZE 7 FILL
+    S" /ro-pages" S" /ro-segment" S" /ro-root-a" S" /ro-root-b"
+    _PSTC-ro-identity 256 _PSTC-vfs @ 0 0 _PSTC-ro-guard
+    ['] _PSTC-fault 0 _PSTC-ro-store PSTORE-INIT PERSIST-S-OK _PSTC-status
+    _PSTC-ro-buffer 512 _PSTC-ro-work PSTORE-WORK-INIT
+        PERSIST-S-OK _PSTC-status
+    -1 _PSTC-ro-store PSTORE-READ-ONLY! PERSIST-S-OK _PSTC-status
+    _PSTC-ro-store _PSTC-ro-work PSTORE-OPEN PERSIST-S-ABSENT _PSTC-status
+    _PSTC-ro-store _PSTC-ro-work PSTORE-PROVISION
+        PERSIST-S-READ-ONLY _PSTC-status
+    _PSTC-ro-store _PSTC-ro-work PSTORE-BEGIN
+        PERSIST-S-CONFLICT _PSTC-status
+    S" /ro-pages" _PSTC-vfs @ VFS-OPEN DUP _PSTC-ro-fd ! 0= _PSTC-assert
+    _PSTC-ro-fd @ ?DUP IF VFS-CLOSE THEN
+    S" /ro-segment" _PSTC-vfs @ VFS-OPEN DUP _PSTC-ro-fd ! 0= _PSTC-assert
+    _PSTC-ro-fd @ ?DUP IF VFS-CLOSE THEN
+    _PSTC-stack ;
+
 : _PSTC-tx-page-seams  ( -- )
     _PSTC-store-b _PSTC-work-b PSTORE-BEGIN PERSIST-S-OK _PSTC-status
     _PSTC-store-b _PSTC-work-b PSTORE-TX-READY? _PSTC-assert _PSTC-stack
@@ -986,6 +1083,7 @@ GUARD _PSTC-guard-i3
     _PSTC-readback
     _PSTC-suffix-reconcile
     _PSTC-cold-open
+    _PSTC-read-only
     _PSTC-tx-page-seams
     _PSTC-layer-poison
     _PSTC-tx-rewrite-faults

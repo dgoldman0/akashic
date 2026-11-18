@@ -13,7 +13,9 @@
 \
 \ Public API:
 \   STREAMS-REFRESH-OWNER-INIT
-\     ( vfs xio-service configured-factory-xt owner -- status )
+\     ( vfs read-only? xio-service configured-factory-xt owner -- status )
+\     READ-ONLY? is the access of the place whose volume VFS is: a
+\     read-only owner reads its checkpoint and saves none.
 \   STREAMS-REFRESH-OWNER-START
 \     ( exact-source owner-id owner-generation owner -- status )
 \   STREAMS-REFRESH-OWNER-TICK
@@ -185,6 +187,7 @@ VARIABLE _SREF-INIT-LOAD
 VARIABLE _SREF-INIT-OLD-GEN
 VARIABLE _SREF-INIT-RECOVERED
 VARIABLE _SREF-INIT-FACTORY-STATUS
+VARIABLE _SREF-INIT-READ-ONLY
 
 : _SREF-INIT-RECOVERY  ( owner -- status )
     _SREF-INIT-OWNER !
@@ -208,9 +211,9 @@ VARIABLE _SREF-INIT-FACTORY-STATUS
     SREF-S-OK ;
 
 : STREAMS-REFRESH-OWNER-INIT
-  ( vfs xio-service configured-factory-xt owner -- status )
+  ( vfs read-only? xio-service configured-factory-xt owner -- status )
     _SREF-INIT-OWNER ! _SREF-INIT-FACTORY !
-    _SREF-INIT-SERVICE ! _SREF-INIT-VFS !
+    _SREF-INIT-SERVICE ! _SREF-INIT-READ-ONLY ! _SREF-INIT-VFS !
     _SREF-INIT-OWNER @ 0= _SREF-INIT-VFS @ 0= OR IF
         SREF-S-INVALID EXIT
     THEN
@@ -236,6 +239,14 @@ VARIABLE _SREF-INIT-FACTORY-STATUS
 
     _SREF-INIT-VFS @ _SREF-INIT-OWNER @ SREF.STORE
         STREAMS-OBSERVATION-STORE-INIT
+    DUP _SREF-INIT-OWNER @ SREF.STORE-STATUS !
+    OSTORE-S-OK <> IF
+        _SREF-INIT-OWNER @ _SREF-PARTIAL-FREE SREF-S-STORAGE EXIT
+    THEN
+    \ The store follows the access of the place under it before it reads,
+    \ since a load can recover and the recovery below can save.
+    _SREF-INIT-READ-ONLY @ _SREF-INIT-OWNER @ SREF.STORE
+        STREAMS-OBSERVATION-STORE-READ-ONLY!
     DUP _SREF-INIT-OWNER @ SREF.STORE-STATUS !
     OSTORE-S-OK <> IF
         _SREF-INIT-OWNER @ _SREF-PARTIAL-FREE SREF-S-STORAGE EXIT

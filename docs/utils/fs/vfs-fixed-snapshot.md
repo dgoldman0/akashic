@@ -94,7 +94,14 @@ VFSNAP-SAVE     ( encode-context expected-generation store -- status )
 VFSNAP-RECOVER  ( store -- status )
 VFSNAP-BLOCKED? ( store -- flag )
 VFSNAP-PATH$    ( store -- a u )
+VFSNAP-READ-ONLY!  ( flag store -- status )
 ```
+
+`VFSNAP-READ-ONLY!` marks the store read-only, or writable again with 0, as
+the place that holds its file is; it marks the embedded replacement
+(`VREPL-READ-ONLY!`). A read-only store loads as any other. A save, and a
+recovery that would have to change the file, answer `VFSNAP-S-READ-ONLY`
+(10), which does not block the store.
 
 The caller owns `VFSNAP-STORE-SIZE` bytes and an exclusive scratch span of
 exactly `VFSNAP-HEADER-SIZE + payload-u` bytes for the complete initialized

@@ -180,18 +180,13 @@ VARIABLE _PACT-A-LOAD-STATUS
 VARIABLE _PACT-A-CONTEXT
 VARIABLE _PACT-A-CTX-FLAGS
 
-\ Narrow every place of the set to read-only.  A store that keeps its
-\ file through a replacement binds it in its place when it opens, and
-\ on a read-only place it binds the file for reading; it would still
-\ write through the instance that binding gave if asked, so the volumes
-\ under the set's places are marked read-only as well.
+\ Narrow every place of the set to read-only.  The volumes under the
+\ places stay as they are: the place words, a replacement bound in a
+\ read-only place, and the persistence and snapshot stores marked from
+\ their home's access each refuse changes themselves
+\ (docs/utils/fs/places.md).
 : _PACT-NARROW  ( -- )
     _PACT-A-SET @ PLSET-READ-ONLY!
-    _PACT-A-SET @ PLSET-FIRST
-    BEGIN ?DUP WHILE
-        DUP PLACE-VFS ?DUP IF V.FLAGS DUP @ VFS-F-RO OR SWAP ! THEN
-        PLACE-NEXT
-    REPEAT
     PACT-F-PLACES-READONLY _PACT-A-PACT @ PACT.FLAGS ! ;
 
 : _PACT-ENTER-RECOVERY  ( -- )

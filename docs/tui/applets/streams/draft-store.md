@@ -44,6 +44,12 @@ window handle, or other ephemeral instance ID is never durable identity.
 
 `STREAMS-DRAFT-STORE-INIT ( vfs store -- status )` selects
 `/streams-draft.bin` for the current singleton Streams lifecycle.
+`STREAMS-DRAFT-STORE-READ-ONLY! ( flag store -- status )` marks the store's
+replacement read-only, as Streams does when its home is a read-only place:
+the store loads, and a save answers `SDSTORE-S-READ-ONLY`. Streams marks its
+source store (`STREAMS-SOURCE-STORE-READ-ONLY!`) and, through
+`STREAMS-REFRESH-OWNER-INIT`'s access argument, its observation store
+(`STREAMS-OBSERVATION-STORE-READ-ONLY!`) the same way.
 `STREAMS-DRAFT-STORE-PATH$` reports the configured target. No new caller
 should adopt either initializer as a general text-storage contract.
 

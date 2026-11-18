@@ -39,6 +39,7 @@ REQUIRE ../../concurrency/guard.f
 7 CONSTANT VFSNAP-S-RECOVERY
 8 CONSTANT VFSNAP-S-BUSY
 9 CONSTANT VFSNAP-S-CONFLICT
+10 CONSTANT VFSNAP-S-READ-ONLY
 
 CREC-HEADER-SIZE CONSTANT VFSNAP-HEADER-SIZE
 
@@ -516,6 +517,7 @@ VARIABLE _VSPA-SPEC
         VREPL-S-MARKER-CORRUPT OF VFSNAP-S-RECOVERY ENDOF
         VREPL-S-UNCERTAIN OF VFSNAP-S-RECOVERY ENDOF
         VREPL-S-NOMEM OF VFSNAP-S-IO ENDOF
+        VREPL-S-READ-ONLY OF VFSNAP-S-READ-ONLY ENDOF
         VFSNAP-S-RECOVERY SWAP
     ENDCASE ;
 
@@ -983,5 +985,14 @@ VARIABLE _VFSRP-STORE
         2DROP DROP VFSNAP-S-BUSY EXIT
     THEN
     _vfsnap-save-xt _vfsnap-guard WITH-GUARD ;
+
+\ VFSNAP-READ-ONLY! ( flag store -- status )
+\   Mark the store read-only, or writable again with 0, as the place that
+\   holds its file is.  A read-only store loads as any other; a save, and a
+\   recovery that would have to change the file, answer VFSNAP-S-READ-ONLY.
+: VFSNAP-READ-ONLY!  ( flag store -- status )
+    DUP VFSNAP-VALID? 0= IF 2DROP VFSNAP-S-INVALID EXIT THEN
+    _vfsnap-operation-active @ IF 2DROP VFSNAP-S-BUSY EXIT THEN
+    VFSNAP.REPLACE VREPL-READ-ONLY! _VFSNAP-VREPL>STATUS ;
 
 HERE _VFSNAP-PRIVATE-LIMIT !

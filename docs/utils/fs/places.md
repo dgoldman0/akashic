@@ -315,9 +315,9 @@ every file under `akashic/` to it.
    replacement does. Done but for what "What slice 4 leaves" lists. Before
    slice 6, the persistence store that Streams and Library share gains a
    read-only mode, so the mark goes, and the place set gains a role for
-   the place where a person's documents go. The recovery in which applets
-   run over read-only places is a step of its own before slice 9
-   (Decided, 2026-11-18).
+   the place where a person's documents go; the read-only mode is done and
+   the mark is gone. The recovery in which applets run over read-only
+   places is a step of its own before slice 9 (Decided, 2026-11-18).
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
@@ -434,6 +434,23 @@ shipping form's places.
   `/records`, the home. The sample documents ship in `/documents`. Desk
   with Pad passes its journey there, opening `notes.md` by its locator in
   the documents place.
+- Stores refuse changes on a read-only place themselves, so narrowing a
+  set (`_PACT-NARROW`) leaves the volumes under its places unmarked. The
+  place words refuse, a replacement bound through `PLACE-VREPL!` refuses,
+  and the persistence store has a read-only mode (`PSTORE-READ-ONLY!`,
+  [storage.md](../../persistence/storage.md)): provisioning, a staging
+  reset and a transaction that may stage answer `PERSIST-S-READ-ONLY`,
+  while reads, a cold audit in a reading transaction
+  (`PSTORE-BEGIN-READ`) among them, still work. Library's repository
+  marks both its stores from its home's access
+  (`LIBRARY-REPOSITORY-READ-ONLY!`), refuses to provision, bootstrap,
+  repair or compact before it touches its folder, and stays absent where
+  it does not exist, which Library shows as read-only. Streams'
+  repository offers the same to the code that composes it
+  (`STREAMS-REPOSITORY-READ-ONLY!`); the applet composes its draft,
+  source and observation stores, which mark their replacements from the
+  home's access (`STREAMS-DRAFT-STORE-READ-ONLY!`, `VFSNAP-READ-ONLY!`)
+  and answer a read-only status of their own.
 - The boot policy runs as decided: a boot without its origin stops with a
   message, here the system volume's own; a boot without the user volume
   goes on, provisions no Practice in the missing home, and Desk starts in
@@ -443,16 +460,6 @@ shipping form's places.
 
 What slice 4 leaves:
 
-- Narrowing a set still marks the volumes under its places read-only. The
-  stores that keep their file through `PLACE-VREPL!`, the Practice head and
-  the Agent's conversation store refuse changes on a read-only place
-  themselves now, but Streams and Library open their repositories with the
-  volume under their home and would write through it. They open read-only
-  once the persistence store both share (`persistence/store.f`) takes a
-  read-only mode that refuses provisioning, a transaction's begin and
-  staging, and their repositories and Streams' other stores pass their
-  home's access to it; the mark goes then (Decided, 2026-11-17). This comes
-  before slice 6 (Decided, 2026-11-18).
 - Desk's recovery fails closed: with no usable home it starts no applet and
   opens none of the stores it gives its home, and shows that the Practice
   is in recovery. The decided recovery, in which applets run over read-only

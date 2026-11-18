@@ -10222,6 +10222,7 @@ _at-run
             "runtime/practice-head.f",
             "runtime/vfs-practice-head.f",
             "runtime/practice-activation.f",
+            "utils/fs/place-replace.f",
             "interop/mandate.f",
             "interop/capability-facet.f",
             "interop/authority.f",
@@ -10237,6 +10238,7 @@ REQUIRE runtime/context.f
 REQUIRE runtime/practice-head.f
 REQUIRE runtime/vfs-practice-head.f
 REQUIRE runtime/practice-activation.f
+REQUIRE utils/fs/place-replace.f
 REQUIRE interop/mandate.f
 REQUIRE interop/capability-facet.f
 REQUIRE interop/authority.f
@@ -10296,6 +10298,7 @@ VARIABLE _pc-persist-revision
 VARIABLE _pc-persist-vfs-flags
 
 VARIABLE _pc-avfs
+CREATE _pc-repl VREPL-SIZE ALLOT  _pc-repl VREPL-SIZE 0 FILL
 CREATE _pc-astore PHEADVFS-SIZE ALLOT
 CREATE _pc-ahead PHEAD-SIZE ALLOT
 CREATE _pc-aout PHEAD-SIZE ALLOT
@@ -10389,12 +10392,21 @@ VARIABLE _pc-first-epoch
     _pc-pact PACT-AUTHENTICATED? 0= _pc-assert
     _pc-pact PACT.CONTEXT @ CTX.FLAGS @
         CTX-F-ACTIVE CTX-F-READONLY OR CTX-F-RECOVERY OR = _pc-assert
-    \ Recovery narrows every place of the set, and its volume with it.
+    \ Recovery narrows every place of the set and leaves its volume
+    \ unmarked: the place and each store refuse changes themselves.
     _pc-aset @ PLSET-HOME PLACE-WRITABLE? 0= _pc-assert
     S" x" _pc-aset @ PLSET-HOME PLACE-CREATE
         VFS-IOR-REASON VFS-R-READONLY = _pc-assert DROP
     _pc-pact PACT.FLAGS @ PACT-F-PLACES-READONLY = _pc-assert
-    _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0<> _pc-assert
+    _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0= _pc-assert
+    \ A store that keeps its file through a replacement is bound for
+    \ reading and refuses to replace; asking to write is refused binding.
+    S" /x.bin" _pc-aset @ PLSET-HOME 0 _pc-repl PLACE-VREPL! 0= _pc-assert
+    S" data" _pc-repl VREPL-REPLACE VREPL-S-READ-ONLY = _pc-assert
+    S" /x.bin" _pc-aset @ PLSET-HOME -1 _pc-repl PLACE-VREPL!
+        VFS-IOR-REASON VFS-R-READONLY = _pc-assert
+    _pc-repl VREPL-FINI DROP
+    S" /x.bin" _pc-avfs @ VFS-RESOLVE 0= _pc-assert
     _pc-pact PACT.REJECTED-GENERATION @ 2 = _pc-assert
     _pc-pact PACT-REJECTED-HEAD PHEAD.REVISION @ 2 = _pc-assert
     _pc-pact PACT-DEACTIVATE
@@ -15884,6 +15896,25 @@ CREATE _sdc-crc64-tails
     _sdc-store-b _sdc-artifacts-clean? _sdc-assert
     _sdc-stack ;
 
+\ A draft store in a read-only place loads what is there and refuses to
+\ save with SDSTORE-S-READ-ONLY, leaving no file behind.
+: _sdc-test-read-only  ( -- )
+    S" /streams-ro.bin" _sdc-vfs @ _sdc-store-cold
+        STREAMS-DRAFT-STORE-INIT-AT SDSTORE-S-OK = _sdc-assert
+    -1 _sdc-store-cold STREAMS-DRAFT-STORE-READ-ONLY!
+        SDSTORE-S-OK = _sdc-assert
+    STREAMS-DRAFT-TEXT-MAX _sdc-store-cold _sdc-load!
+    _sdc-status @ SDSTORE-S-ABSENT = _sdc-assert
+    _sdc-before$ 1 _sdc-store-cold STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-READ-ONLY = _sdc-assert
+    S" /streams-ro.bin" _sdc-vfs @ VFS-RESOLVE 0= _sdc-assert
+    _sdc-store-cold _sdc-artifacts-clean? _sdc-assert
+    0 _sdc-store-cold STREAMS-DRAFT-STORE-READ-ONLY!
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-before$ 1 _sdc-store-cold STREAMS-DRAFT-STORE-SAVE
+        SDSTORE-S-OK = _sdc-assert
+    _sdc-stack ;
+
 : _sdc-run  ( -- )
     0 _sdc-fails ! 0 _sdc-checks ! DEPTH _sdc-depth !
     _sdc-crc-contracts
@@ -15892,6 +15923,7 @@ CREATE _sdc-crc64-tails
     _sdc-test-wrapper-failures
     _sdc-test-malformed-records
     _sdc-test-cold-recovery
+    _sdc-test-read-only
     _sdc-vfs @ VFS-DESTROY
     _sdc-stack
     _sdc-fails @ 0= IF
@@ -26655,6 +26687,22 @@ CREATE _ssoc-rid RID-SIZE ALLOT
         _ssoc-expected @ = _ssoc-assert
     _ssoc-case-store @ _ssoc-scratch-zero? _ssoc-assert ;
 
+\ A source store in a read-only place loads what is there and refuses to
+\ save with SSSTORE-S-READ-ONLY, leaving no file behind.
+: _ssoc-test-read-only  ( -- )
+    _ssoc-store-a @ _ssoc-store-init
+    -1 _ssoc-store-a @ STREAMS-SOURCE-STORE-READ-ONLY!
+        SSSTORE-S-OK = _ssoc-assert
+    _ssoc-destination @ STREAMS-SOURCE-REGISTRY-SIZE _ssoc-store-a @
+        STREAMS-SOURCE-STORE-LOAD SSSTORE-S-ABSENT = _ssoc-assert
+    _ssoc-registry-one @ 0 _ssoc-store-a @ STREAMS-SOURCE-STORE-SAVE
+        SSSTORE-S-READ-ONLY = _ssoc-assert
+    _ssoc-store-a @ STREAMS-SOURCE-STORE-BLOCKED? 0= _ssoc-assert
+    _ssoc-store-a @ _ssoc-artifacts-clean? _ssoc-assert
+    STREAMS-SOURCE-STORE-TARGET$ _ssoc-vfs @ VFS-RESOLVE 0= _ssoc-assert
+    0 _ssoc-store-a @ STREAMS-SOURCE-STORE-READ-ONLY!
+        SSSTORE-S-OK = _ssoc-assert ;
+
 : _ssoc-test-basic  ( -- )
     _ssoc-store-a @ _ssoc-store-init
     _ssoc-destination-fill _ssoc-store-a @ _ssoc-dirty-scratch
@@ -27013,6 +27061,7 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN
         DUP _ssoc-vfs ! 0<> _ssoc-assert
     _ssoc-build-registries
+    _ssoc-test-read-only
     _ssoc-test-basic _ssoc-test-corrupt _ssoc-test-noncanonical-unused
     _ssoc-test-future _ssoc-test-recovery _ssoc-test-alias-preflight
     _ssoc-vfs @ VFS-DESTROY
@@ -37935,7 +37984,7 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
     _lrc-source-init
     STREAMS-OBSERVATION-CHECKPOINT-SIZE ALLOCATE
         DUP IF 2DROP -4107 THROW THEN DROP _lrc-durable !
-    _lrc-vfs @ _lrc-service ['] _lrc-factory _lrc-owner
+    _lrc-vfs @ 0 _lrc-service ['] _lrc-factory _lrc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _lrc-assert
     _lrc-owner STREAMS-REFRESH-OWNER-AVAILABLE? _lrc-assert
 
@@ -37946,7 +37995,7 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
         OCHK.GENERATION @ _lrc-first-generation !
 
     _lrc-owner STREAMS-REFRESH-OWNER-RELEASE SREF-S-OK = _lrc-assert
-    _lrc-vfs @ _lrc-service ['] _lrc-factory _lrc-owner
+    _lrc-vfs @ 0 _lrc-service ['] _lrc-factory _lrc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _lrc-assert
     _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT OCHK-VALID? _lrc-assert
     _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT
