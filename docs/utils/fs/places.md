@@ -312,8 +312,12 @@ every file under `akashic/` to it.
    place themselves, and narrowing a set no longer marks its volumes. The
    slice begins in the replacement and copy libraries: names follow each
    volume's limit and paths the VFS's, and a copy syncs only where a
-   replacement does. Done but for the last two steps of recovery, which
-   "What slice 4 leaves" lists.
+   replacement does. Done but for what "What slice 4 leaves" lists. Before
+   slice 6, the persistence store that Streams and Library share gains a
+   read-only mode, so the mark goes, and the place set gains a role for
+   the place where a person's documents go. The recovery in which applets
+   run over read-only places is a step of its own before slice 9
+   (Decided, 2026-11-18).
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
@@ -321,11 +325,15 @@ every file under `akashic/` to it.
    until its last close.
 7. The other writers on ext4: Daybook, Grid, the Agent, Streams, the
    catalogs, the sandbox store, the head. Streams and Library compose
-   their layouts under a folder of their home.
+   their layouts under a folder of their home. The user volume's writer
+   takes its transaction size from measurements of these writers' saves,
+   the Agent's above all (Decided, 2026-11-18).
 8. The killed run: the simulator killed at chosen flushes during a save
    and during a copy's stage write and rename; each image passes the
    machine's own remount and the host tools' recovery, then `e2fsck`.
-9. Both journeys, linked and shipping form.
+9. Both journeys, linked and shipping form, the shipping form with the
+   user volume. Once both pass, the shipping form with the user volume
+   becomes the builder's default (Decided, 2026-11-18).
 
 Slices 2, 5 and 6 change files the ext4 tests read. Those tests run on
 MegaPad's simulator, so each of these slices runs them whole and ends
@@ -443,17 +451,23 @@ What slice 4 leaves:
   once the persistence store both share (`persistence/store.f`) takes a
   read-only mode that refuses provisioning, a transaction's begin and
   staging, and their repositories and Streams' other stores pass their
-  home's access to it; the mark goes then (Decided, 2026-11-17).
+  home's access to it; the mark goes then (Decided, 2026-11-17). This comes
+  before slice 6 (Decided, 2026-11-18).
 - Desk's recovery fails closed: with no usable home it starts no applet and
   opens none of the stores it gives its home, and shows that the Practice
   is in recovery. The decided recovery, in which applets run over read-only
   places and each store opens as a service that says why, needs Desk to
   compose its applets and stores in recovery as well; the stores' read-only
-  answers are tested on read-only places meanwhile.
+  answers are tested on read-only places meanwhile. That recovery is a step
+  of its own before slice 9, and the Agent and the sandbox stay off in it,
+  as they are now (Decided, 2026-11-18).
 - Pad takes a bare path in its set's home, which the shipping form makes
-  records. Which place Pad's documents default to when the home is not
-  where documents live is open; meanwhile a document is named by its
-  locator, `vfs://documents/...`.
+  records, where the applets keep their own files. The set gains a third
+  role, the place where a person's documents go, which composition
+  declares as it declares the home and the origin: the one place in the
+  linked build and `documents` in the shipping form. Pad takes a bare path
+  there, and File Explorer opens there (Decided, 2026-11-18). Until then a
+  document is named by its locator, `vfs://documents/...`.
 - With records as the home, the other writers meet ext4 in a build with
   the user volume (slice 7). The Agent's conversation store saves its
   first, absent slot with a truncate that changes nothing, which ext4's
@@ -479,4 +493,3 @@ What slice 4 leaves:
 - Explicit-parent VFS words in place of the current-directory bracket.
 - The user volume's two places, documents and records, are the layout for
   now and may change.
-- Whether the shipping form becomes the default build.
