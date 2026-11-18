@@ -426,7 +426,9 @@ Context is not freed from underneath a live or rollback-pending owner.
 
 This is not yet enforced path ownership. File Explorer and arbitrary trusted
 native code can still write `/daybook.md` directly, outside the owner's
-revision sequence. The current claim is intentionally narrower: Daybook and
+revision sequence, until ownership follows from place grants (Decided,
+2026-11-18; `docs/utils/fs/places.md`, "Who may write a file"). The current
+claim is intentionally narrower: Daybook and
 Pad sessions coordinate through one Daybook owner by convention. Desk hosts
 and routes that owner but does not acquire its data or semantic authority.
 

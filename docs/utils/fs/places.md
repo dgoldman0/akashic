@@ -63,9 +63,32 @@ build. The two builds differ only in what composition declares. The
 linked build declares one volume, `boot`, and one writable place over its
 root that is home, origin and documents place. The shipping form declares
 a read-only place on the system volume as origin and writable places on
-the user volume, one of them the home and another the documents place. The user volume holds two places for now, documents and records in
+the user volume, one of them the home and another the documents place.
+The user volume holds two places for now, documents and records in
 separate folders; that layout lives only in what composition declares,
 and no applet or library may assume it.
+
+### Who may write a file
+
+Ownership of a file follows from what each applet is granted (Decided,
+2026-11-18). Each applet holds a set of its own, and each store's home is
+a folder of its own under the records place, so a store writes its own
+files and no other's. File Explorer and Pad write the documents place and
+read the records place. A document that another applet owns, such as
+Daybook's, reaches Pad only through that owner's service in Desk, by its
+identity: Pad asks Desk's resource registry whether a file holds a
+document Desk hosts and opens such a file through its owner, so no applet
+spells another applet's file. A source rule holds applet code to the
+place words for every write.
+
+The grants bind every route the system offers: File Explorer, Pad and
+every store. Applets outside the sandbox run as native code with every
+volume in reach, so the grants do not stop one that sets out to write a
+file it was not granted; sandboxed code has no file access of its own.
+The linked build declares one place that is home, origin and documents
+place at once, so its grants cannot separate records from documents, and
+there the registry lookup is what keeps Pad from writing another
+applet's file.
 
 ### A place that is unavailable at boot
 
@@ -321,13 +344,19 @@ every file under `akashic/` to it.
    gone. The recovery in which applets run over read-only places is a step
    of its own before slice 9 (Decided, 2026-11-18).
 5. Done: the ext4 driver makes an inode group ready on first use.
-6. File Explorer across volumes. Done ahead of it: the run confirmed
+6. File Explorer across volumes. It begins with the grants of "Who may
+   write a file": a set per applet from what each applet's descriptor
+   says it needs, File Explorer and Pad writing the documents place and
+   reading the records place, the registry lookup in place of Pad's
+   spelling of Daybook's path, and the source rule (Decided, 2026-11-18).
+   Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
    now lands that sync and takes other writes, keeping the file's record
    until its last close.
 7. The other writers on ext4: Daybook, Grid, the Agent, Streams, the
-   catalogs, the sandbox store, the head. Streams and Library compose
-   their layouts under a folder of their home. The user volume's writer
+   catalogs, the sandbox store, the head. Each store's home becomes a
+   folder of its own under the records place (Decided, 2026-11-18), and
+   Streams and Library compose their layouts under it. The user volume's writer
    takes its transaction size from measurements of these writers' saves,
    the Agent's above all (Decided, 2026-11-18).
 8. The killed run: the simulator killed at chosen flushes during a save

@@ -36,15 +36,19 @@ The owner target is always its one exact Daybook RID and expected revision.
 Current Daybook date/row, Pad tab/selection, focused Desk tile, and Practice
 binding are neither target nor authority.
 
-## Open security boundary
+## Security boundary
 
 Exact-revision protection currently covers cooperating semantic consumers, not
 every VFS writer. The VFS does not reserve `/daybook.md`, so code with ambient
-VFS authority, including File Explorer, can mutate it outside the owner's
-revision sequence. Whether to enforce ownership at the VFS boundary, through
-Practice-scoped authority or mediation, or retain a documented trusted-code
-convention remains an explicit design decision. Desk orchestrates the
-activation but does not own the Daybook data or policy.
+VFS authority, including File Explorer, can still mutate it outside the owner's
+revision sequence. Ownership is to follow from place grants (Decided,
+2026-11-18; `docs/utils/fs/places.md`, "Who may write a file"): Daybook's home
+becomes a folder that only Daybook is granted, File Explorer and Pad read the
+records place, and Pad finds the document through Desk's resource registry
+rather than by its path. Native code outside the sandbox keeps every volume in
+reach, so the grants bind every route the system offers rather than every line
+of trusted code. Desk orchestrates the activation but does not own the Daybook
+data or policy.
 
 ## Public interface
 
