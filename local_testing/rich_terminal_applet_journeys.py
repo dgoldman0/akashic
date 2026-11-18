@@ -443,13 +443,11 @@ class PadAloneJourney(_AppletJourney):
         LINK_FOLLOWED,
     ) = range(14)
 
-    def __init__(
-        self, ready_markers: tuple[str, ...], *, notes_path: str = styled_text.NOTES_PATH
-    ):
+    def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
-        # What Pad's Open prompt is given for notes.md: a path in Pad's
-        # home, or a locator in the place that holds the sample documents.
-        self._notes_path = notes_path
+        # What Pad's Open prompt is given for notes.md: a bare path, which
+        # Pad takes in the set's documents place in every build.
+        self._notes_path = styled_text.NOTES_PATH
         self._editor_bounds: tuple[int, int, int, int] | None = None
         # The caret each input was sent from, by the stage the input leads
         # to.  A stage a caret move leads to waits for the caret to leave
@@ -3395,14 +3393,10 @@ def applet_journey(
     ready_markers: tuple[str, ...],
     *,
     paced_link: bool = False,
-    documents_place: str | None = None,
 ) -> FrameBoundJourney:
     """The journey for Desk holding only the applet NAME, or for the check
     NAME of Desk holding one applet.  On a PACED_LINK, File Explorer's also
-    checks that the screen answers input while a picture uploads.  With
-    DOCUMENTS_PLACE, the name of the place that holds the sample documents
-    when it is not the home, as on the user volume, Pad's journey opens
-    notes.md there by its locator."""
+    checks that the screen answers input while a picture uploads."""
 
     journeys = {
         "pad": PadAloneJourney,
@@ -3420,9 +3414,4 @@ def applet_journey(
         raise ValueError(f"no journey for Desk with only {name!r}")
     if name == "fexp":
         return FexpAloneJourney(ready_markers, paced_link=paced_link)
-    if name == "pad" and documents_place is not None:
-        return PadAloneJourney(
-            ready_markers,
-            notes_path=f"vfs://{documents_place}{styled_text.NOTES_PATH}",
-        )
     return journeys[name](ready_markers)

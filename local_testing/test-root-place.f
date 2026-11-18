@@ -3,7 +3,8 @@
 \ A check that keeps its records on a RAM volume of its own declares that
 \ volume under a name no other volume or place of the check has, and one
 \ writable place over its root.  _t-root-set answers a set of that one
-\ place, which is its home and its origin; _t-root-place answers the place.
+\ place, which is its home, its origin and its documents place;
+\ _t-root-place answers the place.
 \ _t-root-set-free gives back what _t-root-set made: it detaches the
 \ volume and frees the set.
 \
@@ -18,7 +19,7 @@
     ROT R@ PVOL-ATTACH THROW
     S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW
     PLSET-NEW THROW >R PLACE-WRITABLE SWAP R@ PLSET-GRANT THROW
-    DUP R@ PLSET-HOME!  R@ PLSET-ORIGIN!  R> ;
+    DUP R@ PLSET-HOME!  DUP R@ PLSET-ORIGIN!  R@ PLSET-DOCUMENTS!  R> ;
 
 : _t-root-place  ( vfs name-a name-u -- place )  _t-root-set PLSET-HOME ;
 

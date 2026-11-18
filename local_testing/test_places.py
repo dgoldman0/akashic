@@ -151,6 +151,24 @@ def test_a_set_lists_its_places_in_order_with_their_roles():
         "docs", "Documents", "all", -1])
 
 
+def test_a_set_marks_where_a_persons_documents_go():
+    expect([
+        # A set declares no documents place until composition marks one.
+        ': T  SET @ PLSET-DOCUMENTS .',
+        '     P-OTHER @ SET @ PLSET-DOCUMENTS!  SET @ PLSET-DOCUMENTS P-OTHER @ = .',
+        '     SET @ PLSET-HOME P-DOCS @ = .  SET @ PLSET-ORIGIN P-ALL @ = .',
+        # Marking one moves the set's revision, so a list of places redraws.
+        '     SET @ PLSET-REVISION  P-DOCS @ SET @ PLSET-DOCUMENTS!',
+        '     SET @ PLSET-REVISION <> .  SET @ PLSET-DOCUMENTS P-DOCS @ = .',
+        # A place of another set cannot be this set's documents place.
+        '     PLSET-NEW THROW >R  PLACE-READ-ONLY D-ALL @ R@ PLSET-GRANT THROW',
+        '     SET @ PLSET-DOCUMENTS!  SET @ PLSET-DOCUMENTS P-DOCS @ = .',
+        '     R> PLSET-FREE',
+        '     0 SET @ PLSET-DOCUMENTS!  SET @ PLSET-DOCUMENTS . ;',
+        'T',
+    ], [0, -1, -1, -1, -1, -1, -1, 0])
+
+
 def test_paths_start_at_the_folder():
     expect([
         ': T  S" a.txt" P-DOCS @ PLACE-RESOLVE R. S" /docs/a.txt" VA @ VFS-RESOLVE = .',

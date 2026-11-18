@@ -116,6 +116,7 @@ _PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
 -10 CONSTANT _PAD-E-SHARED-FAILED
 -11 CONSTANT _PAD-E-DAYBOOK-PROTECTED
 -12 CONSTANT _PAD-E-READ-ONLY-PLACE
+-13 CONSTANT _PAD-E-NO-PLACE        \ a bare path, and no documents place
 
 \ Buffer entry struct offsets (11 cells = 88 bytes)
  0 CONSTANT _PBE-FLAGS      \ 0=free, -1=in-use
@@ -897,17 +898,21 @@ VARIABLE _PPP-START
     _PAD-SET !  0 _PAD-IO-PLACE !  0 _PAD-PATH-PLACE ! ;
 
 \ The place a path with none of its own is in: the active document's,
-\ or the set's home.
+\ so its own path, its links and its saves stay in its place, or else the
+\ set's documents place, where a person's documents go.  A set that
+\ declares none has no such place, and Pad then asks for one rather than
+\ choosing another.
 : _PAD-DEFAULT-PLACE  ( -- place | 0 )
     _PAD-ACTIVE @ 0< 0= IF
         _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-PLACE + @ ?DUP IF EXIT THEN
     THEN
-    _PAD-SET @ PLSET-HOME ;
+    _PAD-SET @ DUP IF PLSET-DOCUMENTS THEN ;
 
 \ _PAD-CANON-PATH ( path-a path-u -- canon-a canon-u ior )
 \   A path as Pad keeps it, and its place in _PAD-IO-PLACE.  The place
 \   is the one a caller named (_PAD-OPEN-IN), the one a full
-\   vfs://<place>/<path> names in this instance's set, or the default.
+\   vfs://<place>/<path> names in this instance's set, or the documents
+\   place; a bare path in a set with none answers _PAD-E-NO-PLACE.
 \   The path starts at the place's folder, so a path with no leading
 \   slash is given one.  Nothing is normalized: a path with an empty,
 \   `.` or `..` component is refused.
@@ -921,7 +926,8 @@ VARIABLE _PPP-START
         ELSE
             >R DROP 2DROP R>
             IRES-S-NO-PLACE = IF 0 0 -1 EXIT THEN
-            _PAD-DEFAULT-PLACE _PAD-IO-PLACE !
+            _PAD-DEFAULT-PLACE DUP _PAD-IO-PLACE !
+            0= IF 0 0 _PAD-E-NO-PLACE EXIT THEN
         THEN
     THEN
     _PAD-IO-PLACE @ 0= IF 0 0 -1 EXIT THEN
@@ -1214,7 +1220,9 @@ VARIABLE _PSHO-NEW
 
 : _PAD-SAVE-CURRENT-AS  ( fname-a fname-u -- ior )
     _PAD-ACTIVE @ 0< IF 2DROP -1 EXIT THEN
-    _PAD-CANON-PATH IF 2DROP -1 EXIT THEN
+    _PAD-CANON-PATH ?DUP IF
+        NIP NIP DUP _PAD-E-NO-PLACE <> IF DROP -1 THEN EXIT
+    THEN
     _PIO-NAME-U ! _PIO-NAME-A !
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-RESERVED + @ IF
         _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
@@ -1318,7 +1326,9 @@ VARIABLE _POP-IDX
 VARIABLE _POP-ORIG
 
 : _PAD-OPEN-PATH  ( fname-a fname-u -- ior )
-    _PAD-CANON-PATH IF 2DROP -3 EXIT THEN
+    _PAD-CANON-PATH ?DUP IF
+        NIP NIP DUP _PAD-E-NO-PLACE <> IF DROP -3 THEN EXIT
+    THEN
     _PIO-NAME-U ! _PIO-NAME-A !
     _PIO-NAME-A @ _PIO-NAME-U @ _PAD-DAYBOOK-PATH? IF
         _PAD-RESOURCE-MODE @ RSES-M-DIRECT <> IF
@@ -1359,6 +1369,10 @@ VARIABLE _POP-ORIG
 
 : _PAD-REPORT-OPEN-RESULT  ( ior -- )
     DUP 0= IF DROP EXIT THEN
+    DUP _PAD-E-NO-PLACE = IF
+        DROP S" No documents place: name one, vfs://<place>/<path>"
+        2800 ASHELL-TOAST-WARNING EXIT
+    THEN
     DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST-WARNING EXIT THEN
     DUP -2 = IF DROP S" Max buffers reached" 2000 ASHELL-TOAST-WARNING EXIT THEN
     DUP -3 = IF
@@ -1431,6 +1445,10 @@ VARIABLE _POP-ORIG
     THEN
     DUP _PAD-E-READ-ONLY-PLACE = IF
         DROP S" This place is read-only" 2400 ASHELL-TOAST-WARNING EXIT
+    THEN
+    DUP _PAD-E-NO-PLACE = IF
+        DROP S" No documents place: name one, vfs://<place>/<path>"
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-DAYBOOK-PROTECTED = IF
         DROP S" /daybook.md is owned by the shared Daybook resource"
@@ -2677,9 +2695,11 @@ VARIABLE _PCT-PREVIEW-U
         EXIT
     THEN
     \ An untitled document has no place yet; it would be saved in the
-    \ home.
+    \ documents place.
     DUP _PBE-FNAME-L + @ DUP 0= IF
-        2DROP S" /untitled" _PAD-SET @ PLSET-HOME _PAR-V @ IRES-PLACE!
+        2DROP _PAD-SET @ DUP IF PLSET-DOCUMENTS THEN
+        ?DUP 0= IF IRES-S-NO-PLACE EXIT THEN
+        >R S" /untitled" R> _PAR-V @ IRES-PLACE!
     ELSE
         >R DUP _PBE-FNAME-A + @ R> ROT _PBE-PLACE + @ _PAR-V @ IRES-PLACE!
     THEN ;
@@ -2690,6 +2710,7 @@ VARIABLE _PCT-PREVIEW-U
     DUP -1 = IF DROP CBUS-S-NOT-FOUND EXIT THEN
     DUP -2 = IF DROP CBUS-S-BUSY EXIT THEN
     DUP -3 = IF DROP CBUS-S-INVALID EXIT THEN
+    DUP _PAD-E-NO-PLACE = IF DROP CBUS-S-INVALID EXIT THEN
     DROP CBUS-S-FAILED ;
 
 : _PAD-CAP-OPEN-HANDLER  ( request instance -- status )

@@ -174,6 +174,9 @@ while retaining the Explorer guard.
   `docs/utils/fs/places.md`) and names no place. The sidebar's top rows
   are the set's places; the listed directory, the selection, a pending
   delete and the clipboard's source are each a place and a path in it.
+  It opens listing the folder of the set's documents place, where a
+  person's documents go, or of its first place when the set declares
+  none.
   Every change goes through the `PLACE-` words, so a read-only place
   refuses it and nothing reaches outside a place's folder. The status
   bar shows the selection's path, after its place's label when the set

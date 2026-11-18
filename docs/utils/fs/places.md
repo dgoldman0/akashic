@@ -35,13 +35,15 @@ declared places as linked heap records, records their state, and never
 stops a boot: every word answers a status.
 
 A **place set** is what one holder is given: an ordered list of places,
-each with an access no wider than the place declares, and two marked
+each with an access no wider than the place declares, and three marked
 members. The **home** is the default writable place for the holder's own
 records. Daybook, Grid, the Agent, Streams, the catalogs, the sandbox
 store and the Practice head all write there, and none of them chooses it.
 The **origin** is the place the holder's shipped files are read from: its
-UIDL file, `pad.toml`, `fexplorer.toml` and UIDL media. Composition
-builds one default set.
+UIDL file, `pad.toml`, `fexplorer.toml` and UIDL media. The **documents
+place** is where a person's documents go: Pad takes a path with no place
+of its own there, and File Explorer opens there. Composition builds one
+default set and marks all three.
 
 An applet obtains its set through the service lookup it already uses,
 `CINST-SERVICE`, under the id `org.akashic.fs.places`. Desk's endpoint
@@ -55,13 +57,13 @@ set. An applet that runs with no endpoint at all, as a standalone shell
 run does, takes the registry's default set; an applet whose endpoint
 answers nothing has no places.
 
-Code asks for the home, the origin or the listed places and never spells
-a place's name, so the same code serves every build. The two builds
-differ only in what composition declares. The linked build declares one
-volume, `boot`, and one writable place over its root that is both home
-and origin. The shipping form declares a read-only place on the system
-volume as origin and writable places on the user volume, one of them the
-home. The user volume holds two places for now, documents and records in
+Code asks for the home, the origin, the documents place or the listed
+places and never spells a place's name, so the same code serves every
+build. The two builds differ only in what composition declares. The
+linked build declares one volume, `boot`, and one writable place over its
+root that is home, origin and documents place. The shipping form declares
+a read-only place on the system volume as origin and writable places on
+the user volume, one of them the home and another the documents place. The user volume holds two places for now, documents and records in
 separate folders; that layout lives only in what composition declares,
 and no applet or library may assume it.
 
@@ -90,7 +92,7 @@ PLACES-CHECK    ( -- decl ior )
 PLSET-NEW       ( -- set ior )
 PLSET-FREE      ( set -- )
 PLSET-GRANT     ( access decl set -- place ior )
-PLSET-HOME!  PLSET-ORIGIN!   ( place set -- )
+PLSET-HOME!  PLSET-ORIGIN!  PLSET-DOCUMENTS!   ( place set -- )
 PLSET-READ-ONLY!  ( set -- )
 PLACES-DEFAULT! ( set -- )
 PLACES-DEFAULT  ( -- set | 0 )
@@ -107,7 +109,7 @@ which is what recovery does.
 Applet side, where a `place` is the handle a set gives out:
 
 ```forth
-PLSET-FIRST  PLSET-HOME  PLSET-ORIGIN   ( set -- place | 0 )
+PLSET-FIRST  PLSET-HOME  PLSET-ORIGIN  PLSET-DOCUMENTS   ( set -- place | 0 )
 PLACE-NEXT      ( place -- place | 0 )
 PLSET-FIND      ( name-a name-u set -- place | 0 )
 PLSET-MEMBER?   ( x set -- flag )
@@ -315,9 +317,9 @@ every file under `akashic/` to it.
    replacement does. Done but for what "What slice 4 leaves" lists. Before
    slice 6, the persistence store that Streams and Library share gains a
    read-only mode, so the mark goes, and the place set gains a role for
-   the place where a person's documents go; the read-only mode is done and
-   the mark is gone. The recovery in which applets run over read-only
-   places is a step of its own before slice 9 (Decided, 2026-11-18).
+   the place where a person's documents go; both are done and the mark is
+   gone. The recovery in which applets run over read-only places is a step
+   of its own before slice 9 (Decided, 2026-11-18).
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
@@ -431,9 +433,19 @@ shipping form's places.
   on every launch path, and declares the shipping form's places: `system`,
   read-only over the root of the volume that holds the shipped files and
   required, as origin; `documents` over `/documents`; and `records` over
-  `/records`, the home. The sample documents ship in `/documents`. Desk
-  with Pad passes its journey there, opening `notes.md` by its locator in
-  the documents place.
+  `/records`, the home. The sample documents ship in `/documents`.
+- The set marks a third role, the documents place (`PLSET-DOCUMENTS!`),
+  which composition declares: the one place in the linked build,
+  `documents` with `--user-volume`, and the test sets'
+  (`local_testing/test-root-place.f`) one place. Pad takes a path with no
+  place of its own in the active document's place or else the documents
+  place, and starts an untitled document there; a set that declares none
+  makes Pad ask for a place. File Explorer opens in the documents place,
+  or in the set's first place when there is none. Every file handed to
+  Pad comes as a locator naming its place (Daybook's source, File
+  Explorer's open, the Agent's request) or through Pad's own explorer
+  with its place, so none depends on the role. Desk with Pad opens the
+  bare `notes.md` in both builds.
 - Stores refuse changes on a read-only place themselves, so narrowing a
   set (`_PACT-NARROW`) leaves the volumes under its places unmarked. The
   place words refuse, a replacement bound through `PLACE-VREPL!` refuses,
@@ -468,13 +480,6 @@ What slice 4 leaves:
   answers are tested on read-only places meanwhile. That recovery is a step
   of its own before slice 9, and the Agent and the sandbox stay off in it,
   as they are now (Decided, 2026-11-18).
-- Pad takes a bare path in its set's home, which the shipping form makes
-  records, where the applets keep their own files. The set gains a third
-  role, the place where a person's documents go, which composition
-  declares as it declares the home and the origin: the one place in the
-  linked build and `documents` in the shipping form. Pad takes a bare path
-  there, and File Explorer opens there (Decided, 2026-11-18). Until then a
-  document is named by its locator, `vfs://documents/...`.
 - With records as the home, the other writers meet ext4 in a build with
   the user volume (slice 7). The Agent's conversation store saves its
   first, absent slot with a truncate that changes nothing, which ext4's

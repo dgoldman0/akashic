@@ -9,7 +9,8 @@
 \  name, a label and an access, declared by system composition.  A place
 \  set is what one holder is given: an ordered list of places, each with
 \  an access no wider than its declaration's, a home for the holder's
-\  own records and an origin for its shipped files.
+\  own records, an origin for its shipped files and a documents place
+\  where a person's documents go.
 \
 \  A holder works through the PLACE- words.  A path given to them starts
 \  at the place's folder, the entry it names must lie under that folder
@@ -77,7 +78,8 @@ REQUIRE ../string.f
 : _PS.HOME     ( set -- a ) 16 + ;
 : _PS.ORIGIN   ( set -- a ) 24 + ;
 : _PS.CHANGES  ( set -- a ) 32 + ;
-40 CONSTANT _PS-SIZE
+: _PS.DOCUMENTS  ( set -- a ) 40 + ;
+48 CONSTANT _PS-SIZE
 
 : _PG.MAGIC   ( place -- a ) ;
 : _PG.NEXT    ( place -- a )  8 + ;
@@ -355,6 +357,7 @@ VARIABLE _PGR-ACCESS
 : PLSET-FIRST   ( set -- place | 0 )  _PS.FIRST @ ;
 : PLSET-HOME    ( set -- place | 0 )  _PS.HOME @ ;
 : PLSET-ORIGIN  ( set -- place | 0 )  _PS.ORIGIN @ ;
+: PLSET-DOCUMENTS  ( set -- place | 0 )  _PS.DOCUMENTS @ ;
 : PLACE-NEXT    ( place -- place | 0 )  _PG.NEXT @ ;
 
 \ PLSET-MEMBER? ( x set -- flag )
@@ -368,14 +371,19 @@ VARIABLE _PGR-ACCESS
     REPEAT
     NIP ;
 
-\ PLSET-HOME! and PLSET-ORIGIN! ( place set -- )
-\   Mark one of the set's places, or none with 0.
+\ PLSET-HOME!, PLSET-ORIGIN! and PLSET-DOCUMENTS! ( place set -- )
+\   Mark one of the set's places, or none with 0: the home, where the
+\   holder keeps its own records; the origin, where its shipped files are
+\   read from; and the documents place, where a person's documents go.
 : PLSET-HOME!  ( place set -- )
     OVER IF 2DUP PLSET-MEMBER? 0= IF 2DROP EXIT THEN THEN
     TUCK _PS.HOME ! _PLSET-CHANGED ;
 : PLSET-ORIGIN!  ( place set -- )
     OVER IF 2DUP PLSET-MEMBER? 0= IF 2DROP EXIT THEN THEN
     TUCK _PS.ORIGIN ! _PLSET-CHANGED ;
+: PLSET-DOCUMENTS!  ( place set -- )
+    OVER IF 2DUP PLSET-MEMBER? 0= IF 2DROP EXIT THEN THEN
+    TUCK _PS.DOCUMENTS ! _PLSET-CHANGED ;
 
 \ PLSET-READ-ONLY! ( set -- )
 \   Narrow every place of the set to read-only, as recovery does.

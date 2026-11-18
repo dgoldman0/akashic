@@ -636,7 +636,8 @@ PLACES_BOOT_LINES = (
     '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
     "    PLACE-WRITABLE _boot-place @ _boot-places @ PLSET-GRANT",
     '        ABORT" PLACES FAIL grant"',
-    "    DUP _boot-places @ PLSET-HOME!  _boot-places @ PLSET-ORIGIN!",
+    "    DUP _boot-places @ PLSET-HOME!  DUP _boot-places @ PLSET-ORIGIN!",
+    "    _boot-places @ PLSET-DOCUMENTS!",
     "    _boot-places @ PLACES-DEFAULT! ;",
     PLACES_BOOT_ENTRY,
 )
@@ -737,7 +738,7 @@ def _user_volume_boot_lines(system_volume: bool) -> tuple[str, ...]:
         f'    S" {records_label}" _boot-records @ PLACE-LABEL! ABORT" PLACES FAIL label"',
         '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
         "    PLACE-WRITABLE _boot-documents @ _boot-places @ PLSET-GRANT",
-        '        ABORT" PLACES FAIL grant"  DROP',
+        '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-DOCUMENTS!',
         "    PLACE-WRITABLE _boot-records @ _boot-places @ PLSET-GRANT",
         '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-HOME!',
         "    PLACE-READ-ONLY _boot-origin @ _boot-places @ PLSET-GRANT",
@@ -12457,7 +12458,8 @@ CREATE _pc-binding VFS-BINDING-DESC-SIZE ALLOT
 VARIABLE _pc-vfs VARIABLE _pc-screen VARIABLE _pc-rgn
 VARIABLE _pc-volume VARIABLE _pc-set VARIABLE _pc-place
 \ A place set over a volume: one writable place at its root, which is the
-\ set's home and origin, as a build with one volume declares.
+\ set's home, origin and documents place, as a build with one volume
+\ declares.
 : _pc-places  ( vfs -- set )
     S" pc-files" PLACES-VOLUME THROW _pc-volume !
     _pc-volume @ PVOL-ATTACH THROW
@@ -12466,6 +12468,7 @@ VARIABLE _pc-volume VARIABLE _pc-set VARIABLE _pc-place
     PLACE-WRITABLE SWAP _pc-set @ PLSET-GRANT THROW _pc-place !
     _pc-place @ _pc-set @ PLSET-HOME!
     _pc-place @ _pc-set @ PLSET-ORIGIN!
+    _pc-place @ _pc-set @ PLSET-DOCUMENTS!
     _pc-set @ ;
 VARIABLE _pc-a VARIABLE _pc-u VARIABLE _pc-pa VARIABLE _pc-pu
 VARIABLE _pc-fd VARIABLE _pc-calls VARIABLE _pc-orig VARIABLE _pc-loaded
@@ -12559,6 +12562,16 @@ VARIABLE _pc-close-calls
     _PAD-IO-PLACE @ _pc-place @ = _pc-assert
     S" vfs://elsewhere/full.txt" _PAD-CANON-PATH 0<> _pc-assert 2DROP
     S" /escape" _pc-vfs @ VFS-RESOLVE 0= _pc-assert
+    \ A bare path is in the set's documents place.  A set that declares
+    \ none asks for a place instead of choosing another; a locator still
+    \ names one.
+    0 _pc-set @ PLSET-DOCUMENTS!
+    S" note.txt" _PAD-CANON-PATH _PAD-E-NO-PLACE = _pc-assert 2DROP
+    S" note.txt" _PAD-OPEN-PATH _PAD-E-NO-PLACE = _pc-assert
+    S" vfs://pc-files/full.txt" _PAD-CANON-PATH 0= _pc-assert 2DROP
+    _pc-place @ _pc-set @ PLSET-DOCUMENTS!
+    S" note.txt" _PAD-CANON-PATH 0= _pc-assert 2DROP
+    _PAD-IO-PLACE @ _pc-place @ = _pc-assert
 
     \ Open-buffer search reports every match and F3-style navigation walks
     \ active slots in order before wrapping to the first result.
@@ -12925,7 +12938,8 @@ VARIABLE _pr-service-a VARIABLE _pr-service-u
 
 VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
 \ A place set over a volume: one writable place at its root, which is the
-\ set's home and origin, as a build with one volume declares.
+\ set's home, origin and documents place, as a build with one volume
+\ declares.
 : _pr-places  ( vfs -- set )
     S" pr-files" PLACES-VOLUME THROW _pr-volume !
     _pr-volume @ PVOL-ATTACH THROW
@@ -12934,6 +12948,7 @@ VARIABLE _pr-volume VARIABLE _pr-set VARIABLE _pr-place
     PLACE-WRITABLE SWAP _pr-set @ PLSET-GRANT THROW _pr-place !
     _pr-place @ _pr-set @ PLSET-HOME!
     _pr-place @ _pr-set @ PLSET-ORIGIN!
+    _pr-place @ _pr-set @ PLSET-DOCUMENTS!
     _pr-set @ ;
 
 : _pr-pad-storage-setup  ( -- )
@@ -36380,13 +36395,6 @@ def accept_physical_desktop(
         journey = applet_journey(
             profile_name.removeprefix("desktop-apt1-"), ready_markers,
             paced_link=terminal_link_pace is not None,
-            # With the user volume the samples are documents there, in a
-            # place that is not the home.
-            documents_place=(
-                USER_VOLUME_DOCUMENTS[0]
-                if _user_image_for(image_path) is not None
-                else None
-            ),
         )
     command = _session_server_command(
         profile_name,

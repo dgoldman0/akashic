@@ -200,8 +200,12 @@ built: applets are machine code, and this system compiles none."
 Pad works in the place set it is given (`CINST-PLACES`,
 `docs/utils/fs/places.md`). A document is a place and a path in it, and a
 tab keeps both. A typed path is in the active document's place, or in the
-set's home when there is none; the full form `vfs://<place>/<path>` names
-another place of the set. The sidebar lists the set's places, and
+set's documents place, where a person's documents go, when there is none;
+the full form `vfs://<place>/<path>` names another place of the set. A new
+untitled document belongs to the documents place too. When the set
+declares no documents place, Pad refuses a path with no place of its own
+and says "No documents place: name one, vfs://<place>/<path>", rather
+than choosing another place. The sidebar lists the set's places, and
 `pad.toml` is read from the set's origin. For each read and write Pad
 binds the document to its volume (`PLACE-BIND`, `PLACE-BIND-WRITE`) and
 points its one replacement descriptor there, so a read-only place refuses

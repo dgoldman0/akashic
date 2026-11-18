@@ -1236,11 +1236,13 @@ VARIABLE _FPR-LEN
     _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
 
     \ The places this instance was given.  The listing and the selection
-    \ start at the first place's folder.
+    \ start at the folder of the documents place, where a person's
+    \ documents go, or of the first place when the set declares none.
     _FEXP-CURRENT-INSTANCE @ CINST-PLACES
     DUP 0= ABORT" fexplorer: no places available"
     _FEXP-SET !
-    _FEXP-SET @ PLSET-FIRST DUP _FEXP-DIR-PLACE ! _FEXP-SEL-PLACE !
+    _FEXP-SET @ PLSET-DOCUMENTS ?DUP 0= IF _FEXP-SET @ PLSET-FIRST THEN
+        DUP _FEXP-DIR-PLACE ! _FEXP-SEL-PLACE !
     S" /" _FEXP-DIR-PATH! DROP
     S" /" _FEXP-SEL-PATH! DROP
     _FEXP-PREVIEW-SCOPE VFA-SCOPE-SIZE 0 FILL
