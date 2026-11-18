@@ -14,10 +14,12 @@ REQUIRE utils/fs/places.f
 A **volume** is one mounted VFS instance with a name and a state. The
 module that mounts it reports the outcome to the registry: attached, with
 the instance, or refused, with the reason. `tui/platform/mp64fs-vfs.f`
-reports `boot` and `utils/fs/user-volume.f` reports `user`; the system
-volume is `system`, which composition reports after
-`utils/fs/system-volume.f` mounts it. The settings volume is mounted for
-one read and destroyed, so it never enters the registry.
+reports `boot` and `utils/fs/user-volume.f` reports `user`. Composition
+reports `system`: `utils/fs/system-volume.f` mounts the system volume
+early in the boot, from a boot volume that carries only what that mount
+needs, and the registry loads afterwards from the system volume itself.
+The settings volume is mounted for one read and destroyed, so it never
+enters the registry.
 
 A **place** is a folder of a volume with a name, a label and an access.
 The name identifies it in the resource form, a person reads the label,
@@ -452,9 +454,6 @@ What slice 4 leaves:
   records. Which place Pad's documents default to when the home is not
   where documents live is open; meanwhile a document is named by its
   locator, `vfs://documents/...`.
-- The system volume is reported to the registry by composition. It moves
-  into `utils/fs/system-volume.f` when the shipping form is the default
-  build, since that module is part of every build with a system volume.
 - With records as the home, the other writers meet ext4 in a build with
   the user volume (slice 7). The Agent's conversation store saves its
   first, absent slot with a truncate that changes nothing, which ext4's
