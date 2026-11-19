@@ -59,9 +59,9 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `FEXP-CLIP-COPY` | `( -- )` | Copy selected item to clipboard. |
-| `FEXP-CLIP-CUT` | `( -- )` | Cut selected item to clipboard. |
-| `FEXP-CLIP-PASTE` | `( -- )` | Copy the clipboard's file, or move it after a cut, into the selected directory, the selected file's directory, or the listed directory, in any place of the set. |
+| `FEXP-CLIP-COPY` | `( -- )` | Put the selected file or folder on the clipboard to copy. |
+| `FEXP-CLIP-CUT` | `( -- )` | Put the selected file or folder on the clipboard to move. |
+| `FEXP-CLIP-PASTE` | `( -- )` | Copy the clipboard's file or folder, or move it after a cut, into the selected directory, the selected file's directory, or the listed directory, in any place of the set. |
 
 ### Constants
 
@@ -183,18 +183,20 @@ while retaining the Explorer guard.
   has several places. Go To takes a path in the listed directory's
   place, or the full form `vfs://<place>/<path>`.
 - A paste copies with `PLACE-COPY`, or after a cut moves with
-  `PLACE-MOVE` ([vfs-copy.md](../../../utils/fs/vfs-copy.md)), from the
-  clipboard's place to the place of the directory the paste goes to,
-  which may be on another volume. A read-only destination place refuses
-  the paste, and so does a cut's read-only source place.
+  `PLACE-MOVE` ([vfs-copy.md](../../../utils/fs/vfs-copy.md)), a file or a
+  folder with all it holds, from the clipboard's place to the place of the
+  directory the paste goes to, which may be on another volume. A read-only
+  destination place refuses the paste, and so does a cut's read-only
+  source place.
 - `fexplorer.toml` is read from the set's origin.
 - File Explorer never keeps a VFS entry between operations. Another applet
   may replace or remove an entry at any time; Daybook, for one, saves by
   renaming a new copy over its file, which frees the old entry for the next
   file to reuse. The listed directory and the selection, from either pane,
-  are kept as paths, and every action looks its path up when it runs. A
-  path that does not fit the 512-byte path buffer is refused rather than cut
-  short, so nothing is selected.
+  are kept as paths, and every action looks its path up when it runs. The
+  path buffers take a path as long as the VFS takes (`VFS-PATH-MAX`, 4,096
+  bytes), and the command bar the longest full form `vfs://<place>/<path>`;
+  a longer path is refused rather than cut short, so nothing is selected.
 - Listing a directory walks its VFS children once
   (`_VFS-ENSURE-CHILDREN?`, then the `IN.CHILD @` / `IN.SIBLING @` chain) and
   copies each entry's name, type, size and key into one allocated block of
@@ -223,21 +225,26 @@ while retaining the Explorer guard.
   a time and compares the copy with its source 16 KiB at a time, the
   properties text, and the agent's text preview.
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments
-- Copy and cut keep the selected file in the clipboard as its place and its
-  path there, as the selection is kept, and refuse a directory. A paste puts
-  the file under its own name, and refuses a name the destination already
+- Copy and cut keep the selected file or folder in the clipboard as its
+  place and its path there, as the selection is kept. They refuse a place's
+  own folder, which has no name to paste it under. A paste puts the file or
+  folder under its own name, and refuses a name the destination already
   holds, the source's own among them, before anything is written.
-- The copy writes a stage file, whose name starts with `.s-`, beside the
-  destination, syncs, reads the stage back against the source and only
-  then renames it to the file's name. A paste that fails therefore leaves
-  no file, and its notice says why: no space, a copy that did not match
-  its source, a place that is read-only or unavailable, or a storage
-  error.
-- A cut moves the file: by one rename when both places are on one volume,
-  and otherwise by the copy, after which the source is removed. If the
-  source cannot be removed, both files remain and the toast says so, as
-  it does when a pasted file stands but its volume did not confirm the
-  last sync. The clipboard is cleared once a cut's paste stands.
+- The copy writes a stage, whose name starts with `.s-`, beside the
+  destination: a file, or a folder holding the whole tree. It syncs, reads
+  the stage back against the source and only then renames it to its own
+  name. A paste that fails therefore leaves nothing, and its notice says
+  why: no space, a copy that did not match its source, a place that is
+  read-only or unavailable, a folder pasted inside itself, a name or path
+  too long for the destination, a folder holding a link or a device, or a
+  storage error.
+- A cut moves the file or folder: by one rename when both places are on one
+  volume, and otherwise by the copy, after which the source is removed. If
+  the source cannot be removed, the toast says so, as it does when a
+  pasted copy stands but its volume did not confirm the last sync. The
+  clipboard is cleared once a cut's paste stands.
+- A paste runs to its end before File Explorer answers again, so a folder
+  of many files keeps Desk waiting while it copies.
 - Create, rename, and post-confirmation delete mutations are bounded
   `VFS-TRANSACTION` operations. Modal confirmation never holds the VFS guard
   across its input/yield loop.
@@ -247,5 +254,6 @@ while retaining the Explorer guard.
   properties, rename, delete, copy, cut, and paste all act on the entry at
   the selection's path. Renaming or deleting the listed directory moves the
   listing with it.
-- MP64FS names are validated before mutation (non-empty, no slash, at most 23
-  UTF-8 bytes), and duplicate sibling names are rejected by the VFS layer.
+- Names are validated before mutation: not empty, no slash, and no longer
+  than the place's volume takes (`PLACE-NAME-LIMIT`: 23 bytes on MP64FS,
+  255 on ext4). The VFS layer rejects duplicate sibling names.

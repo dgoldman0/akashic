@@ -189,7 +189,7 @@ def test_paste_copies_a_file_between_places_on_two_volumes():
         'T',
     ]) == " ".join([
         "[toast Clipboard empty ]",
-        "[toast Directory clipboard operations are not supported ]",
+        "[toast Copied to clipboard ]",
         "[toast Copied to clipboard ]",
         "[toast Pasted! ]", "-1 -1",
         "[notice Paste refused: destination exists ]",
@@ -229,5 +229,55 @@ def test_cut_moves_a_file_between_places_and_says_what_stands():
         "[notice Paste refused: the source's place is read-only ]", "-1 0",
         "[toast Cut to clipboard ]",
         "[toast Pasted, but the source could not be removed ]", "-1 -1 0",
+        "[toast Cut to clipboard ]", "[toast Pasted! ]", "0 -1",
+    ])
+
+
+def test_a_path_longer_than_512_bytes_selects_and_pastes():
+    """Paths in a place are as long as the VFS takes: a file three folders
+    of 200-byte names deep, a path of 605 bytes, is selected and copied to
+    another place."""
+    assert pasted([
+        'CREATE LN 200 ALLOT  LN 200 110 FILL  CREATE LP 700 ALLOT  VARIABLE LPU',
+        ': LP+  ( a u -- )  47 LP LPU @ + C!  1 LPU +!',
+        '    DUP >R LP LPU @ + SWAP CMOVE R> LPU +! ;',
+        ': DEEPER  ( -- )  LN 200 VA @ VFS-MKDIR THROW  LN 200 LP+',
+        '    LP LPU @ VA @ VFS-CD? THROW ;',
+        ': T  0 LPU !  DEEPER DEEPER DEEPER  S" /" VA @ VFS-CD? THROW',
+        '     S" f" LP+  S" deep" LP LPU @ VA @ PUT  LPU @ .',
+        '     LP LPU @ P-ONE @ SEL  _FEXP-SEL-LEN @ .',
+        '     FEXP-CLIP-COPY  S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /f" VB @ S" deep" SAME? . ;',
+        'T',
+    ]) == "605 605 [toast Copied to clipboard ] [toast Pasted! ] -1"
+
+
+def test_paste_copies_and_moves_folders_between_places():
+    assert pasted([
+        ': T  S" tree" VA @ VFS-MKDIR THROW  S" /tree" VA @ VFS-CD? THROW',
+        '     S" in" VA @ VFS-MKDIR THROW  S" /" VA @ VFS-CD? THROW',
+        '     S" alpha" S" /tree/a.txt" VA @ PUT  S" beta" S" /tree/in/b.txt" VA @ PUT',
+        # A place's own folder has no name to paste it under.
+        '     S" /" P-ONE @ SEL  FEXP-CLIP-COPY',
+        # A folder copies to another volume with all it holds.
+        '     S" /tree" P-ONE @ SEL  FEXP-CLIP-COPY',
+        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /tree/a.txt" VB @ S" alpha" SAME? .',
+        '     S" /tree/in/b.txt" VB @ S" beta" SAME? .',
+        # It cannot go inside itself.
+        '     S" /tree/in" P-ONE @ SEL  FEXP-CLIP-PASTE  S" /tree/in/tree" VA @ HAS? .',
+        # A cut moves it by a rename inside one volume, and across volumes.
+        '     S" /tree" P-TWO @ SEL  FEXP-CLIP-CUT',
+        '     S" /sub" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /tree" VB @ HAS? .  S" /sub/tree/in/b.txt" VB @ S" beta" SAME? .',
+        '     S" /tree" P-ONE @ SEL  FEXP-CLIP-CUT',
+        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /tree" VA @ HAS? .  S" /tree/in/b.txt" VB @ S" beta" SAME? . ;',
+        'T',
+    ]) == " ".join([
+        "[toast A place cannot be copied, only what it holds ]",
+        "[toast Copied to clipboard ]", "[toast Pasted! ]", "-1 -1",
+        "[notice Paste refused: a folder cannot go inside itself ]", "0",
+        "[toast Cut to clipboard ]", "[toast Pasted! ]", "0 -1",
         "[toast Cut to clipboard ]", "[toast Pasted! ]", "0 -1",
     ])

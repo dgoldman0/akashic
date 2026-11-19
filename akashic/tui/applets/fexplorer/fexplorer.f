@@ -75,10 +75,12 @@ REQUIRE ../../../interop/resource.f
 \  §2 — Constants
 \ =====================================================================
 
-512 CONSTANT _FEXP-PATH-CAP       \ path buffer capacity
+\ A path in a place is as long as the VFS takes, and the command bar takes
+\ the longest full form, vfs://<place>/<path>.
+VFS-PATH-MAX CONSTANT _FEXP-PATH-CAP        \ path buffer capacity
 32768 CONSTANT _FEXP-SCRATCH-CAP  \ scratch: a paste's chunks, compared in halves
  4096 CONSTANT _FEXP-CAP-TEXT-MAX \ Agent-visible UTF-8 preview bytes
-512 CONSTANT _FEXP-PROMPT-CAP     \ command-bar input capacity
+IRES-VFS-URI-MAX CONSTANT _FEXP-PROMPT-CAP  \ command-bar input capacity
 
 \ Sort modes
 0 CONSTANT FEXP-SORT-NAME
@@ -604,11 +606,12 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
 \  §9 — Clipboard (copy / cut / paste)
 \ =====================================================================
 
-\ The clipboard keeps the file a copy or cut chose, and a paste hands it
-\ to PLACE-COPY or PLACE-MOVE (utils/fs/vfs-copy.f) with the destination,
-\ which may be a place on another volume.  The copy writes a stage, reads
-\ it back and only then renames it, so a failed paste leaves no file, and
-\ a cut removes its source only once the copy stands.
+\ The clipboard keeps the file or folder a copy or cut chose, and a paste
+\ hands it to PLACE-COPY or PLACE-MOVE (utils/fs/vfs-copy.f) with the
+\ destination, which may be a place on another volume.  The copy writes a
+\ stage, a file or a whole folder, reads it back and only then renames it,
+\ so a failed paste leaves nothing, and a cut removes its source only once
+\ the copy stands.
 
 : _FEXP-CLIP-CLEAR  ( -- )
     0 _FEXP-CLIP-PATH-LEN !
@@ -619,8 +622,13 @@ VARIABLE _FCS-OP
 
 : _FEXP-CLIP-SET-BODY  ( -- flag )
     _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
-    IN.TYPE @ VFS-T-FILE <> IF
-        S" Directory clipboard operations are not supported"
+    IN.TYPE @ DUP VFS-T-FILE = SWAP VFS-T-DIR = OR 0= IF
+        S" Only files and folders can be copied"
+        2500 ASHELL-TOAST-WARNING FALSE EXIT
+    THEN
+    \ A place's own folder has no name to paste it under.
+    _FEXP-SEL-LEN @ 1 = IF
+        S" A place cannot be copied, only what it holds"
         2500 ASHELL-TOAST-WARNING FALSE EXIT
     THEN
     _FEXP-SEL-PATH _FEXP-CLIP-PATH _FEXP-SEL-LEN @ MOVE
@@ -660,6 +668,17 @@ VARIABLE _FPA-PLACE
     _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ _FEXP-BASENAME
     _FEXP-PATH-BUF _FEXP-JOIN-AT ;
 
+\ _FEXP-INTO-ITSELF? ( -- flag )
+\   Whether the paste's destination lies inside the clipboard's folder:
+\   the same place, and the destination's path starts with the
+\   clipboard's and then "/".
+: _FEXP-INTO-ITSELF?  ( -- flag )
+    _FPA-PLACE @ _FEXP-CLIP-PLACE @ <> IF FALSE EXIT THEN
+    _FEXP-PATH-LEN @ _FEXP-CLIP-PATH-LEN @ > 0= IF FALSE EXIT THEN
+    _FEXP-PATH-BUF _FEXP-CLIP-PATH-LEN @
+    _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ COMPARE IF FALSE EXIT THEN
+    _FEXP-PATH-BUF _FEXP-CLIP-PATH-LEN @ + C@ [CHAR] / = ;
+
 \ _FEXP-PASTE-REFUSED ( ior -- )   Say why a paste changed nothing.
 : _FEXP-PASTE-REFUSED  ( ior -- )
     VFS-IOR-REASON CASE
@@ -683,11 +702,20 @@ VARIABLE _FPA-PLACE
             S" Paste failed: the copy did not match its source" ASHELL-SEVERITY-ERROR
         ENDOF
         VFS-R-INVALID OF
-            S" Paste failed: the destination cannot take this name"
-            ASHELL-SEVERITY-ERROR
+            _FEXP-INTO-ITSELF? IF
+                S" Paste refused: a folder cannot go inside itself"
+                ASHELL-SEVERITY-WARNING
+            ELSE
+                S" Paste failed: the destination cannot take this name"
+                ASHELL-SEVERITY-ERROR
+            THEN
         ENDOF
         VFS-R-NAMETOOLONG OF
-            S" Paste failed: the destination cannot take this name"
+            S" Paste failed: a name or path is too long for the destination"
+            ASHELL-SEVERITY-ERROR
+        ENDOF
+        VFS-R-UNSUPPORTED OF
+            S" Paste failed: the folder holds a link or a device"
             ASHELL-SEVERITY-ERROR
         ENDOF
         VFS-R-NOVOLUME OF
@@ -726,9 +754,9 @@ VARIABLE _FPA-PLACE
     3500 ASHELL-TOAST-WARNING ;
 
 \ FEXP-CLIP-PASTE ( -- )
-\   Copy the clipboard's file, or move it after a cut, into the selected
-\   directory, the selected file's directory, or the listed directory,
-\   in whichever of the set's places that is.
+\   Copy the clipboard's file or folder, or move it after a cut, into the
+\   selected directory, the selected file's directory, or the listed
+\   directory, in whichever of the set's places that is.
 : FEXP-CLIP-PASTE  ( -- )
     _FEXP-CLIP-OP @ _FEXP-CLIP-NONE = IF
         S" Clipboard empty" 1500 ASHELL-TOAST EXIT
