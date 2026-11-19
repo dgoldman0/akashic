@@ -493,8 +493,11 @@ class PadAloneJourney(_AppletJourney):
     Save As holding the file's path; a PLACE at its start and an EXTEND to
     its end select it, the name typed over it has no place of its own, and
     Enter saves the file under that name in the documents place, with Pad's
-    notice that it saved and the name in its status bar; the driver then
-    finds the file in the documents place's folder on the host.
+    notice that it saved and the name in its status bar.  An EXPAND then
+    opens the documents place in Pad's sidebar, which lists the saved file
+    under it; a frame that still shows the place closed sends the EXPAND
+    again, up to three in all.  The driver then finds the file in the
+    documents place's folder on the host.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -523,7 +526,14 @@ class PadAloneJourney(_AppletJourney):
         SAVE_AS_SELECTED,
         SAVE_AS_TYPED,
         SAVED_AS,
-    ) = range(23)
+        SIDEBAR_EXPANDED,
+    ) = range(24)
+
+    # How many EXPANDs of the documents place Pad's sidebar may take before
+    # it lists the saved file.  A frame that supersedes the one an EXPAND
+    # was sent from can leave it naming a control the guest no longer has,
+    # and the guest then drops it, so it is sent again from the newer frame.
+    SIDEBAR_EXPANDS = 3
 
     def __init__(self, ready_markers: tuple[str, ...], *, user_volume: bool = False):
         super().__init__(ready_markers)
@@ -545,10 +555,12 @@ class PadAloneJourney(_AppletJourney):
         # each lasts a second or two, so the input after it may be retried
         # once it is gone.
         self._noticed: set[int] = set()
+        # The EXPANDs of the documents place sent so far.
+        self._expands = 0
 
     @property
     def final_stage(self) -> int:
-        return self.SAVED_AS if self._user_volume else self.LINK_FOLLOWED
+        return self.SIDEBAR_EXPANDED if self._user_volume else self.LINK_FOLLOWED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
@@ -885,11 +897,44 @@ class PadAloneJourney(_AppletJourney):
             raise PhysicalDesktopAcceptanceError(
                 f"Pad still marks {saved} changed after Save As"
             )
+        if self.stage == self.SIDEBAR_EXPANDED:
+            return self._sidebar_lists_saved(offer, generation, projection, sender)
         if not self._notice_seen(offer, projection, PAD_SAVED_NOTICE,
                                  StatusSeverity.NEUTRAL):
             return self._wait(f"Pad's notice {PAD_SAVED_NOTICE!r}")
         _require_cell_text_in(offer, PAD_SAVED_AS, bounds, _WHERE)
-        return self._done("pad-saved-as", offer)
+        return self._expand_documents("pad-saved-as", offer, generation, projection, sender)
+
+    def _expand_documents(self, milestone, offer, generation, projection,
+                          sender) -> JourneyProgress:
+        """Open the documents place's row in Pad's sidebar."""
+
+        sidebar, (documents, _records, _origin) = self._require_sidebar(projection)
+        self._expands += 1
+        return self._step(milestone, "item_expand", sidebar.value(documents.item_key),
+                          self.SIDEBAR_EXPANDED, offer, generation, sender)
+
+    def _sidebar_lists_saved(self, offer, generation, projection,
+                             sender) -> JourneyProgress:
+        """The documents place opened in Pad's sidebar lists the saved file.
+        A frame that shows the place still closed sends the EXPAND again,
+        at most SIDEBAR_EXPANDS times in all."""
+
+        sidebar, (documents, _records, _origin) = self._require_sidebar(projection)
+        if documents.state & ItemState.EXPANDED:
+            if not any(
+                item.parent_key == documents.item_key
+                and item.fields[0].text == PAD_SAVED_AS
+                for item in sidebar.content.items
+            ):
+                return self._wait(f"{PAD_SAVED_AS} under Documents in Pad's sidebar")
+            return self._done("pad-sidebar-lists-saved", offer)
+        if self._expands >= self.SIDEBAR_EXPANDS:
+            raise PhysicalDesktopAcceptanceError(
+                f"Pad's sidebar kept Documents closed through {self._expands} EXPANDs"
+            )
+        return self._expand_documents(f"pad-sidebar-expand-{self._expands + 1}", offer,
+                                      generation, projection, sender)
 
     def _save_as(self, offer, generation, projection, sender, prompt, path) -> JourneyProgress:
         """Save As: it opens holding PATH; select all of it, type the new
@@ -1612,12 +1657,11 @@ class FexpAloneJourney(_AppletJourney):
         SELECTION_SHOWN says whether the status bar already shows that row's
         path as the selection.
 
-        A listing File Explorer makes for a folder it selected, through the
-        tree, Go to or an OPEN, leaves the list's own selection on its first
-        row while File Explorer's selection is the folder (LST-ROWS!), and a
-        SELECT on that row is no change, so File Explorer never selects it.
-        While the row to select is highlighted but not the selection, another
-        row is selected first."""
+        The table shows a row selected only when that row is File Explorer's
+        selection, and no row when its selection is the listed folder itself
+        or lies elsewhere (LST-DESELECT), so a SELECT on any row chooses it.
+        A highlighted row the status bar does not show as the selection fails
+        the journey."""
 
         row = table.named(name)
         if row is None:
@@ -1632,16 +1676,10 @@ class FexpAloneJourney(_AppletJourney):
             and highlighted.item_key == row.item_key
             and not selection_shown
         ):
-            others = [item for item in table.content.shown_items()
-                      if item.item_key != row.item_key]
-            if not others:
-                raise PhysicalDesktopAcceptanceError(
-                    f"File Explorer's table highlights {name}, which File Explorer has "
-                    "not selected, and shows no other row to select first"
-                )
-            return self._step("fexp-highlight-is-not-the-selection", "item_select",
-                              table.value(others[0].item_key), self.stage, offer,
-                              generation, sender)
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer's table highlights {name}, which File Explorer has "
+                "not selected"
+            )
         return self._step(milestone, "item_select", table.value(row.item_key), target,
                           offer, generation, sender)
 
