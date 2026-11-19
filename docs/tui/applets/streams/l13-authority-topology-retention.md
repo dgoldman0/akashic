@@ -220,11 +220,33 @@ The checked application-root payload contains:
   observation-version, native-head, and active counts;
 - migration provenance, completeness flags, and exact legacy fingerprints;
 - the four ordered-index roots;
-- reclamation state; and
+- reclamation state;
+- the staging arena: the page base above which every page stays the
+  authority's until compaction, the root page kept from before it, and the
+  four roots it began from;
+- a provisional flag, which only a first stage's checkpoint carries; and
 - a semantic seal over all used bytes.
 
-Cold open reads and validates a bounded set of roots and metadata independent
-of corpus size. Full-corpus verification and compaction are explicit bounded
+Cold open reads and validates the roots and metadata, then audits page
+ownership before any page may be reused, as the persistence layer requires of
+every reopened reclaim state that holds pages ([storage](../../../persistence/storage.md),
+"Cold reclaim authority"). The audit runs in a reading transaction over both
+valid root slots and submits each snapshot's root page, its embedded reclaim
+state and every node of its four trees; blob chunks and manifests are segment
+records and own no page. A snapshot with an open staging arena also submits
+the arena's kept root page and the nodes of its four baseline trees, accepts a
+live node below the arena base only where the baseline already owns it, and
+claims every page from the base up as the arena. It reads every tree page
+once, so cold open takes time in proportion to the authority's pages. Its map
+is caller-owned, two bytes per page of the larger root slot (one for the
+reclaim audit's marks, one for the walk that visits each node once), and is
+given to `STREAMS-REPOSITORY-WORK-INIT`; the runtime owner keeps 1 MiB, enough
+for 524,288 pages (2 GiB), the page capacity Library's controller gives its
+index. A provisional root opens as no authority, keeping its arena for the
+first stage that continues it. An authority
+larger than the map answers capacity and stays blocked, and the compaction
+builder, which compaction opens only to find it absent, keeps no map.
+Full-corpus semantic verification and compaction are explicit bounded
 maintenance operations. A corrupt, unsupported-future, uncertain, or
 ambiguous authority remains blocked; no such state becomes an empty writable
 repository.
@@ -304,19 +326,27 @@ distinct outcome and all last-good data remains unchanged.
 A successful apply stages all changed immutable revisions, blobs, head
 updates, ordering rows, the terminal attempt, and active-row removal. No
 partial batch becomes query-visible. At large index heights the operation may
-exceed one neutral reclaim ledger. In that case the adapter uses Library's
-proven hidden-root pattern:
+exceed one physical transaction. In that case the adapter uses Library's
+staging pattern ([storage](../../../persistence/storage.md), "Library proving
+consumer"):
 
-1. keep the four visible semantic roots unchanged;
-2. mutate caller-owned hidden staging roots;
-3. publish bounded physical extent/reclaim progress with the old visible
-   roots and unchanged logical generation;
-4. continue from the hidden roots in a fresh physical transaction; and
-5. atomically expose all four staging roots and the successful terminal
+1. open the staging arena at the first staged mutation: record the store's
+   page count as its base, and keep the four visible roots and the root page
+   that holds them as its baseline;
+2. keep the four visible semantic roots unchanged;
+3. mutate caller-owned hidden staging roots, issuing every page above the
+   base and releasing none;
+4. publish bounded physical progress, at most 128 pages a transaction, with
+   the old visible roots and unchanged logical generation;
+5. continue from the hidden roots in a fresh physical transaction; and
+6. atomically expose all four staging roots and the successful terminal
    attempt in the final application-root publication.
 
-A crash before the final publication leaves the accepted attempt and old
-observations visible. Unreachable staging records are later compaction input.
+The arena stays open until compaction. While it is open no page is released
+or retired, ordinary mutations included, so no fallback snapshot or baseline
+can name a reused page, and the cold audit attributes every page. A crash
+before the final publication leaves the accepted attempt and old observations
+visible, and the arena still owns every staged page; compaction reclaims them.
 Cold recovery therefore reports the attempt as indeterminate rather than
 guessing that a batch committed.
 
@@ -366,7 +396,10 @@ removed-source policies without changing authority. Such a transaction must:
 
 Physical reclamation and compaction are not semantic retention. They may
 recover pages and records unreachable under the current semantic roots, but
-may not decide which streaming evidence is live.
+may not decide which streaming evidence is live. Compaction rebuilds into a
+truncated bank, so its target root claims that whole bank as one staging arena
+from page zero, with empty baseline roots; the arena stays open until the next
+compaction.
 
 ## Cold migration and authority flip
 
@@ -378,10 +411,13 @@ LEGACY_AUTHORITY -> STAGING -> VERIFIED -> REPOSITORY_AUTHORITY
 
 There is no dual-write phase. Before the flip, the existing source and
 observation readers perform their complete checked recovery and exact legacy
-bytes are fingerprinted. Import builds repository pages and segments without
-publishing a new root. Readback verifies counts, IDs, revisions, strings,
-digests, attempt states, and every index projection. The first valid new
-atomic root is the authority flip. After it exists, boot never consults a
+bytes are fingerprinted. Import builds repository pages and segments in the
+staging arena. Each checkpoint it publishes along the way carries the
+provisional flag, so the store holds no Streams authority until a root without
+it; a rerun after a crash continues the same arena. Readback verifies counts,
+IDs, revisions, strings, digests, attempt states, and every index projection.
+The first valid new atomic root without the provisional flag is the authority
+flip. After it exists, boot never consults a
 legacy snapshot as writable authority and never rolls back acknowledged new
 writes.
 

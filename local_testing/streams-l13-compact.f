@@ -395,6 +395,7 @@ SPREC-OBSERVATION-SIZE XBUF _SL13C-observation-normalized
     ['] _SL13M-fault 0 _SL13M-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13C-status
+    _SL13M-audit-map _SL13M-audit-map-u
     _SL13M-record-buffer STREAMS-REPOSITORY-RECORD-BUFFER-MIN
     _SL13M-repository _SL13M-repository-work
         STREAMS-REPOSITORY-WORK-INIT

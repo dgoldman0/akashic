@@ -24,6 +24,9 @@ GUARD _SL13R-guard
 STREAMS-REPOSITORY-SIZE XBUF _SL13R-repository
 STREAMS-REPOSITORY-WORK-SIZE XBUF _SL13R-work
 STREAMS-REPOSITORY-RECORD-BUFFER-MIN XBUF _SL13R-record-buffer
+\ The authority's cold reclaim audit takes two bytes per page.
+65536 CONSTANT _SL13R-audit-map-u
+_SL13R-audit-map-u XBUF _SL13R-audit-map
 CREATE _SL13R-authority RID-SIZE ALLOT
 CREATE _SL13R-other-authority RID-SIZE ALLOT
 CREATE _SL13R-source-rid RID-SIZE ALLOT
@@ -118,6 +121,7 @@ STREAMS-QUERY-WORK-SIZE XBUF _SL13R-query-work
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13R-status
     _SL13R-repository STREAMS-REPOSITORY-VALID? _SL13R-assert
+    _SL13R-audit-map _SL13R-audit-map-u
     _SL13R-record-buffer STREAMS-REPOSITORY-RECORD-BUFFER-MIN
     _SL13R-repository _SL13R-work
         STREAMS-REPOSITORY-WORK-INIT

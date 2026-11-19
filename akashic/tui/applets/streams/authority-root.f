@@ -3,8 +3,11 @@
 \ =====================================================================
 \  This is the one current configured-source authority summary placed in a
 \  neutral checked page.  It owns Streams counters, migration completeness,
-\  four ordered-index roots, and reclamation state.  It owns no path, VFS,
-\  provider, draft, Bluesky, document, or publication policy.
+\  four ordered-index roots, reclamation state, and the staging arena: the
+\  page base above which every page stays the authority's until compaction,
+\  the root page kept from before it, and the four roots it began from.  It
+\  owns no path, VFS, provider, draft, Bluesky, document, or publication
+\  policy.
 \ =====================================================================
 
 PROVIDED akashic-tui-streams-authority-root
@@ -23,6 +26,11 @@ REQUIRE ../../../utils/memory-span.f
 1 CONSTANT STREAMS-AUTHORITY-ROOT-ABI
 4 CONSTANT STREAMS-AUTHORITY-ROOT-TREE-COUNT
 64 CONSTANT STREAMS-AUTHORITY-ACTIVE-MAX
+
+\ A first stage's progress checkpoint carries this flag.  Its roots hold
+\ only staging progress, and the store has no Streams authority until a
+\ root without the flag is published.
+1 CONSTANT STREAMS-AUTHORITY-ROOT-F-PROVISIONAL
 
 1 CONSTANT STREAMS-AUTHORITY-PROVENANCE-NATIVE
 2 CONSTANT STREAMS-AUTHORITY-PROVENANCE-LEGACY-BOTH
@@ -63,7 +71,12 @@ REQUIRE ../../../utils/memory-span.f
 _SAR-ROOTS-OFF
     STREAMS-AUTHORITY-ROOT-TREE-COUNT PBTREE-ROOT-SIZE * +
     CONSTANT _SAR-RECLAIM-OFF
-_SAR-RECLAIM-OFF RECLAIM-STATE-SIZE + CONSTANT _SAR-SEAL-OFF
+_SAR-RECLAIM-OFF RECLAIM-STATE-SIZE + CONSTANT _SAR-ARENA-BASE-OFF
+_SAR-ARENA-BASE-OFF 8 + CONSTANT _SAR-ARENA-ROOT-PAGE-OFF
+_SAR-ARENA-ROOT-PAGE-OFF 8 + CONSTANT _SAR-BASELINE-ROOTS-OFF
+_SAR-BASELINE-ROOTS-OFF
+    STREAMS-AUTHORITY-ROOT-TREE-COUNT PBTREE-ROOT-SIZE * +
+    CONSTANT _SAR-SEAL-OFF
 _SAR-SEAL-OFF SHA3-256-LEN + CONSTANT _SAR-RESERVED-OFF
 
 PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
@@ -103,6 +116,9 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
 : SAR.REMOVED-SOURCE-COUNT      ( root -- a )
     _SAR-REMOVED-SOURCE-COUNT-OFF + ;
 : SAR.RECLAIM-STATE           ( root -- state ) _SAR-RECLAIM-OFF + ;
+: SAR.ARENA-BASE              ( root -- a ) _SAR-ARENA-BASE-OFF + ;
+: SAR.ARENA-ROOT-PAGE         ( root -- a ) _SAR-ARENA-ROOT-PAGE-OFF + ;
+: SAR.BASELINE-ROOTS          ( root -- a ) _SAR-BASELINE-ROOTS-OFF + ;
 : SAR.SEAL                    ( root -- digest ) _SAR-SEAL-OFF + ;
 : SAR.RESERVED                ( root -- a ) _SAR-RESERVED-OFF + ;
 
@@ -112,6 +128,14 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
         DROP R> DROP 0 EXIT
     THEN
     PBTREE-ROOT-SIZE * R> _SAR-ROOTS-OFF + + ;
+
+\ The root tree INDEX had when the staging arena opened.
+: STREAMS-AUTHORITY-ROOT-BASELINE  ( index root -- baseline-root|0 )
+    >R
+    DUP 0< OVER STREAMS-AUTHORITY-ROOT-TREE-COUNT >= OR IF
+        DROP R> DROP 0 EXIT
+    THEN
+    PBTREE-ROOT-SIZE * R> _SAR-BASELINE-ROOTS-OFF + + ;
 
 : _SAR-ZERO?  ( a u -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
@@ -131,6 +155,24 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
 
 : _SAR-NONNEG-CELL?  ( value -- flag )
     DUP 0>= SWAP PERSIST-MAX-SIGNED <= AND ;
+
+\ Without an arena the base and the kept root page are -1 and the baseline
+\ roots are empty.  With one, the kept root page is -1 or lies below the
+\ base.  The adapter checks the base and the baseline roots against the
+\ store.
+: _SAR-ARENA?  ( root -- flag )
+    DUP SAR.ARENA-BASE @ DUP -1 = IF
+        DROP
+        DUP SAR.ARENA-ROOT-PAGE @ -1 <> IF DROP 0 EXIT THEN
+        SAR.BASELINE-ROOTS
+        STREAMS-AUTHORITY-ROOT-TREE-COUNT PBTREE-ROOT-SIZE *
+        _SAR-ZERO? EXIT
+    THEN
+    DUP _SAR-NONNEG-CELL? 0= IF 2DROP 0 EXIT THEN
+    SWAP SAR.ARENA-ROOT-PAGE @
+    DUP -1 = IF 2DROP -1 EXIT THEN
+    DUP 0< IF 2DROP 0 EXIT THEN
+    > ;
 
 : _SAR-LEGACY-EVIDENCE?
   ( present-a bytes-a digest-a -- flag )
@@ -247,7 +289,9 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
     DUP SAR.SIZE @ STREAMS-AUTHORITY-ROOT-SIZE <> IF
         DROP STREAMS-AUTHORITY-ROOT-S-CORRUPT EXIT
     THEN
-    DUP SAR.FLAGS @ IF DROP STREAMS-AUTHORITY-ROOT-S-CORRUPT EXIT THEN
+    DUP SAR.FLAGS @ STREAMS-AUTHORITY-ROOT-F-PROVISIONAL INVERT AND IF
+        DROP STREAMS-AUTHORITY-ROOT-S-CORRUPT EXIT
+    THEN
     DUP _SAR-SEAL-VALID? 0= IF
         DROP STREAMS-AUTHORITY-ROOT-S-CORRUPT EXIT
     THEN
@@ -329,16 +373,20 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
         RECLAIM-STATE-VALID? 0= IF
         DROP STREAMS-AUTHORITY-ROOT-S-CORRUPT EXIT
     THEN
+    DUP _SAR-ARENA? 0= IF
+        DROP STREAMS-AUTHORITY-ROOT-S-CORRUPT EXIT
+    THEN
     DROP STREAMS-AUTHORITY-ROOT-S-OK ;
 
 : STREAMS-AUTHORITY-ROOT-HEADER-VALID?  ( root -- flag )
     STREAMS-AUTHORITY-ROOT-HEADER-CLASSIFY
         STREAMS-AUTHORITY-ROOT-S-OK = ;
 
-\ Prepare the native empty header and reclaim state.  The four tree spans stay
-\ deliberately uninitialized and this template is therefore not yet a valid
-\ sealed authority.  The bound adapter must initialize every PBTREE root and
-\ call STREAMS-AUTHORITY-ROOT-SEAL only after all fields are final.
+\ Prepare the native empty header and reclaim state, with no staging arena.
+\ The four tree spans stay deliberately uninitialized and this template is
+\ therefore not yet a valid sealed authority.  The bound adapter must
+\ initialize every PBTREE root and call STREAMS-AUTHORITY-ROOT-SEAL only
+\ after all fields are final.
 : STREAMS-AUTHORITY-ROOT-TEMPLATE-INIT
   ( authority-id root -- status )
     >R
@@ -356,6 +404,8 @@ PERSIST-PAGE-PAYLOAD-SIZE CONSTANT STREAMS-AUTHORITY-ROOT-SIZE
         DROP R> DROP STREAMS-AUTHORITY-ROOT-S-INVALID EXIT
     THEN
     R@ STREAMS-AUTHORITY-ROOT-SIZE 0 FILL
+    -1 R@ SAR.ARENA-BASE !
+    -1 R@ SAR.ARENA-ROOT-PAGE !
     _SAR-MAGIC R@ SAR.MAGIC !
     STREAMS-AUTHORITY-ROOT-ABI R@ SAR.ABI !
     STREAMS-AUTHORITY-ROOT-SIZE R@ SAR.SIZE !

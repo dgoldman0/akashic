@@ -254,8 +254,9 @@ does and reconciles nothing, since its reads stop at that root's bounds.
 `PSTORE-READ-PAGE-TX`, `PSTORE-READ-RECORD-TX`, `PSTORE-ROOT-SLOT@` and
 `PSTORE-READ-PAGE-SNAPSHOT-TX` work in it; the staging words and
 `PSTORE-COMMIT` answer `PERSIST-S-READ-ONLY` and leave it owned, and
-`PSTORE-ABORT` ends it. The cold audits of Library's index and Streams'
-operational spool run in one, so they audit a read-only store too.
+`PSTORE-ABORT` ends it. The cold audits of Library's index, Streams'
+authority and Streams' operational spool run in one, so they audit a
+read-only store too.
 `PCOMPACT-BEGIN` and `PCOMPACT-RECOVER` answer `PERSIST-S-READ-ONLY` when the
 builder store is read-only, before any root or bank is touched.
 

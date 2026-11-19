@@ -54,6 +54,9 @@ OCHK-CANDIDATE-SIZE XBUF _SL13M-candidate
 STREAMS-REPOSITORY-SIZE XBUF _SL13M-repository
 STREAMS-REPOSITORY-WORK-SIZE XBUF _SL13M-repository-work
 STREAMS-REPOSITORY-RECORD-BUFFER-MIN XBUF _SL13M-record-buffer
+\ The authority's cold reclaim audit takes two bytes per page.
+65536 CONSTANT _SL13M-audit-map-u
+_SL13M-audit-map-u XBUF _SL13M-audit-map
 STREAMS-MIGRATION-WORK-SIZE XBUF _SL13M-migration-work
 
 STREAMS-PERSISTENCE-RECORD-MAX XBUF _SL13M-expected-record
@@ -134,6 +137,7 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
     ['] _SL13M-fault 0 _SL13M-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13M-status
+    _SL13M-audit-map _SL13M-audit-map-u
     _SL13M-record-buffer STREAMS-REPOSITORY-RECORD-BUFFER-MIN
     _SL13M-repository _SL13M-repository-work
         STREAMS-REPOSITORY-WORK-INIT

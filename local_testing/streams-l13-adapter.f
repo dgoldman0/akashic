@@ -25,6 +25,9 @@ STREAMS-PERSISTENCE-RECORD-MAX PBLOB-CHUNK-SIZE MAX
 _SL13A-record-max PERSIST-RECORD-HEADER-SIZE +
     CONSTANT _SL13A-buffer-u
 _SL13A-buffer-u XBUF _SL13A-buffer
+\ The authority's cold reclaim audit takes two bytes per page.
+65536 CONSTANT _SL13A-audit-map-u
+_SL13A-audit-map-u XBUF _SL13A-audit-map
 
 STREAMS-SOURCE-SIZE XBUF _SL13A-source
 SPREC-SOURCE-SIZE XBUF _SL13A-source-record
@@ -175,6 +178,7 @@ PBLOB-CHUNK-SIZE 37 + CONSTANT _SL13A-blob-total
         PSTORE-WORK-INIT PERSIST-S-OK _SL13A-status
     _SL13A-store _SL13A-adapter STREAMS-PA-INIT
         STREAMS-PA-S-OK _SL13A-status
+    _SL13A-audit-map _SL13A-audit-map-u
     _SL13A-pwork _SL13A-adapter _SL13A-work
         STREAMS-PA-WORK-INIT STREAMS-PA-S-OK _SL13A-status
     _SL13A-source STREAMS-SOURCE-SIZE _SL13A-work

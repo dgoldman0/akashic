@@ -29,7 +29,7 @@ _SL13R-RUN
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
 
     harness.PROFILES[PROFILE] = harness.Profile(

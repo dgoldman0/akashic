@@ -13,6 +13,12 @@
 \  PBTREE cursor is call-local navigation state; only semantic keys resume.
 \  A read-only span probe lets callers qualify buffers against that complete
 \  borrowed-memory graph without entering or mutating the adapter.
+\
+\  Every open of an authority that holds pages audits which pages the
+\  authority owns before the work may begin a transaction, as reclaim
+\  requires of a reopened state, over a caller-owned map given to
+\  STREAMS-PA-WORK-INIT (docs/persistence/storage.md, "Cold reclaim
+\  authority").
 \ =====================================================================
 
 PROVIDED akashic-tui-streams-persistence-adapter
@@ -295,7 +301,26 @@ _SPAW-RECORD-OFF STREAMS-PERSISTENCE-RECORD-MAX +
     CONSTANT _SPAW-AUTHORITY-ROOT-OFF
 _SPAW-AUTHORITY-ROOT-OFF STREAMS-AUTHORITY-ROOT-SIZE +
     CONSTANT _SPAW-PAGE-OFF
-_SPAW-PAGE-OFF PERSIST-PAGE-PAYLOAD-SIZE +
+_SPAW-PAGE-OFF PERSIST-PAGE-PAYLOAD-SIZE + 7 + -8 AND
+    CONSTANT _SPAW-AUDIT-MAP-OFF
+_SPAW-AUDIT-MAP-OFF 8 + CONSTANT _SPAW-AUDIT-MAP-CAPACITY-OFF
+_SPAW-AUDIT-MAP-CAPACITY-OFF 8 + CONSTANT _SPAW-AUDIT-MAP-U-OFF
+_SPAW-AUDIT-MAP-U-OFF 8 + CONSTANT _SPAW-AUDIT-GENERATION-OFF
+_SPAW-AUDIT-GENERATION-OFF 8 + CONSTANT _SPAW-AUDIT-PAGE-COUNT-OFF
+_SPAW-AUDIT-PAGE-COUNT-OFF 8 + CONSTANT _SPAW-AUDIT-DATA-BANK-OFF
+_SPAW-AUDIT-DATA-BANK-OFF 8 + CONSTANT _SPAW-SNAPSHOT-ROOT-OFF
+_SPAW-SNAPSHOT-ROOT-OFF PERSIST-ROOT-VALUE-SIZE + 7 + -8 AND
+    CONSTANT _SPAW-RECLAIM-AUDIT-WORK-OFF
+_SPAW-RECLAIM-AUDIT-WORK-OFF RECLAIM-AUDIT-WORK-SIZE + 7 + -8 AND
+    CONSTANT _SPAW-BTREE-AUDIT-WORK-OFF
+_SPAW-BTREE-AUDIT-WORK-OFF PBTREE-AUDIT-WORK-SIZE + 7 + -8 AND
+    CONSTANT _SPAW-ARENA-BASE-OFF
+_SPAW-ARENA-BASE-OFF 8 + CONSTANT _SPAW-ARENA-ROOT-PAGE-OFF
+_SPAW-ARENA-ROOT-PAGE-OFF 8 + CONSTANT _SPAW-ARENA-TX-PAGES-OFF
+_SPAW-ARENA-TX-PAGES-OFF 8 + CONSTANT _SPAW-PROVISIONAL-OFF
+_SPAW-PROVISIONAL-OFF 8 + CONSTANT _SPAW-AUDIT-ARENA-BASE-OFF
+_SPAW-AUDIT-ARENA-BASE-OFF 8 + CONSTANT _SPAW-BASELINE-ROOTS-OFF
+_SPAW-BASELINE-ROOTS-OFF _SPA-TREE-COUNT PBTREE-ROOT-SIZE * +
     CONSTANT STREAMS-PA-WORK-SIZE
 
 STREAMS-PERSISTENCE-RECORD-MAX PBLOB-CHUNK-SIZE MAX
@@ -348,6 +373,23 @@ PERSIST-RECORD-HEADER-SIZE +
 : _SPAW.RECORD         ( work -- a ) _SPAW-RECORD-OFF + ;
 : _SPAW.AUTHORITY-ROOT ( work -- root ) _SPAW-AUTHORITY-ROOT-OFF + ;
 : _SPAW.PAGE           ( work -- page ) _SPAW-PAGE-OFF + ;
+: _SPAW.AUDIT-MAP      ( work -- a ) _SPAW-AUDIT-MAP-OFF + ;
+: _SPAW.AUDIT-MAP-CAPACITY ( work -- a )
+    _SPAW-AUDIT-MAP-CAPACITY-OFF + ;
+: _SPAW.AUDIT-MAP-U    ( work -- a ) _SPAW-AUDIT-MAP-U-OFF + ;
+: _SPAW.AUDIT-GENERATION ( work -- a ) _SPAW-AUDIT-GENERATION-OFF + ;
+: _SPAW.AUDIT-PAGE-COUNT ( work -- a ) _SPAW-AUDIT-PAGE-COUNT-OFF + ;
+: _SPAW.AUDIT-DATA-BANK ( work -- a ) _SPAW-AUDIT-DATA-BANK-OFF + ;
+: _SPAW.SNAPSHOT-ROOT  ( work -- root ) _SPAW-SNAPSHOT-ROOT-OFF + ;
+: _SPAW.RECLAIM-AUDIT-WORK ( work -- audit-work )
+    _SPAW-RECLAIM-AUDIT-WORK-OFF + ;
+: _SPAW.BTREE-AUDIT-WORK ( work -- audit-work )
+    _SPAW-BTREE-AUDIT-WORK-OFF + ;
+: _SPAW.ARENA-BASE     ( work -- a ) _SPAW-ARENA-BASE-OFF + ;
+: _SPAW.ARENA-ROOT-PAGE ( work -- a ) _SPAW-ARENA-ROOT-PAGE-OFF + ;
+: _SPAW.ARENA-TX-PAGES ( work -- a ) _SPAW-ARENA-TX-PAGES-OFF + ;
+: _SPAW.PROVISIONAL    ( work -- a ) _SPAW-PROVISIONAL-OFF + ;
+: _SPAW.AUDIT-ARENA-BASE ( work -- a ) _SPAW-AUDIT-ARENA-BASE-OFF + ;
 
 : _SPAW-TREE  ( index work -- tree )
     SWAP PBTREE-SIZE * _SPAW-TREES-OFF + + ;
@@ -357,6 +399,39 @@ PERSIST-RECORD-HEADER-SIZE +
 
 : _SPAW-STAGING-ROOT  ( index work -- root )
     SWAP PBTREE-ROOT-SIZE * _SPAW-STAGING-ROOTS-OFF + + ;
+
+: _SPAW-BASELINE-ROOT  ( index work -- root )
+    SWAP PBTREE-ROOT-SIZE * _SPAW-BASELINE-ROOTS-OFF + + ;
+
+\ ---------------------------------------------------------------------
+\ Staging arena
+\ ---------------------------------------------------------------------
+\ The first staged mutation opens one arena at the store's page count, as
+\ Library's adapter does (docs/persistence/storage.md).  From then until
+\ compaction every page is issued above that base, and none is released or
+\ retired: hidden staging nodes, the copies they replace, superseded roots
+\ and a crashed stage's pages all stay the authority's, so no fallback
+\ snapshot or baseline can name a reused page.  The arena keeps the four
+\ roots it began from and the root page they were published in, and the
+\ cold audit claims that baseline, the live nodes below the base, and every
+\ page above it.
+
+\ One staged mutation issues at most 2h+1 pages at the tallest tree.  Each
+\ physical transaction's arena allocation, including its root-page
+\ publication, stays within this bound, as Library's does.
+128 CONSTANT _SPAW-ARENA-TX-PAGE-MAX
+
+: _SPAW-ARENA-ACTIVE?  ( work -- flag )
+    _SPAW.ARENA-BASE @ 0>= ;
+
+: _SPAW-ARENA-RESET  ( work -- )
+    >R
+    -1 R@ _SPAW.ARENA-BASE !
+    -1 R@ _SPAW.ARENA-ROOT-PAGE !
+    0 R@ _SPAW.ARENA-TX-PAGES !
+    R@ _SPAW-BASELINE-ROOTS-OFF +
+        _SPA-TREE-COUNT PBTREE-ROOT-SIZE * 0 FILL
+    R> DROP ;
 
 : _SPA-SCOPE  ( index -- scope|0 )
     CASE
@@ -368,14 +443,14 @@ PERSIST-RECORD-HEADER-SIZE +
     ENDCASE ;
 
 : _SPAW-ALLOCATE  ( work store pstore-work -- page-id status )
-    2 PICK _SPAW.STAGING-ACTIVE @ IF
-        2 PICK _SPAW.RECLAIM-WORK >R
-        PBTREE-HIGH-WATER-ALLOCATE
-        DUP IF R> DROP EXIT THEN DROP
-        DUP R@ RECLAIM-CLAIM-HIGH-WATER
-        DUP IF
-            >R DROP -1 R> R> DROP EXIT
+    2 PICK _SPAW-ARENA-ACTIVE? IF
+        2 PICK _SPAW.ARENA-TX-PAGES @
+            _SPAW-ARENA-TX-PAGE-MAX >= IF
+            _SPA-DROP3 -1 PERSIST-S-CAPACITY EXIT
         THEN
+        2 PICK >R
+        PBTREE-HIGH-WATER-ALLOCATE
+        DUP 0= IF 1 R@ _SPAW.ARENA-TX-PAGES +! THEN
         R> DROP EXIT
     THEN
     1 3 PICK _SPAW.RECLAIM-STEP-CALLS +!
@@ -423,6 +498,60 @@ PERSIST-RECORD-HEADER-SIZE +
     THEN
     2DROP _SPA-DROP3 -1 ;
 
+\ The cold ownership map is none (0 0) or a span apart from the work, the
+\ adapter, its store and the PSTORE work.
+: _SPAW-AUDIT-MAP-BOUND?  ( work -- flag )
+    >R
+    R@ _SPAW.AUDIT-MAP-CAPACITY @ DUP 0< IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP 0= IF
+        DROP R@ _SPAW.AUDIT-MAP @ 0= R> DROP EXIT
+    THEN
+    R@ _SPAW.AUDIT-MAP @ DUP 0= IF
+        DROP DROP R> DROP 0 EXIT
+    THEN
+    SWAP 2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ STREAMS-PA-WORK-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SPAW.ADAPTER @ STREAMS-PA-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+        PSTORE-SPAN-DISJOINT? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _SPAW.PSTORE-WORK @ PSTORE-WORK-SPAN-DISJOINT?
+    R> DROP ;
+
+: _SPAW-INIT-AUDIT-MAP?  ( map-a map-cap pstore-work adapter work -- flag )
+    3 PICK DUP 0< IF DROP _SPA-DROP5 0 EXIT THEN
+    0= IF
+        4 PICK 0= >R _SPA-DROP5 R> EXIT
+    THEN
+    4 PICK 0= IF _SPA-DROP5 0 EXIT THEN
+    4 PICK 4 PICK MSPAN-NONWRAPPING? 0= IF
+        _SPA-DROP5 0 EXIT
+    THEN
+    4 PICK 4 PICK 2 PICK STREAMS-PA-WORK-SIZE
+        MSPAN-OVERLAP? IF
+        _SPA-DROP5 0 EXIT
+    THEN
+    4 PICK 4 PICK 3 PICK STREAMS-PA-SIZE MSPAN-OVERLAP? IF
+        _SPA-DROP5 0 EXIT
+    THEN
+    4 PICK 4 PICK 3 PICK _SPA-D.STORE @
+        PSTORE-SPAN-DISJOINT? 0= IF
+        _SPA-DROP5 0 EXIT
+    THEN
+    4 PICK 4 PICK 4 PICK PSTORE-WORK-SPAN-DISJOINT? 0= IF
+        _SPA-DROP5 0 EXIT
+    THEN
+    _SPA-DROP5 -1 ;
+
 : STREAMS-PA-WORK-VALID?  ( work -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP STREAMS-PA-WORK-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
@@ -436,8 +565,13 @@ PERSIST-RECORD-HEADER-SIZE +
     DUP _SPAW.PSTORE-WORK @ PSTORE-WORK-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SPAW.RECLAIM RECLAIM-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SPAW.RECLAIM-WORK RECLAIM-WORK-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SPAW.RECLAIM-AUDIT-WORK
+        RECLAIM-AUDIT-WORK-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SPAW.BTREE-WORK PBTREE-WORK-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SPAW.BTREE-AUDIT-WORK
+        PBTREE-AUDIT-WORK-VALID? 0= IF DROP 0 EXIT THEN
     DUP _SPAW.BLOB-WORK PBLOB-WORK-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SPAW-AUDIT-MAP-BOUND? 0= IF DROP 0 EXIT THEN
     0
     BEGIN DUP _SPA-TREE-COUNT < WHILE
         DUP 2 PICK _SPAW-TREE PBTREE-VALID? 0= IF
@@ -447,43 +581,66 @@ PERSIST-RECORD-HEADER-SIZE +
     REPEAT
     DROP DROP -1 ;
 
-: STREAMS-PA-WORK-INIT  ( pstore-work adapter work -- status )
+\ STREAMS-PA-WORK-INIT
+\   ( audit-map-a audit-map-cap pstore-work adapter work -- status )
+\   The audit map is caller-owned storage for the cold reclaim audit that
+\   every open of an authority with pages runs: two bytes per page of the
+\   larger valid root slot, one for the reclaim audit's marks and one for
+\   the structural walk that visits each tree node once.  0 0 gives none:
+\   an open that finds such an authority then answers
+\   STREAMS-PA-S-CAPACITY, as one whose store has outgrown the map does.
+: STREAMS-PA-WORK-INIT
+  ( audit-map-a audit-map-cap pstore-work adapter work -- status )
     2 PICK 2 PICK 2 PICK _SPAW-INIT-GEOMETRY? 0= IF
-        _SPA-DROP3 STREAMS-PA-S-INVALID EXIT
+        _SPA-DROP5 STREAMS-PA-S-INVALID EXIT
+    THEN
+    4 PICK 4 PICK 4 PICK 4 PICK 4 PICK _SPAW-INIT-AUDIT-MAP? 0= IF
+        _SPA-DROP5 STREAMS-PA-S-INVALID EXIT
     THEN
     >R
     R@ STREAMS-PA-WORK-SIZE 0 FILL
     _SPAW-MAGIC R@ _SPAW.MAGIC !
     R@ R@ _SPAW.SELF !
     STREAMS-PA-S-OK R@ _SPAW.STATUS !
+    R@ _SPAW-ARENA-RESET
+    3 PICK R@ _SPAW.AUDIT-MAP !
+    2 PICK R@ _SPAW.AUDIT-MAP-CAPACITY !
     OVER R@ _SPAW.PSTORE-WORK !
     DUP R@ _SPAW.ADAPTER !
     OVER R@ _SPAW.BTREE-WORK PBTREE-WORK-INIT
     DUP IF
-        _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        _SPA-PERSIST>STATUS >R _SPA-DROP4 R> R> DROP EXIT
+    THEN DROP
+    OVER R@ _SPAW.BTREE-AUDIT-WORK PBTREE-AUDIT-WORK-INIT
+    DUP IF
+        _SPA-PERSIST>STATUS >R _SPA-DROP4 R> R> DROP EXIT
     THEN DROP
     R@ _SPAW.BLOB-WORK PBLOB-WORK-INIT
     DUP IF
-        _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        _SPA-PERSIST>STATUS >R _SPA-DROP4 R> R> DROP EXIT
     THEN DROP
     R@ _SPAW.RECLAIM RECLAIM-INIT
     DUP IF
-        _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        _SPA-PERSIST>STATUS >R _SPA-DROP4 R> R> DROP EXIT
     THEN DROP
     R@ _SPAW.RECLAIM-WORK RECLAIM-WORK-INIT
     DUP IF
-        _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        _SPA-PERSIST>STATUS >R _SPA-DROP4 R> R> DROP EXIT
+    THEN DROP
+    R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-WORK-INIT
+    DUP IF
+        _SPA-PERSIST>STATUS >R _SPA-DROP4 R> R> DROP EXIT
     THEN DROP
     0
     BEGIN DUP _SPA-TREE-COUNT < WHILE
         DUP R@ _SPAW-INIT-TREE
-        DUP IF >R _SPA-DROP3 R> R> DROP EXIT THEN DROP
+        DUP IF >R _SPA-DROP5 R> R> DROP EXIT THEN DROP
         1+
     REPEAT
     DROP
     _SPAW-STATE-REOPEN R@ _SPAW.STATE !
     -1 R@ _SPAW.APP-ROOT-PAGE !
-    2DROP R> DROP STREAMS-PA-S-OK ;
+    _SPA-DROP4 R> DROP STREAMS-PA-S-OK ;
 
 : _SPA-BOUND?  ( adapter work -- flag )
     >R
@@ -564,34 +721,79 @@ PERSIST-RECORD-HEADER-SIZE +
     REPEAT
     DROP R> DROP -1 ;
 
-: _SPAW-ROOT-ADVANCE-ONE  ( index work -- status )
+\ Advances ROOT, tree INDEX's live, staging or baseline root, to the
+\ transaction's generation; a root already there stays as it is.
+: _SPAW-ADVANCE-ROOT  ( index root work -- status )
     >R
-    DUP R@ _SPAW-ROOT PBTREE-ROOT-GENERATION@
+    DUP PBTREE-ROOT-GENERATION@
     DUP R@ _SPAW.BASE-GENERATION @ = IF
         DROP
-        DUP R@ _SPAW-ROOT
-        R@ _SPAW.TEMP-ROOT
-        2 PICK R@ _SPAW-TREE PBTREE-ROOT-ADVANCE
+        DUP R@ _SPAW.TEMP-ROOT
+        3 PICK R@ _SPAW-TREE PBTREE-ROOT-ADVANCE
         DUP IF
-            _SPA-PERSIST>STATUS >R DROP R> R> DROP EXIT
+            _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
         THEN DROP
-        R@ _SPAW.TEMP-ROOT
-        OVER R@ _SPAW-ROOT PBTREE-ROOT-COPY
+        R@ _SPAW.TEMP-ROOT SWAP PBTREE-ROOT-COPY
         _SPA-PERSIST>STATUS NIP R> DROP EXIT
     THEN
     R@ _SPAW.BASE-GENERATION @ 1+ <> IF
-        DROP R> DROP STREAMS-PA-S-CONFLICT EXIT
+        2DROP R> DROP STREAMS-PA-S-CONFLICT EXIT
     THEN
-    DROP R> DROP STREAMS-PA-S-OK ;
+    2DROP R> DROP STREAMS-PA-S-OK ;
 
-: _SPAW-ROOTS-ADVANCE  ( work -- status )
+\ Advances the four roots that ROOT-XT ( index work -- root ) names.
+: _SPAW-ADVANCE-ROOTS  ( root-xt work -- status )
     >R 0
     BEGIN DUP _SPA-TREE-COUNT < WHILE
-        DUP R@ _SPAW-ROOT-ADVANCE-ONE
-        DUP IF >R DROP R> R> DROP EXIT THEN DROP
+        DUP DUP R@ 4 PICK EXECUTE
+        R@ _SPAW-ADVANCE-ROOT
+        DUP IF >R 2DROP R> R> DROP EXIT THEN DROP
         1+
     REPEAT
-    DROP R> DROP STREAMS-PA-S-OK ;
+    2DROP R> DROP STREAMS-PA-S-OK ;
+
+: _SPAW-ROOTS-ADVANCE  ( work -- status )
+    ['] _SPAW-ROOT SWAP _SPAW-ADVANCE-ROOTS ;
+
+\ The baseline stays unchanged; only its generation follows the store's.
+: _SPAW-BASELINE-ROOTS-ADVANCE  ( work -- status )
+    DUP _SPAW-ARENA-ACTIVE? 0= IF DROP STREAMS-PA-S-OK EXIT THEN
+    ['] _SPAW-BASELINE-ROOT SWAP _SPAW-ADVANCE-ROOTS ;
+
+\ Opens the arena at the durable page count.  The durable roots become its
+\ baseline, and the root page that holds them is kept with it.
+: _SPAW-ARENA-ACTIVATE  ( work -- status )
+    >R
+    R@ _SPAW-ARENA-ACTIVE? IF R> DROP STREAMS-PA-S-OK EXIT THEN
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @ PSTORE-CURRENT-ROOT@
+    DUP IF
+        DUP PROOTV.PAGE-COUNT @
+        SWAP PROOTV.APPLICATION-ROOT @
+    ELSE
+        DROP 0 -1
+    THEN
+    OVER 0< IF 2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT THEN
+    DUP 0< IF
+        DUP -1 <> IF 2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT THEN
+        OVER IF 2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT THEN
+    ELSE
+        2DUP > 0= IF 2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT THEN
+    THEN
+    0
+    BEGIN DUP _SPA-TREE-COUNT < WHILE
+        DUP R@ _SPAW-ROOT
+        OVER R@ _SPAW-BASELINE-ROOT
+        PBTREE-ROOT-COPY
+        DUP IF
+            _SPA-PERSIST>STATUS >R DROP 2DROP R> R> DROP EXIT
+        THEN DROP
+        1+
+    REPEAT
+    DROP
+    R@ _SPAW.ARENA-ROOT-PAGE !
+    R@ _SPAW.ARENA-BASE !
+    0 R@ _SPAW.ARENA-TX-PAGES !
+    R> DROP STREAMS-PA-S-OK ;
 
 : _SPAW-ROOTS>STAGING  ( work -- status )
     >R 0
@@ -608,38 +810,11 @@ PERSIST-RECORD-HEADER-SIZE +
     -1 R@ _SPAW.STAGING-ACTIVE !
     R> DROP STREAMS-PA-S-OK ;
 
-: _SPAW-STAGING-ROOT-ADVANCE-ONE  ( index work -- status )
-    >R
-    DUP R@ _SPAW-STAGING-ROOT PBTREE-ROOT-GENERATION@
-    DUP R@ _SPAW.BASE-GENERATION @ = IF
-        DROP
-        DUP R@ _SPAW-STAGING-ROOT
-        R@ _SPAW.TEMP-ROOT
-        2 PICK R@ _SPAW-TREE PBTREE-ROOT-ADVANCE
-        DUP IF
-            _SPA-PERSIST>STATUS >R DROP R> R> DROP EXIT
-        THEN DROP
-        R@ _SPAW.TEMP-ROOT
-        OVER R@ _SPAW-STAGING-ROOT PBTREE-ROOT-COPY
-        _SPA-PERSIST>STATUS NIP R> DROP EXIT
-    THEN
-    R@ _SPAW.BASE-GENERATION @ 1+ <> IF
-        DROP R> DROP STREAMS-PA-S-CONFLICT EXIT
-    THEN
-    DROP R> DROP STREAMS-PA-S-OK ;
-
 : _SPAW-STAGING-ROOTS-ADVANCE  ( work -- status )
-    >R
-    R@ _SPAW.STAGING-ACTIVE @ 0= IF
-        R> DROP STREAMS-PA-S-CONFLICT EXIT
+    DUP _SPAW.STAGING-ACTIVE @ 0= IF
+        DROP STREAMS-PA-S-CONFLICT EXIT
     THEN
-    0
-    BEGIN DUP _SPA-TREE-COUNT < WHILE
-        DUP R@ _SPAW-STAGING-ROOT-ADVANCE-ONE
-        DUP IF >R DROP R> R> DROP EXIT THEN DROP
-        1+
-    REPEAT
-    DROP R> DROP STREAMS-PA-S-OK ;
+    ['] _SPAW-STAGING-ROOT SWAP _SPAW-ADVANCE-ROOTS ;
 
 : _SPAW-STAGING>ROOTS  ( work -- status )
     >R
@@ -742,9 +917,76 @@ PERSIST-RECORD-HEADER-SIZE +
     REPEAT
     DROP R> DROP -1 ;
 
+\ Binds the loaded root's staging arena.  Its base lies within the store,
+\ and its baseline roots are valid at the store's generation.
+: _SPAW-ROOT>ARENA  ( work -- status )
+    >R
+    R@ _SPAW-ARENA-RESET
+    R@ _SPAW.AUTHORITY-ROOT SAR.ARENA-BASE @ DUP 0< IF
+        DROP R> DROP STREAMS-PA-S-OK EXIT
+    THEN
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @ PSTORE-CURRENT-ROOT@
+    DUP 0= IF 2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT THEN
+    PROOTV.PAGE-COUNT @ OVER < IF
+        DROP R> DROP STREAMS-PA-S-CORRUPT EXIT
+    THEN
+    0
+    BEGIN DUP _SPA-TREE-COUNT < WHILE
+        DUP R@ _SPAW.AUTHORITY-ROOT STREAMS-AUTHORITY-ROOT-BASELINE
+        OVER R@ _SPAW-BASELINE-ROOT PBTREE-ROOT-COPY
+        DUP IF
+            _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        THEN DROP
+        DUP R@ _SPAW-BASELINE-ROOT
+        OVER R@ _SPAW-TREE PBTREE-ROOT-VALID? 0= IF
+            2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT
+        THEN
+        DUP R@ _SPAW-BASELINE-ROOT PBTREE-ROOT-GENERATION@
+        R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+            PSTORE-GENERATION@ <> IF
+            2DROP R> DROP STREAMS-PA-S-CORRUPT EXIT
+        THEN
+        1+
+    REPEAT
+    DROP
+    R@ _SPAW.AUTHORITY-ROOT SAR.ARENA-ROOT-PAGE @
+        R@ _SPAW.ARENA-ROOT-PAGE !
+    R@ _SPAW.ARENA-BASE !
+    R> DROP STREAMS-PA-S-OK ;
+
+\ Copies the arena and its baseline roots into the root a publication
+\ writes.  An open arena's baseline roots carry the proposed generation.
+: _SPAW-ARENA>ROOT  ( work -- status )
+    >R
+    R@ _SPAW.ARENA-BASE @ R@ _SPAW.AUTHORITY-ROOT SAR.ARENA-BASE !
+    R@ _SPAW.ARENA-ROOT-PAGE @
+        R@ _SPAW.AUTHORITY-ROOT SAR.ARENA-ROOT-PAGE !
+    R@ _SPAW-ARENA-ACTIVE? 0= IF
+        R@ _SPAW.AUTHORITY-ROOT SAR.BASELINE-ROOTS
+            _SPA-TREE-COUNT PBTREE-ROOT-SIZE * 0 FILL
+        R> DROP STREAMS-PA-S-OK EXIT
+    THEN
+    0
+    BEGIN DUP _SPA-TREE-COUNT < WHILE
+        DUP R@ _SPAW-BASELINE-ROOT PBTREE-ROOT-GENERATION@
+        R@ _SPAW.BASE-GENERATION @ 1+ <> IF
+            DROP R> DROP STREAMS-PA-S-CORRUPT EXIT
+        THEN
+        DUP R@ _SPAW-BASELINE-ROOT
+        OVER R@ _SPAW.AUTHORITY-ROOT STREAMS-AUTHORITY-ROOT-BASELINE
+        PBTREE-ROOT-COPY
+        DUP IF
+            _SPA-PERSIST>STATUS >R DROP R> R> DROP EXIT
+        THEN DROP
+        1+
+    REPEAT
+    DROP R> DROP STREAMS-PA-S-OK ;
+
 \ Seal validation is intentionally first on cold load.  Only a supported,
 \ self-consistent header is copied into mutable work; bound tree scopes,
-\ generations, cardinalities, and reclaim state follow in that order.
+\ generations, cardinalities, the staging arena, and reclaim state follow
+\ in that order.  A provisional root binds the arena of an unfinished first
+\ stage but presents no authority.
 : _SPAW-ROOT>WORK  ( payload-a payload-u work -- status )
     >R
     DUP STREAMS-AUTHORITY-ROOT-SIZE <> IF
@@ -782,13 +1024,18 @@ PERSIST-RECORD-HEADER-SIZE +
     R@ _SPAW-CARDINALITIES? 0= IF
         R> DROP STREAMS-PA-S-CORRUPT EXIT
     THEN
+    R@ _SPAW-ROOT>ARENA
+    DUP IF R> DROP EXIT THEN DROP
     R@ _SPAW.AUTHORITY-ROOT SAR.RECLAIM-STATE
         RECLAIM-STATE-SIZE
     R@ _SPAW.ADAPTER @ _SPA-D.STORE @
     R@ _SPAW.RECLAIM RECLAIM-OPEN
     _SPA-PERSIST>STATUS
     DUP IF R> DROP EXIT THEN DROP
-    -1 R@ _SPAW.AUTHORITY-PRESENT !
+    R@ _SPAW.AUTHORITY-ROOT SAR.FLAGS @
+        STREAMS-AUTHORITY-ROOT-F-PROVISIONAL AND 0=
+        R@ _SPAW.AUTHORITY-PRESENT !
+    0 R@ _SPAW.PROVISIONAL !
     _SPAW-STATE-READY R@ _SPAW.STATE !
     0 R@ _SPAW.STAGING-ACTIVE !
     R> DROP STREAMS-PA-S-OK ;
@@ -816,6 +1063,11 @@ PERSIST-RECORD-HEADER-SIZE +
         1+
     REPEAT
     DROP
+    R@ _SPAW-ARENA>ROOT
+    DUP IF R> DROP EXIT THEN DROP
+    \ The work's root never carries the provisional flag; a first stage's
+    \ checkpoint gets it in the copy that publication writes.
+    0 R@ _SPAW.AUTHORITY-ROOT SAR.FLAGS !
     R@ _SPAW.AUTHORITY-ROOT SAR.RECLAIM-STATE
         RECLAIM-STATE-SIZE
     R@ _SPAW.RECLAIM-WORK RECLAIM-STATE!
@@ -865,9 +1117,267 @@ PERSIST-RECORD-HEADER-SIZE +
     R@ _SPAW.AUTHORITY-ROOT STREAMS-AUTHORITY-ROOT-SIZE 0 FILL
     0 R@ _SPAW.AUTHORITY-PRESENT !
     0 R@ _SPAW.STAGING-ACTIVE !
+    0 R@ _SPAW.PROVISIONAL !
+    R@ _SPAW-ARENA-RESET
     -1 R@ _SPAW.APP-ROOT-PAGE !
     _SPAW-STATE-READY R@ _SPAW.STATE !
     R> DROP STREAMS-PA-S-ABSENT ;
+
+\ ---------------------------------------------------------------------
+\ Cold reclaim audit
+\ ---------------------------------------------------------------------
+\ A reopened reclaim state that holds pages may begin no transaction until
+\ the pages it does not name are proved the authority's own
+\ (docs/persistence/storage.md, "Cold reclaim authority").  The authority
+\ owns its root page and the nodes of its four trees; blob chunks and
+\ manifests are segment records and own no page.  An open staging arena
+\ also owns its kept root page, the nodes of its baseline trees, and every
+\ page from its base up.
+
+: _SPAW-AUDIT-READ-STATUS  ( status -- status )
+    DUP PERSIST-S-ABSENT =
+    OVER PERSIST-S-NOT-FOUND = OR IF
+        DROP PERSIST-S-CORRUPT
+    THEN ;
+
+\ The map's second half records which nodes one walk has visited, so a node
+\ that two places reach is refused even where Reclaim does not mark it.
+: _SPAW-AUDIT-VISIT-MAP  ( work -- a )
+    DUP _SPAW.AUDIT-MAP @ SWAP _SPAW.AUDIT-MAP-U @ 2 / + ;
+
+: _SPAW-AUDIT-VISIT-CLEAR  ( work -- )
+    DUP _SPAW-AUDIT-VISIT-MAP SWAP _SPAW.AUDIT-MAP-U @ 2 / 0 FILL ;
+
+: _SPAW-AUDIT-VISIT-PAGE  ( page-id work -- status )
+    >R
+    DUP 0< IF DROP R> DROP PERSIST-S-CORRUPT EXIT THEN
+    DUP R@ _SPAW.AUDIT-PAGE-COUNT @ >= IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _SPAW-AUDIT-VISIT-MAP + DUP C@ IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    1 SWAP C!
+    R> DROP PERSIST-S-OK ;
+
+\ A baseline node lies below the arena and is the authority's.
+: _SPAW-AUDIT-BASELINE-PAGE  ( page-id expected-height work -- status )
+    >R DROP
+    DUP R@ _SPAW.AUDIT-ARENA-BASE @ >= IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    DUP R@ _SPAW-AUDIT-VISIT-PAGE
+    DUP IF NIP R> DROP EXIT THEN DROP
+    R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-PAGE
+    R> DROP ;
+
+\ Without an arena a live node is the authority's.  With one, a live node
+\ below the base must be a baseline node already claimed, and one from the
+\ base up belongs to the arena.
+: _SPAW-AUDIT-TREE-PAGE  ( page-id expected-height work -- status )
+    >R DROP
+    DUP R@ _SPAW-AUDIT-VISIT-PAGE
+    DUP IF NIP R> DROP EXIT THEN DROP
+    R@ _SPAW.AUDIT-ARENA-BASE @ DUP 0< IF
+        DROP R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-PAGE
+        R> DROP EXIT
+    THEN
+    OVER > IF
+        R@ _SPAW.RECLAIM-AUDIT-WORK
+            RECLAIM-AUDIT-APPLICATION-PAGE-SHARED
+    ELSE
+        DROP PERSIST-S-OK
+    THEN
+    R> DROP ;
+
+\ Submits through VISITOR-XT every node of the tree INDEX describes, rooted
+\ at TREE-ROOT in the snapshot's root page.
+: _SPAW-AUDIT-WALK  ( tree-root visitor-xt index work -- status )
+    >R
+    ROT
+    R@ _SPAW.AUDIT-GENERATION @
+    R@ _SPAW.AUDIT-PAGE-COUNT @
+    R@ _SPAW.AUDIT-DATA-BANK @
+    5 PICK
+    R@
+    6 PICK R@ _SPAW-TREE
+    R@ _SPAW.BTREE-AUDIT-WORK
+    PBTREE-AUDIT-SNAPSHOT-TX
+    >R 2DROP 2DROP R> R> DROP ;
+
+\ Walks the four trees whose roots ROOT-XT ( index root -- tree-root ) finds
+\ in the snapshot's root page, each node visited once.
+: _SPAW-AUDIT-FOREST  ( root-xt visitor-xt work -- status )
+    >R
+    R@ _SPAW-AUDIT-VISIT-CLEAR
+    0
+    BEGIN DUP _SPA-TREE-COUNT < WHILE
+        DUP R@ _SPAW.PAGE 4 PICK EXECUTE
+        2 PICK 2 PICK R@ _SPAW-AUDIT-WALK
+        DUP IF >R DROP 2DROP R> R> DROP EXIT THEN DROP
+        1+
+    REPEAT
+    DROP 2DROP R> DROP PERSIST-S-OK ;
+
+\ Submits an open arena's kept root page and the nodes of its baseline.
+: _SPAW-AUDIT-BASELINE  ( work -- status )
+    >R
+    R@ _SPAW.AUDIT-ARENA-BASE @ R@ _SPAW.AUDIT-PAGE-COUNT @ > IF
+        R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _SPAW.PAGE SAR.ARENA-ROOT-PAGE @ DUP 0>= IF
+        R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-PAGE
+        DUP IF R> DROP EXIT THEN
+    THEN
+    DROP
+    ['] STREAMS-AUTHORITY-ROOT-BASELINE ['] _SPAW-AUDIT-BASELINE-PAGE
+    R> _SPAW-AUDIT-FOREST ;
+
+\ A snapshot of no pages, as a store's first root before the authority
+\ was written, owns nothing and holds the empty reclaim state.
+: _SPAW-AUDIT-EMPTY-SNAPSHOT  ( work -- status )
+    >R
+    R@ _SPAW.SNAPSHOT-ROOT PROOTV.APPLICATION-ROOT @ -1 <> IF
+        R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    -1 R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-ROOT!
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.PAGE RECLAIM-STATE-SIZE RECLAIM-STATE-INIT
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.PAGE RECLAIM-STATE-SIZE
+        R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-STATE!
+    DUP IF R> DROP EXIT THEN DROP
+    R> _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-COMPLETE ;
+
+\ Submits the snapshot's root page, its embedded reclaim state, an open
+\ arena's baseline, the nodes of its four trees and the arena itself,
+\ reading the root into the page buffer.
+: _SPAW-AUDIT-SNAPSHOT  ( work -- status )
+    >R
+    R@ _SPAW.AUDIT-PAGE-COUNT @ 0= IF
+        R> _SPAW-AUDIT-EMPTY-SNAPSHOT EXIT
+    THEN
+    R@ _SPAW.SNAPSHOT-ROOT PROOTV.APPLICATION-ROOT @
+    DUP 0< OVER R@ _SPAW.AUDIT-PAGE-COUNT @ < 0= OR IF
+        DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+    R@ _SPAW.PSTORE-WORK @ PSTORE-READ-PAGE-SNAPSHOT-TX
+    DUP IF _SPAW-AUDIT-READ-STATUS R> DROP EXIT THEN DROP
+    R@ _SPAW.PSTORE-WORK @ PSTORE-PAGE-PAYLOAD$
+    DUP STREAMS-AUTHORITY-ROOT-SIZE <> IF
+        2DROP R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _SPAW.PAGE SWAP MOVE
+    R@ _SPAW.PAGE STREAMS-AUTHORITY-ROOT-HEADER-CLASSIFY
+        _SPA-ROOT>STATUS IF
+        R> DROP PERSIST-S-CORRUPT EXIT
+    THEN
+    R@ _SPAW.SNAPSHOT-ROOT PROOTV.APPLICATION-ROOT @
+    R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-ROOT!
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.PAGE SAR.RECLAIM-STATE RECLAIM-STATE-SIZE
+        R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-STATE!
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.PAGE SAR.ARENA-BASE @ DUP R@ _SPAW.AUDIT-ARENA-BASE !
+    0>= IF
+        R@ _SPAW-AUDIT-BASELINE
+        DUP IF R> DROP EXIT THEN DROP
+    THEN
+    ['] STREAMS-AUTHORITY-ROOT-TREE ['] _SPAW-AUDIT-TREE-PAGE
+    R@ _SPAW-AUDIT-FOREST
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.AUDIT-ARENA-BASE @ DUP 0>= IF
+        R@ _SPAW.AUDIT-PAGE-COUNT @ OVER -
+        R@ _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-ARENA!
+        DUP IF R> DROP EXIT THEN
+    THEN
+    DROP
+    R> _SPAW.RECLAIM-AUDIT-WORK RECLAIM-AUDIT-APPLICATION-COMPLETE ;
+
+: _SPAW-RECLAIM-ENUMERATOR
+  ( snapshot-root generation slot reclaim-audit-work work -- status )
+    >R
+    DUP R@ _SPAW.RECLAIM-AUDIT-WORK <> IF
+        _SPA-DROP4 R> DROP PERSIST-S-INVALID EXIT
+    THEN
+    2DROP
+    R@ _SPAW.AUDIT-GENERATION !
+    DUP PROOTV.PAGE-COUNT @ R@ _SPAW.AUDIT-PAGE-COUNT !
+    DUP PROOTV.DATA-BANK @ R@ _SPAW.AUDIT-DATA-BANK !
+    R@ _SPAW.SNAPSHOT-ROOT PERSIST-ROOT-VALUE-SIZE MOVE
+    R> _SPAW-AUDIT-SNAPSHOT ;
+
+\ Widens the map's size to SLOT's page count when that slot is valid.
+: _SPAW-AUDIT-SLOT-SIZE  ( slot work -- status )
+    >R
+    R@ _SPAW.SNAPSHOT-ROOT
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+    R@ _SPAW.PSTORE-WORK @ PSTORE-ROOT-SLOT@
+    DUP PERSIST-S-OK = IF
+        2DROP
+        R@ _SPAW.SNAPSHOT-ROOT PROOTV.PAGE-COUNT @
+        R@ _SPAW.AUDIT-MAP-U @ MAX
+        R@ _SPAW.AUDIT-MAP-U !
+        R> DROP PERSIST-S-OK EXIT
+    THEN
+    DUP PERSIST-S-ABSENT =
+    OVER PERSIST-S-CORRUPT = OR IF
+        2DROP R> DROP PERSIST-S-OK EXIT
+    THEN
+    DUP PERSIST-S-BUSY = IF
+        2DROP R> DROP PERSIST-S-CONFLICT EXIT
+    THEN
+    NIP R> DROP ;
+
+\ The audit only reads, so it runs in a reading transaction, on a
+\ read-only store too.
+: _SPAW-COLD-AUDIT-TX  ( work -- status )
+    >R
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+    R@ _SPAW.PSTORE-WORK @ PSTORE-BEGIN-READ
+    DUP IF R> DROP EXIT THEN DROP
+    0 R@ _SPAW.AUDIT-MAP-U !
+    GPAIR-SLOT-A R@ _SPAW-AUDIT-SLOT-SIZE
+    DUP IF R> DROP EXIT THEN DROP
+    GPAIR-SLOT-B R@ _SPAW-AUDIT-SLOT-SIZE
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.AUDIT-MAP-U @ RECLAIM-AUDIT-MAP-BYTES?
+    DUP IF NIP R> DROP EXIT THEN DROP
+    \ Reclaim's marks take the first half, the structural walk the second.
+    DUP PERSIST-MAX-SIGNED 2 / > IF
+        DROP R> DROP PERSIST-S-CAPACITY EXIT
+    THEN
+    2 * DUP R@ _SPAW.AUDIT-MAP-U !
+    R@ _SPAW.AUDIT-MAP-CAPACITY @ > IF
+        R> DROP PERSIST-S-CAPACITY EXIT
+    THEN
+    R@ _SPAW.AUDIT-MAP @ R@ _SPAW.AUDIT-MAP-U @ 2 /
+    ['] _SPAW-RECLAIM-ENUMERATOR R@
+    R@ _SPAW.RECLAIM
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+    R@ _SPAW.PSTORE-WORK @
+    R@ _SPAW.RECLAIM-AUDIT-WORK
+    RECLAIM-AUDIT-CURRENT
+    R> DROP ;
+
+\ Runs the audit and always ends its reading transaction.  Success leaves
+\ the reclaim state's audited generation at the store's.
+: _SPAW-COLD-AUDIT  ( work -- status )
+    >R
+    R@ ['] _SPAW-COLD-AUDIT-TX CATCH
+    DUP IF
+        2DROP PERSIST-S-FAULT
+    ELSE
+        DROP
+    THEN
+    DUP R@ _SPAW.TEMP-STATUS !
+    R@ _SPAW.PSTORE-WORK @ PSTORE-PROPOSED-ROOT@ IF
+        R@ _SPAW.ADAPTER @ _SPA-D.STORE @
+        R@ _SPAW.PSTORE-WORK @ PSTORE-ABORT
+        DUP IF R@ _SPAW.TEMP-STATUS ! ELSE DROP THEN
+    THEN
+    DROP R@ _SPAW.TEMP-STATUS @ R> DROP ;
 
 : _SPAW-OPEN-RUN  ( work -- status )
     >R
@@ -886,7 +1396,22 @@ PERSIST-RECORD-HEADER-SIZE +
     PROOTV.APPLICATION-ROOT @ 0< IF
         R> _SPAW-OPEN-EMPTY EXIT
     THEN
-    R> _SPAW-LOAD-CURRENT ;
+    R@ _SPAW-LOAD-CURRENT
+    DUP IF R> DROP EXIT THEN DROP
+    \ The loaded state stays unusable until its reclaim state is audited.
+    _SPAW-STATE-REOPEN R@ _SPAW.STATE !
+    R@ _SPAW-COLD-AUDIT _SPA-PERSIST>STATUS
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SPAW.RECLAIM RECLAIM-AUDITED-GENERATION@
+    R@ _SPAW.ADAPTER @ _SPA-D.STORE @ PSTORE-GENERATION@ <> IF
+        R> DROP STREAMS-PA-S-CONFLICT EXIT
+    THEN
+    _SPAW-STATE-READY R@ _SPAW.STATE !
+    \ An unfinished first stage's checkpoint is no authority yet.
+    R@ _SPAW.AUTHORITY-PRESENT @ 0= IF
+        R> DROP STREAMS-PA-S-ABSENT EXIT
+    THEN
+    R> DROP STREAMS-PA-S-OK ;
 
 : STREAMS-PA-OPEN  ( adapter work -- status )
     2DUP _SPAW-ENTER DUP IF >R 2DROP R> EXIT THEN DROP
@@ -1025,6 +1550,7 @@ PERSIST-RECORD-HEADER-SIZE +
     R@ _SPAW.OLD-ROOT-PAGE !
     0 R@ _SPAW.RECLAIM-STEP-CALLS !
     0 R@ _SPAW.RECLAIM-MOVED !
+    0 R@ _SPAW.ARENA-TX-PAGES !
     R@ _SPAW.ADAPTER @ _SPA-D.STORE @
     R@ _SPAW.PSTORE-WORK @ PSTORE-BEGIN
     DUP IF _SPA-PERSIST>STATUS R> DROP EXIT THEN DROP
@@ -1036,7 +1562,9 @@ PERSIST-RECORD-HEADER-SIZE +
         R> DROP EXIT
     THEN DROP
     _SPAW-STATE-ACTIVE R@ _SPAW.STATE !
-    R@ _SPAW.OLD-ROOT-PAGE @ 0>= IF
+    \ An open arena keeps every root page it publishes until compaction.
+    R@ _SPAW-ARENA-ACTIVE? 0=
+    R@ _SPAW.OLD-ROOT-PAGE @ 0>= AND IF
         R@ _SPAW.OLD-ROOT-PAGE 1
         R@ _SPAW.RECLAIM-WORK RECLAIM-RETIRE-BATCH
         DUP IF
@@ -1148,7 +1676,7 @@ PERSIST-RECORD-HEADER-SIZE +
     R@ _SPAW.BTREE-WORK PBTREE-PUT
     DUP IF _SPA-PERSIST>STATUS R> DROP EXIT THEN DROP
     R@ _SPAW.BTREE-WORK PBTREE-RETIRED-PAGES$
-    DUP IF
+    DUP R@ _SPAW-ARENA-ACTIVE? 0= AND IF
         R@ _SPAW.RECLAIM-WORK RECLAIM-RELEASE-BATCH
         DUP IF _SPA-PERSIST>STATUS R> DROP EXIT THEN DROP
     ELSE
@@ -1174,7 +1702,7 @@ PERSIST-RECORD-HEADER-SIZE +
     THEN
     DUP IF _SPA-PERSIST>STATUS R> DROP EXIT THEN DROP
     R@ _SPAW.BTREE-WORK PBTREE-RETIRED-PAGES$
-    DUP IF
+    DUP R@ _SPAW-ARENA-ACTIVE? 0= AND IF
         R@ _SPAW.RECLAIM-WORK RECLAIM-RELEASE-BATCH
         DUP IF _SPA-PERSIST>STATUS R> DROP EXIT THEN DROP
     ELSE
@@ -2026,12 +2554,30 @@ PERSIST-RECORD-HEADER-SIZE +
     R@ _SPAW.ADAPTER @ _SPA-D.STORE @ PSTORE-UNCERTAIN? 0= AND
     R> DROP ;
 
+\ The root bytes a publication writes: the sealed work root, or during a
+\ first stage a sealed copy that carries the provisional flag, so that a
+\ checkpoint never reads as a finished authority.
+: _SPAW-ROOT-PAYLOAD  ( work -- payload-a payload-u status )
+    >R
+    R@ _SPAW.PROVISIONAL @ 0= IF
+        R@ _SPAW.AUTHORITY-ROOT STREAMS-AUTHORITY-ROOT-SIZE
+        R> DROP STREAMS-PA-S-OK EXIT
+    THEN
+    R@ _SPAW.AUTHORITY-ROOT R@ _SPAW.PAGE
+        STREAMS-AUTHORITY-ROOT-SIZE MOVE
+    STREAMS-AUTHORITY-ROOT-F-PROVISIONAL R@ _SPAW.PAGE SAR.FLAGS !
+    R@ _SPAW.PAGE STREAMS-AUTHORITY-ROOT-SEAL _SPA-ROOT>STATUS
+    R@ _SPAW.PAGE STREAMS-AUTHORITY-ROOT-SIZE ROT
+    R> DROP ;
+
 : _SPAW-PUBLISH-RUN  ( work -- status )
     >R
     R@ _SPAW.STATE @ _SPAW-STATE-ACTIVE <> IF
         R> DROP STREAMS-PA-S-BUSY EXIT
     THEN
     R@ _SPAW-ROOTS-ADVANCE
+    DUP IF R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
+    R@ _SPAW-BASELINE-ROOTS-ADVANCE
     DUP IF R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
     R@
     R@ _SPAW.ADAPTER @ _SPA-D.STORE @
@@ -2059,7 +2605,8 @@ PERSIST-RECORD-HEADER-SIZE +
     THEN DROP
     R@ _SPAW-WORK>ROOT
     DUP IF R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
-    R@ _SPAW.AUTHORITY-ROOT STREAMS-AUTHORITY-ROOT-SIZE
+    R@ _SPAW-ROOT-PAYLOAD
+    DUP IF >R 2DROP R> R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
     R@ _SPAW.APP-ROOT-PAGE @
     R@ _SPAW.ADAPTER @ _SPA-D.STORE @
     R@ _SPAW.PSTORE-WORK @ PSTORE-WRITE-PAGE-TX
@@ -2175,7 +2722,7 @@ PERSIST-RECORD-HEADER-SIZE +
     R@ _SPAW.ARG-A @ RID-PRESENT? 0= IF
         R> DROP STREAMS-PA-S-INVALID EXIT
     THEN
-    R@ _SPAW.APP-ROOT-PAGE @ 0>= IF
+    R@ _SPAW.AUTHORITY-PRESENT @ IF
         R@ _SPAW.ARG-A @
         R@ _SPAW.AUTHORITY-ROOT SAR.AUTHORITY-ID RID=
         IF STREAMS-PA-S-OK ELSE STREAMS-PA-S-CONFLICT THEN
@@ -2206,8 +2753,9 @@ PERSIST-RECORD-HEADER-SIZE +
 \ ---------------------------------------------------------------------
 
 \ Staged COW paths retain the pages they replace because visible roots remain
-\ authoritative until final publication.  Crashed shadow paths are ordinary
-\ unreachable compaction input, never entries in the live reclaim ledger.
+\ authoritative until final publication.  The staging arena owns those
+\ pages, and a crashed stage's, until compaction, so none reaches the live
+\ reclaim ledger.
 : _SPAW-PUT-STAGED-RAW
   ( key-a key-u value-a value-u tree-index work -- status )
     >R
@@ -2253,13 +2801,6 @@ PERSIST-RECORD-HEADER-SIZE +
     _SPA-PERSIST>STATUS
     R> DROP ;
 
-RECLAIM-RETIRED-MAX RECLAIM-MAX-BATCH 1- +
-    RECLAIM-MAX-BATCH /
-RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
-    RECLAIM-MAX-BATCH / +
-    CONSTANT _SPAW-RECLAIM-FINALIZER-PAGE-MAX
-2 CONSTANT _SPAW-RECLAIM-STEP-RETIRE-PAGE-MAX
-
 : _SPAW-STAGING-MUTATION-PAGES  ( work -- count )
     0
     _SPA-TREE-COUNT 0 ?DO
@@ -2267,17 +2808,24 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     LOOP
     2 * 1+ NIP ;
 
+\ Admission keeps the next staged mutation's largest path and the
+\ following root-page publication within the transaction's arena bound.
 : _SPAW-STAGE-NEXT-ROOM?  ( work -- flag )
     >R
-    R@ _SPAW-STAGING-MUTATION-PAGES 1+
-    _SPAW-RECLAIM-STEP-RETIRE-PAGE-MAX
-    1+ _SPAW-RECLAIM-FINALIZER-PAGE-MAX +
-    0 R@ _SPAW.RECLAIM-WORK RECLAIM-TX-ROOM?
+    R@ _SPAW-ARENA-ACTIVE? 0= IF R> DROP 0 EXIT THEN
+    R@ _SPAW.ARENA-TX-PAGES @ DUP 0<
+    OVER _SPAW-ARENA-TX-PAGE-MAX > OR IF
+        DROP R> DROP 0 EXIT
+    THEN
+    _SPAW-ARENA-TX-PAGE-MAX SWAP -
+    R@ _SPAW-STAGING-MUTATION-PAGES 1+ >=
     R> DROP ;
 
 : _SPAW-STAGE-BEGIN-RUN  ( work -- status )
     >R
     R@ _SPAW.STAGING-ACTIVE @ 0= IF
+        R@ _SPAW-ARENA-ACTIVATE
+        DUP IF R> DROP EXIT THEN DROP
         R@ _SPAW-ROOTS>STAGING
         DUP IF R> DROP EXIT THEN DROP
     THEN
@@ -2295,15 +2843,16 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     OVER _SPAW-FAIL-ACTIVE
     ROT ROT _SPAW-LEAVE ;
 
-\ Begin the one cold-import authority transaction from a neutral PSTORE whose
-\ application-root is still absent.  The supplied RID initializes provisional
-\ semantic metadata, but only FIRST-STAGE-COMMIT can make that metadata
-\ authoritative.
+\ Begin the one cold-import authority transaction on a store that holds no
+\ Streams authority: no application root, or the provisional checkpoint of
+\ an unfinished first stage, whose arena this stage continues.  The supplied
+\ RID initializes provisional semantic metadata, but only
+\ FIRST-STAGE-COMMIT can make that metadata authoritative.  An arena this
+\ call opens closes again if the transaction cannot begin.
 : _SPAW-FIRST-STAGE-BEGIN-RUN  ( work -- status )
     >R
     R@ _SPAW-READY? 0= IF R> DROP STREAMS-PA-S-BUSY EXIT THEN
-    R@ _SPAW.APP-ROOT-PAGE @ 0>=
-    R@ _SPAW.AUTHORITY-PRESENT @ 0<> OR
+    R@ _SPAW.AUTHORITY-PRESENT @ 0<>
     R@ _SPAW.STAGING-ACTIVE @ 0<> OR IF
         R> DROP STREAMS-PA-S-CONFLICT EXIT
     THEN
@@ -2313,13 +2862,20 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     R@ _SPAW.ARG-A @ RID-PRESENT? 0= IF
         R> DROP STREAMS-PA-S-INVALID EXIT
     THEN
+    R@ _SPAW-ARENA-ACTIVE? 0=
+    R@ _SPAW-ARENA-ACTIVATE
+    DUP IF NIP R> DROP EXIT THEN DROP
     R@ _SPAW-ROOTS>STAGING
-    DUP IF R> DROP EXIT THEN DROP
-    R@ _SPAW-BEGIN-RUN
     DUP IF
-        0 R@ _SPAW.STAGING-ACTIVE !
+        SWAP IF R@ _SPAW-ARENA-RESET THEN
         R> DROP EXIT
     THEN DROP
+    R@ _SPAW-BEGIN-RUN
+    DUP IF
+        SWAP IF R@ _SPAW-ARENA-RESET THEN
+        0 R@ _SPAW.STAGING-ACTIVE !
+        R> DROP EXIT
+    THEN 2DROP
     R@ _SPAW.ARG-A @ R@ _SPAW.AUTHORITY-ROOT
         STREAMS-AUTHORITY-ROOT-TEMPLATE-INIT
         _SPA-ROOT>STATUS
@@ -2329,6 +2885,7 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
         R> DROP EXIT
     THEN DROP
     -1 R@ _SPAW.AUTHORITY-PRESENT !
+    -1 R@ _SPAW.PROVISIONAL !
     1 R@ _SPAW.MUTATION-N !
     R> DROP STREAMS-PA-S-OK ;
 
@@ -2342,46 +2899,11 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     SWAP R@ _SPAW-LEAVE
     >R DROP R> R> DROP ;
 
-\ Commit physical staging progress while the neutral PSTORE application-root
-\ remains absent.  Hidden roots live only in caller-owned work until the final
-\ first-stage commit; a crash here therefore cannot manufacture Streams
-\ authority.  The committed extents are replaceable unreachable staging
-\ evidence if the process does not continue to the final flip.
-: _SPAW-PUBLISH-ABSENT-RUN  ( work -- status )
-    >R
-    R@ _SPAW.STATE @ _SPAW-STATE-ACTIVE <> IF
-        R> DROP STREAMS-PA-S-BUSY EXIT
-    THEN
-    R@ _SPAW.OLD-ROOT-PAGE @ 0>= IF
-        R> DROP STREAMS-PA-S-CONFLICT EXIT
-    THEN
-    R@ _SPAW.RECLAIM-WORK RECLAIM-FINALIZE
-    DUP IF
-        _SPA-PERSIST>STATUS R@ _SPAW-ABORT-ACTIVE
-        R> DROP EXIT
-    THEN DROP
-    R@ _SPAW.ADAPTER @ _SPA-D.STORE @
-    R@ _SPAW.PSTORE-WORK @ PSTORE-COMMIT
-    _SPA-PERSIST>STATUS R@ _SPAW.TEMP-STATUS !
-    R@ _SPAW-COMMIT-DURABLE? IF
-        R@ _SPAW.RECLAIM-WORK R@ _SPAW.RECLAIM RECLAIM-ADOPT
-        DUP IF
-            _SPA-PERSIST>STATUS
-            R@ _SPAW.TEMP-STATUS @ STREAMS-PA-S-OK = IF
-                R@ _SPAW.TEMP-STATUS !
-            ELSE
-                DROP
-            THEN
-            _SPAW-STATE-REOPEN R@ _SPAW.STATE !
-        ELSE
-            DROP
-            _SPAW-STATE-READY R@ _SPAW.STATE !
-        THEN
-    ELSE
-        R@ _SPAW.TEMP-STATUS @ R@ _SPAW-ABORT-ACTIVE DROP
-    THEN
-    R@ _SPAW.TEMP-STATUS @ R> DROP ;
-
+\ Commit physical staging progress with the visible roots unchanged.  Hidden
+\ roots live only in caller-owned work until the final publication.  During
+\ a first stage the checkpoint root is provisional, so a crash leaves a
+\ store without a Streams authority whose arena still owns every staged
+\ page.
 : _SPAW-STAGE-PUBLISH  ( work -- status )
     >R
     R@ _SPAW.STATE @ _SPAW-STATE-ACTIVE <> IF
@@ -2389,13 +2911,6 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     THEN
     R@ _SPAW-STAGING-ROOTS-ADVANCE
     DUP IF R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
-    R@ _SPAW.OLD-ROOT-PAGE @ 0< IF
-        R@ _SPAW-ROOTS-ADVANCE
-        DUP IF R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
-        1 R@ _SPAW.PHYSICAL-ONLY-N !
-        R@ _SPAW-PUBLISH-ABSENT-RUN
-        R> DROP EXIT
-    THEN
     1 R@ _SPAW.PHYSICAL-ONLY-N !
     R@ _SPAW-PUBLISH-RUN
     R> DROP ;
@@ -2536,7 +3051,7 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     R@ _SPAW.STAGING-ACTIVE @ 0= IF
         R> DROP STREAMS-PA-S-CONFLICT EXIT
     THEN
-    R@ _SPAW.OLD-ROOT-PAGE @ 0>= IF
+    R@ _SPAW.PROVISIONAL @ 0= IF
         R> DROP STREAMS-PA-S-CONFLICT EXIT
     THEN
     R@ _SPAW.AUTHORITY-PRESENT @ 0= IF
@@ -2548,6 +3063,8 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     DUP IF R@ _SPAW-ABORT-ACTIVE R> DROP EXIT THEN DROP
     1 R@ _SPAW.MUTATION-N !
     1 R@ _SPAW.PHYSICAL-ONLY-N !
+    \ This publication is the authority, so its root is not provisional.
+    0 R@ _SPAW.PROVISIONAL !
     R@ _SPAW-PUBLISH-RUN
     0 R@ _SPAW.STAGING-ACTIVE !
     R> DROP ;
@@ -2571,6 +3088,9 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
     THEN
     R> _SPAW-STAGING-ROOT PBTREE-ROOT-CARDINALITY@ ;
 
+\ Restores the durable view after every rejected staged lifetime, including
+\ one that failed before PSTORE became active, so that an arena no durable
+\ root records leaves RAM with it.
 : _SPAW-STAGE-DISCARD-RUN  ( work -- status )
     >R
     STREAMS-PA-S-OK R@ _SPAW.TEMP-STATUS !
@@ -2578,8 +3098,11 @@ RECLAIM-DISCARD-MAX RECLAIM-MAX-BATCH 1- +
         STREAMS-PA-S-OK R@ _SPAW-ABORT-ACTIVE
         R@ _SPAW.TEMP-STATUS !
     THEN
+    R@ _SPAW.STAGING-ACTIVE @
+    R@ _SPAW.STATE @ _SPAW-STATE-READY <> OR
     0 R@ _SPAW.STAGING-ACTIVE !
-    R@ _SPAW.STATE @ _SPAW-STATE-READY <> IF
+    0 R@ _SPAW.PROVISIONAL !
+    IF
         R@ _SPAW-OPEN-RUN
         DUP STREAMS-PA-S-OK =
         OVER STREAMS-PA-S-ABSENT = OR IF

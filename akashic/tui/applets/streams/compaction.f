@@ -1177,6 +1177,42 @@ _SPACOM-LOOKUP-OFF STREAMS-PERSISTENCE-RECORD-MAX +
 \ Exact-generation physical-only application-root finalizer
 \ ---------------------------------------------------------------------
 
+\ PCOMPACT truncates the builder bank before the rebuild, so every page of
+\ the target bank is a provisional build page.  The target root claims them
+\ all as one staging arena from page zero, with empty baseline roots rebased
+\ to the exact publication generation, so the cold audit attributes every
+\ page and the arena stays open until the next compaction.
+: _SPACOM-ROOT-ARENA  ( exact-generation context -- status )
+    >R
+    0 R@ _SPACOM.BUILDER-WORK @ _SPAW.PAGE SAR.ARENA-BASE !
+    -1 R@ _SPACOM.BUILDER-WORK @ _SPAW.PAGE SAR.ARENA-ROOT-PAGE !
+    0
+    BEGIN DUP _SPA-TREE-COUNT < WHILE
+        DUP R@ _SPACOM.BUILDER-WORK @ _SPAW-TREE
+        OVER R@ _SPACOM.BUILDER-WORK @ _SPAW-BASELINE-ROOT
+        PBTREE-ROOT-INIT
+        DUP IF
+            _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        THEN DROP
+        DUP R@ _SPACOM.BUILDER-WORK @ _SPAW-BASELINE-ROOT
+        2 PICK
+        R@ _SPACOM.BUILDER-WORK @ _SPAW.TEMP-ROOT
+        3 PICK R@ _SPACOM.BUILDER-WORK @ _SPAW-TREE
+        PBTREE-ROOT-REBASE
+        DUP IF
+            _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        THEN DROP
+        R@ _SPACOM.BUILDER-WORK @ _SPAW.TEMP-ROOT
+        OVER R@ _SPACOM.BUILDER-WORK @ _SPAW.PAGE
+            STREAMS-AUTHORITY-ROOT-BASELINE
+        PBTREE-ROOT-COPY
+        DUP IF
+            _SPA-PERSIST>STATUS >R 2DROP R> R> DROP EXIT
+        THEN DROP
+        1+
+    REPEAT
+    2DROP R> DROP STREAMS-PA-S-OK ;
+
 : _SPACOM-ROOT-PAGE  ( exact-generation context -- status )
     >R
     DUP 0> 0= IF DROP R> DROP STREAMS-PA-S-INVALID EXIT THEN
@@ -1208,6 +1244,8 @@ _SPACOM-LOOKUP-OFF STREAMS-PERSISTENCE-RECORD-MAX +
         1+
     REPEAT
     DROP
+    DUP R@ _SPACOM-ROOT-ARENA
+    DUP IF NIP R> DROP EXIT THEN DROP
     R@ _SPACOM.BUILDER-WORK @ _SPAW.PAGE SAR.RECLAIM-STATE
     RECLAIM-STATE-SIZE
     RECLAIM-EMPTY-STATE-FOR-GENERATION _SPA-PERSIST>STATUS
