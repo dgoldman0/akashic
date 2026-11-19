@@ -97,7 +97,12 @@ through its owner, so no applet spells another applet's file. A source
 rule, `local_testing/test_applet_writes_through_places.py`, holds applet
 code to the place words for every write: no applet module creates,
 removes or renames an entry by a path on a volume, or binds a store's
-file there, except Streams' and Library's stores until slice 7.
+file there. Streams' and Library's stores keep layouts of several files
+and write them by path, inside the folder their holder binds through the
+place (`PFOLDER-BIND`), for writing only where the place is writable. The
+rule holds their repositories to paths composed under that folder, and
+every other applet module to opening Streams' stores there rather than at
+their defaults in the volume's root.
 
 The grants bind every route the system offers: File Explorer, Pad and
 every store. Applets outside the sandbox run as native code with every
@@ -260,8 +265,8 @@ their places and enforce read-only among components that share one
 address space; the sandbox, which requires a context with no place set,
 stays the boundary against code that would reach around them.
 
-A store that keeps a layout of several files, as Library's repository
-does, takes its folder from `utils/fs/place-folder.f`:
+A store that keeps a layout of several files, as Streams' and Library's
+do, takes its folder from `utils/fs/place-folder.f`:
 
 ```forth
 PFOLDER-BIND  ( place buf cap -- vfs len ior )
@@ -494,9 +499,9 @@ shipping form's places.
   conversation store work through `PLACE-OPEN`, `PLACE-CREATE` and
   `PLACE-SYNC` in the home. The builder publishes in its catalog's place
   and the loader reads in the place it is given.
-- Daybook, Grid and Sound Lab keep their file in their home. Library
-  keeps its repository in its home's folder, as the slice 7 entry below
-  describes, and Streams opens its stores on the volume under its home.
+- Daybook, Grid and Sound Lab keep their file in their home. Streams and
+  Library keep their stores in their home's folder, as the slice 7 entry
+  below describes.
 - The shell and the applet host read an applet's UIDL file from its
   origin, and a document's media read their file from the place the
   document came from (`UTUI-FILES!`).
@@ -591,15 +596,18 @@ shipping form's places.
   (`PLACE-DECLARED-PATH`, `PLSET-FIND-PATH`). Each applet's home is a folder
   named by its id where the activation's home is a records place, as the
   `practice-contracts` profile checks; `local_testing/test_practice_contracts.py`
-  runs that profile as a test. Library keeps its repository in its home's
-  folder (Decided, 2026-11-17): its controller binds that folder once when
-  it opens (`PFOLDER-BIND`), and the repository composes every path of its
-  layout under it (`PFOLDER-PATH`), in a `library` folder there. In the
-  linked build and the test sets the home is the volume's root, so the
-  files keep the paths they had. `local_testing/test_place_folder.py`
-  tests the helper, and `test_library_home_folder.py` provisions the
-  repository in a folder under records. Desk's own stores, the layout of
-  Streams, and the user volume's transaction size come next.
+  runs that profile as a test. Streams and Library keep their layouts in
+  their home's folder (Decided, 2026-11-17). Each binds that folder once
+  when it opens (`PFOLDER-BIND`) and composes every path under it
+  (`PFOLDER-PATH`): Library's repository keeps its files in a `library`
+  folder there, and Streams keeps its draft, source and observation files
+  there beside the `streams` folder of its repository, which its runtime
+  owner opens in the folder it is given. In the linked build and the test
+  sets the home is the volume's root, so the files keep the paths they
+  had. `local_testing/test_place_folder.py` tests the helper, and
+  `test_library_home_folder.py` and `test_streams_home_folder.py` open
+  each store in a folder under records. Desk's own stores and the user
+  volume's transaction size come next.
 
 What slice 4 leaves:
 
@@ -616,12 +624,7 @@ What slice 4 leaves:
   first, absent slot with a truncate that changes nothing, which ext4's
   writer refuses, so Desk shows `history error`; the Practice head no
   longer truncates an empty slot. The Agent saves every 500 ms while a
-  256 KiB save takes 2 to 5 s. Streams keeps its stores with fixed
-  layouts from the volume's root (`/streams/...`, `/streams-*.bin`);
-  before they move to the user volume, it binds its folder in its home
-  once when it opens and composes their paths under that folder through
-  the helper Library's repository uses, and the persistence layer keeps
-  taking an instance and a path (Decided, 2026-11-17).
+  256 KiB save takes 2 to 5 s.
 - Power cuts during a save, a copy's stage write and its rename are
   qualified in slice 8.
 

@@ -122,8 +122,8 @@ preceding launch. The host qualification harness alone injects a hand-authored
 synthetic page under `/testing/streams/`; `timeline.json` is test input, not a
 runtime fallback or library data source.
 
-The five `streams.draft.*` capabilities and `/streams-draft.bin` remain
-behavior-compatible for recovery and possible explicit export if real user
+The five `streams.draft.*` capabilities and the draft file
+`streams-draft.bin` remain behavior-compatible for recovery and possible explicit export if real user
 content is identified. New code must not build output delivery, saved sets,
 Library access, or generic text storage on that surface. Future output uses
 connector/event/delivery contracts, not the draft. The exact Gate 0 revision-7
@@ -205,8 +205,8 @@ search reports the scope `retained`.
 
 ## Current configured sources
 
-Normal lifecycle initialization binds `/streams-sources.bin` and recovers a
-pointer-free registry of at most sixteen sources. A source has a stable local
+Normal lifecycle initialization binds `streams-sources.bin` in Streams' home
+folder and recovers a pointer-free registry of at most sixteen sources. A source has a stable local
 RID, a positive domain revision, kind and format, exact UTF-8 label, endpoint
 and provider configuration, enabled state, manual or bounded interval policy,
 and explicit redirect, response, page, observation, and retained-revision
@@ -294,7 +294,7 @@ complete.
 
 Normal lifecycle now owns an exactly 131,072-byte (128 KiB), pointer-free
 observation checkpoint behind the optimistic replacement record
-`/streams-observation.bin`. Ordinary offline Streams still loads and recovers
+`streams-observation.bin` in Streams' home folder. Ordinary offline Streams still loads and recovers
 that state but cannot start external work. A configured online owner copies the
 checkpoint, records `accepted`, saves it, and only then submits the operation
 to Desk XIO. Terminal failure preserves prior observations. Successful decode
@@ -369,8 +369,11 @@ bounded revision-safe mutation used by the capability handlers, accepts an
 explicitly empty local draft, and wipes its input buffer on submit or cancel.
 Cancel leaves the current draft and both revisions unchanged.
 
-Normal app initialization binds the VFS singleton `/streams-draft.bin` and
-resolves any interrupted VREPL replacement before accepting edits. A missing
+Normal app initialization binds the instance's home folder once
+(`PFOLDER-BIND`), opens the singleton `streams-draft.bin` there and
+resolves any interrupted VREPL replacement before accepting edits. In the
+linked build and the test sets the home is the volume's root, so the draft,
+source and observation files keep their paths there. A missing
 record is an ordinary writable empty state. A complete record restores its
 exact UTF-8 bytes and positive revision without advancing the component owner
 revision. Corrupt or future-format records, I/O failure, and uncertain

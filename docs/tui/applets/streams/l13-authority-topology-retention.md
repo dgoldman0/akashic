@@ -40,7 +40,8 @@ revision; neither side becomes a second writer for the other.
 The following surfaces are excluded from this authority and remain frozen
 during L13:
 
-- `/streams-draft.bin` and the five existing draft capabilities;
+- the draft file `streams-draft.bin` and the five existing draft
+  capabilities;
 - the retained public-Bluesky model, identities, schemas, provider, and
   feed/thread/search capabilities;
 - editable documents, arbitrary attachments, collections, annotations,
@@ -54,9 +55,9 @@ observations with the retained Bluesky model.
 ## One authority over four ordered indexes
 
 The scalable repository uses one Streams-owned two-bank `PSTORE` authority
-under `/streams/`, composed from the neutral page, segment, atomic-root,
-`PBTREE`, `PBLOB`, reclamation, and compaction modules. The application-root
-page owns four `PBTREE` roots:
+in a `streams` folder inside Streams' home folder, composed from the neutral
+page, segment, atomic-root, `PBTREE`, `PBLOB`, reclamation, and compaction
+modules. The application-root page owns four `PBTREE` roots:
 
 | Physical tree | Logical families |
 | --- | --- |
@@ -228,18 +229,26 @@ maintenance operations. A corrupt, unsupported-future, uncertain, or
 ambiguous authority remains blocked; no such state becomes an empty writable
 repository.
 
-The sealed physical roles are:
+The sealed physical roles lie in a `streams` folder inside the folder the
+repository is given, Streams' home folder:
 
 ```text
-/streams/root-0             /streams/root-1
-/streams/pages-0            /streams/pages-1
-/streams/segments-0         /streams/segments-1
-/streams/compact-root-0     /streams/compact-root-1
+streams/root-0             streams/root-1
+streams/pages-0            streams/pages-1
+streams/segments-0         streams/segments-1
+streams/compact-root-0     streams/compact-root-1
 ```
 
-The frozen draft remains `/streams-draft.bin`. Legacy
-`/streams-sources.bin` and `/streams-observation.bin` are migration evidence,
-not members of the new authority.
+`STREAMS-REPOSITORY-INIT` takes that folder's volume path first and
+composes each path of the layout once, keeping it in its record. The
+runtime owner takes the same folder, keeps its own copy, and opens the
+repository there. The frozen draft remains `streams-draft.bin` beside the
+`streams` folder. Legacy `streams-sources.bin` and
+`streams-observation.bin`, beside it too, are migration evidence, not
+members of the new authority; the runtime owner reads them from the folder
+it is given. In the linked build and the test sets the home is the
+volume's root, so the paths are `/streams/root-0`, `/streams-draft.bin`
+and the rest.
 
 ## Mutation protocols
 

@@ -38059,6 +38059,7 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
     _lrc-source-init
     STREAMS-OBSERVATION-CHECKPOINT-SIZE ALLOCATE
         DUP IF 2DROP -4107 THROW THEN DROP _lrc-durable !
+    STREAMS-OBSERVATION-STORE-TARGET$
     _lrc-vfs @ 0 _lrc-service ['] _lrc-factory _lrc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _lrc-assert
     _lrc-owner STREAMS-REFRESH-OWNER-AVAILABLE? _lrc-assert
@@ -38070,6 +38071,7 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
         OCHK.GENERATION @ _lrc-first-generation !
 
     _lrc-owner STREAMS-REFRESH-OWNER-RELEASE SREF-S-OK = _lrc-assert
+    STREAMS-OBSERVATION-STORE-TARGET$
     _lrc-vfs @ 0 _lrc-service ['] _lrc-factory _lrc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _lrc-assert
     _lrc-owner STREAMS-REFRESH-OWNER-CHECKPOINT OCHK-VALID? _lrc-assert

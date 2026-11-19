@@ -18,6 +18,7 @@ PROVIDED akashic-tui-streams-repository
 
 REQUIRE ../../../persistence/compaction.f
 REQUIRE compaction.f
+REQUIRE ../../../utils/fs/place-folder.f
 
 \ ---------------------------------------------------------------------
 \ Status domain
@@ -80,16 +81,12 @@ STREAMS-PA-S-READ-ONLY   CONSTANT STREAMS-REPOSITORY-S-READ-ONLY
 \ Sealed topology
 \ ---------------------------------------------------------------------
 
-: _SREPO-DIRECTORY$       ( -- a u ) S" /streams" ;
+\ The repository keeps its layout in a folder named streams inside the
+\ folder it is given, as a store keeps a layout of its own under its home
+\ (utils/fs/place-folder.f).  STREAMS-REPOSITORY-INIT makes each path of
+\ the layout once and keeps it in the record: the file of each evidence
+\ role, the streams folder, and the folder that holds it.
 : _SREPO-DIRECTORY-NAME$  ( -- a u ) S" streams" ;
-: _SREPO-ROOT-0$          ( -- a u ) S" /streams/root-0" ;
-: _SREPO-ROOT-1$          ( -- a u ) S" /streams/root-1" ;
-: _SREPO-PAGES-0$         ( -- a u ) S" /streams/pages-0" ;
-: _SREPO-PAGES-1$         ( -- a u ) S" /streams/pages-1" ;
-: _SREPO-SEGMENTS-0$      ( -- a u ) S" /streams/segments-0" ;
-: _SREPO-SEGMENTS-1$      ( -- a u ) S" /streams/segments-1" ;
-: _SREPO-COMPACT-ROOT-0$  ( -- a u ) S" /streams/compact-root-0" ;
-: _SREPO-COMPACT-ROOT-1$  ( -- a u ) S" /streams/compact-root-1" ;
 
 0 CONSTANT STREAMS-REPOSITORY-EVIDENCE-ROOT-0
 1 CONSTANT STREAMS-REPOSITORY-EVIDENCE-ROOT-1
@@ -101,26 +98,28 @@ STREAMS-PA-S-READ-ONLY   CONSTANT STREAMS-REPOSITORY-S-READ-ONLY
 7 CONSTANT STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-1
 8 CONSTANT STREAMS-REPOSITORY-EVIDENCE-COUNT
 
-: _SREPO-EVIDENCE-PATH$  ( role -- path-a path-u flag )
+\ The record's path slots: the evidence roles, then the streams folder
+\ and the folder that holds it.  A slot is a length cell and a path of at
+\ most PERSIST-PATH-MAX bytes, the longest path the persistence layer takes.
+STREAMS-REPOSITORY-EVIDENCE-COUNT      CONSTANT _SREPO-P-DIRECTORY
+STREAMS-REPOSITORY-EVIDENCE-COUNT 1+   CONSTANT _SREPO-P-FOLDER
+STREAMS-REPOSITORY-EVIDENCE-COUNT 2 +  CONSTANT _SREPO-PATH-COUNT
+PERSIST-PATH-MAX 8 + 8 + -8 AND        CONSTANT _SREPO-PATH-SLOT
+
+\ The name of each evidence role's file in the streams folder.
+: _SREPO-LEAF$  ( role -- a u )
     CASE
-        STREAMS-REPOSITORY-EVIDENCE-ROOT-0 OF
-            _SREPO-ROOT-0$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-ROOT-1 OF
-            _SREPO-ROOT-1$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-PAGES-0 OF
-            _SREPO-PAGES-0$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-PAGES-1 OF
-            _SREPO-PAGES-1$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-SEGMENTS-0 OF
-            _SREPO-SEGMENTS-0$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-SEGMENTS-1 OF
-            _SREPO-SEGMENTS-1$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-0 OF
-            _SREPO-COMPACT-ROOT-0$ -1 ENDOF
-        STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-1 OF
-            _SREPO-COMPACT-ROOT-1$ -1 ENDOF
-        0 0 0 ROT
+        STREAMS-REPOSITORY-EVIDENCE-ROOT-0 OF S" root-0" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-ROOT-1 OF S" root-1" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-PAGES-0 OF S" pages-0" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-PAGES-1 OF S" pages-1" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-SEGMENTS-0 OF S" segments-0" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-SEGMENTS-1 OF S" segments-1" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-0 OF S" compact-root-0" ENDOF
+        STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-1 OF S" compact-root-1" ENDOF
+        0 0 ROT
     ENDCASE ;
+
 
 \ PBLOB chunks share the neutral segment with Streams semantic records.
 STREAMS-PERSISTENCE-RECORD-MAX PBLOB-CHUNK-SIZE MAX
@@ -162,7 +161,9 @@ _SR-BUILDER-BANK1-PAGE PERSIST-PAGE-FILE-SIZE +
 _SR-BUILDER-BANK1-SEGMENT PSEG-FILE-SIZE +
     CONSTANT _SR-BUILDER-ADAPTER
 _SR-BUILDER-ADAPTER STREAMS-PA-SIZE + CONSTANT _SR-COMPACT
-_SR-COMPACT PCOMPACT-SIZE + CONSTANT STREAMS-REPOSITORY-SIZE
+_SR-COMPACT PCOMPACT-SIZE + CONSTANT _SR-PATHS
+_SR-PATHS _SREPO-PATH-COUNT _SREPO-PATH-SLOT * +
+    CONSTANT STREAMS-REPOSITORY-SIZE
 
 1   CONSTANT _SR-F-INITIALIZED
 2   CONSTANT _SR-F-LOADED
@@ -201,6 +202,66 @@ _SR-COMPACT PCOMPACT-SIZE + CONSTANT STREAMS-REPOSITORY-SIZE
 : _SR.BUILDER-ADAPTER ( repository -- adapter )
     _SR-BUILDER-ADAPTER + ;
 : _SR.COMPACT       ( repository -- compact ) _SR-COMPACT + ;
+: _SR.PATH          ( slot repository -- a )
+    _SR-PATHS + SWAP _SREPO-PATH-SLOT * + ;
+
+\ The path of SLOT in the repository's layout.
+: _SREPO-PATH$  ( slot repository -- a u )  _SR.PATH DUP 8 + SWAP @ ;
+
+: _SREPO-FOLDER$     ( repository -- a u )
+    _SREPO-P-FOLDER SWAP _SREPO-PATH$ ;
+: _SREPO-DIRECTORY$  ( repository -- a u )
+    _SREPO-P-DIRECTORY SWAP _SREPO-PATH$ ;
+: _SREPO-ROOT-0$     ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-ROOT-0 SWAP _SREPO-PATH$ ;
+: _SREPO-ROOT-1$     ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-ROOT-1 SWAP _SREPO-PATH$ ;
+: _SREPO-PAGES-0$    ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-PAGES-0 SWAP _SREPO-PATH$ ;
+: _SREPO-PAGES-1$    ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-PAGES-1 SWAP _SREPO-PATH$ ;
+: _SREPO-SEGMENTS-0$ ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-SEGMENTS-0 SWAP _SREPO-PATH$ ;
+: _SREPO-SEGMENTS-1$ ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-SEGMENTS-1 SWAP _SREPO-PATH$ ;
+: _SREPO-COMPACT-ROOT-0$ ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-0 SWAP _SREPO-PATH$ ;
+: _SREPO-COMPACT-ROOT-1$ ( repository -- a u )
+    STREAMS-REPOSITORY-EVIDENCE-COMPACT-ROOT-1 SWAP _SREPO-PATH$ ;
+
+: _SREPO-EVIDENCE-PATH$  ( role repository -- path-a path-u flag )
+    OVER 0 STREAMS-REPOSITORY-EVIDENCE-COUNT WITHIN 0= IF
+        2DROP 0 0 0 EXIT
+    THEN
+    _SREPO-PATH$ -1 ;
+
+VARIABLE _SRPS-R  VARIABLE _SRPS-FA  VARIABLE _SRPS-FU
+
+\ Compose NAME under FOLDER into SLOT of the repository _SRPS-R names.
+: _SREPO-PATH-SET  ( name-a name-u folder-a folder-u slot -- ok? )
+    _SRPS-R @ _SR.PATH >R
+    R@ 8 + PERSIST-PATH-MAX PFOLDER-PATH IF DROP R> DROP 0 EXIT THEN
+    R> ! -1 ;
+
+\ Make the layout's paths under FOLDER, the volume path of the folder
+\ that holds the streams folder.  INVALID when FOLDER is no absolute path
+\ or a path would be longer than the persistence layer takes.
+: _SREPO-PATHS!  ( folder-a folder-u repository -- status )
+    _SRPS-R ! _SRPS-FU ! _SRPS-FA !
+    _SRPS-FU @ 0= _SRPS-FU @ PERSIST-PATH-MAX > OR IF
+        STREAMS-REPOSITORY-S-INVALID EXIT
+    THEN
+    _SRPS-FA @ _SREPO-P-FOLDER _SRPS-R @ _SR.PATH 8 + _SRPS-FU @ CMOVE
+    _SRPS-FU @ _SREPO-P-FOLDER _SRPS-R @ _SR.PATH !
+    _SREPO-DIRECTORY-NAME$ _SRPS-FA @ _SRPS-FU @ _SREPO-P-DIRECTORY
+        _SREPO-PATH-SET 0= IF STREAMS-REPOSITORY-S-INVALID EXIT THEN
+    STREAMS-REPOSITORY-EVIDENCE-COUNT 0 DO
+        I _SREPO-LEAF$  _SREPO-P-DIRECTORY _SRPS-R @ _SREPO-PATH$
+        I _SREPO-PATH-SET 0= IF
+            UNLOOP STREAMS-REPOSITORY-S-INVALID EXIT
+        THEN
+    LOOP
+    STREAMS-REPOSITORY-S-OK ;
 
 \ ---------------------------------------------------------------------
 \ Caller-owned repository work graph
@@ -264,28 +325,28 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
 : _SREPO-PATHS?  ( repository -- flag )
     >R
     PERSIST-DATA-BANK-0 R@ _SR.STORE PSTORE-PAGE-FILE-FOR-BANK@
-        PPAGE-FILE-PATH$ _SREPO-PAGES-0$
+        PPAGE-FILE-PATH$ R@ _SREPO-PAGES-0$
         _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
     PERSIST-DATA-BANK-1 R@ _SR.STORE PSTORE-PAGE-FILE-FOR-BANK@
-        PPAGE-FILE-PATH$ _SREPO-PAGES-1$
+        PPAGE-FILE-PATH$ R@ _SREPO-PAGES-1$
         _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
     PERSIST-DATA-BANK-0 R@ _SR.STORE PSTORE-SEGMENT-FILE-FOR-BANK@
-        PSEG-FILE-PATH$ _SREPO-SEGMENTS-0$
+        PSEG-FILE-PATH$ R@ _SREPO-SEGMENTS-0$
         _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
     PERSIST-DATA-BANK-1 R@ _SR.STORE PSTORE-SEGMENT-FILE-FOR-BANK@
-        PSEG-FILE-PATH$ _SREPO-SEGMENTS-1$
+        PSEG-FILE-PATH$ R@ _SREPO-SEGMENTS-1$
         _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
     R@ _SR.STORE PSTORE-ROOT-FILE@ PROOT-PATH-A$
-        _SREPO-ROOT-0$ _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
+        R@ _SREPO-ROOT-0$ _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
     R@ _SR.STORE PSTORE-ROOT-FILE@ PROOT-PATH-B$
-        _SREPO-ROOT-1$ _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
+        R@ _SREPO-ROOT-1$ _SREPO-BYTES= 0= IF R> DROP 0 EXIT THEN
     R@ _SR.FLAGS @ _SR-F-COMPACTION-CONFIGURED AND IF
         R@ _SR.BUILDER-STORE PSTORE-ROOT-FILE@ PROOT-PATH-A$
-            _SREPO-COMPACT-ROOT-0$ _SREPO-BYTES= 0= IF
+            R@ _SREPO-COMPACT-ROOT-0$ _SREPO-BYTES= 0= IF
             R> DROP 0 EXIT
         THEN
         R@ _SR.BUILDER-STORE PSTORE-ROOT-FILE@ PROOT-PATH-B$
-            _SREPO-COMPACT-ROOT-1$ _SREPO-BYTES= 0= IF
+            R@ _SREPO-COMPACT-ROOT-1$ _SREPO-BYTES= 0= IF
             R> DROP 0 EXIT
         THEN
     THEN
@@ -717,17 +778,17 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
 
 : _SREPO-COMPONENTS-INIT  ( repository -- status )
     >R
-    _SREPO-PAGES-0$ _SREPO-SEGMENTS-0$
-    _SREPO-ROOT-0$ _SREPO-ROOT-1$
+    R@ _SREPO-PAGES-0$ R@ _SREPO-SEGMENTS-0$
+    R@ _SREPO-ROOT-0$ R@ _SREPO-ROOT-1$
     R@ _SR.IDENTITY STREAMS-REPOSITORY-RECORD-MAX
     R@ _SR.VFS @ 0 R@ _SR.CACHE-0 @ R@ _SR.GUARD @
     R@ _SR.FAULT-XT @ R@ _SR.FAULT-CONTEXT @
     R@ _SR.STORE PSTORE-INIT
     DUP IF _SREPO-PERSIST>STATUS R> DROP EXIT THEN DROP
-    _SREPO-PAGES-1$ R@ _SR.VFS @ 0 R@ _SR.CACHE-1 @
+    R@ _SREPO-PAGES-1$ R@ _SR.VFS @ 0 R@ _SR.CACHE-1 @
         R@ _SR.BANK1-PAGE PPAGE-FILE-INIT
     DUP IF _SREPO-PERSIST>STATUS R> DROP EXIT THEN DROP
-    _SREPO-SEGMENTS-1$ STREAMS-REPOSITORY-RECORD-MAX
+    R@ _SREPO-SEGMENTS-1$ STREAMS-REPOSITORY-RECORD-MAX
     R@ _SR.VFS @ 0 R@ _SR.BANK1-SEGMENT PSEG-FILE-INIT
     DUP IF _SREPO-PERSIST>STATUS R> DROP EXIT THEN DROP
     R@ _SR.BANK1-PAGE R@ _SR.BANK1-SEGMENT
@@ -739,18 +800,18 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
 
 : _SREPO-BUILDER-COMPONENTS-INIT  ( repository -- status )
     >R
-    _SREPO-PAGES-0$ _SREPO-SEGMENTS-0$
-    _SREPO-COMPACT-ROOT-0$ _SREPO-COMPACT-ROOT-1$
+    R@ _SREPO-PAGES-0$ R@ _SREPO-SEGMENTS-0$
+    R@ _SREPO-COMPACT-ROOT-0$ R@ _SREPO-COMPACT-ROOT-1$
     R@ _SR.IDENTITY STREAMS-REPOSITORY-RECORD-MAX
     R@ _SR.VFS @ 0 R@ _SR.BUILDER-CACHE-0 @
     R@ _SR.BUILDER-GUARD @
     R@ _SR.FAULT-XT @ R@ _SR.FAULT-CONTEXT @
     R@ _SR.BUILDER-STORE PSTORE-INIT
     DUP IF _SREPO-PERSIST>STATUS R> DROP EXIT THEN DROP
-    _SREPO-PAGES-1$ R@ _SR.VFS @ 0 R@ _SR.BUILDER-CACHE-1 @
+    R@ _SREPO-PAGES-1$ R@ _SR.VFS @ 0 R@ _SR.BUILDER-CACHE-1 @
         R@ _SR.BUILDER-BANK1-PAGE PPAGE-FILE-INIT
     DUP IF _SREPO-PERSIST>STATUS R> DROP EXIT THEN DROP
-    _SREPO-SEGMENTS-1$ STREAMS-REPOSITORY-RECORD-MAX
+    R@ _SREPO-SEGMENTS-1$ STREAMS-REPOSITORY-RECORD-MAX
     R@ _SR.VFS @ 0
         R@ _SR.BUILDER-BANK1-SEGMENT PSEG-FILE-INIT
     DUP IF _SREPO-PERSIST>STATUS R> DROP EXIT THEN DROP
@@ -763,13 +824,17 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
     _SREPO-ADAPTER>STATUS
     R> DROP ;
 
+\ ( folder-a folder-u vfs cache0 cache1 guard fault-xt|0 fault-context
+\   repository -- status )
 \ The two page caches and spin guard remain caller-owned.  A zero fault XT
 \ requires a zero fault context; a nonzero callback may use any context.
-: STREAMS-REPOSITORY-INIT
-  ( vfs cache0 cache1 guard fault-xt|0 fault-context repository -- status )
+\ FOLDER is the volume path of the folder that holds the streams folder:
+\ its holder's home folder as PFOLDER-BIND answers it, or "/" for the
+\ volume's root.
+: STREAMS-REPOSITORY-INIT  ( folder-a folder-u six-values repository -- status )
     6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK
     6 PICK _SREPO-INIT-ARGS? 0= IF
-        _SREPO-DROP7 STREAMS-REPOSITORY-S-INVALID EXIT
+        _SREPO-DROP7 2DROP STREAMS-REPOSITORY-S-INVALID EXIT
     THEN
     >R
     R@ STREAMS-REPOSITORY-SIZE 0 FILL
@@ -785,6 +850,9 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
     _SR-F-INITIALIZED R@ _SR.FLAGS !
     STREAMS-REPOSITORY-S-OK R@ _SR.STATUS !
     _SREPO-DROP6
+    R@ _SREPO-PATHS! DUP IF
+        R> _SREPO-INIT-FAIL EXIT
+    THEN DROP
     R@ _SREPO-COMPONENTS-INIT DUP IF
         R> _SREPO-INIT-FAIL EXIT
     THEN DROP
@@ -1333,12 +1401,12 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
 
 : _SREPO-DIRECTORY-TYPE  ( repository -- status )
     >R
-    _SREPO-DIRECTORY$ VFS-T-DIR R>
+    R@ _SREPO-DIRECTORY$ VFS-T-DIR R>
     _SREPO-NOFOLLOW-TYPE ;
 
 : _SREPO-EVIDENCE-TYPE  ( role repository -- status )
     >R
-    _SREPO-EVIDENCE-PATH$ 0= IF
+    R@ _SREPO-EVIDENCE-PATH$ 0= IF
         2DROP R> DROP STREAMS-REPOSITORY-S-INVALID EXIT
     THEN
     VFS-T-FILE R> _SREPO-NOFOLLOW-TYPE ;
@@ -1412,14 +1480,16 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
     THEN
     NIP ;
 
-: _SREPO-MKDIR-ROOT-RUN  ( repository -- ior )
-    DUP _SR.VFS @ DUP >R
-    V.ROOT @ R@ V.CWD !
-    _SREPO-DIRECTORY-NAME$ R> VFS-MKDIR
-    NIP ;
+\ Make the streams folder inside the folder the repository was given.
+: _SREPO-MKDIR-RUN  ( repository -- ior )
+    DUP _SREPO-FOLDER$ VFS-RP-NOFOLLOW-FINAL 3 PICK _SR.VFS @
+        VFS-RESOLVE-POLICY?                       ( repository folder ior )
+    ?DUP IF NIP NIP EXIT THEN
+    OVER _SR.VFS @ V.CWD !
+    _SREPO-DIRECTORY-NAME$ ROT _SR.VFS @ VFS-MKDIR ;
 
 : _SREPO-ENSURE-DIRECTORY  ( repository -- status )
-    _SREPO-DIRECTORY$ VFS-RP-NOFOLLOW-FINAL
+    DUP _SREPO-DIRECTORY$ VFS-RP-NOFOLLOW-FINAL
         3 PICK _SR.VFS @ VFS-RESOLVE-POLICY?
     DUP 0= IF
         DROP
@@ -1433,7 +1503,7 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
     THEN
     2DROP
     DUP _SR.VFS @ V.CWD @ >R
-    DUP ['] _SREPO-MKDIR-ROOT-RUN CATCH
+    DUP ['] _SREPO-MKDIR-RUN CATCH
     R> 3 PICK _SR.VFS @ V.CWD !
     DUP IF
         _SREPO-DROP3 STREAMS-REPOSITORY-S-IO EXIT
@@ -1549,13 +1619,13 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
         R@ _SRW.REPOSITORY @ _SREPO-MARK-BLOCKING
         R> DROP EXIT
     THEN DROP
-    _SREPO-PAGES-1$
+    R@ _SRW.REPOSITORY @ _SREPO-PAGES-1$
     R@ _SRW.REPOSITORY @ _SREPO-ENSURE-FILE
     DUP IF
         R@ _SRW.REPOSITORY @ _SREPO-MARK-BLOCKING
         R> DROP EXIT
     THEN DROP
-    _SREPO-SEGMENTS-1$
+    R@ _SRW.REPOSITORY @ _SREPO-SEGMENTS-1$
     R@ _SRW.REPOSITORY @ _SREPO-ENSURE-FILE
     DUP IF
         R@ _SRW.REPOSITORY @ _SREPO-MARK-BLOCKING
@@ -1613,13 +1683,13 @@ _SRW-COMPACT PCOMPACT-WORK-SIZE +
         R@ _SRW.REPOSITORY @ _SREPO-MARK-BLOCKING
         R> DROP EXIT
     THEN DROP
-    _SREPO-PAGES-1$
+    R@ _SRW.REPOSITORY @ _SREPO-PAGES-1$
     R@ _SRW.REPOSITORY @ _SREPO-ENSURE-FILE
     DUP IF
         R@ _SRW.REPOSITORY @ _SREPO-MARK-BLOCKING
         R> DROP EXIT
     THEN DROP
-    _SREPO-SEGMENTS-1$
+    R@ _SRW.REPOSITORY @ _SREPO-SEGMENTS-1$
     R@ _SRW.REPOSITORY @ _SREPO-ENSURE-FILE
     DUP IF
         R@ _SRW.REPOSITORY @ _SREPO-MARK-BLOCKING

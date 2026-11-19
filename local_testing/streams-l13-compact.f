@@ -391,7 +391,7 @@ SPREC-OBSERVATION-SIZE XBUF _SL13C-observation-normalized
         STREAMS-REPOSITORY-S-OK _SL13C-status
     _SL13M-cache0-memory _SL13M-cache0 _SL13C-cache-init
     _SL13M-cache1-memory _SL13M-cache1 _SL13C-cache-init
-    _SL13M-vfs @ _SL13M-cache0 _SL13M-cache1 _SL13M-guard
+    S" /" _SL13M-vfs @ _SL13M-cache0 _SL13M-cache1 _SL13M-guard
     ['] _SL13M-fault 0 _SL13M-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13C-status

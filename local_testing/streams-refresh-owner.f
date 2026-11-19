@@ -357,7 +357,8 @@ VARIABLE _srtc-factory-context
 
 : _srtc-test-absent-init  ( -- )
     ." SRTC CASE absent-init at " _srtc-checks @ . CR
-    _srtc-vfs @ _srtc-service ['] _srtc-factory _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        _srtc-service ['] _srtc-factory _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-owner STREAMS-REFRESH-OWNER-VALID? _srtc-assert
     _srtc-owner STREAMS-REFRESH-OWNER-AVAILABLE? _srtc-assert
@@ -534,7 +535,8 @@ VARIABLE _srtc-factory-context
 
 : _srtc-test-restart-and-revision  ( -- )
     ." SRTC CASE restart and revised item at " _srtc-checks @ . CR
-    _srtc-vfs @ _srtc-service ['] _srtc-factory _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        _srtc-service ['] _srtc-factory _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-owner STREAMS-REFRESH-OWNER-PHASE@
         SREF-PHASE-IDLE = _srtc-assert
@@ -736,7 +738,8 @@ VARIABLE _srtc-factory-context
     _srtc-durable _srtc-status @ _srtc-seed-store
         STREAMS-OBSERVATION-STORE-SAVE OSTORE-S-OK = _srtc-assert
 
-    _srtc-vfs @ _srtc-service ['] _srtc-factory _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        _srtc-service ['] _srtc-factory _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-owner STREAMS-REFRESH-OWNER-PHASE@
         SREF-PHASE-RECOVERED = _srtc-assert
@@ -778,7 +781,8 @@ VARIABLE _srtc-factory-context
 : _srtc-test-factory-absent-release  ( -- )
     ." SRTC CASE factory absent owner release at " _srtc-checks @ . CR
     _srtc-release-count @ _srtc-status !
-    _srtc-vfs @ _srtc-service 0 _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        _srtc-service 0 _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-context @ 0= _srtc-assert
     SREF-S-UNAVAILABLE _srtc-check-offline-owned-release
@@ -788,7 +792,8 @@ VARIABLE _srtc-factory-context
 : _srtc-test-service-absent-release  ( -- )
     ." SRTC CASE service absent owner release at " _srtc-checks @ . CR
     _srtc-release-count @ _srtc-status !
-    _srtc-vfs @ 0 ['] _srtc-factory _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        0 ['] _srtc-factory _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-context @ 0= _srtc-assert
     SREF-S-UNAVAILABLE _srtc-check-offline-owned-release
@@ -798,7 +803,8 @@ VARIABLE _srtc-factory-context
 : _srtc-test-factory-failure-release  ( -- )
     ." SRTC CASE factory failure owner release at " _srtc-checks @ . CR
     _srtc-release-count @ _srtc-status !
-    _srtc-vfs @ _srtc-service ['] _srtc-factory-failure _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        _srtc-service ['] _srtc-factory-failure _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-context @ 0= _srtc-assert
     _srtc-release-count @ _srtc-status @ 1+ = _srtc-assert
@@ -809,7 +815,8 @@ VARIABLE _srtc-factory-context
 : _srtc-test-persist-block-metadata  ( -- )
     ." SRTC CASE persist failure blocks with exact metadata at "
         _srtc-checks @ . CR
-    _srtc-vfs @ _srtc-service ['] _srtc-factory _srtc-owner
+    STREAMS-OBSERVATION-STORE-TARGET$ _srtc-vfs @ 0
+        _srtc-service ['] _srtc-factory _srtc-owner
         STREAMS-REFRESH-OWNER-INIT SREF-S-OK = _srtc-assert
     _srtc-good-state-snapshot!
     _srtc-plan-base

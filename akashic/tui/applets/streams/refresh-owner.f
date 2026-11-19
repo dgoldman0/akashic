@@ -13,8 +13,11 @@
 \
 \ Public API:
 \   STREAMS-REFRESH-OWNER-INIT
-\     ( vfs read-only? xio-service configured-factory-xt owner -- status )
-\     READ-ONLY? is the access of the place whose volume VFS is: a
+\     ( target-a target-u vfs read-only? xio-service configured-factory-xt
+\       owner -- status )
+\     TARGET is the volume path on VFS of the file that keeps the
+\     observation checkpoint, as STREAMS-OBSERVATION-STORE-INIT-AT takes
+\     it.  READ-ONLY? is the access of the place that holds that file: a
 \     read-only owner reads its checkpoint and saves none.
 \   STREAMS-REFRESH-OWNER-START
 \     ( exact-source owner-id owner-generation owner -- status )
@@ -179,6 +182,8 @@ VARIABLE _SREF-PARTIAL
     THEN
     _SREF-PARTIAL @ STREAMS-REFRESH-OWNER-SIZE 0 FILL ;
 
+VARIABLE _SREF-INIT-TARGET-A
+VARIABLE _SREF-INIT-TARGET-U
 VARIABLE _SREF-INIT-VFS
 VARIABLE _SREF-INIT-SERVICE
 VARIABLE _SREF-INIT-FACTORY
@@ -211,10 +216,12 @@ VARIABLE _SREF-INIT-READ-ONLY
     SREF-S-OK ;
 
 : STREAMS-REFRESH-OWNER-INIT
-  ( vfs read-only? xio-service configured-factory-xt owner -- status )
+  ( target-a target-u vfs read-only? xio-service factory-xt owner -- status )
     _SREF-INIT-OWNER ! _SREF-INIT-FACTORY !
     _SREF-INIT-SERVICE ! _SREF-INIT-READ-ONLY ! _SREF-INIT-VFS !
-    _SREF-INIT-OWNER @ 0= _SREF-INIT-VFS @ 0= OR IF
+    _SREF-INIT-TARGET-U ! _SREF-INIT-TARGET-A !
+    _SREF-INIT-OWNER @ 0= _SREF-INIT-VFS @ 0= OR
+    _SREF-INIT-TARGET-A @ 0= OR IF
         SREF-S-INVALID EXIT
     THEN
     _SREF-INIT-OWNER @ STREAMS-REFRESH-OWNER-SIZE 0 FILL
@@ -237,8 +244,9 @@ VARIABLE _SREF-INIT-READ-ONLY
     THEN
     _SREF-INIT-OWNER @ SREF.DECODER !
 
-    _SREF-INIT-VFS @ _SREF-INIT-OWNER @ SREF.STORE
-        STREAMS-OBSERVATION-STORE-INIT
+    _SREF-INIT-TARGET-A @ _SREF-INIT-TARGET-U @
+        _SREF-INIT-VFS @ _SREF-INIT-OWNER @ SREF.STORE
+        STREAMS-OBSERVATION-STORE-INIT-AT
     DUP _SREF-INIT-OWNER @ SREF.STORE-STATUS !
     OSTORE-S-OK <> IF
         _SREF-INIT-OWNER @ _SREF-PARTIAL-FREE SREF-S-STORAGE EXIT

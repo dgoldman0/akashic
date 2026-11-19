@@ -70,6 +70,10 @@ _SSS-LOAD-GENERATION 8 + CONSTANT STREAMS-SOURCE-STORE-SIZE
     STREAMS-SOURCE-STORE.SCRATCH STREAMS-SOURCE-STORE-RECORD-MAX 0 FILL ;
 
 : STREAMS-SOURCE-STORE-TARGET$  ( -- a u ) S" /streams-sources.bin" ;
+\ The name of the store's file.  A holder keeps the file in its home's
+\ folder; the default above keeps it in the volume's root.
+: STREAMS-SOURCE-STORE-NAME$  ( -- a u )
+    STREAMS-SOURCE-STORE-TARGET$ SWAP 1+ SWAP 1- ;
 : STREAMS-SOURCE-STORE-PATH$  ( store -- a u )
     STREAMS-SOURCE-STORE.CORE VFSNAP-PATH$ ;
 : STREAMS-SOURCE-STORE-BLOCKED?  ( store -- flag )

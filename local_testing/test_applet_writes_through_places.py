@@ -11,10 +11,16 @@ one.  An applet writes through a place word, a replacement bound with
 PLACE-VREPL!, a copy with PLACE-COPY or PLACE-MOVE, or a file that a
 place word opened, whose grant the open checked.
 
-Streams' and Library's stores still keep root-absolute layouts on their
-home's volume until slice 7 binds each store's folder in its home; those
-files are named below and leave the list then.  KDOS names ignore case,
-so the check does too, and it reads code, not comments.
+Streams' and Library's stores keep layouts of several files of their
+own.  Their holder binds its home's folder through the place once when
+it opens (PFOLDER-BIND, utils/fs/place-folder.f), for writing only where
+the place is writable, and hands the store that folder or a path
+composed under it; the store writes by path inside it, as the
+persistence and replacement libraries below it take an instance and a
+path.  Those store modules are named below.  The repositories spell no
+path from the volume's root, and no other applet module opens one of
+Streams' stores at its default in the volume's root.  KDOS names ignore
+case, so the checks do too, and they read code, not comments.
 """
 
 from __future__ import annotations
@@ -35,14 +41,31 @@ PATH_WRITES = re.compile(
     re.IGNORECASE,
 )
 
-# Until slice 7 binds each store's folder in its home.
-UNTIL_SLICE_7 = {
+# Stores that keep a layout of their own under the folder their holder
+# binds, and write by path inside it.
+LAYOUT_STORES = {
     "library/repository.f",
     "streams/repository.f",
     "streams/draft-store.f",
     "streams/observation-store.f",
     "streams/source-store.f",
 }
+
+# The repositories, which compose every path of their layout under the
+# folder they are given.
+REPOSITORIES = ("library/repository.f", "streams/repository.f")
+
+# A Streams store's default in the volume's root: the plain INIT and the
+# target it opens.
+ROOT_DEFAULTS = re.compile(
+    r"(?<![A-Za-z0-9_?!@$./-])"
+    r"STREAMS-(?:DRAFT|SOURCE|OBSERVATION)-STORE-(?:INIT|TARGET\$)"
+    r"(?![A-Za-z0-9_?!@$./-])",
+    re.IGNORECASE,
+)
+
+# A string literal that starts at a volume's root.
+ROOT_LITERAL = re.compile(r'(?<![A-Za-z0-9_?!@$./-])S"\s+/')
 
 _LINE_COMMENT = re.compile(r"(?:^|\s)\\(?:\s.*)?$")
 _STACK_COMMENT = re.compile(r"(?:^|\s)\(\s[^)]*\)")
@@ -54,17 +77,32 @@ def code_of(line: str) -> str:
     return _STACK_COMMENT.sub(" ", _LINE_COMMENT.sub("", line))
 
 
-def path_writes(text: str) -> list[tuple[int, str]]:
-    """The lines of TEXT whose code names a path-level write, from 1."""
+def lines_naming(pattern: re.Pattern[str], text: str) -> list[tuple[int, str]]:
+    """The lines of TEXT whose code matches PATTERN, from 1."""
 
     return [
         (number, line.strip())
         for number, line in enumerate(text.splitlines(), start=1)
-        if PATH_WRITES.search(code_of(line))
+        if pattern.search(code_of(line))
     ]
 
 
-def test_the_pattern_reads_code_and_whole_names() -> None:
+def path_writes(text: str) -> list[tuple[int, str]]:
+    """The lines of TEXT whose code names a path-level write, from 1."""
+
+    return lines_naming(PATH_WRITES, text)
+
+
+def _applet_modules() -> list[tuple[str, str]]:
+    files = sorted(APPLETS.rglob("*.f"))
+    assert files, APPLETS
+    return [
+        (path.relative_to(APPLETS).as_posix(), path.read_text(encoding="utf-8"))
+        for path in files
+    ]
+
+
+def test_the_patterns_read_code_and_whole_names() -> None:
     assert path_writes("S\" x\" vfs VFS-MKDIR") == [(1, "S\" x\" vfs VFS-MKDIR")]
     assert path_writes("a u v vfs-rn-noreplace") == [(1, "a u v vfs-rn-noreplace")]
     assert path_writes("vfs r VREPL-INIT") == [(1, "vfs r VREPL-INIT")]
@@ -75,22 +113,51 @@ def test_the_pattern_reads_code_and_whole_names() -> None:
     assert path_writes("_VFS-RM-BODY MY-VFS-CREATE VFS-MKDIR-HELPER") == []
     assert path_writes("REQUIRE ../../../utils/fs/vfs-copy.f") == []
 
+    assert lines_naming(ROOT_DEFAULTS, "vfs s STREAMS-DRAFT-STORE-INIT") != []
+    assert lines_naming(ROOT_DEFAULTS, "streams-source-store-target$ v s") != []
+    assert lines_naming(ROOT_DEFAULTS, "a u v s STREAMS-SOURCE-STORE-INIT-AT") == []
+    assert lines_naming(ROOT_DEFAULTS, "STREAMS-OBSERVATION-STORE-NAME$") == []
+    assert lines_naming(ROOT_DEFAULTS, "\\ not STREAMS-DRAFT-STORE-INIT") == []
+
+    assert lines_naming(ROOT_LITERAL, ": P  S\" /library/root-0\" ;") != []
+    assert lines_naming(ROOT_LITERAL, "S\" library\" S\" root-0\"") == []
+    assert lines_naming(ROOT_LITERAL, "\\ S\" /streams\" was the layout") == []
+
 
 def test_applets_write_only_through_their_places() -> None:
-    files = sorted(APPLETS.rglob("*.f"))
-    assert files, APPLETS
     found = [
-        f"{path.relative_to(APPLETS)}:{number}: {line}"
-        for path in files
-        if path.relative_to(APPLETS).as_posix() not in UNTIL_SLICE_7
-        for number, line in path_writes(path.read_text(encoding="utf-8"))
+        f"{name}:{number}: {line}"
+        for name, text in _applet_modules()
+        if name not in LAYOUT_STORES
+        for number, line in path_writes(text)
     ]
     assert not found, "\n".join(found)
 
 
-def test_each_file_waiting_for_slice_7_still_needs_its_exception() -> None:
+def test_each_layout_store_still_writes_by_path() -> None:
     stale = [
-        name for name in sorted(UNTIL_SLICE_7)
+        name for name in sorted(LAYOUT_STORES)
         if not path_writes((APPLETS / name).read_text(encoding="utf-8"))
     ]
     assert not stale, stale
+
+
+def test_the_repositories_compose_their_layout_under_their_folder() -> None:
+    found = [
+        f"{name}:{number}: {line}"
+        for name in REPOSITORIES
+        for number, line in lines_naming(
+            ROOT_LITERAL, (APPLETS / name).read_text(encoding="utf-8")
+        )
+    ]
+    assert not found, "\n".join(found)
+
+
+def test_applets_open_streams_stores_in_their_home_folder() -> None:
+    found = [
+        f"{name}:{number}: {line}"
+        for name, text in _applet_modules()
+        if name not in LAYOUT_STORES
+        for number, line in lines_naming(ROOT_DEFAULTS, text)
+    ]
+    assert not found, "\n".join(found)

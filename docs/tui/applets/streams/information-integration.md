@@ -367,7 +367,7 @@ in [`streams.md`](streams.md):
 
 - the older Bluesky-shaped retained page, thread, feed, search, and public
   refresh surface;
-- `/streams-draft.bin` and five draft capabilities;
+- the draft file `streams-draft.bin` and five draft capabilities;
 - configured source and manual syndication refresh behavior;
 - the fixed source and observation snapshot stores; and
 - the landed but not production-composed L13 repository modules.

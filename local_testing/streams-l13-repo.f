@@ -113,7 +113,7 @@ STREAMS-QUERY-WORK-SIZE XBUF _SL13R-query-work
     _SL13R-stack ;
 
 : _SL13R-repository-init  ( -- )
-    _SL13R-vfs @ _SL13R-cache0 _SL13R-cache1 _SL13R-guard
+    S" /" _SL13R-vfs @ _SL13R-cache0 _SL13R-cache1 _SL13R-guard
     ['] _SL13R-fault 0 _SL13R-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13R-status

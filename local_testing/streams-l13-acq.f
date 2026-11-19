@@ -142,7 +142,7 @@ CREATE _SL13A-key STREAMS-PI-KEY-MAX ALLOT
     _SL13A-stack ;
 
 : _SL13A-repository-init  ( -- )
-    _SL13A-vfs @ _SL13A-cache0 _SL13A-cache1 _SL13A-guard
+    S" /" _SL13A-vfs @ _SL13A-cache0 _SL13A-cache1 _SL13A-guard
     ['] _SL13A-fault 0 _SL13A-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13A-status

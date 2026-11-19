@@ -73,6 +73,10 @@ _OSS-LOAD-GENERATION 8 + CONSTANT STREAMS-OBSERVATION-STORE-SIZE
 
 : STREAMS-OBSERVATION-STORE-TARGET$  ( -- a u )
     S" /streams-observation.bin" ;
+\ The name of the store's file.  A holder keeps the file in its home's
+\ folder; the default above keeps it in the volume's root.
+: STREAMS-OBSERVATION-STORE-NAME$  ( -- a u )
+    STREAMS-OBSERVATION-STORE-TARGET$ SWAP 1+ SWAP 1- ;
 : STREAMS-OBSERVATION-STORE-PATH$  ( store -- a u )
     STREAMS-OBSERVATION-STORE.CORE VFSNAP-PATH$ ;
 : STREAMS-OBSERVATION-STORE-BLOCKED?  ( store -- flag )

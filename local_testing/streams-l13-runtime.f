@@ -48,7 +48,7 @@ CREATE _SL13T-corrupt-digest SHA3-256-LEN ALLOT
 
 : _SL13T-init  ( owner -- status )
     >R
-    _SL13M-vfs @ 0 0 _SL13M-authority R>
+    S" /" _SL13M-vfs @ 0 0 _SL13M-authority R>
         STREAMS-RUNTIME-OWNER-INIT ;
 
 : _SL13T-repository  ( owner -- repository )

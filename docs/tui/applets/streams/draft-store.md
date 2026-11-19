@@ -15,7 +15,7 @@ qualified independently and is the persistence boundary used by normal
 `streams.f` app initialization and draft mutation.
 
 The store remains Streams-owned throughout the compatibility interval.
-Library must never open `/streams-draft.bin`, import this codec, or silently
+Library must never open Streams' draft file, import this codec, or silently
 proxy its revision-sensitive capabilities. A later Streams-owned migration
 adapter may export one exact validated revision through typed Library
 operations only after the Library owner and migration journal are separately
@@ -42,8 +42,15 @@ describe compatibility behavior only; they do not authorize new document
 owners or a multi-account draft product. A runtime pointer, allocation address,
 window handle, or other ephemeral instance ID is never durable identity.
 
-`STREAMS-DRAFT-STORE-INIT ( vfs store -- status )` selects
-`/streams-draft.bin` for the current singleton Streams lifecycle.
+Streams opens its singleton draft with `INIT-AT` at `streams-draft.bin`, the
+name `STREAMS-DRAFT-STORE-NAME$` gives, in its home's folder: the instance
+binds that folder once when it opens (`PFOLDER-BIND`) and composes the path
+under it. `STREAMS-DRAFT-STORE-INIT ( vfs store -- status )` selects
+`/streams-draft.bin` in the volume's root, the default the store's own
+contracts use; in the linked build Streams' home is that root, so its draft
+keeps that path. The source and observation stores follow the same pattern
+with `streams-sources.bin` and `streams-observation.bin`, the observation
+path reaching its store through `STREAMS-REFRESH-OWNER-INIT`.
 `STREAMS-DRAFT-STORE-READ-ONLY! ( flag store -- status )` marks the store's
 replacement read-only, as Streams does when its home is a read-only place:
 the store loads, and a save answers `SDSTORE-S-READ-ONLY`. Streams marks its

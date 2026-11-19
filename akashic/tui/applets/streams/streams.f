@@ -32,6 +32,7 @@ REQUIRE ../../../interop/capability.f
 REQUIRE ../../../interop/request-bus.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/place-resource.f
+REQUIRE ../../../utils/fs/place-folder.f
 REQUIRE ../../../interop/resource.f
 REQUIRE ../../../interop/schema-common.f
 REQUIRE ../../../net/external-io.f
@@ -164,6 +165,13 @@ _STM-CURRENT-STATE BFM-URI-CAP CMP-FIELD: _STM-THREAD-ROOT-BUF
 _STM-CURRENT-STATE _STM-QUERY-CAP CMP-FIELD: _STM-SEARCH-BUF
 _STM-CURRENT-STATE CMP-CELL: _STM-SEARCH-U
 _STM-CURRENT-STATE CMP-CELL: _STM-SEARCH-MATCH-N
+\ The home's folder, which holds the draft, source and observation stores:
+\ its instance and volume path, bound once as the instance opens, and the
+\ volume path of one store's file in it, composed as that store opens.
+_STM-CURRENT-STATE CMP-CELL: _STM-FOLDER-VFS
+_STM-CURRENT-STATE CMP-CELL: _STM-FOLDER-U
+_STM-CURRENT-STATE VFS-PATH-MAX CMP-FIELD: _STM-FOLDER
+_STM-CURRENT-STATE VFS-PATH-MAX CMP-FIELD: _STM-STORE-PATH
 _STM-CURRENT-STATE _STM-DRAFT-CAP CMP-FIELD: _STM-DRAFT-BUF
 _STM-CURRENT-STATE CMP-CELL: _STM-DRAFT-U
 _STM-CURRENT-STATE CMP-CELL: _STM-DRAFT-REV
@@ -289,11 +297,30 @@ VARIABLE _STM-DSI-U
 VARIABLE _STM-DSI-REV
 VARIABLE _STM-DSI-STATUS
 
-\ The volume under this instance's home.  Streams' stores keep a layout
-\ of their own from that volume's root (docs/utils/fs/places.md, "What
-\ slice 2 leaves").
-: _STM-HOME-VFS  ( -- vfs | 0 )
-    _STM-CURRENT-INSTANCE @ CINST-HOME DUP IF PLACE-VFS THEN ;
+\ Streams keeps its stores in its home's folder.  The instance binds that
+\ folder once as it opens (utils/fs/place-folder.f), and each store opens
+\ its file by a path composed under it.  A home that is missing or
+\ unavailable, or whose folder does not bind, leaves _STM-FOLDER-VFS 0,
+\ and every store then stays blocked.
+: _STM-HOME-BIND-BODY  ( -- )
+    _STM-CURRENT-INSTANCE @ CINST-HOME DUP 0= IF DROP EXIT THEN
+    _STM-FOLDER VFS-PATH-MAX PFOLDER-BIND IF 2DROP EXIT THEN
+    _STM-FOLDER-U ! _STM-FOLDER-VFS ! ;
+
+: _STM-HOME-BIND  ( -- )
+    0 _STM-FOLDER-VFS ! 0 _STM-FOLDER-U !
+    ['] _STM-HOME-BIND-BODY CATCH IF
+        0 _STM-FOLDER-VFS ! 0 _STM-FOLDER-U !
+    THEN ;
+
+\ The volume path of NAME, a store's file, in the home's folder, composed
+\ in _STM-STORE-PATH: 0 0 when the folder is not bound or the path does
+\ not fit.
+: _STM-STORE-PATH$  ( name-a name-u -- path-a path-u )
+    _STM-FOLDER-VFS @ 0= IF 2DROP 0 0 EXIT THEN
+    _STM-FOLDER _STM-FOLDER-U @ _STM-STORE-PATH VFS-PATH-MAX PFOLDER-PATH
+    IF DROP 0 0 EXIT THEN
+    _STM-STORE-PATH SWAP ;
 
 \ Each store follows the home's access: on a read-only home it reads and
 \ refuses every change itself.
@@ -301,10 +328,11 @@ VARIABLE _STM-DSI-STATUS
     _STM-CURRENT-INSTANCE @ CINST-HOME DUP IF PLACE-WRITABLE? 0= THEN ;
 
 : _STM-DRAFT-STORAGE-INIT-BODY  ( -- )
-    _STM-HOME-VFS DUP 0= IF
-        DROP SDSTORE-S-INVALID _STM-DRAFT-BLOCK! EXIT
+    STREAMS-DRAFT-STORE-NAME$ _STM-STORE-PATH$ DUP 0= IF
+        2DROP SDSTORE-S-INVALID _STM-DRAFT-BLOCK! EXIT
     THEN
-    _STM-DRAFT-STORE STREAMS-DRAFT-STORE-INIT _STM-DSI-STATUS !
+    _STM-FOLDER-VFS @ _STM-DRAFT-STORE STREAMS-DRAFT-STORE-INIT-AT
+        _STM-DSI-STATUS !
     _STM-DSI-STATUS @ IF
         _STM-DSI-STATUS @ _STM-DRAFT-BLOCK! EXIT
     THEN
@@ -365,10 +393,10 @@ VARIABLE _STM-DSI-STATUS
 VARIABLE _STM-SSI-STATUS
 
 : _STM-SOURCE-STORAGE-INIT-BODY  ( -- )
-    _STM-HOME-VFS DUP 0= IF
-        DROP SSSTORE-S-INVALID _STM-SOURCE-BLOCK! EXIT
+    STREAMS-SOURCE-STORE-NAME$ _STM-STORE-PATH$ DUP 0= IF
+        2DROP SSSTORE-S-INVALID _STM-SOURCE-BLOCK! EXIT
     THEN
-    _STM-SOURCE-STORE STREAMS-SOURCE-STORE-INIT
+    _STM-FOLDER-VFS @ _STM-SOURCE-STORE STREAMS-SOURCE-STORE-INIT-AT
         DUP _STM-SSI-STATUS !
     SSSTORE-S-OK <> IF
         _STM-SSI-STATUS @ _STM-SOURCE-BLOCK! EXIT
@@ -3176,7 +3204,8 @@ VARIABLE _STM-CONFIGURED-INIT-SERVICE
     S" org.akashic.net.external-io"
         _STM-CURRENT-INSTANCE @ CINST-SERVICE
         _STM-CONFIGURED-INIT-SERVICE !
-    _STM-HOME-VFS _STM-HOME-READ-ONLY? _STM-CONFIGURED-INIT-SERVICE @
+    STREAMS-OBSERVATION-STORE-NAME$ _STM-STORE-PATH$
+    _STM-FOLDER-VFS @ _STM-HOME-READ-ONLY? _STM-CONFIGURED-INIT-SERVICE @
         _STM-CONFIGURED-FACTORY-XT @ _STM-CONFIGURED-REFRESH
         STREAMS-REFRESH-OWNER-INIT
     DUP _STM-CONFIGURED-INIT-STATUS ! ;
@@ -3197,7 +3226,7 @@ VARIABLE _STM-AUTH-QUIESCE-STATUS
     _STM-AUTH-FACTORY-XT @ DUP 0= IF
         DROP _STM-AUTH-INIT-STATUS @ EXIT
     THEN DROP
-    _STM-HOME-VFS
+    _STM-FOLDER-VFS @
     _STM-XIO-SERVICE @ DUP 0= IF
         DROP S" org.akashic.net.external-io"
             _STM-CURRENT-INSTANCE @ CINST-SERVICE
@@ -3555,6 +3584,7 @@ VARIABLE _STM-TERMINAL-STATE
     _STM-BURROW-INIT DROP
     _STM-SOURCE-PENDING-WIPE _STM-SOURCE-UI-SCRATCH-WIPE
     0 _STM-SEARCH-U ! 0 _STM-SEARCH-MATCH-N !
+    _STM-HOME-BIND
     _STM-DRAFT-STORAGE-INIT DROP
     _STM-SOURCE-STORAGE-INIT DROP
     0 _STM-FEED-READY ! BFM-S-MISSING _STM-FEED-STATUS !

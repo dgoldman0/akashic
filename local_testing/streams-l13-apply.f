@@ -191,7 +191,7 @@ SPREC-OBSERVATION-SIZE XBUF _SL13P-readback-record
     _SL13P-stack ;
 
 : _SL13P-repository-init  ( -- )
-    _SL13P-vfs @ _SL13P-cache0 _SL13P-cache1 _SL13P-guard
+    S" /" _SL13P-vfs @ _SL13P-cache0 _SL13P-cache1 _SL13P-guard
     ['] _SL13P-fault 0 _SL13P-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13P-status

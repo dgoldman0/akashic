@@ -130,7 +130,7 @@ STREAMS-SOURCE-STORE-RECORD-MAX XBUF _SL13M-source-raw
         STREAMS-OBSERVATION-STORE-INIT
         OSTORE-S-OK _SL13M-status
 
-    _SL13M-vfs @ _SL13M-cache0 _SL13M-cache1 _SL13M-guard
+    S" /" _SL13M-vfs @ _SL13M-cache0 _SL13M-cache1 _SL13M-guard
     ['] _SL13M-fault 0 _SL13M-repository
         STREAMS-REPOSITORY-INIT
         STREAMS-REPOSITORY-S-OK _SL13M-status

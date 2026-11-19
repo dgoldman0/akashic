@@ -151,6 +151,11 @@ _SDS-REPLACE VREPL-SIZE + CONSTANT STREAMS-DRAFT-STORE-SIZE
 : STREAMS-DRAFT-STORE-TARGET$  ( -- a u )  \ singleton default only
     S" /streams-draft.bin" ;
 
+\ The name of the store's file.  A holder keeps the file in its home's
+\ folder; the singleton default above keeps it in the volume's root.
+: STREAMS-DRAFT-STORE-NAME$  ( -- a u )
+    STREAMS-DRAFT-STORE-TARGET$ SWAP 1+ SWAP 1- ;
+
 : STREAMS-DRAFT-STORE-PATH$  ( store -- a u )
     STREAMS-DRAFT-STORE.REPLACE VREPL-TARGET$ ;
 

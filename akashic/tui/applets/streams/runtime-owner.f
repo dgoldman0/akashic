@@ -11,6 +11,12 @@
 \ writable legacy fallback.  Accepted repository attempts are recovered as
 \ indeterminate before source/query work or external refresh is enabled.
 \
+\ INIT takes the volume path of the folder that holds Streams' stores: its
+\ holder's home folder as PFOLDER-BIND answers it (utils/fs/place-folder.f),
+\ or "/" for the volume's root.  The owner keeps that path, the repository
+\ keeps its layout in that folder, and the legacy evidence is read from the
+\ files the applet keeps there.
+\
 \ Legacy evidence descriptors and acquisition-recovery buffers are allocated
 \ only as temporary boot scratch and are wiped/freed before INIT returns.
 \ RELEASE orders refresh teardown before repository finalization and never
@@ -79,8 +85,11 @@ REQUIRE ../../../utils/memory-span.f
 : _SRT-DROP4  ( x1 x2 x3 x4 -- )
     2DROP 2DROP ;
 
+: _SRT-DROP6  ( x1 x2 x3 x4 x5 x6 -- )
+    2DROP 2DROP 2DROP ;
+
 \ One process-live owner prevents distinct component guards from presenting
-\ two writers for the same sealed /streams namespace.  The module guard is
+\ two writers for the same sealed streams folder.  The module guard is
 \ held only for the claim/unclaim metadata transition, never repository I/O.
 VARIABLE _SRT-LIVE-OWNER
 0 _SRT-LIVE-OWNER !
@@ -144,13 +153,17 @@ _SRTL-BEFORE STREAMS-QUERY-CONTINUATION-SIZE +
 _SRTL-REFRESH STREAMS-REPOSITORY-REFRESH-OWNER-SIZE +
     CONSTANT STREAMS-RUNTIME-BLOCK-SIZE
 
-\ Migration scratch is absent after cold authority selection.
+\ Migration scratch is absent after cold authority selection.  Beside the
+\ legacy evidence stores it holds the volume path of one evidence file,
+\ composed in the owner's folder as that store opens.
   0 CONSTANT _SRTM-SOURCE-STORE
 _SRTM-SOURCE-STORE STREAMS-SOURCE-STORE-SIZE +
     CONSTANT _SRTM-OBSERVATION-STORE
 _SRTM-OBSERVATION-STORE STREAMS-OBSERVATION-STORE-SIZE +
     CONSTANT _SRTM-MIGRATION-WORK
 _SRTM-MIGRATION-WORK STREAMS-MIGRATION-WORK-SIZE +
+    CONSTANT _SRTM-PATH
+_SRTM-PATH VFS-PATH-MAX +
     CONSTANT STREAMS-RUNTIME-MIGRATION-SCRATCH-SIZE
 
 \ Native accepted-attempt recovery has an independent temporary allocation.
@@ -194,7 +207,12 @@ _SRTR-OUTPUTS
 192 CONSTANT _SRT-TEMP-STATUS-OFF
 200 CONSTANT _SRT-BOOT-KIND-OFF
 224 CONSTANT _SRT-AUTHORITY-ID
-256 CONSTANT STREAMS-RUNTIME-OWNER-SIZE
+\ The volume path of the folder that holds Streams' stores: a length and at
+\ most PERSIST-PATH-MAX bytes, the longest path the persistence layer takes.
+256 CONSTANT _SRT-FOLDER-U-OFF
+264 CONSTANT _SRT-FOLDER-OFF
+_SRT-FOLDER-OFF PERSIST-PATH-MAX 8 + -8 AND +
+    CONSTANT STREAMS-RUNTIME-OWNER-SIZE
 
 0 CONSTANT _SRT-BOOT-KIND-NONE
 1 CONSTANT _SRT-BOOT-KIND-MIGRATION
@@ -238,6 +256,10 @@ _SRTR-OUTPUTS
 : SRT.TEMP-STATUS           ( owner -- a ) _SRT-TEMP-STATUS-OFF + ;
 : SRT.BOOT-KIND             ( owner -- a ) _SRT-BOOT-KIND-OFF + ;
 : SRT.AUTHORITY-ID          ( owner -- rid ) _SRT-AUTHORITY-ID + ;
+: SRT.FOLDER-U              ( owner -- a ) _SRT-FOLDER-U-OFF + ;
+: SRT.FOLDER                ( owner -- a ) _SRT-FOLDER-OFF + ;
+
+: _SRT-FOLDER$  ( owner -- a u )  DUP SRT.FOLDER SWAP SRT.FOLDER-U @ ;
 
 \ ---------------------------------------------------------------------
 \ Runtime and boot-scratch address helpers
@@ -284,6 +306,8 @@ _SRTR-OUTPUTS
     SRT.BOOT @ _SRTM-OBSERVATION-STORE + ;
 : _SRT-MIGRATION-WORK  ( owner -- work )
     SRT.BOOT @ _SRTM-MIGRATION-WORK + ;
+: _SRT-MIGRATION-PATH  ( owner -- a )
+    SRT.BOOT @ _SRTM-PATH + ;
 : _SRT-RECOVERY-WORK  ( owner -- work )
     SRT.BOOT @ _SRTR-ACQUISITION-WORK + ;
 : _SRT-RECOVERY-OUTPUTS  ( owner -- outputs )
@@ -354,6 +378,9 @@ _SRTR-OUTPUTS
         DROP DROP 0 EXIT
     THEN
     VFS-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP SRT.FOLDER-U @ DUP 0= SWAP PERSIST-PATH-MAX > OR IF
         DROP 0 EXIT
     THEN
     DUP SRT.XIO-SERVICE @ 0=
@@ -620,6 +647,14 @@ _SRTR-OUTPUTS
     THEN
     SAR.AUTHORITY-ID R> SRT.AUTHORITY-ID RID= ;
 
+\ The volume path of NAME, a legacy evidence file, in the owner's folder,
+\ composed in the migration scratch: 0 0 when it does not fit, which the
+\ store then refuses as invalid.
+: _SRT-LEGACY-PATH$  ( name-a name-u owner -- path-a path-u )
+    >R R@ _SRT-FOLDER$ R@ _SRT-MIGRATION-PATH VFS-PATH-MAX PFOLDER-PATH
+    IF DROP R> DROP 0 0 EXIT THEN
+    R> _SRT-MIGRATION-PATH SWAP ;
+
 : _SRT-MIGRATE  ( owner -- status )
     >R
     SRT-S-MIGRATION R@ SRT.TEMP-STATUS !
@@ -657,8 +692,9 @@ _SRTR-OUTPUTS
         R> DROP EXIT
     THEN DROP
 
+    STREAMS-SOURCE-STORE-NAME$ R@ _SRT-LEGACY-PATH$
     R@ SRT.VFS @ R@ _SRT-MIGRATION-SOURCE-STORE
-        STREAMS-SOURCE-STORE-INIT
+        STREAMS-SOURCE-STORE-INIT-AT
     DUP R@ SRT.LEGACY-STATUS !
     DUP SSSTORE-S-OK <> IF
         DUP _SRT-LEGACY>MIGRATION
@@ -671,8 +707,9 @@ _SRTR-OUTPUTS
     THEN
     DROP -1 R@ SRT.SOURCE-OPEN !
 
+    STREAMS-OBSERVATION-STORE-NAME$ R@ _SRT-LEGACY-PATH$
     R@ SRT.VFS @ R@ _SRT-MIGRATION-OBSERVATION-STORE
-        STREAMS-OBSERVATION-STORE-INIT
+        STREAMS-OBSERVATION-STORE-INIT-AT
     DUP R@ SRT.LEGACY-STATUS !
     DUP OSTORE-S-OK <> IF
         DUP _SRT-LEGACY>MIGRATION
@@ -861,6 +898,7 @@ _SRTR-OUTPUTS
     DUP R@ SRT.REPOSITORY-STATUS !
     DUP IF DROP R> DROP SRT-S-REPOSITORY EXIT THEN DROP
 
+    R@ _SRT-FOLDER$
     R@ SRT.VFS @
     R@ _SRT-CACHE-0
     R@ _SRT-CACHE-1
@@ -905,50 +943,62 @@ _SRTR-OUTPUTS
         DROP
     THEN ;
 
-: STREAMS-RUNTIME-OWNER-INIT  ( vfs xio|0 factory|0 authority-id owner -- status )
+\ FOLDER is the volume path of the folder that holds Streams' stores, at
+\ most PERSIST-PATH-MAX bytes; the owner keeps its own copy.
+: STREAMS-RUNTIME-OWNER-INIT
+  ( folder-a folder-u vfs xio|0 factory|0 authority-id owner -- status )
     >R
-    R@ 0= IF _SRT-DROP4 R> DROP SRT-S-INVALID EXIT THEN
+    R@ 0= IF _SRT-DROP6 R> DROP SRT-S-INVALID EXIT THEN
     R@ STREAMS-RUNTIME-OWNER-SIZE
         MSPAN-NONWRAPPING? 0= IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     R@ SRT.MAGIC @ _SRT-MAGIC = IF
-        _SRT-DROP4 R> DROP SRT-S-BUSY EXIT
+        _SRT-DROP6 R> DROP SRT-S-BUSY EXIT
     THEN
     DUP RID-SIZE MSPAN-NONWRAPPING? 0= IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     DUP RID-PRESENT? 0= IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     DUP RID-SIZE
     R@ STREAMS-RUNTIME-OWNER-SIZE MSPAN-OVERLAP? IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     3 PICK 0= IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     3 PICK VFS-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     3 PICK VFS-DESC-SIZE
     R@ STREAMS-RUNTIME-OWNER-SIZE MSPAN-OVERLAP? IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     2 PICK 0= 2 PICK 0= <> IF
-        _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
     THEN
     2 PICK 0<> IF
         2 PICK XIO-SERVICE-SIZE MSPAN-NONWRAPPING? 0= IF
-            _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+            _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
         THEN
         2 PICK XIO-SERVICE-SIZE
         R@ STREAMS-RUNTIME-OWNER-SIZE MSPAN-OVERLAP? IF
-            _SRT-DROP4 R> DROP SRT-S-INVALID EXIT
+            _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
         THEN
     THEN
+    5 PICK 0= 5 PICK 0= OR 5 PICK PERSIST-PATH-MAX > OR IF
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
+    THEN
+    5 PICK 5 PICK MSPAN-NONWRAPPING? 0= IF
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
+    THEN
+    5 PICK 5 PICK R@ STREAMS-RUNTIME-OWNER-SIZE MSPAN-OVERLAP? IF
+        _SRT-DROP6 R> DROP SRT-S-INVALID EXIT
+    THEN
     R@ _SRT-LIVE-CLAIM 0= IF
-        _SRT-DROP4 R> DROP SRT-S-BUSY EXIT
+        _SRT-DROP6 R> DROP SRT-S-BUSY EXIT
     THEN
 
     R@ STREAMS-RUNTIME-OWNER-SIZE 0 FILL
@@ -967,6 +1017,8 @@ _SRTR-OUTPUTS
     OVER R@ SRT.FACTORY-XT !
     DUP R@ SRT.AUTHORITY-ID RID-COPY
     _SRT-DROP4
+    DUP R@ SRT.FOLDER-U !
+    R@ SRT.FOLDER SWAP CMOVE
 
     R@ _SRT-RUNTIME-ALLOC
     DUP IF
