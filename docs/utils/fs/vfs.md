@@ -743,7 +743,12 @@ than the mark, each path resolution starts an eviction pass, which walks the
 slab and evicts eligible dentries until the count falls to half the mark, and
 then gives back to the heap each dentry page that holds no dentry, each vnode
 page that holds no vnode, and each name chunk but the newest that holds no
-name, linking what is free in the pages left into the free lists again. A
+name, linking what is free in the pages left into the free lists again. An
+operation that takes a new entry and then refuses, as a create does when its
+binding refuses it or its name finds no room, gives back with the entry each
+dentry or vnode page its allocation added, so a create refused at a full slab
+leaves the pages and their free lists as it found them. A name chunk or index
+segment it added stays, as after any removal. A
 listing loads a whole folder, so a folder larger than the mark is cached
 whole and evicted at the next lookup after it. Eviction removes cached
 dentries without changing backend link counts. It runs only for bindings with

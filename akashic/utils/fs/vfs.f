@@ -1405,6 +1405,76 @@ VARIABLE _VGB-XT
         IF R@ _VFS-VSLAB-RELINK THEN
     R> _VFS-STR-GIVE-BACK ;
 
+\  An operation that takes a new entry and then refuses gives back, with
+\  the entry, each dentry or vnode page its allocation added, so the
+\  refusal leaves those pages and their free lists as it found them.
+\  The operation notes the first page of each chain before it allocates
+\  (_VFS-SLAB-MARK) and hands the note back when it refuses
+\  (_VFS-SLAB-UNGROW).  A page in front of the noted one that holds
+\  nothing leaves its chain, its slots leave the free list, and it goes
+\  back to the heap.  A name chunk or index segment the operation added
+\  stays, as after any removal: the pool keeps its newest chunk, and an
+\  index keeps the buckets it split.
+
+VARIABLE _VFSP-LO
+VARIABLE _VFSP-HI
+
+\ _VFS-FREE-SPLICE ( lo hi free-cell -- )
+\   Take off the free list that FREE-CELL heads each entry from LO up to,
+\   not including, HI.  A free dentry or vnode keeps its free-list link
+\   in its first cell.
+: _VFS-FREE-SPLICE  ( lo hi free-cell -- )
+    ROT _VFSP-LO !  SWAP _VFSP-HI !
+    BEGIN DUP @ ?DUP WHILE                  ( cell entry )
+        DUP _VFSP-LO @ _VFSP-HI @ WITHIN IF
+            @ OVER !
+        ELSE
+            NIP
+        THEN
+    REPEAT DROP ;
+
+VARIABLE _VUG-MARK
+VARIABLE _VUG-CELL
+VARIABLE _VUG-FREE
+VARIABLE _VUG-BYTES
+VARIABLE _VUG-XT
+VARIABLE _VUG-V
+
+\ _VFS-CHAIN-UNGROW ( mark first-cell free-cell bytes live-xt vfs -- )
+\   Give back each page in front of MARK on the chain FIRST-CELL heads
+\   that LIVE-XT ( page -- flag ) finds empty, its slots first taken off
+\   the free list FREE-CELL heads.
+: _VFS-CHAIN-UNGROW  ( mark first-cell free-cell bytes live-xt vfs -- )
+    _VUG-V ! _VUG-XT ! _VUG-BYTES ! _VUG-FREE ! _VUG-CELL ! _VUG-MARK !
+    BEGIN
+        _VUG-CELL @ @ DUP _VUG-MARK @ <> OVER 0<> AND
+    WHILE                                   ( page )
+        DUP _VUG-XT @ EXECUTE IF
+            _VUG-CELL !
+        ELSE
+            DUP DUP _VUG-BYTES @ + _VUG-FREE @ _VFS-FREE-SPLICE
+            DUP @ _VUG-CELL @ !
+            _VUG-BYTES @ _VUG-V @ _VFS-PAGE-FREE
+        THEN
+    REPEAT DROP ;
+
+\ _VFS-SLAB-MARK ( vfs -- imark vmark )
+\   The first dentry and vnode pages, noted before an operation takes an
+\   entry.
+: _VFS-SLAB-MARK  ( vfs -- imark vmark )
+    DUP V.ISLAB @ SWAP V.VSLAB @ ;
+
+\ _VFS-SLAB-UNGROW ( imark vmark vfs -- )
+\   Give back the empty dentry and vnode pages added since _VFS-SLAB-MARK
+\   noted IMARK and VMARK.  Only core 0 frees, as only core 0 allocates.
+: _VFS-SLAB-UNGROW  ( imark vmark vfs -- )
+    COREID IF DROP 2DROP EXIT THEN
+    >R
+    R@ V.VSLAB R@ V.VFREE _VFS-VSLAB-SIZE ['] _VFS-VSLAB-LIVE? R@
+    _VFS-CHAIN-UNGROW
+    R@ V.ISLAB R@ V.IFREE _VFS-SLAB-SIZE ['] _VFS-SLAB-LIVE? R>
+    _VFS-CHAIN-UNGROW ;
+
 VARIABLE _VCRL-V
 
 \ _VFS-CACHE-RELEASE ( vfs -- )
@@ -2750,6 +2820,11 @@ VARIABLE _VMK-IN
 VARIABLE _VMK-IOR
 VARIABLE _VMK-A
 VARIABLE _VMK-U
+VARIABLE _VMK-IM
+VARIABLE _VMK-VM
+
+\ Give back the pages this create's allocation added.
+: _VMK-UNGROW  ( -- )  _VMK-IM @ _VMK-VM @ _VMK-V @ _VFS-SLAB-UNGROW ;
 
 : VFS-MKFILE?  ( c-addr u vfs -- inode ior )
     _VMK-V ! _VMK-U ! _VMK-A !
@@ -2761,13 +2836,14 @@ VARIABLE _VMK-U
     ?DUP IF NIP 0 SWAP EXIT THEN
     IF 0 VFS-E-EXISTS EXIT THEN
     \ Allocate new inode
+    _VMK-V @ _VFS-SLAB-MARK _VMK-VM ! _VMK-IM !
     VFS-T-FILE _VMK-V @ _VFS-INODE-ALLOC   ( inode )
-    DUP 0= IF 0 VFS-E-NOMEM EXIT THEN
+    DUP 0= IF _VMK-UNGROW VFS-E-NOMEM EXIT THEN
     \ Set name
     _VMK-A @ _VMK-U @ _VMK-V @ _VFS-STR-ALLOC ( inode handle )
     DUP 0= IF
         DROP DUP _VMK-V @ _VFS-INODE-FREE
-        DROP 0 VFS-E-NOMEM EXIT
+        DROP _VMK-UNGROW 0 VFS-E-NOMEM EXIT
     THEN
     OVER IN.NAME !                           ( inode )
     \ Zero size
@@ -2783,6 +2859,7 @@ VARIABLE _VMK-U
         DROP
         _VMK-IN @ _VMK-V @ V.CWD @ _VFS-REMOVE-CHILD
         _VMK-IN @ _VMK-V @ _VFS-INODE-FREE
+        _VMK-UNGROW
         0 _VMK-IOR @ EXIT
     THEN
     \ The binding has given the new vnode its identity.
@@ -2807,12 +2884,13 @@ VARIABLE _VMK-U
     _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VMK-V @ _VFS-NAME-HOLDER?
     ?DUP IF NIP EXIT THEN
     IF VFS-E-EXISTS EXIT THEN
+    _VMK-V @ _VFS-SLAB-MARK _VMK-VM ! _VMK-IM !
     VFS-T-DIR _VMK-V @ _VFS-INODE-ALLOC    ( inode )
-    DUP 0= IF VFS-E-NOMEM EXIT THEN
+    DUP 0= IF DROP _VMK-UNGROW VFS-E-NOMEM EXIT THEN
     _VMK-A @ _VMK-U @ _VMK-V @ _VFS-STR-ALLOC ( inode handle )
     DUP 0= IF
         DROP DUP _VMK-V @ _VFS-INODE-FREE
-        DROP VFS-E-NOMEM EXIT
+        DROP _VMK-UNGROW VFS-E-NOMEM EXIT
     THEN
     OVER IN.NAME !
     0 OVER IN.SIZE-LO !
@@ -2825,6 +2903,7 @@ VARIABLE _VMK-U
         DROP
         _VMK-IN @ _VMK-V @ V.CWD @ _VFS-REMOVE-CHILD
         _VMK-IN @ _VMK-V @ _VFS-INODE-FREE
+        _VMK-UNGROW
         _VMK-IOR @ EXIT
     THEN
     DUP D.VNODE @ _VMK-V @ _VFS-VNODE-FILE
@@ -2956,6 +3035,10 @@ VARIABLE _VLN-PARENT
 VARIABLE _VLN-V
 VARIABLE _VLN-D
 VARIABLE _VLN-H
+VARIABLE _VLN-IM
+VARIABLE _VLN-VM
+
+: _VLN-UNGROW  ( -- )  _VLN-IM @ _VLN-VM @ _VLN-V @ _VFS-SLAB-UNGROW ;
 
 : VFS-LINK  ( name-a name-u target parent vfs -- dentry ior )
     _VLN-V ! _VLN-PARENT ! _VLN-TARGET ! _VLN-U ! _VLN-A !
@@ -2976,11 +3059,13 @@ VARIABLE _VLN-H
     _VLN-A @ _VLN-U @ _VLN-PARENT @ _VLN-V @ _VFS-NAME-HOLDER?
     ?DUP IF NIP 0 SWAP EXIT THEN
     IF 0 VFS-E-EXISTS EXIT THEN
-    _VLN-V @ _VFS-DENTRY-ALLOC DUP 0= IF 0 VFS-E-NOMEM EXIT THEN _VLN-D !
+    _VLN-V @ _VFS-SLAB-MARK _VLN-VM ! _VLN-IM !
+    _VLN-V @ _VFS-DENTRY-ALLOC DUP 0= IF VFS-E-NOMEM EXIT THEN _VLN-D !
     _VLN-A @ _VLN-U @ _VLN-V @ _VFS-STR-ALLOC DUP 0= IF
         DROP _VLN-D @ _VFS-ZERO-INODE
         _VLN-V @ V.IFREE @ _VLN-D @ !
         _VLN-D @ _VLN-V @ V.IFREE !
+        _VLN-UNGROW
         0 VFS-E-NOMEM EXIT
     THEN _VLN-H !
     _VLN-H @ _VLN-D @ D.NAME !
@@ -2991,6 +3076,7 @@ VARIABLE _VLN-H
     VFS-OP-LINK _VLN-V @ _VFS-XT EXECUTE
     DUP IF
         _VLN-D @ TRUE _VLN-V @ _VFS-DENTRY-RELEASE
+        _VLN-UNGROW
         0 SWAP EXIT
     THEN DROP
     _VLN-D @ _VLN-PARENT @ _VFS-ADD-CHILD
@@ -3035,6 +3121,10 @@ VARIABLE _VCDN-V
 VARIABLE _VCDN-D
 VARIABLE _VCDN-VN
 VARIABLE _VCDN-H
+VARIABLE _VCDN-IM
+VARIABLE _VCDN-VM
+
+: _VCDN-UNGROW  ( -- )  _VCDN-IM @ _VCDN-VM @ _VCDN-V @ _VFS-SLAB-UNGROW ;
 
 : VFS-CACHE-DENTRY  ( name-a name-u type bid generation parent vfs -- dentry ior )
     _VCDN-V ! _VCDN-PARENT ! _VCDN-GEN ! _VCDN-BID !
@@ -3054,14 +3144,16 @@ VARIABLE _VCDN-H
         SWAP VN.GEN @ _VCDN-GEN @ = AND IF 0 EXIT THEN
         DROP 0 VFS-E-CONFLICT EXIT
     THEN DROP
+    _VCDN-V @ _VFS-SLAB-MARK _VCDN-VM ! _VCDN-IM !
     _VCDN-BID @ _VCDN-GEN @ _VCDN-V @ _VFS-FIND-VNODE
     DUP IF
         DUP VN.TYPE @ _VCDN-TYPE @ <> IF DROP 0 VFS-E-CORRUPT EXIT THEN
         _VCDN-VN !
-        _VCDN-V @ _VFS-DENTRY-ALLOC DUP 0= IF 0 VFS-E-NOMEM EXIT THEN
+        _VCDN-V @ _VFS-DENTRY-ALLOC DUP 0= IF VFS-E-NOMEM EXIT THEN
         _VCDN-D !
         _VCDN-A @ _VCDN-U @ _VCDN-V @ _VFS-STR-ALLOC DUP 0= IF
             DROP _VCDN-D @ _VCDN-V @ _VFS-DENTRY-ABANDON
+            _VCDN-UNGROW
             0 VFS-E-NOMEM EXIT
         THEN _VCDN-H !
         _VCDN-H @ _VCDN-D @ D.NAME !
@@ -3070,12 +3162,13 @@ VARIABLE _VCDN-H
     ELSE
         DROP
         _VCDN-TYPE @ _VCDN-V @ _VFS-INODE-ALLOC DUP 0= IF
-            0 VFS-E-NOMEM EXIT
+            _VCDN-UNGROW VFS-E-NOMEM EXIT
         THEN _VCDN-D !
         _VCDN-BID @ _VCDN-D @ IN.BID !
         _VCDN-GEN @ _VCDN-D @ D.VNODE @ VN.GEN !
         _VCDN-A @ _VCDN-U @ _VCDN-V @ _VFS-STR-ALLOC DUP 0= IF
             DROP _VCDN-D @ _VCDN-V @ _VFS-INODE-FREE
+            _VCDN-UNGROW
             0 VFS-E-NOMEM EXIT
         THEN _VCDN-D @ IN.NAME !
         _VCDN-D @ D.VNODE @ _VCDN-V @ _VFS-VNODE-FILE
@@ -3216,6 +3309,10 @@ VARIABLE _VSL-PARENT
 VARIABLE _VSL-V
 VARIABLE _VSL-D
 VARIABLE _VSL-H
+VARIABLE _VSL-IM
+VARIABLE _VSL-VM
+
+: _VSL-UNGROW  ( -- )  _VSL-IM @ _VSL-VM @ _VSL-V @ _VFS-SLAB-UNGROW ;
 
 : VFS-SYMLINK  ( target-a target-u name-a name-u parent vfs -- inode ior )
     _VSL-V ! _VSL-PARENT ! _VSL-NU ! _VSL-NA ! _VSL-TU ! _VSL-TA !
@@ -3232,10 +3329,12 @@ VARIABLE _VSL-H
     _VSL-NA @ _VSL-NU @ _VSL-PARENT @ _VSL-V @ _VFS-NAME-HOLDER?
     ?DUP IF NIP 0 SWAP EXIT THEN
     IF 0 VFS-E-EXISTS EXIT THEN
+    _VSL-V @ _VFS-SLAB-MARK _VSL-VM ! _VSL-IM !
     VFS-T-SYMLINK _VSL-V @ _VFS-INODE-ALLOC
-    DUP 0= IF 0 VFS-E-NOMEM EXIT THEN _VSL-D !
+    DUP 0= IF _VSL-UNGROW VFS-E-NOMEM EXIT THEN _VSL-D !
     _VSL-NA @ _VSL-NU @ _VSL-V @ _VFS-STR-ALLOC DUP 0= IF
         DROP _VSL-D @ _VSL-V @ _VFS-INODE-FREE
+        _VSL-UNGROW
         0 VFS-E-NOMEM EXIT
     THEN _VSL-H !
     _VSL-H @ _VSL-D @ IN.NAME !
@@ -3245,6 +3344,7 @@ VARIABLE _VSL-H
     VFS-OP-SYMLINK _VSL-V @ _VFS-XT EXECUTE
     DUP IF
         _VSL-D @ _VSL-V @ _VFS-INODE-FREE
+        _VSL-UNGROW
         0 SWAP EXIT
     THEN DROP
     _VSL-D @ D.VNODE @ _VSL-V @ _VFS-VNODE-FILE
