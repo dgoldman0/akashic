@@ -73157,8 +73157,9 @@ def test_staged_vfs_truncate_without_writer_refuses_before_clock(
     """Without a bound writer profile every size change refuses early.
 
     The refusals come before the trusted clock is sampled, so sizes and
-    cursors stay as they were.  Truncating to the current size refuses as
-    unsupported, so the VFS never marks an unchanged volume dirty.
+    cursors stay as they were.  Truncating to the current size changes
+    nothing, so the VFS answers it at once without the driver, and never
+    marks an unchanged volume dirty.
     """
     output = run_forth(
         read_side_image,
@@ -73205,10 +73206,7 @@ def test_staged_vfs_truncate_without_writer_refuses_before_clock(
                         "_TPR-S-OPEN-IOR 0=",
                         "_TPR-P-SEEK-IOR 0=",
                         "_TPR-S-SEEK-IOR 0=",
-                        (
-                            "_TPR-EQUAL-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
-                        ),
+                        "_TPR-EQUAL-IOR 0=",
                         "_TPR-GROW-IOR VFS-IOR-REASON VFS-R-NOSPC =",
                         "_TPR-ZERO-IOR VFS-IOR-REASON VFS-R-NOSPC =",
                         "_TPR-CROSS-IOR VFS-IOR-REASON VFS-R-NOSPC =",

@@ -811,6 +811,31 @@ def test_successful_truncate_preserves_stack():
     ], "OK STACK SIZE")
 
 
+def test_truncate_to_the_current_size_asks_no_binding():
+    """A file already the size asked for has nothing to change: the VFS
+    answers 0 without calling the binding, and marks neither the file nor
+    the volume dirty, as when a store's first save truncates its new, empty
+    file to zero.  A size that changes still reaches the binding."""
+    check("truncate to the current size", [
+        'VARIABLE _TRN-CALLS',
+        ': T-COUNT-TRUNCATE  2DROP 1 _TRN-CALLS +! 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-COUNT-TRUNCATE _BIND VB.OPS @ VFS-OP-TRUNCATE CELLS + !",
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" empty.bin" _V1 VFS-MKFILE CONSTANT _E',
+        'S" empty.bin" _V1 VFS-OPEN CONSTANT _FD',
+        '_E IN.FLAGS @ VFS-IF-DIRTY INVERT AND _E IN.FLAGS !',
+        '_V1 V.FLAGS @ VFS-F-DIRTY INVERT AND _V1 V.FLAGS !',
+        ': T-UNCHANGED',
+        '  0 _FD VFS-TRUNCATE 0= IF ." OK " THEN',
+        '  _TRN-CALLS @ 0= IF ." UNASKED " THEN',
+        '  _E IN.FLAGS @ VFS-IF-DIRTY AND 0= _V1 V.FLAGS @ VFS-F-DIRTY AND 0= AND',
+        '  IF ." CLEAN " THEN',
+        '  3 _FD VFS-TRUNCATE 0= _TRN-CALLS @ 1 = AND IF ." ASKED" THEN ;',
+        'T-UNCHANGED CR _FD VFS-CLOSE',
+    ], "OK UNASKED CLEAN ASKED")
+
+
 def test_truncate_clamps_every_open_alias_only_after_success():
     """Successful truncate clamps all same-vnode FDs; failure changes none."""
     check("truncate clamps shared-vnode descriptors", [

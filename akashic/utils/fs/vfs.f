@@ -2634,6 +2634,11 @@ VARIABLE _VTR-V
     _VTR-V @ V.FLAGS @ VFS-F-RO AND IF VFS-E-READONLY EXIT THEN
     _VTR-FD @ FD.GEN @ _VTR-V @ V.MEDIA-GEN @ <> IF VFS-E-STALE EXIT THEN
     VFS-OP-TRUNCATE _VTR-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
+    \ A file already SIZE long has nothing to change: it answers at once,
+    \ asks no binding and marks nothing dirty, as when a store's first save
+    \ truncates its new, empty file to zero.
+    _VTR-FD @ FD.INODE @ DUP IN.SIZE-LO @ _VTR-SIZE @ =
+    SWAP IN.SIZE-HI @ 0= AND IF 0 EXIT THEN
     _VTR-FD @ FD.INODE @ IN.SIZE-LO @ _VTR-OLD-SIZE !
     _VTR-FD @ FD.INODE @ IN.SIZE-HI @ _VTR-OLD-SIZE-HI !
     _VTR-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !

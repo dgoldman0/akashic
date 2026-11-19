@@ -27012,9 +27012,11 @@ VARIABLE _XO-D-REVOKE
     _XT-V ! _XT-D !
     0 _XW-WRITER ! 0 _XW-TX ! FALSE _XW-ORPHAN ! FALSE _XW-DELETION !
     _XT-ENTRY ?DUP IF EXIT THEN
-    \ The generic VFS marks the volume dirty after any successful truncate,
-    \ and a dirty volume with an inactive journal refuses later mutations,
-    \ so a size that does not change refuses rather than succeed unwritten.
+    \ VFS-TRUNCATE answers a size that does not change itself, asking no
+    \ binding.  The generic VFS marks the volume dirty after any truncate a
+    \ binding takes, and a dirty volume with an inactive journal refuses
+    \ later mutations, so a call that still asks for the size the file has
+    \ refuses rather than succeed unwritten.
     _XT-NEW @ _XT-OLD @ = IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN
     _XT-QUALIFY ?DUP IF EXIT THEN
     _XT-NOW ?DUP IF EXIT THEN
