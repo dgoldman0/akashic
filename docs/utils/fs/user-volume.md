@@ -20,12 +20,19 @@ USERVOL-VFS    ( -- vfs | 0 )
 staged-write binding (`EXT4-STAGED-WRITE-NEW`), and gives the writer what it
 needs before its first change: a clock, the machine's `EPOCH@` in
 milliseconds, and a workspace for its credits. The credits are 16 metadata
-blocks, 16 data blocks and 2 revoke records for one transaction
-(`USERVOL-META-CREDITS`, `USERVOL-DATA-CREDITS`, `USERVOL-REVOKE-CREDITS`),
-the profile with which
-[`user-volume-20261115.md`](../../../local_testing/evidence/user-volume-20261115.md)
-measured what a write to the volume costs; the driver sizes the workspace
-for them, 45,408 bytes. The mount's own arena, `ARENA-BYTES` of extended
+blocks and 2 revoke records for one transaction (`USERVOL-META-CREDITS`,
+`USERVOL-REVOKE-CREDITS`), and as many data blocks as the volume and the
+machine allow. The mount tries 128 (`USERVOL-DATA-CREDITS-MAX`) and halves
+down to 16 (`USERVOL-DATA-CREDITS-MIN`) until the volume's journal admits the
+profile and the extended memory holds the workspace the driver sizes for it,
+and `USERVOL-DATA-CREDITS` answers what it took. More data blocks speed only
+large writes. On the emulator a 256 KiB save took 4.1 s with 16 data blocks,
+1.9 s with 64 and 1.7 s with 128, while every save of 64 KiB or less cost the
+same from 64 blocks up
+([`user-volume-writer-profile-20261119.md`](../../../local_testing/evidence/user-volume-writer-profile-20261119.md)).
+The workspace for 128 is 164,576 bytes, against 45,408 for 16, and a 64 MiB
+volume's journal of 4,096 blocks admits 128, so there the memory decides. The
+mount's own arena, `ARENA-BYTES` of extended
 memory, holds the VFS's and the driver's records for the mount; composition
 passes 524,288 bytes, the arena the costs were measured with, of which the
 mount uses 194,168 (measured on 2026-11-19). The cache of entries and names

@@ -33,6 +33,7 @@ ROOTS = ("utils/fs/user-volume.f", "utils/fs/place-replace.f")
 STEPS = 2_000_000_000
 TRUE = 2**64 - 1
 NOVOLUME = 21           # VFS-R-NOVOLUME
+NOMEM = 20              # VFS-R-NOMEM
 ARENA = tui.USER_VOLUME_ARENA_BYTES
 PAD = "desktop-apt1-pad"
 
@@ -167,11 +168,14 @@ def test_a_fresh_user_volume_attaches_and_takes_long_names(
     fresh_user_volume: bytes, tmp_path: Path
 ) -> None:
     machine = Machine(fresh_user_volume)
-    assert machine.run("USERVOL-VFS") == (0,)
+    assert machine.run("USERVOL-VFS USERVOL-DATA-CREDITS") == (0, 0)
     assert machine.run(f"{ARENA} USERVOL-MOUNT") == (0,)
     assert machine.run(
         'USERVOL-VFS 0<>  S" user" PLACES-VOLUME DROP PVOL-VFS USERVOL-VFS ='
     ) == (TRUE, TRUE)
+    # The volume's journal and the machine's memory both admit the writer's
+    # largest profile.
+    assert machine.run("USERVOL-DATA-CREDITS") == (128,)
     # The writer is ext4's staged one, and the volume takes ext4's names.
     assert machine.run(
         "USERVOL-VFS V.BINDING @ EXT4-STAGED-WRITE-BINDING =  "
@@ -233,6 +237,69 @@ def test_a_damaged_or_foreign_image_is_refused(
     assert machine.run("_USERVOL-BD BD-VALID? _USERVOL-WRITER @") == (0, 0)
     # Nothing was written to the volume.
     assert machine.user.image_bytes == user
+
+
+def _journal_first_block(image: Path) -> int:
+    """The volume block that holds the journal's superblock: the first
+    block of the journal inode, 8."""
+    manifest, env, tools = tui._system_volume_toolchain()
+    result = subprocess.run(
+        [tools["debugfs"]["path"], "-R", "bmap <8> 0", str(image)],
+        env=env, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return int(result.stdout.split()[-1])
+
+
+def test_a_journal_that_admits_fewer_data_blocks_takes_a_smaller_writer(
+    fresh_user_volume: bytes, tmp_path: Path
+) -> None:
+    """A journal whose superblock allows 100 data blocks in a transaction
+    refuses the writer's first profile, 128 blocks, and the mount takes 64,
+    which saves a document as the larger profile does."""
+    source = tmp_path / "user.img"
+    source.write_bytes(fresh_user_volume)
+    image = bytearray(fresh_user_volume)
+    # s_max_trans_data, big-endian at 0x4C of the journal's superblock.
+    limit = _journal_first_block(source) * 1024 + 0x4C
+    assert image[limit:limit + 4] == bytes(4)
+    image[limit:limit + 4] = (100).to_bytes(4, "big")
+    machine = Machine(bytes(image))
+    assert machine.run(f"{ARENA} USERVOL-MOUNT") == (0,)
+    assert machine.run("USERVOL-DATA-CREDITS") == (64,)
+    assert machine.run(f"T-PLACES  T-DOC {NAME_PATH} T-SAVE") == (0,)
+    crc, length, ior = machine.run(f"{NAME_PATH} T-READ")
+    assert (length, ior) == (len(DOCUMENT), 0)
+    assert machine.run("USERVOL-VFS VFS-SYNC") == (0,)
+    checked = tmp_path / "checked.img"
+    checked.write_bytes(machine.user.image_bytes)
+    result = _e2fsck(checked)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(("spare", "credits"), [(160_000, 64), (40_000, 0)])
+def test_extended_memory_bounds_the_writer(
+    fresh_user_volume: bytes, spare: int, credits: int
+) -> None:
+    """Beside its arena the mount takes about 29 KB of extended memory and
+    then the writer's workspace.  With 160,000 bytes to spare, the
+    workspace for 128 data blocks, 164,576 bytes, does not fit and the one
+    for 64, 96,480 bytes, does.  With 40,000 not even the one for 16,
+    45,408 bytes, fits: the mount is refused for want of memory and keeps
+    no writer."""
+    machine = Machine(fresh_user_volume)
+    (free,) = machine.run("XMEM-FREE")
+    assert machine.run(f"{free - ARENA - spare} A-XMEM ARENA-NEW NIP") == (0,)
+    (ior,) = machine.run(f"{ARENA} USERVOL-MOUNT")
+    assert machine.run("USERVOL-DATA-CREDITS") == (credits,)
+    if credits:
+        assert ior == 0
+        return
+    assert _reason(ior) == NOMEM
+    assert machine.run("USERVOL-VFS _USERVOL-WRITER @") == (0, 0)
+    (status,) = machine.run("T-PLACES T-DOCS @ PLACE-STATUS")
+    assert status == ior
+    assert machine.run('S" mount refused" T-WHY=') == (TRUE,)
 
 
 # =====================================================================

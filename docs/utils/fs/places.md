@@ -624,7 +624,11 @@ shipping form's places.
   no sooner than nine times as long as its last save took, and never within
   500 ms, so saving takes at most a tenth of the run on any volume
   (Decided, 2026-11-19; [persistence.md](../../tui/applets/agent/persistence.md)).
-  The user volume's transaction size comes next.
+  The user volume's writer takes the most data blocks per transaction, from
+  128 down by halves to 16, that the volume's journal admits and the
+  extended memory holds, which on the 64 MiB volume is 128: a 256 KiB save
+  then takes 1.7 s where 16 blocks took 4.1 s (Decided, 2026-11-19;
+  [user-volume.md](user-volume.md#mounting)).
 
 What slice 4 leaves:
 
@@ -648,3 +652,8 @@ What slice 4 leaves:
 - Explicit-parent VFS words in place of the current-directory bracket.
 - The user volume's two places, documents and records, are the layout for
   now and may change.
+- The ext4 writer makes one journal transaction for each write call, about
+  0.2 s on the user volume, so a Streams or Library commit of 12 pages takes
+  2.9 s whatever the transaction size
+  (`local_testing/evidence/user-volume-writer-profile-20261119.md`).
+  Grouping a commit's writes into one transaction needs a driver feature.
