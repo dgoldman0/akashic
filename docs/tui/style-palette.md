@@ -38,8 +38,13 @@ and keep its attributes.
 | `SPAL-DEFAULT` | `( -- palette )` | The shared default palette |
 | `SPAL-INIT` | `( palette -- )` | Copy the default into a palette |
 | `SPAL-SET` | `( fg attrs meaning palette -- )` | Set one meaning's look |
+| `SPAL-LOOK@` | `( meaning palette -- fg attrs )` | One meaning's colour and attributes |
 | `SPAL-FG@` | `( meaning palette -- fg )` | One meaning's colour |
 | `SPAL-ATTRS@` | `( meaning palette -- attrs )` | One meaning's attributes |
+
+The styled draws of [draw](draw.md) take a palette with a map of meanings and
+read each character's look with `SPAL-LOOK@`, one fetch of the meaning's
+entry.
 
 A rich renderer does not use this palette: it draws the same meanings, which
 the text area publishes as style runs, through its own theme.

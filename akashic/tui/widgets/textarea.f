@@ -506,9 +506,6 @@ VARIABLE _TXTA-VX
 VARIABLE _TXTA-SM-A    0 _TXTA-SM-A !     \ the prepared line's style map
 VARIABLE _TXTA-SM-CAP  0 _TXTA-SM-CAP !
 VARIABLE _TXTA-L-STYLED                   \ the map holds the prepared line
-VARIABLE _TXTA-PAL                        \ palette of the line being drawn
-VARIABLE _TXTA-BASE-FG                    \ the drawing style under it
-VARIABLE _TXTA-BASE-A
 
 \ _TXTA-L-STYLE ( -- )
 \   Style the prepared line when the widget has a style source.  A line
@@ -525,15 +522,6 @@ VARIABLE _TXTA-BASE-A
     _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-SM-A @
     _TXTA-W @ _TXTA-O-STYLE-XT + @ EXECUTE
     -1 _TXTA-L-STYLED ! ;
-
-\ _TXTA-STYLE-OF ( byte -- fg attrs )
-\   The look of the styled line's byte at that offset.
-: _TXTA-STYLE-OF  ( byte -- fg attrs )
-    _TXTA-SM-A @ + C@ DUP TSTY-VALID? 0= IF
-        DROP _TXTA-BASE-FG @ _TXTA-BASE-A @ EXIT
-    THEN
-    DUP _TXTA-PAL @ SPAL-FG@
-    SWAP _TXTA-PAL @ SPAL-ATTRS@ _TXTA-BASE-A @ OR ;
 
 : _TXTA-PALETTE  ( -- palette )
     _TXTA-W @ _TXTA-O-PALETTE + @ ?DUP 0= IF SPAL-DEFAULT THEN ;
@@ -944,26 +932,18 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB selection extraction
         R> EXECUTE
     ELSE DROP THEN ;
 
-\ _TXTA-ASCII-LOOK ( byte -- fg attrs )
-\   The look of a styled ASCII line's byte, reversed when it is marked: an
-\   ASCII line's bytes are its scalars.
-: _TXTA-ASCII-LOOK  ( byte -- fg attrs )
-    DUP _TXTA-STYLE-OF ROT
-    DUP _TXTA-DRW-MS @ < 0= SWAP _TXTA-DRW-ME @ < AND IF CELL-A-REVERSE OR THEN ;
-
 \ _TXTA-DRAW-STYLED ( -- )
-\   The styled line's characters from _TXTA-DRW-COL, each in its look,
-\   the marked ones reversed.
+\   The styled line's characters from _TXTA-DRW-COL, each in the look the
+\   palette gives its meaning in the line's map, the marked ones reversed.
 : _TXTA-DRAW-STYLED  ( -- )
-    _TXTA-PALETTE _TXTA-PAL !
-    DRW-FG@ _TXTA-BASE-FG !  DRW-ATTR@ _TXTA-BASE-A !
     _TXTA-L-ASCII @ IF
         _TXTA-L-TEXT @ _TXTA-L-LEN @ _TXTA-DRW-ROW @ _TXTA-DRW-COL @
-        ['] _TXTA-ASCII-LOOK DRW-TEXT-STYLED EXIT
+        _TXTA-DRW-MS @ _TXTA-DRW-ME @ CELL-A-REVERSE
+        _TXTA-SM-A @ _TXTA-PALETTE DRW-TEXT-STYLED EXIT
     THEN
     _TXTA-ROW _TXTA-DRW-ROW @ _TXTA-DRW-COL @
     _TXTA-DRW-MS @ _TXTA-DRW-ME @ CELL-A-REVERSE
-    ['] _TXTA-STYLE-OF DRW-TROW-STYLED ;
+    _TXTA-SM-A @ _TXTA-PALETTE DRW-TROW-STYLED ;
 
 \ _TXTA-DRAW-TEXT ( -- )
 \   The prepared line's characters from _TXTA-DRW-COL, the marked ones

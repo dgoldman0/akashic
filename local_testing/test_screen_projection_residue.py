@@ -47,7 +47,8 @@ class ScreenHarness:
             "tui/ansi.f", "text/utf8.f", "text/unicode-tables.f",
             "text/unicode-props.f", "text/grapheme.f", "text/bidi.f",
             "text/text-row.f", "text/cell-width.f",
-            "utils/term.f", "tui/screen.f", "tui/draw.f",
+            "utils/term.f", "tui/screen.f", "text/text-style.f",
+            "tui/style-palette.f", "tui/draw.f",
         ):
             source = (ROOT / "akashic" / relative).read_text()
             # Only source-loading directives are removed.  The complete
