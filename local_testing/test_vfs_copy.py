@@ -40,7 +40,8 @@ ROOTS = ("utils/fs/vfs-copy.f",)
 
 # VFS reasons the checks name (VFS-R-* in utils/fs/vfs.f).
 INVALID, NOENT, EXISTS, NOTDIR, ISDIR = 1, 2, 3, 4, 5
-READONLY, NOSPC, IO, CORRUPT, BUSY, XDEV, NOVOLUME = 7, 8, 9, 10, 14, 19, 21
+READONLY, NOSPC, IO, CORRUPT, UNSUPPORTED = 7, 8, 9, 10, 11
+BUSY, NAMETOOLONG, XDEV, NOVOLUME = 14, 17, 19, 21
 TRUE, FALSE = -1, 0
 
 HELPERS = (
@@ -148,36 +149,32 @@ PLACES = (
     'T-PLACES',
 )
 
-# A folder copied by a walk that calls VFS-COPY for each file: the folder
-# WS on VA into the folder WD on VB, which exists.
-WALK = (
-    'CREATE WS 256 ALLOT  VARIABLE WSU  CREATE WD 256 ALLOT  VARIABLE WDU',
-    ': WS+  ( a u -- )  [CHAR] / WS WSU @ + C!  1 WSU +!',
-    '    DUP >R WS WSU @ + SWAP CMOVE R> WSU +! ;',
-    ': WD+  ( a u -- )  [CHAR] / WD WDU @ + C!  1 WDU +!',
-    '    DUP >R WD WDU @ + SWAP CMOVE R> WDU +! ;',
-    ': WALK  ( -- )',
-    '    WS WSU @ VA @ VFS-RESOLVE? THROW',
-    '    DUP VA @ _VFS-ENSURE-CHILDREN? THROW',
-    '    IN.CHILD @',
-    '    BEGIN ?DUP WHILE',
-    '        WSU @ >R  WDU @ >R',
-    '        DUP IN.TYPE @ VFS-T-DIR = IF',
-    '            WD WDU @ VB @ VFS-CD? THROW',
-    '            DUP IN.NAME @ _VFS-STR-GET VB @ VFS-MKDIR THROW',
-    '            S" /" VB @ VFS-CD? THROW',
-    '            DUP IN.NAME @ _VFS-STR-GET 2DUP WS+ WD+',
-    '            RECURSE',
-    '        ELSE',
-    '            DUP IN.NAME @ _VFS-STR-GET 2DUP WS+ WD+',
-    '            WS WSU @ VA @ WD WDU @ VB @ SCR 4096 VFS-COPY THROW',
-    '        THEN',
-    '        R> WDU !  R> WSU !',
-    '        IN.SIBLING @',
-    '    REPEAT ;',
+# A folder of three levels: TREE makes /tree on a volume, holding a.txt
+# (700 bytes), an empty file c, an empty folder e, and sub/b.bin (40,000
+# bytes, ten times the scratch the copies take), and TREE? checks that a
+# path holds that tree.  AT joins the base in TP with a suffix, in TQ.
+TREE = (
+    'CREATE TP 600 ALLOT  VARIABLE TPU  CREATE TQ 600 ALLOT',
+    ': BASE!  ( a u -- )  DUP TPU !  TP SWAP CMOVE ;',
+    ': AT  ( a u -- a2 u2 )  TP TQ TPU @ CMOVE',
+    '    DUP >R TQ TPU @ + SWAP CMOVE  TQ TPU @ R> + ;',
+    ': DIR?  ( path-a path-u vfs -- flag )',
+    '    VFS-RESOLVE? IF DROP FALSE EXIT THEN IN.TYPE @ VFS-T-DIR = ;',
+    ': TREE  ( vfs -- )  >R',
+    '    S" /" R@ VFS-CD? THROW  S" tree" R@ VFS-MKDIR THROW',
+    '    S" /tree" R@ VFS-CD? THROW  S" sub" R@ VFS-MKDIR THROW',
+    '    S" e" R@ VFS-MKDIR THROW  S" /" R@ VFS-CD? THROW',
+    '    21 700 PAT  BIG 700 S" /tree/a.txt" R@ PUT',
+    '    BIG 0 S" /tree/c" R@ PUT',
+    '    22 40000 PAT  BIG 40000 S" /tree/sub/b.bin" R@ PUT  R> DROP ;',
+    ': TREE?  ( path-a path-u vfs -- flag )  >R BASE!',
+    '    21 700 PAT  S" /a.txt" AT R@ BIG 700 SAME?',
+    '    S" /c" AT R@ BIG 0 SAME? AND',
+    '    S" /e" AT R@ DIR? AND',
+    '    22 40000 PAT  S" /sub/b.bin" AT R@ BIG 40000 SAME? AND  R> DROP ;',
 )
 
-SUITE = NativeForth(ROOTS, prelude=HELPERS + PLACES + WALK)
+SUITE = NativeForth(ROOTS, prelude=HELPERS + PLACES + TREE)
 
 
 def words(raw: bytes) -> str:
@@ -275,7 +272,8 @@ def test_a_name_taken_while_copying_is_kept():
 def test_a_copy_refuses_what_it_cannot_copy():
     expect([
         ': T  NOTE-STATE  BIG 10 S" /f" VA @ PUT',
-        '     S" /d" VA @ S" /x" VB @ SCR 4096 VFS-COPY R.',
+        # A folder cannot be copied into itself.
+        '     S" /d" VA @ S" /d/x" VA @ SCR 4096 VFS-COPY R.',
         '     S" /nope" VA @ S" /x" VB @ SCR 4096 VFS-COPY R.',
         '     S" /f" VA @ S" /d/no/x" VB @ SCR 4096 VFS-COPY R.',
         '     S" /f" VA @ S" /f/x" VA @ SCR 4096 VFS-COPY R.',
@@ -291,7 +289,7 @@ def test_a_copy_refuses_what_it_cannot_copy():
         '     REC VCOPY-SIZE 0 FILL  REC VCOPY-STEP R. .  REC VCOPY-CANCEL R.',
         '     S" /x" VB @ HAS? .  STATE-KEPT? . ;',
         'T',
-    ], [ISDIR, NOENT, NOENT, NOTDIR, INVALID, INVALID, INVALID, INVALID,
+    ], [INVALID, NOENT, NOENT, NOTDIR, INVALID, INVALID, INVALID, INVALID,
         INVALID, INVALID, INVALID, 0, INVALID, FALSE, TRUE])
 
 
@@ -461,8 +459,8 @@ def test_a_move_whose_delete_fails_keeps_both_files():
 
 def test_a_move_inside_one_volume_is_a_rename():
     """No stage is written: the file keeps its storage and takes the new
-    name, with one sync where a copy takes two.  A sync that fails after
-    the rename leaves it moved."""
+    name, with one sync where a copy takes two.  A folder cannot move
+    beneath itself.  A sync that fails after the rename leaves it moved."""
     expect([
         ': T  6 3000 PAT  BIG 3000 S" /in" VA @ PUT  NOTE-STATE  VA @ F-VFS !',
         '     S" /in" VA @ S" /d/moved" VA @ SCR 4096 VFS-MOVE R.',
@@ -470,38 +468,161 @@ def test_a_move_inside_one_volume_is_a_rename():
         '     S" /d/moved" VA @ STAGE$ VA @ HAS? .  SYNCS @ .',
         '     BIG 10 S" /in" VA @ PUT',
         '     S" /in" VA @ S" /d/moved" VA @ SCR 4096 VFS-MOVE R.',
-        '     S" /d" VA @ S" /e" VA @ SCR 4096 VFS-MOVE R.',
+        '     S" /d" VA @ S" /d/e" VA @ SCR 4096 VFS-MOVE R.',
         '     S" /in" VA @ S" /.s-x" VA @ SCR 4096 VFS-MOVE R.',
         '     S" /in" VA @ S" /d/no/m" VA @ SCR 4096 VFS-MOVE R.',
         '     VA @ F-VFS !  1 F-SYNC !',
         '     S" /in" VA @ S" /d/m2" VA @ SCR 4096 VFS-MOVE RP.',
         '     S" /in" VA @ HAS? .  S" /d/m2" VA @ HAS? .  STATE-KEPT? . ;',
         'T',
-    ], [0, FALSE, TRUE, FALSE, 1, EXISTS, ISDIR, INVALID, NOENT,
+    ], [0, FALSE, TRUE, FALSE, 1, EXISTS, INVALID, INVALID, NOENT,
         IO, TRUE, FALSE, TRUE, TRUE])
 
 
 # =====================================================================
-#  A folder, and places
+#  Folders
 # =====================================================================
 
-def test_a_folder_copies_by_a_walk_that_copies_each_file():
+def test_a_folder_copies_whole_between_two_volumes_and_inside_one():
+    """The tree goes under the stage name, one barrier follows, every file
+    reads back, and the stage folder's rename and a second barrier end it:
+    two syncs for the whole folder."""
     expect([
-        ': T  S" tree" VA @ VFS-MKDIR THROW  S" /tree" VA @ VFS-CD? THROW',
-        '     S" sub" VA @ VFS-MKDIR THROW  S" /" VA @ VFS-CD? THROW',
-        '     21 700 PAT  BIG 700 S" /tree/a.txt" VA @ PUT',
-        '     22 5000 PAT  BIG 5000 S" /tree/sub/b.bin" VA @ PUT',
-        '     BIG 0 S" /tree/sub/c" VA @ PUT',
-        '     S" tree2" VB @ VFS-MKDIR THROW',
-        '     S" /tree" WS SWAP DUP WSU ! CMOVE  S" /tree2" WD SWAP DUP WDU ! CMOVE',
-        '     WALK',
-        '     21 700 PAT  S" /tree2/a.txt" VB @ BIG 700 SAME? .',
-        '     22 5000 PAT  S" /tree2/sub/b.bin" VB @ BIG 5000 SAME? .',
-        '     S" /tree2/sub/c" VB @ BIG 0 SAME? .',
-        '     S" /tree/sub/b.bin" VA @ BIG 5000 SAME? . ;',
+        ': T  VA @ TREE  NOTE-STATE  VB @ F-VFS !  0 SYNCS !',
+        '     S" /tree" VA @ S" /d/tree" VB @ SCR 4096 VFS-COPY R.',
+        '     S" /d/tree" VB @ TREE? .  S" /tree" VA @ TREE? .',
+        '     S" /d/tree" VB @ STAGE$ VB @ HAS? .  SYNCS @ .',
+        '     S" /tree" VA @ S" /d/again" VA @ SCR 4096 VFS-COPY R.',
+        '     S" /d/again" VA @ TREE? .  STATE-KEPT? . ;',
         'T',
-    ], [TRUE, TRUE, TRUE, TRUE])
+    ], [0, TRUE, TRUE, FALSE, 2, 0, TRUE, TRUE], max_steps=600_000_000)
 
+
+def test_a_folder_copy_refuses_what_it_cannot_take():
+    expect([
+        ': T  VA @ TREE  NOTE-STATE',
+        '     S" /tree" VA @ S" /d/tree" VB @ SCR 4096 VFS-COPY R.',
+        '     S" /tree" VA @ S" /d/tree" VB @ SCR 4096 VFS-COPY R.',
+        # Into itself, at any depth.
+        '     S" /tree" VA @ S" /tree/sub/in" VA @ SCR 4096 VFS-COPY R.',
+        '     S" /tree" VA @ S" /tree/in" VA @ SCR 4096 VFS-COPY R.',
+        '     S" /tree/sub/in" VA @ HAS? .',
+        '     S" /tree" VA @ S" /nope/x" VB @ SCR 4096 VFS-COPY R.',
+        '     S" /tree" VA @ S" /d/t2" VB @ SCR 1 VFS-COPY R.',
+        '     S" /tree" VA @ S" /d/t2" 0 SCR 4096 VFS-COPY R.',
+        '     S" /d/t2" VB @ HAS? .  STATE-KEPT? . ;',
+        'T',
+    ], [0, EXISTS, INVALID, INVALID, FALSE, NOENT, INVALID, INVALID,
+        FALSE, TRUE], max_steps=600_000_000)
+
+
+def test_a_folder_copy_that_fails_leaves_no_final_name_and_no_stage():
+    """Out of space midway, a copy that does not read back, a failed sync
+    before the comparison, a failed rename and a write that throws each
+    remove the stage tree; a failed sync after the rename leaves the copy
+    standing, and its answer says so."""
+    expect([
+        ': GONE?  ( a u -- )  2DUP VB @ HAS? .  VB @ STAGE$ VB @ HAS? . ;',
+        ': T  VA @ TREE  NOTE-STATE',
+        '     VB @ F-VFS !  20000 F-SPACE !',
+        '     S" /tree" VA @ S" /t1" VB @ SCR 4096 VFS-COPY RP.  S" /t1" GONE?',
+        '     CLEAR-FAULTS  VB @ F-VFS !  -1 F-FLIP !',
+        '     S" /tree" VA @ S" /t2" VB @ SCR 4096 VFS-COPY RP.  S" /t2" GONE?',
+        '     CLEAR-FAULTS  VB @ F-VFS !  1 F-SYNC !',
+        '     S" /tree" VA @ S" /t3" VB @ SCR 4096 VFS-COPY RP.  S" /t3" GONE?',
+        '     CLEAR-FAULTS  VB @ F-VFS !  -1 F-RENAME !',
+        '     S" /tree" VA @ S" /t4" VB @ SCR 4096 VFS-COPY RP.  S" /t4" GONE?',
+        '     CLEAR-FAULTS  VB @ F-VFS !  -1 F-THROW !',
+        '     S" /tree" VA @ S" /t5" VB @ SCR 4096 VFS-COPY RP.  S" /t5" GONE?',
+        '     CLEAR-FAULTS  VB @ F-VFS !  2 F-SYNC !',
+        '     S" /tree" VA @ S" /t6" VB @ SCR 4096 VFS-COPY RP.',
+        '     S" /t6" VB @ TREE? .  S" /t6" VB @ STAGE$ VB @ HAS? .',
+        '     CLEAR-FAULTS  S" /tree" VA @ TREE? .  STATE-KEPT? . ;',
+        'T',
+    ], [NOSPC, FALSE, FALSE, FALSE,
+        CORRUPT, FALSE, FALSE, FALSE,
+        IO, FALSE, FALSE, FALSE,
+        IO, FALSE, FALSE, FALSE,
+        IO, FALSE, FALSE, FALSE,
+        IO, TRUE, TRUE, FALSE, TRUE, TRUE], max_steps=1_200_000_000)
+
+
+def test_a_retried_folder_copy_removes_the_stage_a_crash_left():
+    """A crash leaves the stage folder, part written, under the name the
+    same copy derives again."""
+    expect([
+        ': T  VA @ TREE',
+        '     S" /" VB @ VFS-CD? THROW',
+        '     S" /r" VB @ STAGE$ SWAP 1+ SWAP 1- VB @ VFS-MKDIR THROW',
+        '     S" /r" VB @ STAGE$ BASE!  BIG 100 S" /junk" AT VB @ PUT',
+        '     S" /r" VB @ STAGE$ VB @ HAS? .',
+        '     S" /tree" VA @ S" /r" VB @ SCR 4096 VFS-COPY R.',
+        '     S" /r" VB @ TREE? .  S" /r" VB @ STAGE$ VB @ HAS? . ;',
+        'T',
+    ], [TRUE, 0, TRUE, FALSE], max_steps=600_000_000)
+
+
+def test_a_folder_moves_inside_one_volume_by_one_rename():
+    expect([
+        ': T  VA @ TREE  NOTE-STATE  VA @ F-VFS !  0 SYNCS !',
+        '     S" /tree" VA @ S" /d/tree" VA @ SCR 4096 VFS-MOVE R.',
+        '     S" /tree" VA @ HAS? .  S" /d/tree" VA @ TREE? .  SYNCS @ .',
+        '     S" /d/tree" VA @ S" /d/tree/sub/x" VA @ SCR 4096 VFS-MOVE R.',
+        '     S" /d/tree" VA @ TREE? .  STATE-KEPT? . ;',
+        'T',
+    ], [0, FALSE, TRUE, 1, INVALID, TRUE, TRUE], max_steps=600_000_000)
+
+
+def test_a_folder_moves_across_volumes_and_leaves_its_folder_at_once():
+    """Once the copy stands, the source takes its own stage name, so it is
+    gone from its folder, and that tree is removed.  A removal that fails
+    leaves it hidden and the answer partial, and the next move of a folder
+    by that name clears it first; a rename that fails leaves both folders
+    under their names."""
+    expect([
+        ': T  VA @ TREE  NOTE-STATE',
+        '     S" /tree" VA @ S" /m" VB @ SCR 4096 VFS-MOVE R.',
+        '     S" /tree" VA @ HAS? .  S" /m" VB @ TREE? .',
+        '     S" /tree" VA @ STAGE$ VA @ HAS? .  STATE-KEPT? . ;',
+        'T',
+        ': U  VA @ TREE  VA @ F-VFS !  -1 F-UNLINK !',
+        '     S" /tree" VA @ S" /m2" VB @ SCR 4096 VFS-MOVE RP.',
+        '     S" /m2" VB @ TREE? .  S" /tree" VA @ HAS? .',
+        '     S" /tree" VA @ STAGE$ VA @ HAS? .',
+        '     CLEAR-FAULTS  VA @ TREE',
+        '     S" /tree" VA @ S" /m3" VB @ SCR 4096 VFS-MOVE R.',
+        '     S" /tree" VA @ STAGE$ VA @ HAS? .  S" /m3" VB @ TREE? . ;',
+        'U',
+        ': V  VA @ TREE  VA @ F-VFS !  -1 F-RENAME !',
+        '     S" /tree" VA @ S" /m4" VB @ SCR 4096 VFS-MOVE RP.',
+        '     S" /m4" VB @ TREE? .  S" /tree" VA @ TREE? .',
+        # A move whose copy fails changes nothing.
+        '     CLEAR-FAULTS  VB @ F-VFS !  1000 F-SPACE !',
+        '     S" /tree" VA @ S" /m5" VB @ SCR 4096 VFS-MOVE RP.',
+        '     S" /tree" VA @ TREE? .  S" /m5" VB @ HAS? .  CLEAR-FAULTS ;',
+        'V',
+    ], [0, FALSE, TRUE, FALSE, TRUE,
+        IO, TRUE, TRUE, FALSE, TRUE, 0, FALSE, TRUE,
+        IO, TRUE, TRUE, TRUE, NOSPC, FALSE, TRUE, FALSE],
+        max_steps=1_200_000_000)
+
+
+def test_places_copy_and_move_folders():
+    expect([
+        ': T  VB @ TREE',
+        '     S" tree" P-TWO @ S" tree" P-ONE @ SCR 4096 PLACE-COPY R.',
+        '     S" /d/tree" VA @ TREE? .',
+        '     S" tree" P-TWO @ S" t2" P-RO @ SCR 4096 PLACE-COPY R.',
+        '     S" /d/t2" VB @ HAS? .',
+        '     S" tree" P-ONE @ S" moved" P-TWO @ SCR 4096 PLACE-MOVE R.',
+        '     S" /d/tree" VA @ HAS? .  S" /moved" VB @ TREE? . ;',
+        'T',
+    ], [0, TRUE, READONLY, FALSE, 0, FALSE, TRUE], max_steps=800_000_000)
+
+
+# =====================================================================
+#  Places
+# =====================================================================
 
 def test_places_bind_the_source_for_reading_and_the_destination_for_writing():
     expect([
@@ -519,16 +640,17 @@ def test_places_bind_the_source_for_reading_and_the_destination_for_writing():
         # A move between places on two volumes.
         '     S" p.txt" P-ONE @ S" moved.txt" P-TWO @ SCR 4096 PLACE-MOVE R.',
         '     S" /d/p.txt" VA @ HAS? .  S" /moved.txt" VB @ BIG 3000 SAME? .',
-        # Neither path leaves its place, and a place's folder is no file.
+        # Neither path leaves its place, and a place's own folder copies as
+        # a folder does.
         '     BIG 10 S" /x" VA @ PUT',
         '     S" ../x" P-ONE @ S" x" P-TWO @ SCR 4096 PLACE-COPY R.',
         '     S" /moved.txt" P-TWO @ S" ../x2" P-ONE @ SCR 4096 PLACE-COPY R.',
         '     S" /" P-ONE @ S" x" P-TWO @ SCR 4096 PLACE-COPY R.',
         '     S" x" P-GONE @ S" x" P-TWO @ SCR 4096 PLACE-COPY R.',
-        '     S" /x2" VA @ HAS? .  S" /x" VB @ HAS? . ;',
+        '     S" /x2" VA @ HAS? .  S" /x" VB @ DIR? .  S" /x/r.txt" VB @ BIG 10 SAME? . ;',
         'T',
     ], [0, TRUE, READONLY, FALSE, READONLY, TRUE, FALSE, 0, TRUE,
-        0, FALSE, TRUE, XDEV, XDEV, ISDIR, NOVOLUME, FALSE, FALSE])
+        0, FALSE, TRUE, XDEV, XDEV, 0, NOVOLUME, FALSE, TRUE, TRUE])
 
 
 # =====================================================================
@@ -536,7 +658,7 @@ def test_places_bind_the_source_for_reading_and_the_destination_for_writing():
 # =====================================================================
 
 BOOT_ROOTS = ("utils/fs/vfs-copy.f", "tui/platform/mp64fs-vfs.f")
-BOOT_HELPERS = HELPERS + (
+BOOT_HELPERS = HELPERS + TREE + (
     'VARIABLE VM',
     'S" boot" PLACES-VOLUME THROW PVOL-VFS VM !',
 )
@@ -624,6 +746,35 @@ def test_the_boot_volume_takes_names_of_23_bytes_and_no_longer():
     assert got == f"23 255 0 {INVALID} 0", got
     fs = MP64FS(bytearray(storage.image_bytes))
     assert names(fs) == ["d", "n" * 23]
+
+
+def test_the_boot_volume_takes_and_gives_folders():
+    """A folder copies onto the MP64FS boot volume and moves between its
+    folders by one rename.  One that holds a name of 24 bytes, which MP64FS
+    does not take, is refused, and leaves neither its final name nor its
+    stage."""
+    machine, storage = boot_machine(boot_image(2048, {}))
+    got = boot_words(machine, [
+        ': T  VA @ TREE',
+        '     S" /tree" VA @ S" /tree" VM @ SCR 4096 VFS-COPY R.',
+        '     S" /tree" VM @ TREE? .',
+        '     S" /tree" VM @ S" /d/tree" VM @ SCR 4096 VFS-MOVE R.',
+        '     S" /d/tree" VM @ TREE? .  S" /tree" VM @ HAS? .',
+        f'     S" /tree" BASE!  BIG 5 S" /{"n" * 24}" AT VA @ PUT',
+        '     S" /tree" VA @ S" /t2" VM @ SCR 4096 VFS-COPY R.',
+        '     S" /t2" VM @ HAS? .  S" /t2" VM @ STAGE$ VM @ HAS? . ;',
+        'T',
+    ])
+    assert got == f"0 -1 0 -1 0 {NAMETOOLONG} 0 0", got
+    fs = MP64FS(bytearray(storage.image_bytes))
+    # The reader lists every entry of the volume, in whichever folder: the
+    # moved tree, and no stage of either copy.
+    assert names(fs) == ["a.txt", "b.bin", "c", "d", "e", "sub", "tree"]
+    tree = fs.resolve_path("/d/tree")
+    assert fs.read_file("a.txt", parent=tree) == pattern(21, 700)
+    assert fs.read_file("c", parent=tree) == b""
+    sub = fs.resolve_path("/d/tree/sub")
+    assert fs.read_file("b.bin", parent=sub) == pattern(22, 40000)
 
 
 def test_the_boot_volume_running_out_of_space_keeps_no_stage():

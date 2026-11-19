@@ -427,6 +427,73 @@ def test_copies_and_moves_reach_ext4_and_leave_it_clean(
     assert _names(image, "/dir", jbd2_toolchain) == {"in2.bin", "mv.bin"}
 
 
+def test_folders_copy_and_move_on_ext4_and_leave_it_clean(
+    copy_volume: bytes, jbd2_toolchain: dict[str, object], tmp_path: Path,
+) -> None:
+    """A folder of two levels, with an empty folder and a file larger than
+    the scratch, copies from RAM to ext4 and within ext4, moves to another
+    parent inside ext4 by one rename, and moves from ext4 back to RAM,
+    which hides the source and removes it.  The medium the machine leaves
+    is clean and holds the copies and no stage."""
+    machine = Machine(copy_volume)
+    try:
+        assert machine.one("CPX-UP", "up") == ["0", "0"]
+        assert machine.one(
+            ': K0 S" /" CPX-R @ VFS-CD? S" tree" CPX-R @ VFS-MKDIR OR'
+            ' S" /tree" CPX-R @ VFS-CD? OR ." [mk " . ." ]" ; K0', "mk"
+        ) == ["0"]
+        assert machine.one(
+            ': K1 S" sub" CPX-R @ VFS-MKDIR S" e" CPX-R @ VFS-MKDIR OR'
+            ' S" /" CPX-R @ VFS-CD? OR ." [mk " . ." ]" ; K1', "mk"
+        ) == ["0"]
+        machine.line("51 700 CPX-FILL")
+        assert machine.one(
+            ': K2 700 S" /tree/a.txt" CPX-R @ CPX-PUT ; K2', "put"
+        ) == ["0"]
+        machine.line("52 40000 CPX-FILL")
+        assert machine.one(
+            ': K3 40000 S" /tree/sub/b.bin" CPX-R @ CPX-PUT ; K3', "put"
+        ) == ["0"]
+        # RAM to ext4, then within ext4.
+        assert machine.one(
+            ': K4 S" /tree" CPX-R @ S" /tree" CPX-V @ CPX-COPY ; K4', "copy"
+        ) == ["0", "0"]
+        assert machine.one(
+            ': K5 S" /tree" CPX-V @ S" /dir/tree2" CPX-V @ CPX-COPY ; K5', "copy"
+        ) == ["0", "0"]
+        # A rename to another parent inside ext4, then ext4 back to RAM.
+        assert machine.one(
+            ': K6 S" /dir/tree2" CPX-V @ S" /moved" CPX-V @ CPX-MOVE ; K6', "move"
+        ) == ["0", "0"]
+        assert machine.one(
+            ': K7 S" /tree" CPX-V @ S" /back" CPX-R @ CPX-MOVE ; K7', "move"
+        ) == ["0", "0"]
+        assert machine.one(': K8 S" /tree" CPX-V @ CPX-HAS ; K8', "has") == ["0"]
+        assert machine.one(
+            ': K9 S" /back/sub/b.bin" CPX-R @ CPX-FILE ; K9', "file"
+        ) == _file_record(pattern(52, 40000))
+        assert machine.one(
+            ': K10 S" /moved/a.txt" CPX-V @ CPX-FILE ; K10', "file"
+        ) == _file_record(pattern(51, 700))
+        assert machine.one("CPX-DOWN", "down") == ["0"]
+        image = _left_image(machine.media, tmp_path, jbd2_toolchain)
+    finally:
+        machine.close()
+    assert ext4._general_write_cat(image, "/moved/a.txt", jbd2_toolchain) == (
+        pattern(51, 700)
+    )
+    assert ext4._general_write_cat(image, "/moved/sub/b.bin", jbd2_toolchain) == (
+        pattern(52, 40000)
+    )
+    assert _names(image, "/", jbd2_toolchain) == {
+        "lost+found", "fixture", "doc.txt", "dir", "moved",
+    }
+    assert _names(image, "/dir", jbd2_toolchain) == set()
+    assert _names(image, "/moved", jbd2_toolchain) == {"a.txt", "sub", "e"}
+    assert _names(image, "/moved/sub", jbd2_toolchain) == {"b.bin"}
+    assert _names(image, "/moved/e", jbd2_toolchain) == set()
+
+
 def test_a_copy_that_runs_out_of_space_on_ext4_gives_its_blocks_back(
     full_volume: bytes, jbd2_toolchain: dict[str, object], tmp_path: Path,
 ) -> None:

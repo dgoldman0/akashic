@@ -1,10 +1,11 @@
-# Copying and moving files
+# Copying and moving files and folders
 
-`akashic/utils/fs/vfs-copy.f` copies and moves files, inside one volume or
-from one volume to another, and between [places](places.md). A copy never
-shows a partial file under its final name: it writes the file under a
-hidden stage name in the destination folder, reads the stage back against
-the source, and only then renames the stage to the final name.
+`akashic/utils/fs/vfs-copy.f` copies and moves files and folders, inside one
+volume or from one volume to another, and between [places](places.md). A
+copy never shows a partial file or folder under its final name: it writes
+the copy under a hidden stage name in the destination folder, reads the
+stage back against the source, and only then renames the stage to the final
+name.
 
 ```forth
 REQUIRE utils/fs/vfs-copy.f
@@ -24,8 +25,9 @@ PLACE-MOVE   ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -
 ## The copy
 
 A copy takes a regular file, named by a path on its instance and followed
-through a final symbolic link, and an absolute destination path on the
-destination instance, which may be the same instance. It refuses a
+through a final symbolic link, or a folder (see [Folders](#folders)), and
+an absolute destination path on the destination instance, which may be the
+same instance. It refuses a
 destination name that already names an entry, of any kind. The bytes pass
 through the caller's scratch, so a file of any size copies through a few
 kilobytes of memory. In order, a copy:
@@ -104,44 +106,92 @@ scratch belong to the copy until it ends.
 answers `0 0`. `VCOPY-CANCEL` ends a running copy before its rename: it
 closes the files, removes the stage, syncs, and answers the first of those
 steps that failed; on a record with no running copy it answers 0. A
-record that was never started answers `VFS-E-INVALID` to both.
+record that was never started answers `VFS-E-INVALID` to both. A stepped
+copy takes a file only; `VCOPY-INIT` answers `VFS-E-ISDIR` for a folder.
+
+## Folders
+
+`VFS-COPY` and `PLACE-COPY` copy a folder with all it holds, at any depth,
+by the file's protocol at the scale of the tree:
+
+1. the source is a folder, the final name is free, and the destination's
+   folder exists and is neither the source nor inside it;
+2. a stage an earlier copy to the same name left, a folder or a file, is
+   removed with everything in it, and the stage folder is made;
+3. a walk of the source makes each folder in the stage and copies each
+   file into it, a scratch at a time;
+4. one barrier on the destination instance;
+5. a second walk reads every file of the stage back against its source,
+   half of the scratch from each, and checks that each folder is there;
+6. the stage folder is renamed to the final name with `VFS-RN-NOREPLACE`,
+   and a barrier taken.
+
+The rename is the commit, as for a file: a failure before it removes the
+stage tree and takes a barrier, so the final name never holds part of a
+folder, and a folder copy takes two barriers however many files it holds.
+The walk keeps names and paths, never a VFS entry, between its steps: it
+lists each folder's entries once into a block of its own and looks each
+path up again when it uses it, so neither another writer nor the cache's
+eviction leaves it holding a stale entry. Each step is one
+`VFS-TRANSACTION`, as a file's are.
+
+A folder copies its files and folders. A symbolic link or a device in it
+refuses the copy with `VFS-E-UNSUPPORTED`, since copying a link could
+reach outside its place and a device has no bytes to copy. Every name in the
+tree must be one the destination volume takes, and every path, as it will
+be once the stage is renamed, no longer than `VFS-PATH-MAX`; a name or a
+path that breaks this answers `VFS-E-NAMETOOLONG`, and the stage goes. A
+folder of names longer than 23 bytes therefore copies between ext4 volumes
+and is refused on its way to MP64FS.
 
 ## Moving
 
-`VFS-MOVE` moves a regular file, named by its own name rather than through
-a final link, and takes the same destinations a copy takes. Inside one
-instance it is one `VFS-RENAME-AT` with `VFS-RN-NOREPLACE` into the
-destination folder, then a barrier: the file keeps its storage and no stage
-is written. Across two instances it checks the source, copies it as
-`VFS-COPY` does, then removes the source and takes a barrier on the source's
-instance. A move whose copy fails leaves the source as it was.
+`VFS-MOVE` moves a regular file or a folder, named by its own name rather
+than through a final link, and takes the same destinations a copy takes.
+Inside one instance it is one `VFS-RENAME-AT` with `VFS-RN-NOREPLACE` into
+the destination folder, then a barrier: the file, or the folder with all it
+holds, keeps its storage and no stage is written. The source's entry is
+held from its lookup to the rename, a file's by opening it and a folder's
+by pinning it. The VFS refuses to move a folder beneath itself with
+`VFS-E-INVALID`.
+
+Across two instances a move checks the source and copies it as `VFS-COPY`
+does. A file is then removed and a barrier taken on the source's instance.
+A folder is first renamed to its own stage name, the one
+`VREPL-DERIVE-PATHS!` derives from its path, so it leaves its folder at once,
+and that hidden tree is then removed and a barrier taken; a hidden tree an
+earlier move left under that name is removed first. A move whose copy fails
+leaves the source as it was.
 
 ## Answers
 
 Every word answers a VFS ior, 0 for success. An answer that carries
-`VFS-IOR-F-PARTIAL` means the destination file stands though a later step
+`VFS-IOR-F-PARTIAL` means the destination stands though a later step
 failed:
 
 - the barrier after a copy's rename, so the copy may not have reached the
   medium yet;
 - a move's removal of its source, or the barrier after it, so the source may
-  still be there; a move inside one instance, whose rename succeeded,
-  answers this way when only its barrier failed.
+  still be there, under its name, or, for a folder whose removal began,
+  hidden under its stage name; a move inside one instance, whose rename
+  succeeded, answers this way when only its barrier failed.
 
-Every other failure leaves no destination file and the source as it was,
-and never carries the flag, whatever flags a binding set on the failure it
-reported. The answers a caller sees most:
+Every other failure leaves nothing at the destination and the source as it
+was, and never carries the flag, whatever flags a binding set on the
+failure it reported. The answers a caller sees most:
 
 | Answer | When |
 |---|---|
 | `VFS-E-EXISTS` | The destination name holds an entry, or took one while the copy ran |
 | `VFS-E-NOENT` | The source, or the destination's folder, does not exist |
 | `VFS-E-NOTDIR` | A folder on the destination path is a file |
-| `VFS-E-ISDIR` | The source is a folder |
-| `VFS-E-INVALID` | The destination path breaks the replacement library's rule for its volume, the scratch is under two bytes, an instance or the record is 0, or a stage is the source |
+| `VFS-E-ISDIR` | `VCOPY-INIT` was given a folder |
+| `VFS-E-INVALID` | The destination path breaks the replacement library's rule for its volume, the scratch is under two bytes, an instance or the record is 0, a stage is the source, or a folder would go inside itself |
+| `VFS-E-NAMETOOLONG` | A name in a folder is longer than the destination volume takes, or a path in it would pass `VFS-PATH-MAX` |
+| `VFS-E-UNSUPPORTED` | A folder holds a symbolic link or a device |
 | `VFS-E-BUSY` | `VCOPY-INIT` was given a record whose copy is still running |
 | `VFS-E-NOSPC` | The destination ran out of space |
-| `VFS-E-CORRUPT` | The stage did not read back as the source, or the source changed size while the copy ran |
+| `VFS-E-CORRUPT` | The stage did not read back as the source, or the source changed size, or a folder's source changed, while the copy ran |
 | `VFS-E-IO` | A binding failed, or a binding operation threw |
 | `VFS-E-READONLY` | The destination instance, or a place, is read-only |
 
@@ -179,14 +229,22 @@ MegaPad's own MP64FS reader. It covers an existing name and a name taken
 during the copy, a destination that runs out of space midway, a stage that
 does not read back, failed syncs before and after the rename, a failed
 rename, a throwing write, cancel, a retried copy after a stage a crash left,
-a move whose delete fails, a move inside one volume, and a folder copied by
-a walk that calls `VFS-COPY` for each file. It also counts the syncs a copy
-takes on the RAM binding (two) and on the same binding declared durable
-(none), copies a name of 255 bytes and a path of 304, and copies a name of 23
-bytes to the boot volume while refusing one of 24.
-`local_testing/test_vfs_copy_ext4.py` runs copies and moves to, from and
-within the 64 MiB ext4 fixture volume, including one that runs out of space
-on a volume with 39 free blocks, and checks the medium with the pinned
-`e2fsck` and `debugfs`. Power cuts during a copy's stage write and rename
-are the killed-run qualification of [places.md](places.md), order of work,
-item 8.
+a move whose delete fails, and a move inside one volume. It also counts the
+syncs a copy takes on the RAM binding (two) and on the same binding declared
+durable (none), copies a name of 255 bytes and a path of 304, and copies a
+name of 23 bytes to the boot volume while refusing one of 24. Its folder
+tests copy a tree of three levels, with an empty file, an empty folder and a
+file ten times the scratch, between the volumes and inside one, with two
+syncs; refuse an existing name, a folder into itself and a missing
+destination folder; give the stage tree up on each of the file's failures
+and leave the copy standing when only the last barrier fails; clear a stage
+folder a crash left; move a folder inside one volume by one rename and
+across volumes, where a failed removal leaves the source hidden and the
+next move clears it; copy and move folders between places; and copy a folder
+onto the boot volume, move it between its folders, and refuse one that holds
+a name of 24 bytes. `local_testing/test_vfs_copy_ext4.py` runs copies and
+moves of files and of a folder to, from and within the 64 MiB ext4 fixture
+volume, including a file copy that runs out of space on a volume with 39
+free blocks, and checks the medium with the pinned `e2fsck` and `debugfs`.
+Power cuts during a copy's stage write and rename are the killed-run
+qualification of [places.md](places.md), order of work, item 8.

@@ -1,7 +1,8 @@
 \ =====================================================================
-\  vfs-copy.f - Copying and moving files, between volumes too
+\  vfs-copy.f - Copying and moving files and folders, between volumes too
 \ =====================================================================
 \  Megapad-64 / KDOS Forth      Prefix: VCOPY- VFS- PLACE- / _VCP- _VC.
+\                                       _VCT- _VW- _VMV-
 \
 \  A copy writes the file under a stage name in the destination folder,
 \  takes a barrier, reads the stage back against the source in halves of
@@ -13,6 +14,12 @@
 \  barrier is VFS-BARRIER, the one a checked replacement takes: a sync,
 \  except on a binding whose every change is durable when it returns.
 \
+\  A folder copies the same way at the scale of its tree: the whole tree
+\  goes under the stage name, one barrier follows, every file is read
+\  back, and the stage folder's rename is the commit, so a failure never
+\  leaves part of a folder under its final name.  A folder of files and
+\  folders copies; a link or a device in it refuses the copy.
+\
 \  The destination follows its volume's rules, as a replacement's paths
 \  do: names as long as the volume takes, and a path of VFS-PATH-MAX.
 \
@@ -21,11 +28,14 @@
 \  is therefore a hidden file, and the same copy, tried again, finds it
 \  under the same name and removes it before it writes a new one.
 \
-\  VCOPY-STEP moves one chunk, so an applet can step a long copy from its
-\  tick; VFS-COPY runs the steps to the end.  VFS-MOVE renames inside one
-\  instance, and across two it copies, then removes the source and
-\  takes a barrier.  PLACE-COPY and PLACE-MOVE bind both paths in their
-\  places first, so a read-only place refuses to be written.
+\  VCOPY-STEP moves one chunk of a file, so an applet can step a long
+\  copy from its tick; VFS-COPY runs a file's or a folder's copy to the
+\  end.  VFS-MOVE renames inside one instance, a file or a folder with
+\  all it holds, and across two it copies, then removes the source and
+\  takes a barrier; a folder first takes its own stage name, so it leaves
+\  its folder at once, and is then removed.  PLACE-COPY and PLACE-MOVE
+\  bind both paths in their places first, so a read-only place refuses
+\  to be written.
 \
 \  Public API:
 \    VCOPY-SIZE   ( -- n )   bytes of a copy record
@@ -35,10 +45,10 @@
 \    VFS-COPY  VFS-MOVE      ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
 \    PLACE-COPY  PLACE-MOVE  ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
 \
-\  An answer that carries VFS-IOR-F-PARTIAL means the destination file
-\  stands though a later step failed: the barrier after the copy's
-\  rename, or a move's removal of its source.  Every other failure leaves
-\  no destination file and the source as it was.
+\  An answer that carries VFS-IOR-F-PARTIAL means the destination stands
+\  though a later step failed: the barrier after the copy's rename, or a
+\  move's removal of its source.  Every other failure leaves nothing at
+\  the destination and the source as it was.
 \
 \  These words take this module's guard, then the replacement library's
 \  to name the stage, then the VFS's, the order every replacement takes.
@@ -376,16 +386,507 @@ VARIABLE _VCS-HALF
     ['] _VCP-DROP VFS-TRANSACTION _VCP-RELEASE ;
 
 \ =====================================================================
-\  Copying and moving to the end
+\  Entries held across lookups
 \ =====================================================================
 
+\ _VCP-PIN ( inode -- pinned? )
+\   Keep INODE from eviction.  True when this call set the pin, which
+\   the matching _VCP-UNPIN then clears; a pin someone else set stays.
+: _VCP-PIN  ( inode -- pinned? )
+    IN.FLAGS DUP @ VFS-IF-PINNED AND IF DROP FALSE EXIT THEN
+    DUP @ VFS-IF-PINNED OR SWAP ! TRUE ;
+
+: _VCP-UNPIN  ( inode pinned? -- )
+    IF IN.FLAGS DUP @ VFS-IF-PINNED INVERT AND SWAP ! ELSE DROP THEN ;
+
+\ =====================================================================
+\  Walking a folder
+\ =====================================================================
+\
+\  The walk keeps names and paths, never a VFS entry, between its steps.
+\  It lists each folder's entries once, into a block of their own, and
+\  each step looks its path up again, so another applet's change, or the
+\  cache evicting an entry, never leaves the walk holding a stale one.
+\  A walk follows a source tree and may mirror each path under a
+\  destination folder, whose name limit and path length it checks.
+
+\ One folder of the walk: its entries and the next one to visit, and the
+\ lengths of the source and destination paths that name it.
+: _VW.UP     ( level -- a ) ;
+: _VW.BLOCK  ( level -- a )  8 + ;
+: _VW.COUNT  ( level -- a ) 16 + ;
+: _VW.NEXT   ( level -- a ) 24 + ;
+: _VW.SU     ( level -- a ) 32 + ;
+: _VW.DU     ( level -- a ) 40 + ;
+48 CONSTANT _VW-LEVEL-SIZE
+
+\ An entry as it was listed: its name and its kind.  The names follow the
+\ entries in the same block.
+: _VE.A  ( entry -- a ) ;
+: _VE.U  ( entry -- a )  8 + ;
+: _VE.T  ( entry -- a ) 16 + ;
+24 CONSTANT _VE-SIZE
+
+CREATE _VW-SRC  VFS-PATH-MAX ALLOT   VARIABLE _VW-SU
+CREATE _VW-DST  VFS-PATH-MAX ALLOT   VARIABLE _VW-DU
+VARIABLE _VW-SV      \ the instance the walk lists
+VARIABLE _VW-DV      \ the instance the destination paths are on, or 0
+VARIABLE _VW-LIMIT   \ its name limit
+VARIABLE _VW-SLACK   \ how much a destination path grows when its stage is renamed
+VARIABLE _VW-TOP     \ the deepest level; 0 when no walk runs
+0 _VW-TOP !
+VARIABLE _VW-ENTRY   \ the entry the walk visits
+
+\ What a step of the walk visits.
+0 CONSTANT _VW-END      \ the root is done, and the paths name it
+1 CONSTANT _VW-FILE
+2 CONSTANT _VW-FOLDER   \ a folder, before its entries
+3 CONSTANT _VW-LEFT     \ a folder after its entries, which the paths name
+4 CONSTANT _VW-OTHER    \ a link or a device
+
+VARIABLE _VWL-DIR  VARIABLE _VWL-N  VARIABLE _VWL-NAMES
+VARIABLE _VWL-BLOCK  VARIABLE _VWL-E  VARIABLE _VWL-T
+
+\ _VW-LIST-BODY ( -- block count ior )
+\   The entries of the folder the source path names, copied into one
+\   allocated block; no block for a folder without entries.
+: _VW-LIST-BODY  ( -- block count ior )
+    _VW-SRC _VW-SU @ _VW-SV @ _VCP-ENTRY ?DUP IF NIP 0 0 ROT EXIT THEN
+    DUP 0= IF DROP 0 0 VFS-E-NOENT EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR <> IF DROP 0 0 VFS-E-NOTDIR EXIT THEN
+    DUP _VWL-DIR !  _VW-SV @ _VFS-ENSURE-CHILDREN? ?DUP IF 0 0 ROT EXIT THEN
+    0 _VWL-N !  0 _VWL-NAMES !
+    _VWL-DIR @ IN.CHILD @
+    BEGIN ?DUP WHILE
+        1 _VWL-N +!  DUP IN.NAME @ _VFS-STR-GET NIP _VWL-NAMES +!
+        IN.SIBLING @
+    REPEAT
+    _VWL-N @ 0= IF 0 0 0 EXIT THEN
+    _VWL-N @ _VE-SIZE * _VWL-NAMES @ + ALLOCATE ?DUP IF NIP 0 0 ROT EXIT THEN
+    DUP _VWL-BLOCK !  DUP _VWL-E !  _VWL-N @ _VE-SIZE * + _VWL-T !
+    _VWL-DIR @ IN.CHILD @
+    BEGIN ?DUP WHILE
+        DUP IN.NAME @ _VFS-STR-GET                   ( in a u )
+        DUP _VWL-E @ _VE.U !  _VWL-T @ _VWL-E @ _VE.A !
+        TUCK _VWL-T @ SWAP CMOVE _VWL-T +!           ( in )
+        DUP IN.TYPE @ _VWL-E @ _VE.T !
+        _VE-SIZE _VWL-E +!
+        IN.SIBLING @
+    REPEAT
+    _VWL-BLOCK @ _VWL-N @ 0 ;
+
+VARIABLE _VWP-L
+
+: _VW-LISTED  ( -- block count ior )  ['] _VW-LIST-BODY VFS-TRANSACTION ;
+
+\ _VW-PUSH ( -- ior )
+\   List the folder the paths name, and visit its entries next.  A throw
+\   from the binding answers VFS-E-IO.
+: _VW-PUSH  ( -- ior )
+    ['] _VW-LISTED CATCH IF 0 0 VFS-E-IO THEN
+    ?DUP IF NIP NIP EXIT THEN
+    _VW-LEVEL-SIZE ALLOCATE ?DUP IF
+        NIP >R DROP ?DUP IF FREE THEN R> EXIT
+    THEN
+    _VWP-L !
+    _VWP-L @ _VW.COUNT !  _VWP-L @ _VW.BLOCK !
+    0 _VWP-L @ _VW.NEXT !
+    _VW-SU @ _VWP-L @ _VW.SU !  _VW-DU @ _VWP-L @ _VW.DU !
+    _VW-TOP @ _VWP-L @ _VW.UP !  _VWP-L @ _VW-TOP !
+    0 ;
+
+\ _VW-POP ( -- )   Leave the deepest folder; the paths name it again.
+: _VW-POP  ( -- )
+    _VW-TOP @ ?DUP 0= IF EXIT THEN
+    DUP _VW.SU @ _VW-SU !  DUP _VW.DU @ _VW-DU !
+    DUP _VW.UP @ _VW-TOP !
+    DUP _VW.BLOCK @ ?DUP IF FREE THEN
+    FREE ;
+
+\ _VW-ABANDON ( -- )   End the walk wherever it stands.
+: _VW-ABANDON  ( -- )  BEGIN _VW-TOP @ WHILE _VW-POP REPEAT ;
+
+VARIABLE _VWJ-A  VARIABLE _VWJ-U  VARIABLE _VWJ-B  VARIABLE _VWJ-L
+
+\ _VW-APPEND ( name-a name-u buf len -- len' ior )
+\   The first LEN bytes of BUF name a folder: put "/" and NAME after them.
+\   VFS-E-NAMETOOLONG when the path would pass VFS-PATH-MAX.
+: _VW-APPEND  ( name-a name-u buf len -- len' ior )
+    _VWJ-L ! _VWJ-B ! _VWJ-U ! _VWJ-A !
+    \ The root's path is "/", which the name follows directly.
+    _VWJ-L @ 1 = IF _VWJ-B @ C@ [CHAR] / = IF 0 _VWJ-L ! THEN THEN
+    _VWJ-L @ 1+ _VWJ-U @ + VFS-PATH-MAX > IF 0 VFS-E-NAMETOOLONG EXIT THEN
+    [CHAR] / _VWJ-B @ _VWJ-L @ + C!
+    _VWJ-A @ _VWJ-B @ _VWJ-L @ 1+ + _VWJ-U @ CMOVE
+    _VWJ-L @ 1+ _VWJ-U @ + 0 ;
+
+VARIABLE _VWN-L
+
+\ _VW-NEXT ( -- event ior )
+\   Visit the next entry: for FILE, FOLDER and OTHER the paths name it,
+\   for LEFT the folder just left, and for END the root.  A name the
+\   destination's volume does not take, or a path longer than the VFS
+\   takes, answers VFS-E-NAMETOOLONG.
+: _VW-NEXT  ( -- event ior )
+    _VW-TOP @ DUP 0= IF DROP _VW-END 0 EXIT THEN  _VWN-L !
+    _VWN-L @ _VW.NEXT @ _VWN-L @ _VW.COUNT @ < IF
+        _VWN-L @ _VW.BLOCK @ _VWN-L @ _VW.NEXT @ _VE-SIZE * + _VW-ENTRY !
+        1 _VWN-L @ _VW.NEXT +!
+        _VW-ENTRY @ _VE.A @ _VW-ENTRY @ _VE.U @ _VW-SRC _VWN-L @ _VW.SU @
+        _VW-APPEND ?DUP IF NIP 0 SWAP EXIT THEN _VW-SU !
+        _VW-DV @ IF
+            _VW-ENTRY @ _VE.U @ _VW-LIMIT @ > IF 0 VFS-E-NAMETOOLONG EXIT THEN
+            _VW-ENTRY @ _VE.A @ _VW-ENTRY @ _VE.U @ _VW-DST _VWN-L @ _VW.DU @
+            _VW-APPEND ?DUP IF NIP 0 SWAP EXIT THEN
+            DUP _VW-SLACK @ + VFS-PATH-MAX > IF DROP 0 VFS-E-NAMETOOLONG EXIT THEN
+            _VW-DU !
+        THEN
+        _VW-ENTRY @ _VE.T @ CASE
+            VFS-T-FILE OF _VW-FILE ENDOF
+            VFS-T-DIR  OF _VW-FOLDER ENDOF
+            >R _VW-OTHER R>
+        ENDCASE 0 EXIT
+    THEN
+    _VWN-L @ _VW.UP @ 0= IF _VW-POP _VW-END 0 EXIT THEN
+    _VW-POP _VW-LEFT 0 ;
+
+VARIABLE _VWR-A  VARIABLE _VWR-U
+
+\ _VW-ROOT ( src-a src-u src-vfs dst-a dst-u dst-vfs -- ior )
+\   Start a walk of the folder SRC on SRC-VFS that mirrors each path
+\   under DST on DST-VFS, or that walks SRC alone when DST-VFS is 0.
+\   _VW-SLACK must be set first for a walk with a destination.
+: _VW-ROOT  ( src-a src-u src-vfs dst-a dst-u dst-vfs -- ior )
+    _VW-DV !  _VWR-U ! _VWR-A !  _VW-SV !
+    _VW-ABANDON
+    DUP VFS-PATH-MAX > IF 2DROP VFS-E-NAMETOOLONG EXIT THEN
+    DUP _VW-SU !  _VW-SRC SWAP CMOVE
+    0 _VW-DU !
+    _VW-DV @ IF
+        _VWR-U @ VFS-PATH-MAX > IF VFS-E-NAMETOOLONG EXIT THEN
+        _VWR-U @ _VW-DU !  _VWR-A @ _VW-DST _VWR-U @ CMOVE
+        _VW-DV @ VFS-NAME-LIMIT _VW-LIMIT !
+    THEN
+    _VW-PUSH ;
+
+\ =====================================================================
+\  Removing a folder
+\ =====================================================================
+
+VARIABLE _VCP-KIND-T
+VARIABLE _VCT-XT
+
+\ _VCT-DO ( xt -- ior )
+\   Run XT ( -- ior ) as one VFS transaction; a throw answers VFS-E-IO.
+: _VCT-DO-BODY  ( -- ior )  _VCT-XT @ _VCP-CAUGHT ;
+: _VCT-DO  ( xt -- ior )  _VCT-XT !  ['] _VCT-DO-BODY VFS-TRANSACTION ;
+
+\ What the walk's source path names, in _VCP-KIND-T.
+: _VCT-KIND-BODY  ( -- ior )
+    _VW-SRC _VW-SU @ _VW-SV @ _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    DUP 0= IF DROP VFS-E-NOENT EXIT THEN
+    IN.TYPE @ _VCP-KIND-T !  0 ;
+
+: _VCT-RM-PATH  ( -- ior )  _VW-SRC _VW-SU @ _VW-SV @ VFS-RM ;
+
+VARIABLE _VCR-A  VARIABLE _VCR-U  VARIABLE _VCR-V
+
+\ _VCT-RM-TREE ( a u vfs -- ior )
+\   Remove the folder A U on VFS and everything in it, each entry before
+\   the folder that holds it, or the file A U.  Each removal is a call of
+\   its own, and the first that fails ends the walk, leaving the rest.
+: _VCT-RM-TREE  ( a u vfs -- ior )
+    _VCR-V ! _VCR-U ! _VCR-A !
+    _VW-ABANDON
+    _VCR-U @ VFS-PATH-MAX > IF VFS-E-NAMETOOLONG EXIT THEN
+    _VCR-A @ _VW-SRC _VCR-U @ CMOVE  _VCR-U @ _VW-SU !  _VCR-V @ _VW-SV !
+    ['] _VCT-KIND-BODY _VCT-DO ?DUP IF EXIT THEN
+    _VCP-KIND-T @ VFS-T-DIR <> IF ['] _VCT-RM-PATH _VCT-DO EXIT THEN
+    _VCR-A @ _VCR-U @ _VCR-V @ 0 0 0 _VW-ROOT ?DUP IF EXIT THEN
+    BEGIN
+        _VW-NEXT ?DUP IF NIP _VW-ABANDON EXIT THEN
+        CASE
+            _VW-FOLDER OF _VW-PUSH ENDOF
+            _VW-END OF ['] _VCT-RM-PATH _VCT-DO EXIT ENDOF
+            \ A file, a link or a device, or a folder now empty.
+            >R ['] _VCT-RM-PATH _VCT-DO R>
+        ENDCASE
+        ?DUP IF _VW-ABANDON EXIT THEN
+    AGAIN ;
+
+\ =====================================================================
+\  Copying a folder
+\ =====================================================================
+\
+\  A folder copies as a file does, at the scale of its tree.  The tree is
+\  written under the stage name in the destination folder, one barrier
+\  follows, every file is read back against its source, and only then is
+\  the stage folder renamed to its final name, which is the commit, and
+\  another barrier taken.  A failure before the rename removes the stage
+\  tree, so the final name never holds part of a folder.  A folder holds
+\  files and folders only: a link or a device in it refuses the copy, as
+\  a name or a path its destination does not take does.
+
 \ The record VFS-COPY steps, and whose replacement descriptor names a
-\ move's destination.  It is idle between calls.
+\ move's destination and a folder's stage.  It is idle between calls.
 CREATE _VCP-RECORD VCOPY-SIZE ALLOT
 _VCP-RECORD VCOPY-SIZE 0 FILL
 
+VARIABLE _VCT-SA  VARIABLE _VCT-SU  VARIABLE _VCT-SV
+VARIABLE _VCT-DA  VARIABLE _VCT-DU  VARIABLE _VCT-DV
+VARIABLE _VCT-XA  VARIABLE _VCT-XU
+VARIABLE _VCT-SFD  VARIABLE _VCT-DFD   \ the file copied or compared, and its copy
+VARIABLE _VCT-SIZE  VARIABLE _VCT-POS  VARIABLE _VCT-N  VARIABLE _VCT-HALF
+VARIABLE _VCT-STAGED   \ true while the stage folder stands
+VARIABLE _VCT-STALE    \ true when a stage left before holds the stage name
+VARIABLE _VCT-SRC-IN  VARIABLE _VCT-PINNED
+VARIABLE _VCT-WALK  VARIABLE _VCT-DEPTH
+VARIABLE _VCT-CWD
+
+: _VCT-CLOSE?  ( field -- ior )
+    DUP @ ?DUP IF 0 ROT ! VFS-CLOSE? ELSE DROP 0 THEN ;
+
+\ Close the file and its copy, if open; the first failure is the answer.
+: _VCT-FILES-CLOSE  ( -- ior )
+    _VCT-SFD _VCT-CLOSE?  _VCT-DFD _VCT-CLOSE?  ?DUP IF NIP THEN ;
+
+\ _VCT-INSIDE? ( dir -- flag )
+\   Whether DIR is the source folder or lies inside it.  A walk up that
+\   outlasts the cache's count is a cycle, and counts as inside.
+: _VCT-INSIDE?  ( dir -- flag )
+    _VCT-WALK !  0 _VCT-DEPTH !
+    BEGIN _VCT-WALK @ WHILE
+        _VCT-WALK @ _VCT-SRC-IN @ = IF TRUE EXIT THEN
+        _VCT-DEPTH @ _VCT-SV @ V.ICOUNT @ U< 0= IF TRUE EXIT THEN
+        _VCT-WALK @ IN.PARENT @ _VCT-WALK !  1 _VCT-DEPTH +!
+    REPEAT
+    FALSE ;
+
+\ The final name is free, the destination's folder exists and lies
+\ outside the source, and whether a stage left before holds the stage
+\ name.  The source is the folder pinned in _VCT-SRC-IN.
+: _VCT-START-CHECK  ( -- ior )
+    _VCP-REPL VREPL-TARGET$ _VCP-DST _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    IF VFS-E-EXISTS EXIT THEN
+    _VCP-FOLDER ?DUP IF NIP EXIT THEN
+    _VCT-SV @ _VCP-DST = IF
+        _VCT-INSIDE? IF VFS-E-INVALID EXIT THEN
+    ELSE DROP THEN
+    _VCP-REPL VREPL-STAGE$ _VCP-DST _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    ?DUP IF _VCT-SRC-IN @ = IF VFS-E-INVALID EXIT THEN -1 _VCT-STALE ! THEN
+    0 ;
+
+: _VCT-START-BODY  ( -- ior )
+    0 _VCT-STALE !
+    _VCT-SA @ _VCT-SU @ _VCT-SV @ _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    DUP 0= IF DROP VFS-E-NOENT EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR <> IF DROP VFS-E-NOTDIR EXIT THEN
+    DUP _VCT-SRC-IN !  _VCP-PIN _VCT-PINNED !
+    _VCT-START-CHECK
+    _VCT-SRC-IN @ _VCT-PINNED @ _VCP-UNPIN ;
+
+: _VCT-MKSTAGE  ( -- ior )  _VCP-STAGE-NAME$ _VCP-DST VFS-MKDIR ;
+
+\ Make the stage folder in the destination's folder.  The instance's
+\ current directory is that folder for this one call.
+: _VCT-MAKE-STAGE-BODY  ( -- ior )
+    _VCP-FOLDER ?DUP IF NIP EXIT THEN
+    _VCP-DST V.CWD @ _VCT-CWD !  _VCP-DST V.CWD !
+    ['] _VCT-MKSTAGE CATCH
+    _VCT-CWD @ _VCP-DST V.CWD !
+    IF VFS-E-IO THEN ;
+
+\ _VCT-AT-PARENT ( xt -- ior )
+\   Run XT ( -- ior ) with the destination's current directory at the
+\   folder that holds the entry the walk visits.  The directory is put
+\   back however XT ends.
+: _VCT-AT-PARENT  ( xt -- ior )
+    >R _VW-DST _VW-TOP @ _VW.DU @ _VCT-DV @ VFS-RESOLVE?
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR <> IF DROP R> DROP VFS-E-NOTDIR EXIT THEN
+    _VCT-DV @ V.CWD @ _VCT-CWD !  _VCT-DV @ V.CWD !
+    R> CATCH
+    _VCT-CWD @ _VCT-DV @ V.CWD !
+    IF VFS-E-IO THEN ;
+
+: _VCT-NAME$  ( -- a u )  _VW-ENTRY @ DUP _VE.A @ SWAP _VE.U @ ;
+: _VCT-MKDIR   ( -- ior )  _VCT-NAME$ _VCT-DV @ VFS-MKDIR ;
+: _VCT-MKFILE  ( -- ior )  _VCT-NAME$ _VCT-DV @ VFS-MKFILE? NIP ;
+
+: _VCT-FOLDER-BODY  ( -- ior )  ['] _VCT-MKDIR _VCT-AT-PARENT ;
+
+\ A file of the tree: create its copy, empty, and open both.
+: _VCT-FILE-OPEN  ( -- ior )
+    ['] _VCT-MKFILE _VCT-AT-PARENT ?DUP IF EXIT THEN
+    _VW-SRC _VW-SU @ VFS-FF-READ _VCT-SV @ VFS-OPEN? ?DUP IF NIP EXIT THEN
+    DUP _VCT-SFD !  VFS-SIZE _VCT-SIZE !  0 _VCT-POS !
+    _VW-DST _VW-DU @ VFS-FF-WRITE _VCT-DV @ VFS-OPEN? ?DUP IF NIP EXIT THEN
+    _VCT-DFD !  0 ;
+
+\ Move the next chunk, as much as the scratch holds.
+: _VCT-WRITE-CHUNK  ( -- ior )
+    _VCT-SIZE @ _VCT-POS @ - _VCT-XU @ MIN _VCT-N !
+    _VCT-XA @ _VCT-N @ _VCT-SFD @ VFS-READ-EXACT ?DUP IF EXIT THEN
+    _VCT-XA @ _VCT-N @ _VCT-DFD @ VFS-WRITE-EXACT ?DUP IF EXIT THEN
+    _VCT-N @ _VCT-POS +!  0 ;
+
+: _VCT-COPY-FILE  ( -- ior )
+    ['] _VCT-FILE-OPEN _VCT-DO ?DUP IF EXIT THEN
+    BEGIN _VCT-POS @ _VCT-SIZE @ < WHILE
+        ['] _VCT-WRITE-CHUNK _VCT-DO ?DUP IF EXIT THEN
+    REPEAT
+    ['] _VCT-FILES-CLOSE _VCT-DO ;
+
+\ _VCT-WRITE-TREE ( -- ior )   Copy every entry of the tree into the stage.
+: _VCT-WRITE-TREE  ( -- ior )
+    BEGIN
+        _VW-NEXT ?DUP IF NIP EXIT THEN
+        CASE
+            _VW-END OF 0 EXIT ENDOF
+            _VW-FOLDER OF
+                ['] _VCT-FOLDER-BODY _VCT-DO ?DUP IF EXIT THEN
+                _VW-PUSH ?DUP IF EXIT THEN
+            ENDOF
+            _VW-FILE OF _VCT-COPY-FILE ?DUP IF EXIT THEN ENDOF
+            _VW-OTHER OF VFS-E-UNSUPPORTED EXIT ENDOF
+        ENDCASE
+    AGAIN ;
+
+\ A copy that differs from its source, or is missing, is corrupt; the
+\ source gone is the source gone.
+: _VCT-CORRUPT  ( ior -- ior' )
+    DUP VFS-IOR-REASON VFS-R-NOENT = IF DROP VFS-E-CORRUPT THEN ;
+
+: _VCT-CHECK-FOLDER  ( -- ior )
+    _VW-DST _VW-DU @ _VCT-DV @ _VCP-ENTRY ?DUP IF NIP _VCT-CORRUPT EXIT THEN
+    DUP 0= IF DROP VFS-E-CORRUPT EXIT THEN
+    IN.TYPE @ VFS-T-DIR <> IF VFS-E-CORRUPT EXIT THEN  0 ;
+
+: _VCT-CHECK-OPEN  ( -- ior )
+    _VW-SRC _VW-SU @ VFS-FF-READ _VCT-SV @ VFS-OPEN? ?DUP IF NIP EXIT THEN
+    DUP _VCT-SFD !  VFS-SIZE _VCT-SIZE !  0 _VCT-POS !
+    _VW-DST _VW-DU @ VFS-FF-READ _VCT-DV @ VFS-OPEN?
+    ?DUP IF NIP _VCT-CORRUPT EXIT THEN
+    DUP _VCT-DFD !
+    VFS-SIZE _VCT-SIZE @ <> IF VFS-E-CORRUPT EXIT THEN  0 ;
+
+\ Compare the next half of the scratch's worth of the copy with the
+\ source.
+: _VCT-CHECK-CHUNK  ( -- ior )
+    _VCT-XU @ 2 / _VCT-HALF !
+    _VCT-SIZE @ _VCT-POS @ - _VCT-HALF @ MIN _VCT-N !
+    _VCT-XA @ _VCT-N @ _VCT-SFD @ VFS-READ-EXACT ?DUP IF EXIT THEN
+    _VCT-XA @ _VCT-HALF @ + _VCT-N @ _VCT-DFD @ VFS-READ-EXACT ?DUP IF EXIT THEN
+    _VCT-XA @ _VCT-N @  _VCT-XA @ _VCT-HALF @ + _VCT-N @  COMPARE
+    IF VFS-E-CORRUPT EXIT THEN
+    _VCT-N @ _VCT-POS +!  0 ;
+
+: _VCT-CHECK-FILE  ( -- ior )
+    ['] _VCT-CHECK-OPEN _VCT-DO ?DUP IF EXIT THEN
+    BEGIN _VCT-POS @ _VCT-SIZE @ < WHILE
+        ['] _VCT-CHECK-CHUNK _VCT-DO ?DUP IF EXIT THEN
+    REPEAT
+    ['] _VCT-FILES-CLOSE _VCT-DO ;
+
+\ _VCT-CHECK-TREE ( -- ior )
+\   Read the whole copy back against its source.  An entry of another
+\   kind now is a source that changed after it was copied.
+: _VCT-CHECK-TREE  ( -- ior )
+    BEGIN
+        _VW-NEXT ?DUP IF NIP EXIT THEN
+        CASE
+            _VW-END OF 0 EXIT ENDOF
+            _VW-FOLDER OF
+                ['] _VCT-CHECK-FOLDER _VCT-DO ?DUP IF EXIT THEN
+                _VW-PUSH ?DUP IF EXIT THEN
+            ENDOF
+            _VW-FILE OF _VCT-CHECK-FILE ?DUP IF EXIT THEN ENDOF
+            _VW-OTHER OF VFS-E-CORRUPT EXIT ENDOF
+        ENDCASE
+    AGAIN ;
+
+\ Walk the source, mirrored under the stage folder.  A path grows by
+\ the final name's length less the stage name's once the stage is
+\ renamed, and is checked for that length.
+: _VCT-ROOTS  ( -- ior )
+    _VCP-REPL VREPL-TARGET$ NIP _VCP-REPL VREPL-STAGE$ NIP - 0 MAX _VW-SLACK !
+    _VCT-SA @ _VCT-SU @ _VCT-SV @ _VCP-REPL VREPL-STAGE$ _VCP-DST _VW-ROOT ;
+
+: _VCT-BARRIER  ( -- ior )  _VCP-DST VFS-BARRIER ;
+
+\ The stage reads back as the source: rename it to the final name.
+: _VCT-PUBLISH-BODY  ( -- ior )
+    _VCP-REPL VREPL-STAGE$ _VCP-DST _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    DUP 0= IF DROP VFS-E-NOENT EXIT THEN
+    >R _VCP-NAME$ R@ R> IN.PARENT @ VFS-RN-NOREPLACE _VCP-DST VFS-RENAME-AT ;
+
+\ _VCT-GIVE-UP ( ior -- ior' )
+\   End a folder's copy before its rename: close its files, leave the
+\   walk, remove the stage tree and take a barrier.  The answer is IOR,
+\   whole.  A stage that cannot be removed stays a hidden folder until
+\   the same copy is tried again.
+: _VCT-GIVE-UP  ( ior -- ior' )
+    ['] _VCT-FILES-CLOSE _VCP-CAUGHT DROP
+    _VW-ABANDON
+    _VCT-STAGED @ IF
+        0 _VCT-STAGED !
+        _VCP-REPL VREPL-STAGE$ _VCP-DST _VCT-RM-TREE DROP
+        ['] _VCT-BARRIER _VCP-CAUGHT DROP
+    THEN
+    _VCP-WHOLE ;
+
+\ _VCT-COPY ( -- ior )
+\   Copy the folder _VCT-SA _VCT-SU on _VCT-SV to the destination the
+\   record names, through the scratch in _VCT-XA _VCT-XU.
+: _VCT-COPY  ( -- ior )
+    0 _VCT-STAGED !  0 _VCT-SFD !  0 _VCT-DFD !
+    ['] _VCT-START-BODY _VCT-DO ?DUP IF EXIT THEN
+    _VCT-STALE @ IF
+        _VCP-REPL VREPL-STAGE$ _VCP-DST _VCT-RM-TREE ?DUP IF _VCP-WHOLE EXIT THEN
+    THEN
+    ['] _VCT-MAKE-STAGE-BODY _VCT-DO ?DUP IF _VCP-WHOLE EXIT THEN
+    -1 _VCT-STAGED !
+    _VCT-ROOTS ?DUP IF _VCT-GIVE-UP EXIT THEN
+    _VCT-WRITE-TREE ?DUP IF _VCT-GIVE-UP EXIT THEN
+    ['] _VCT-BARRIER _VCP-CAUGHT ?DUP IF _VCT-GIVE-UP EXIT THEN
+    _VCT-ROOTS ?DUP IF _VCT-GIVE-UP EXIT THEN
+    _VCT-CHECK-TREE ?DUP IF _VCT-GIVE-UP EXIT THEN
+    ['] _VCT-PUBLISH-BODY _VCT-DO ?DUP IF _VCT-GIVE-UP EXIT THEN
+    0 _VCT-STAGED !
+    ['] _VCT-BARRIER _VCP-CAUGHT ?DUP IF _VCP-STANDS EXIT THEN
+    0 ;
+
+: _VCT-ARGS  ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- )
+    _VCT-XU ! _VCT-XA ! _VCT-DV ! _VCT-DU ! _VCT-DA !
+    _VCT-SV ! _VCT-SU ! _VCT-SA ! ;
+
+\ _VCT-FOLDER? ( -- flag ior )   Whether the source is a folder.
+: _VCT-FOLDER?  ( -- flag ior )
+    _VCT-SU @ VFS-PATH-MAX > IF 0 VFS-E-NAMETOOLONG EXIT THEN
+    _VCT-SA @ _VW-SRC _VCT-SU @ CMOVE  _VCT-SU @ _VW-SU !  _VCT-SV @ _VW-SV !
+    ['] _VCT-KIND-BODY _VCT-DO ?DUP IF 0 SWAP EXIT THEN
+    _VCP-KIND-T @ VFS-T-DIR = 0 ;
+
+\ _VCT-TREE-COPY ( -- ior )   Name the destination, copy, give the names back.
+: _VCT-TREE-COPY  ( -- ior )
+    _VCT-SV @ 0= _VCT-DV @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _VCT-XA @ 0= _VCT-XU @ 2 < OR IF VFS-E-INVALID EXIT THEN
+    _VCT-DA @ _VCT-DU @ _VCT-DV @ _VCP-RECORD _VCP-NAME-PATH ?DUP IF
+        _VCP-RELEASE EXIT
+    THEN
+    _VCT-COPY _VCP-RELEASE ;
+
+\ =====================================================================
+\  Copying and moving to the end
+\ =====================================================================
+
 : _VCP-COPY  ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
-    _VCP-RECORD _VCP-INIT ?DUP IF EXIT THEN
+    _VCT-ARGS
+    _VCT-SV @ 0= IF VFS-E-INVALID EXIT THEN
+    _VCT-FOLDER? ?DUP IF NIP EXIT THEN
+    IF _VCT-TREE-COPY EXIT THEN
+    _VCT-SA @ _VCT-SU @ _VCT-SV @ _VCT-DA @ _VCT-DU @ _VCT-DV @
+    _VCT-XA @ _VCT-XU @ _VCP-RECORD _VCP-INIT ?DUP IF EXIT THEN
     BEGIN _VCP-RECORD _VCP-STEP ?DUP IF NIP EXIT THEN 0= UNTIL
     0 ;
 
@@ -394,33 +895,46 @@ VARIABLE _VMV-DA   VARIABLE _VMV-DU   VARIABLE _VMV-DV
 VARIABLE _VMV-XA   VARIABLE _VMV-XU
 VARIABLE _VMV-FD
 VARIABLE _VMV-MOVED
+VARIABLE _VMV-IN       \ the source's entry, held until the rename
+VARIABLE _VMV-PINNED
 
 \ _VMV-SOURCE ( -- inode ior )
-\   What a move takes: a regular file, by its own name rather than
-\   through a final link.
+\   What a move takes: a regular file or a folder, by its own name rather
+\   than through a final link.
 : _VMV-SOURCE  ( -- inode ior )
     _VMV-SA @ _VMV-SU @ _VMV-SV @ _VCP-ENTRY ?DUP IF EXIT THEN
     DUP 0= IF VFS-E-NOENT EXIT THEN
-    DUP _VCP-FILE? ;
+    DUP IN.TYPE @ DUP VFS-T-FILE = SWAP VFS-T-DIR = OR
+    IF 0 ELSE VFS-E-INVALID THEN ;
 
-\ Inside one instance: one rename.  The open source holds its entry, so
-\ the folder's lookup cannot evict it before the rename.
+\ Hold the source's entry until the rename, so the folder's lookup
+\ cannot evict it: a file by opening it, a folder by its pin.
+: _VMV-HOLD  ( -- ior )
+    _VMV-SOURCE ?DUP IF NIP EXIT THEN
+    DUP IN.TYPE @ VFS-T-DIR = IF
+        DUP _VMV-IN !  _VCP-PIN _VMV-PINNED !  0 EXIT
+    THEN
+    DROP _VMV-SA @ _VMV-SU @ VFS-FF-READ _VMV-SV @ VFS-OPEN? ?DUP IF NIP EXIT THEN
+    DUP _VMV-FD !  FD.INODE @ _VMV-IN !  0 ;
+
+\ Inside one instance: one rename, of a file or of a folder with all it
+\ holds.  The VFS refuses to move a folder beneath itself.
 : _VMV-RENAME-BODY  ( -- ior )
     _VMV-SOURCE NIP ?DUP IF EXIT THEN
     _VCP-REPL VREPL-TARGET$ _VMV-DV @ _VCP-ENTRY ?DUP IF NIP EXIT THEN
     IF VFS-E-EXISTS EXIT THEN
-    _VMV-SA @ _VMV-SU @ VFS-FF-READ _VMV-SV @ VFS-OPEN? ?DUP IF NIP EXIT THEN
-    _VMV-FD !
+    _VMV-HOLD ?DUP IF EXIT THEN
     _VCP-FOLDER ?DUP IF NIP EXIT THEN
-    >R _VCP-NAME$ _VMV-FD @ FD.INODE @ R> VFS-RN-NOREPLACE _VMV-DV @
+    >R _VCP-NAME$ _VMV-IN @ R> VFS-RN-NOREPLACE _VMV-DV @
     VFS-RENAME-AT ?DUP IF EXIT THEN
     -1 _VMV-MOVED !
     _VMV-DV @ VFS-BARRIER ;
 
 : _VMV-RENAME  ( -- ior )
-    0 _VMV-FD !  0 _VMV-MOVED !
+    0 _VMV-FD !  0 _VMV-MOVED !  0 _VMV-IN !  0 _VMV-PINNED !
     ['] _VMV-RENAME-BODY _VCP-CAUGHT
     _VMV-FD @ ?DUP IF 0 _VMV-FD ! VFS-CLOSE? DROP THEN
+    _VMV-PINNED @ IF _VMV-IN @ TRUE _VCP-UNPIN  0 _VMV-PINNED ! THEN
     DUP _VMV-MOVED @ AND IF _VCP-STANDS ELSE _VCP-WHOLE THEN ;
 
 : _VMV-CHECK  ( -- ior )  _VMV-SOURCE NIP ;
@@ -433,6 +947,52 @@ VARIABLE _VMV-MOVED
 : _VMV-REMOVE  ( -- ior )
     ['] _VMV-REMOVE-BODY _VCP-CAUGHT DUP IF _VCP-STANDS THEN ;
 
+\ A folder moved across instances leaves its folder first: it takes the
+\ stage name that VREPL-DERIVE-PATHS! derives from its own path, so it is
+\ hidden at once, and that tree is then removed.  The descriptor holds the
+\ hidden path while the move runs.
+CREATE _VCT-HIDE VREPL-SIZE ALLOT
+_VCT-HIDE VREPL-SIZE 0 FILL
+
+: _VCT-HIDDEN$  ( -- a u )  _VCT-HIDE VREPL-STAGE$ ;
+
+\ Whether a folder a move left before holds the hidden name.
+: _VCT-HIDDEN-BODY  ( -- ior )
+    0 _VCT-STALE !
+    _VCT-HIDDEN$ _VCT-SV @ _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    IF -1 _VCT-STALE ! THEN 0 ;
+
+: _VCT-HIDE-BODY  ( -- ior )
+    _VCT-SA @ _VCT-SU @ _VCT-SV @ _VCP-ENTRY ?DUP IF NIP EXIT THEN
+    DUP 0= IF DROP VFS-E-NOENT EXIT THEN
+    >R _VCT-HIDE VREPL-STAGE-NAME$ R@ R> IN.PARENT @ VFS-RN-NOREPLACE
+    _VCT-SV @ VFS-RENAME-AT ;
+
+: _VCT-SOURCE-BARRIER  ( -- ior )  _VCT-SV @ VFS-BARRIER ;
+
+\ _VCT-UNSOURCE ( -- ior )
+\   Once the folder's copy stands: hide the source, remove it and take a
+\   barrier.  A failure leaves the copy standing, and the answer says so;
+\   until the hiding, both folders keep their names.
+: _VCT-UNSOURCE  ( -- ior )
+    ['] _VCT-HIDDEN-BODY _VCT-DO ?DUP IF _VCP-STANDS EXIT THEN
+    _VCT-STALE @ IF
+        _VCT-HIDDEN$ _VCT-SV @ _VCT-RM-TREE ?DUP IF _VCP-STANDS EXIT THEN
+    THEN
+    ['] _VCT-HIDE-BODY _VCT-DO ?DUP IF _VCP-STANDS EXIT THEN
+    _VCT-HIDDEN$ _VCT-SV @ _VCT-RM-TREE ?DUP IF _VCP-STANDS EXIT THEN
+    ['] _VCT-SOURCE-BARRIER _VCP-CAUGHT ?DUP IF _VCP-STANDS EXIT THEN
+    0 ;
+
+\ _VCT-TREE-MOVE ( -- ior )   Move the folder in _VCT- across instances.
+: _VCT-TREE-MOVE  ( -- ior )
+    _VCT-SV @ _VCT-HIDE VREPL-INIT IF VFS-E-INVALID EXIT THEN
+    _VCT-SA @ _VCT-SU @ _VCT-HIDE VREPL-DERIVE-PATHS! IF
+        _VCT-HIDE VREPL-FINI DROP VFS-E-INVALID EXIT
+    THEN
+    _VCT-TREE-COPY ?DUP IF _VCT-HIDE VREPL-FINI DROP EXIT THEN
+    _VCT-UNSOURCE  _VCT-HIDE VREPL-FINI DROP ;
+
 : _VCP-MOVE  ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
     _VMV-XU ! _VMV-XA ! _VMV-DV ! _VMV-DU ! _VMV-DA !
     _VMV-SV ! _VMV-SU ! _VMV-SA !
@@ -444,6 +1004,10 @@ VARIABLE _VMV-MOVED
         ?DUP IF _VCP-RELEASE EXIT THEN
         ['] _VMV-RENAME VFS-TRANSACTION _VCP-RELEASE EXIT
     THEN
+    _VMV-SA @ _VMV-SU @ _VMV-SV @ _VMV-DA @ _VMV-DU @ _VMV-DV @
+    _VMV-XA @ _VMV-XU @ _VCT-ARGS
+    _VCT-FOLDER? ?DUP IF NIP EXIT THEN
+    IF _VCT-TREE-MOVE EXIT THEN
     ['] _VMV-CHECK VFS-TRANSACTION ?DUP IF EXIT THEN
     _VMV-SA @ _VMV-SU @ _VMV-SV @ _VMV-DA @ _VMV-DU @ _VMV-DV @
     _VMV-XA @ _VMV-XU @ _VCP-COPY ?DUP IF EXIT THEN
@@ -521,18 +1085,19 @@ VARIABLE _VCPL-DV  VARIABLE _VCPL-DU
 : VCOPY-CANCEL  _vcopy-cancel-xt _vcopy-guard WITH-GUARD ;
 
 \ VFS-COPY ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
-\   Copy a file to the end.
+\   Copy a file, or a folder with all it holds, to the end.
 : VFS-COPY      _vcopy-copy-xt _vcopy-guard WITH-GUARD ;
 
 \ VFS-MOVE ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
-\   Move a file: one rename inside an instance; across two, a copy, then
-\   the source's removal and a barrier.
+\   Move a file or a folder: one rename inside an instance; across two, a
+\   copy, then the source's removal and a barrier.
 : VFS-MOVE      _vcopy-move-xt _vcopy-guard WITH-GUARD ;
 
 \ PLACE-COPY ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
-\   Copy a file of one place to a path of another, or the same, place.
+\   Copy a file or a folder of one place to a path of another, or the
+\   same, place.
 : PLACE-COPY    _vcopy-place-copy-xt _vcopy-guard WITH-GUARD ;
 
 \ PLACE-MOVE ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
-\   Move a file between places; both must be writable.
+\   Move a file or a folder between places; both must be writable.
 : PLACE-MOVE    _vcopy-place-move-xt _vcopy-guard WITH-GUARD ;
