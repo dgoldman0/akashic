@@ -13,7 +13,10 @@
 \  the set a component instance works in: the part of the activation's
 \  set its descriptor says it needs (COMP.PLACE-NEEDS, PLSET-DERIVE),
 \  made once for the instance and freed by PACT-PLACES-RELEASE or when
-\  the activation ends.  Ownership of a file follows from these grants
+\  the activation ends.  A component's home in it is a folder of its own
+\  inside the activation's home, named by the component's id, where that
+\  home stands apart from the documents place.  Ownership of a file
+\  follows from these grants
 \  (docs/utils/fs/places.md, "Who may write a file"), and a Practice's
 \  own choice of places per component belongs in the same word.
 \
@@ -318,6 +321,19 @@ VARIABLE _PPL-PACT
 : _PACT-NEEDS  ( instance -- needs )
     CINST-DESC DUP COMP-DESC-VALID? IF COMP.PLACE-NEEDS @ ELSE DROP 0 THEN ;
 
+\ The folder of the instance's own home in the activation's home: the
+\ component's id, so each component keeps its records in a folder of its
+\ own that no other component is given.  A home that is the documents
+\ place too, as the linked build's one place is, stays shared, since a
+\ folder per component there would sit among a person's documents.
+: _PACT-HOME-FOLDER  ( instance pact -- a u )
+    PACT.PLACES @ DUP PLSET-HOME SWAP PLSET-DOCUMENTS = IF
+        DROP 0 0 EXIT
+    THEN
+    CINST-DESC DUP COMP-DESC-VALID? IF
+        DUP COMP.ID-A @ SWAP COMP.ID-U @
+    ELSE DROP 0 0 THEN ;
+
 \ PACT-PLACES ( instance pact -- set | 0 )
 \   The place set the runtime instance INSTANCE works in under this
 \   activation: the part of the activation's set its component's
@@ -331,7 +347,8 @@ VARIABLE _PPL-PACT
     _PPL-INST @ CINST.ID @ _PPL-PACT @ _PACT-GRANT-FIND ?DUP IF
         _PAG.SET @ EXIT
     THEN
-    _PPL-INST @ _PACT-NEEDS 0 0 _PPL-PACT @ PACT.PLACES @ PLSET-DERIVE
+    _PPL-INST @ _PACT-NEEDS _PPL-INST @ _PPL-PACT @ _PACT-HOME-FOLDER
+    _PPL-PACT @ PACT.PLACES @ PLSET-DERIVE
     IF DROP 0 EXIT THEN                                ( set )
     _PAG-SIZE ALLOCATE IF DROP PLSET-FREE 0 EXIT THEN  ( set grant )
     TUCK _PAG.SET !

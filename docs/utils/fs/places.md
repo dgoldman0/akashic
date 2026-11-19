@@ -55,7 +55,13 @@ asks (`PLSET-DERIVE`), by what its component's descriptor says it needs
 (`PLACES-NEED-HOME`), the documents place to write
 (`PLACES-NEED-DOCUMENTS`), and every place to read (`PLACES-NEED-LIST`).
 The origin comes with every set, read-only, for the applet's shipped
-files, and a place no need names is left out. The set lasts until Desk
+files, and a place no need names is left out. Where the activation's home
+stands apart from the documents place, as the records place of the shipping
+form does, a component's home is a folder of its own inside it, named by the
+component's id (`/records/org.akashic.grid` for Grid) and made the first time
+the component asks. Where the home is the documents place too, as the linked
+build's one place and the test sets' are, components share it, since a folder
+per component would sit among a person's documents. The set lasts until Desk
 releases the instance (`PACT-PLACES-RELEASE`) or the activation ends, and
 it is narrowed with the activation's set. A Practice's own choice of
 places for each applet (Part 5b of the release plan) belongs in the same
@@ -98,9 +104,9 @@ every store. Applets outside the sandbox run as native code with every
 volume in reach, so the grants do not stop one that sets out to write a
 file it was not granted; sandboxed code has no file access of its own.
 The linked build declares one place that is home, origin and documents
-place at once, so its grants cannot separate records from documents, and
-there the registry lookup is what keeps Pad from writing another
-applet's file.
+place at once, so its grants cannot separate records from documents and its
+applets share that place as their home; there the registry lookup is what
+keeps Pad from writing another applet's file.
 
 ### A place that is unavailable at boot
 
@@ -555,6 +561,14 @@ shipping form's places.
   fills from Daybook's owner (`SDOC-PATH$`), and Pad finds the shared
   document's file there; `pad-resource-contracts` covers it. The source
   rule is `local_testing/test_applet_writes_through_places.py`.
+- Slice 7 has begun. A set may grant a place over a folder inside its
+  declared folder (`PLSET-GRANT-IN`), and a path that leaves its holder, in
+  a locator or the held-files table, starts at the declared folder
+  (`PLACE-DECLARED-PATH`, `PLSET-FIND-PATH`). Each applet's home is a folder
+  named by its id where the activation's home is a records place, as the
+  `practice-contracts` profile checks; `local_testing/test_practice_contracts.py`
+  runs that profile as a test. Desk's own stores, the layouts of
+  Streams and Library, and the user volume's transaction size come next.
 
 What slice 4 leaves:
 

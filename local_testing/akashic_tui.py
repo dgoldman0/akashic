@@ -10314,11 +10314,13 @@ VARIABLE _pc-first-epoch
 \ Two components: one keeps its records in its home, one lists the
 \ places it is given.  CREATE does not align, so the descriptors are
 \ placed on a cell boundary inside a larger buffer.
-CREATE _pc-desc-raw COMP-DESC 2* 7 + ALLOT
+CREATE _pc-desc-raw COMP-DESC 3 * 7 + ALLOT
 : _pc-desc-home  ( -- desc )  _pc-desc-raw 7 + -8 AND ;
 : _pc-desc-list  ( -- desc )  _pc-desc-home COMP-DESC + ;
+: _pc-desc-own   ( -- desc )  _pc-desc-list COMP-DESC + ;
 VARIABLE _pc-inst-home
 VARIABLE _pc-inst-list
+VARIABLE _pc-inst-own
 VARIABLE _pc-hset
 
 : _pc-semantic-validator  ( head data -- status )
@@ -10391,6 +10393,25 @@ VARIABLE _pc-hset
     _pc-inst-list @ _pc-pact PACT-PLACES-RELEASE
     _pc-inst-list @ _pc-pact PACT-PLACES PLSET-FIRST 0<> _pc-assert
     _pc-aset @ PLSET-HOME PLACE-WRITABLE? _pc-assert
+    \ A component with an id keeps its records in a folder of its own,
+    \ named by the id and made when missing, inside a home that stands
+    \ apart from the documents place.  Where the home is the documents
+    \ place too, components share it.
+    _pc-desc-own COMP-DESC-INIT
+    PLACES-NEED-HOME _pc-desc-own COMP.PLACE-NEEDS !
+    S" pc.own" _pc-desc-own COMP.ID-U ! _pc-desc-own COMP.ID-A !
+    _pc-desc-own CINST-NEW 0= _pc-assert _pc-inst-own !
+    _pc-inst-own @ _pc-pact PACT-PLACES PLSET-HOME
+    DUP PLACE-WRITABLE? _pc-assert
+    S" /" ROT PLACE-RESOLVE 0= _pc-assert
+    S" /pc.own" _pc-avfs @ VFS-RESOLVE DUP 0<> _pc-assert = _pc-assert
+    _pc-inst-own @ _pc-pact PACT-PLACES-RELEASE
+    _pc-aset @ PLSET-HOME _pc-aset @ PLSET-DOCUMENTS!
+    _pc-inst-own @ _pc-pact PACT-PLACES PLSET-HOME
+    S" /" ROT PLACE-RESOLVE 0= _pc-assert
+    _pc-avfs @ V.ROOT @ = _pc-assert
+    _pc-inst-own @ _pc-pact PACT-PLACES-RELEASE
+    0 _pc-aset @ PLSET-DOCUMENTS!
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-FALLBACK? _pc-assert
     _pc-pact PACT-RECOVERY? 0= _pc-assert
