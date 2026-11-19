@@ -28,6 +28,7 @@ REQUIRE coroutine.f
   - [BG-STOP-ALL](#bg-stop-all)
   - [BG-INFO](#bg-info)
 - [Concurrency Model](#concurrency-model)
+- [Long Work in a Background Slot](#long-work-in-a-background-slot)
 - [Constraints](#constraints)
 - [Quick Reference](#quick-reference)
 
@@ -368,6 +369,48 @@ counts active cooperative background tasks.
 The cooperative scheduler is per-core.  Each core has its own R20
 trampoline and task PC table.  `BACKGROUND` on core 0 only affects
 core 0's slots.
+
+---
+
+## Long Work in a Background Slot
+
+Each slot has its own data and return stacks, and KDOS keeps an
+exception chain for each slot, so a task can stop in the middle of its
+work and resume there with its `CATCH` frames intact.  No Akashic module
+runs long work in a slot today.  An operation that must let Desk keep
+answering, such as a folder copy, runs as steps a caller drives from its
+loop instead: the copy library keeps a copy's state in a record and
+returns between steps ([vfs-copy.md](../utils/fs/vfs-copy.md)), and File
+Explorer's service takes one step a pass.
+
+A slot could run such an operation as straight-line code that yields
+between its steps.  That route is open, not taken (2026-11-19), and it
+would need:
+
+- slot stacks that hold the deepest path the work takes.  Each slot's two
+  stacks are 256 bytes, 32 cells, set in MegaPad's `bios.asm`; a VFS call
+  through its guard, `CATCH` frames and the ext4 staged writer very likely
+  needs more, and that depth has not been measured;
+- a policy for the three slots, which serve the whole machine: which work
+  gets one, and what an operation does when none is free;
+- yields only between VFS transactions, with no guard held.  A guard
+  records the core and task that own it, so code on task 0 that needs a
+  guard a suspended task holds can go on only after that task runs again,
+  and the task runs only when task 0 pauses;
+- a record per operation all the same when two can run at once, or one
+  at a time;
+- cooperative cancelling, a flag the task reads at its yields, since
+  `TASK-STOP` abandons what the task holds: its open files, a stage half
+  written and its heap blocks;
+- tests that call `PAUSE` themselves, so a run interleaves the same way
+  each time.
+
+The estimate is two to three days across MegaPad and Akashic before the
+first operation uses it, made without the stack measurement.  The route
+would pay once several long operations need to run while Desk answers,
+such as Pad saving a large document through a checked replacement, an
+ext4 checkpoint or a long PDF's layout, since each would stay
+straight-line code; for the copy alone the steps are the cheaper design.
 
 ---
 
