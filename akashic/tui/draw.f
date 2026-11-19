@@ -17,19 +17,24 @@
 \  Text follows the shared text rules (APT-1-TEXT.md): a character is a
 \  grapheme cluster, a wide one takes a lead and a continuation cell, and
 \  each DRW-TEXT string is laid out as one bidi paragraph in visual order
-\  (../text/text-row.f).  Printable ASCII takes a byte path.
+\  (../text/text-row.f).  Printable ASCII takes a byte path.  Styled text
+\  takes each character's look from a map of meanings
+\  (../text/text-style.f) and a palette (style-palette.f).
 \
 \  Prefix: DRW- (public), _DRW- (internal)
 \  Provider: akashic-tui-draw
-\  Dependencies: screen.f, ../text/utf8.f, ../text/cell-width.f,
-\                ../text/text-row.f
+\  Dependencies: screen.f, style-palette.f, ../text/utf8.f,
+\                ../text/cell-width.f, ../text/text-row.f,
+\                ../text/text-style.f
 
 PROVIDED akashic-tui-draw
 
 REQUIRE screen.f
+REQUIRE style-palette.f
 REQUIRE ../text/utf8.f
 REQUIRE ../text/cell-width.f
 REQUIRE ../text/text-row.f
+REQUIRE ../text/text-style.f
 
 \ =====================================================================
 \ 1. Style state — current drawing style
@@ -803,10 +808,15 @@ VARIABLE _DRW-TEXT-SC-U
 VARIABLE _DRW-TEXT-REC
 VARIABLE _DRW-TEXT-C
 VARIABLE _DRW-TEXT-W
-VARIABLE _DRW-TEXT-STYLE-XT  0 _DRW-TEXT-STYLE-XT !  \ ( byte -- fg attrs )
+\ A styled draw's looks: where the meaning of its text's first byte lies,
+\ or 0 while plain text is drawn, the palette, and the style in force at
+\ the call.
+VARIABLE _DRW-TEXT-MAP     0 _DRW-TEXT-MAP !
+VARIABLE _DRW-TEXT-PAL
 VARIABLE _DRW-TEXT-BASE-FG
 VARIABLE _DRW-TEXT-BASE-A
 VARIABLE _DRW-TEXT-ORIGIN    \ a styled text's first byte
+VARIABLE _DRW-TEXT-FIRST     \ the column of its first scalar
 
 CREATE _DRW-TEXT-UTF8-STATE UTF8-DECODE-STATE-SIZE ALLOT
 CREATE _DRW-TROW TROW-SIZE ALLOT  _DRW-TROW TROW-INIT
@@ -925,6 +935,41 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-TEXT-ROW @ DUP _DRW-LOCAL-ROW-LOW >=
     SWAP _DRW-LOCAL-ROW-HIGH < AND ;
 
+\ _DRW-TEXT-MARK! ( start end attrs -- )
+\   Characters whose logical start offset lies in [START, END) take ATTRS.
+\   ATTRS is kept only when START lies below END, so a draw has a mark
+\   exactly when some character can take it.
+: _DRW-TEXT-MARK!  ( start end attrs -- )
+    >R 2DUP < R> AND _DRW-TEXT-MARK !
+    _DRW-TEXT-ME ! _DRW-TEXT-MS ! ;
+
+\ _DRW-TEXT-MARKED? ( offset -- flag )
+\   Does the character whose logical start offset is OFFSET lie in the
+\   marked range [MS, ME)?  Only a draw with a mark asks, and its range
+\   holds an offset, so MS lies below ME.
+: _DRW-TEXT-MARKED?  ( offset -- flag )
+    _DRW-TEXT-MS @ _DRW-TEXT-ME @ WITHIN ;
+
+\ _DRW-TEXT-LOOK ( byte offset -- )
+\   A styled text's character, whose first byte lies at offset BYTE and
+\   whose logical start offset is OFFSET, takes its look: the colour the
+\   palette gives the meaning the map holds at BYTE, with that meaning's
+\   attributes added to the base ones, or the base style when the meaning
+\   is plain or lies outside the list of meanings; and MARK as well when
+\   OFFSET is marked.
+: _DRW-TEXT-LOOK  ( byte offset -- )
+    SWAP _DRW-TEXT-MAP @ + C@ DUP TSTY-VALID? IF
+        _DRW-TEXT-PAL @ SPAL-LOOK@ _DRW-TEXT-BASE-A @ OR SWAP _DRW-FG !
+    ELSE
+        DROP _DRW-TEXT-BASE-FG @ _DRW-FG !  _DRW-TEXT-BASE-A @
+    THEN                                          ( offset attrs )
+    _DRW-TEXT-MARK @ IF
+        SWAP _DRW-TEXT-MARKED? IF _DRW-TEXT-MARK @ OR THEN
+    ELSE
+        NIP
+    THEN
+    _DRW-ATTRS ! ;
+
 \ Printable ASCII: one byte per cell.  The body is bounded by the visible
 \ column interval; the unseen right suffix is never read.
 : _DRW-TEXT-ASCII-BODY  ( -- )
@@ -939,11 +984,11 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         _DRW-TEXT-ROW @ _DRW-TEXT-ABS-ROW !
         _DRW-TEXT-COL @ _DRW-TEXT-ABS-COL !
     THEN
-    _DRW-TEXT-STYLE-XT @ IF
-        \ Styled text: each byte first takes its style.
+    _DRW-TEXT-MAP @ IF
+        \ Styled text: each byte takes its look.  A printable ASCII byte
+        \ is one scalar, so its offset is its logical offset as well.
         _DRW-TEXT-A @ SWAP OVER + SWAP ?DO
-            I _DRW-TEXT-ORIGIN @ - _DRW-TEXT-STYLE-XT @ EXECUTE
-            _DRW-ATTRS ! _DRW-FG !
+            I _DRW-TEXT-ORIGIN @ - DUP _DRW-TEXT-LOOK
             I C@ _DRW-MAKE-CELL
             _DRW-TEXT-ABS-ROW @ _DRW-TEXT-ABS-COL @ _DRW-PLANE-SET
             1 _DRW-TEXT-ABS-COL +!
@@ -957,7 +1002,8 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
 
 \ One scalar per cell: text of one-cell scalars, and the fallback when a
 \ row cannot be laid out, where any scalar but printable ASCII shows as
-\ U+FFFD.
+\ U+FFFD.  A styled text's scalar takes its look, its logical offset being
+\ the count of scalars before it: its column less the first scalar's.
 : _DRW-TEXT-BODY  ( -- )
     _DRW-TEXT-ROW-VISIBLE? 0= IF EXIT THEN
     _DRW-TEXT-COL @ _DRW-LOCAL-COL-LOW < IF EXIT THEN
@@ -976,9 +1022,9 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
         _DRW-TEXT-COL @ _DRW-TEXT-HIGH @ < AND
         _DRW-TEXT-BUDGET @ 0> AND
     WHILE
-        _DRW-TEXT-STYLE-XT @ IF
-            _DRW-TEXT-A @ _DRW-TEXT-ORIGIN @ - _DRW-TEXT-STYLE-XT @ EXECUTE
-            _DRW-ATTRS ! _DRW-FG !
+        _DRW-TEXT-MAP @ IF
+            _DRW-TEXT-A @ _DRW-TEXT-ORIGIN @ -
+            _DRW-TEXT-COL @ _DRW-TEXT-FIRST @ - _DRW-TEXT-LOOK
         THEN
         _DRW-TEXT-NEXT
         _DRW-TEXT-KEEP @ 0= IF
@@ -1009,24 +1055,25 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     _DRW-MAKE-CELL
     R> 2 = IF _DRW-C-WIDE OR THEN ;
 
-\ _DRW-TEXT-STYLE ( rec -- rec )
-\   A styled row's character takes the foreground and attributes its style
-\   word gives the character's first byte.
-: _DRW-TEXT-STYLE  ( rec -- rec )
-    DUP TROW.BYTE _DRW-TEXT-STYLE-XT @ EXECUTE
-    _DRW-ATTRS ! _DRW-FG ! ;
-
-\ Before the plane borrow, the cell of every visible character, marked
-\ when its logical start lies in [MS, ME): the borrow itself neither
+\ Before the plane borrow, the cell of every visible character: in its
+\ look when the row is styled, and otherwise in the current style with
+\ MARK added when its logical start is marked.  The borrow itself neither
 \ allocates nor calls the screen.
 : _DRW-TEXT-PREPARE?  ( -- ok? )
     _DRW-TEXT-T @ TROW-VISIBLE DUP _DRW-TC-FIT? 0= IF DROP 0 EXIT THEN
     0 ?DO
         I _DRW-TEXT-T @ TROW-VCHAR
-        _DRW-TEXT-STYLE-XT @ IF _DRW-TEXT-STYLE THEN
-        DUP _DRW-TEXT-CHAR-CELL SWAP TROW.START
-        DUP _DRW-TEXT-MS @ < 0= SWAP _DRW-TEXT-ME @ < AND IF
-            _DRW-TEXT-MARK @ 48 LSHIFT OR
+        _DRW-TEXT-MAP @ IF
+            DUP TROW.BYTE OVER TROW.START _DRW-TEXT-LOOK _DRW-TEXT-CHAR-CELL
+        ELSE
+            DUP _DRW-TEXT-CHAR-CELL
+            _DRW-TEXT-MARK @ IF
+                SWAP TROW.START _DRW-TEXT-MARKED? IF
+                    _DRW-TEXT-MARK @ 48 LSHIFT OR
+                THEN
+            ELSE
+                NIP
+            THEN
         THEN
         _DRW-TC-A @ I 8 * + !
     LOOP -1 ;
@@ -1122,7 +1169,7 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
     THEN ;
 
 : DRW-TROW-MARK  ( trow row col start end attrs -- )
-    _DRW-TEXT-MARK ! _DRW-TEXT-ME ! _DRW-TEXT-MS !
+    _DRW-TEXT-MARK!
     _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-T !
     ['] _DRW-TROW-RUN CATCH
     _DRW-TEXT-CLEAR
@@ -1131,45 +1178,57 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
 : DRW-TROW  ( trow row col -- )
     0 0 0 DRW-TROW-MARK ;
 
-\ DRW-TEXT-STYLED ( addr len row col xt -- )
-\   As DRW-TEXT, but each character first takes the foreground and
-\   attributes XT ( byte -- fg attrs ) gives for the byte offset where the
-\   character starts, so one call draws a highlighted line.  The style in
-\   force before the call is back in force after it.
-\   DRW-TEXT-STYLED-UNTRUSTED draws as DRW-TEXT-UNTRUSTED does.
-: _DRW-TEXT-STYLED-START  ( addr len row col xt flags -- )
-    _DRW-TEXT-FLAGS !
-    _DRW-TEXT-STYLE-XT !
-    _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-U !
-    DUP _DRW-TEXT-A ! _DRW-TEXT-ORIGIN !
+\ _DRW-TEXT-STYLED-CALL ( run-xt -- )
+\   Run a styled draw whose text, marks, map and palette are set.  Whether
+\   RUN returns or throws, the style in force before it is back in force
+\   and the map is cleared, so the next draw is plain unless it brings
+\   its own.
+: _DRW-TEXT-STYLED-CALL  ( run-xt -- )
     _DRW-FG @ _DRW-TEXT-BASE-FG !  _DRW-ATTRS @ _DRW-TEXT-BASE-A !
-    ['] _DRW-TEXT-RUN CATCH
+    CATCH
     _DRW-TEXT-BASE-FG @ _DRW-FG !  _DRW-TEXT-BASE-A @ _DRW-ATTRS !
-    0 _DRW-TEXT-STYLE-XT !
+    0 _DRW-TEXT-MAP !
     _DRW-TEXT-CLEAR
     ?DUP IF THROW THEN ;
 
-: DRW-TEXT-STYLED  ( addr len row col xt -- )
+\ DRW-TEXT-STYLED ( addr len row col start end attrs map palette -- )
+\   As DRW-TEXT, but each character takes the look PALETTE
+\   (style-palette.f) gives its meaning, so one call draws a highlighted
+\   line.  MAP holds one meaning (../text/text-style.f) for each byte of
+\   the text, from its first, and a character takes the meaning of its
+\   first byte.  A meaning's look is its colour, with its attributes added
+\   to the current ones; a plain character keeps the current style.
+\   Characters whose logical start offset lies in [START, END) also take
+\   ATTRS, as a selection does; offsets count scalars, so in printable
+\   ASCII they count bytes.  The style in force before the call is back in
+\   force after it.  DRW-TEXT-STYLED-UNTRUSTED draws as DRW-TEXT-UNTRUSTED
+\   does.
+: _DRW-TEXT-STYLED-START
+  ( addr len row col start end attrs map palette flags -- )
+    _DRW-TEXT-FLAGS !
+    _DRW-TEXT-PAL ! _DRW-TEXT-MAP !
+    _DRW-TEXT-MARK!
+    DUP _DRW-TEXT-COL ! _DRW-TEXT-FIRST !
+    _DRW-TEXT-ROW ! _DRW-TEXT-U !
+    DUP _DRW-TEXT-A ! _DRW-TEXT-ORIGIN !
+    ['] _DRW-TEXT-RUN _DRW-TEXT-STYLED-CALL ;
+
+: DRW-TEXT-STYLED  ( addr len row col start end attrs map palette -- )
     0 _DRW-TEXT-STYLED-START ;
 
-: DRW-TEXT-STYLED-UNTRUSTED  ( addr len row col xt -- )
+: DRW-TEXT-STYLED-UNTRUSTED  ( addr len row col start end attrs map palette -- )
     TROW-F-UNTRUSTED _DRW-TEXT-STYLED-START ;
 
-\ DRW-TROW-STYLED ( trow row col start end attrs xt -- )
-\   As DRW-TROW-MARK, but each character first takes the foreground and
-\   attributes XT ( byte -- fg attrs ) gives for the byte offset where the
-\   character starts, as a syntax highlighter's style map does.  The style
-\   in force before the call is back in force after it.
-: DRW-TROW-STYLED  ( trow row col start end attrs xt -- )
-    _DRW-TEXT-STYLE-XT !
-    _DRW-TEXT-MARK ! _DRW-TEXT-ME ! _DRW-TEXT-MS !
+\ DRW-TROW-STYLED ( trow row col start end attrs map palette -- )
+\   As DRW-TROW-MARK, but each character takes the look PALETTE gives its
+\   meaning, as DRW-TEXT-STYLED draws: MAP holds one meaning for each byte
+\   of the text the row was laid out from, from its first.  The style in
+\   force before the call is back in force after it.
+: DRW-TROW-STYLED  ( trow row col start end attrs map palette -- )
+    _DRW-TEXT-PAL ! _DRW-TEXT-MAP !
+    _DRW-TEXT-MARK!
     _DRW-TEXT-COL ! _DRW-TEXT-ROW ! _DRW-TEXT-T !
-    _DRW-FG @ _DRW-TEXT-BASE-FG !  _DRW-ATTRS @ _DRW-TEXT-BASE-A !
-    ['] _DRW-TROW-RUN CATCH
-    _DRW-TEXT-BASE-FG @ _DRW-FG !  _DRW-TEXT-BASE-A @ _DRW-ATTRS !
-    0 _DRW-TEXT-STYLE-XT !
-    _DRW-TEXT-CLEAR
-    ?DUP IF THROW THEN ;
+    ['] _DRW-TROW-RUN _DRW-TEXT-STYLED-CALL ;
 
 \ Network, document, and Agent text must not place terminal controls or
 \ invisible direction overrides into the screen buffer.  Keep the source

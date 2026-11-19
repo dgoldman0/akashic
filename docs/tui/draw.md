@@ -24,7 +24,8 @@ using the ordinary drawing words.
 
 `PROVIDED akashic-tui-draw` — safe to include multiple times.
 
-**Dependencies:** `screen.f`, `../text/utf8.f`
+**Dependencies:** `screen.f`, `style-palette.f`, `../text/utf8.f`,
+`../text/cell-width.f`, `../text/text-row.f`, `../text/text-style.f`
 
 ---
 
@@ -303,20 +304,33 @@ and draws it with this word.
 ### DRW-TEXT-STYLED, DRW-TEXT-STYLED-UNTRUSTED and DRW-TROW-STYLED
 
 ```
-( addr len row col xt -- )
-( addr len row col xt -- )
-( trow row col start end attrs xt -- )
+( addr len row col start end attrs map palette -- )
+( addr len row col start end attrs map palette -- )
+( trow row col start end attrs map palette -- )
 ```
 
-As `DRW-TEXT` and `DRW-TROW-MARK`, but each character first takes the
-foreground and attributes that `xt ( byte -- fg attrs )` gives for the byte
-offset where the character starts, so one call draws a highlighted line.
-Printable ASCII calls `xt` for each byte, other text for each character. The
-style in force before the call is back in force after it. A text area uses
-these with its style map ([textarea](widgets/textarea.md)).
-`DRW-TEXT-STYLED-UNTRUSTED` draws as `DRW-TEXT-UNTRUSTED` does, for styled
-text from outside the application, such as a list's cards in
-`LST-UNTRUSTED` mode ([list](widgets/list.md)).
+As `DRW-TEXT` and `DRW-TROW-MARK`, but each character takes the look that a
+[style palette](style-palette.md) gives its meaning, so one call draws a
+highlighted line. `map` holds one meaning from
+[text-style](../text/text-style.md) for each byte of the text, starting at its
+first byte, and a character takes the meaning of its first byte; a caller
+drawing text that starts partway through a styled line passes the map's
+address at that byte. A meaning's look is its colour, with its attributes
+added to the current ones, while a plain character, or one whose byte holds a
+value outside the list of meanings, keeps the current style. Characters whose
+logical start offset lies in [start, end) also take `attrs`, as a selection or
+a caret does; offsets count scalars, so in printable ASCII they count bytes.
+The style in force before the call is back in force after it.
+
+The draw resolves each look itself, with plain fetches from the map and the
+palette: inside its one bounded back-plane borrow for printable ASCII and for
+the one-cell-per-scalar path, and before the borrow for laid-out text. The
+borrow therefore runs only the draw layer's own words. The text area, the list
+and the document view draw their highlighted text this way, each passing its
+style map ([textarea](widgets/textarea.md), [list](widgets/list.md),
+[document](widgets/document.md)). `DRW-TEXT-STYLED-UNTRUSTED` draws as
+`DRW-TEXT-UNTRUSTED` does, for styled text from outside the application, such
+as a list's cards in `LST-UNTRUSTED` mode.
 
 ### DRW-FG@, DRW-BG@ and DRW-ATTR@
 
@@ -430,9 +444,9 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-TEXT` | `( addr len row col -- )` | Draw UTF-8 text |
 | `DRW-TROW-MARK` | `( trow row col start end attrs -- )` | Draw a laid-out row, marking a logical range |
 | `DRW-TROW` | `( trow row col -- )` | Draw a laid-out row |
-| `DRW-TEXT-STYLED` | `( addr len row col xt -- )` | Draw text, each character in the style `xt` gives |
-| `DRW-TEXT-STYLED-UNTRUSTED` | `( addr len row col xt -- )` | As `DRW-TEXT-STYLED`, ignoring bidi controls as `DRW-TEXT-UNTRUSTED` does |
-| `DRW-TROW-STYLED` | `( trow row col start end attrs xt -- )` | Draw a laid-out row, each character in the style `xt` gives |
+| `DRW-TEXT-STYLED` | `( addr len row col start end attrs map palette -- )` | Draw text, each character in its meaning's look, marking a logical range |
+| `DRW-TEXT-STYLED-UNTRUSTED` | `( addr len row col start end attrs map palette -- )` | As `DRW-TEXT-STYLED`, ignoring bidi controls as `DRW-TEXT-UNTRUSTED` does |
+| `DRW-TROW-STYLED` | `( trow row col start end attrs map palette -- )` | Draw a laid-out row, each character in its meaning's look, marking a logical range |
 | `DRW-FG@` / `DRW-BG@` / `DRW-ATTR@` | `( -- fg )` / `( -- bg )` / `( -- attrs )` | The current foreground, background and attributes |
 | `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Draw untrusted UTF-8, ignoring bidi controls |
 | `DRW-TEXT-CENTER` | `( addr len row col w -- )` | Center text |

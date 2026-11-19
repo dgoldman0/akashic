@@ -18,6 +18,7 @@
 \    SPAL-DEFAULT  ( -- palette )
 \    SPAL-INIT     ( palette -- )           copy the default
 \    SPAL-SET      ( fg attrs meaning palette -- )
+\    SPAL-LOOK@    ( meaning palette -- fg attrs )
 \    SPAL-FG@      ( meaning palette -- fg )
 \    SPAL-ATTRS@   ( meaning palette -- attrs )
 \ =================================================================
@@ -35,8 +36,12 @@ TSTY-COUNT CELLS CONSTANT SPAL-SIZE
 : SPAL-SET  ( fg attrs meaning palette -- )
     _SPAL-ENTRY >R 8 LSHIFT SWAP 0xFF AND OR R> ! ;
 
-: SPAL-FG@     ( meaning palette -- fg )     _SPAL-ENTRY @ 0xFF AND ;
-: SPAL-ATTRS@  ( meaning palette -- attrs )  _SPAL-ENTRY @ 8 RSHIFT ;
+\ A meaning's look, its colour and attributes, read from its one entry.
+: SPAL-LOOK@   ( meaning palette -- fg attrs )
+    _SPAL-ENTRY @ DUP 0xFF AND SWAP 8 RSHIFT ;
+
+: SPAL-FG@     ( meaning palette -- fg )     SPAL-LOOK@ DROP ;
+: SPAL-ATTRS@  ( meaning palette -- attrs )  SPAL-LOOK@ NIP ;
 
 CREATE SPAL-DEFAULT  SPAL-SIZE ALLOT
 SPAL-DEFAULT SPAL-SIZE 0 FILL
