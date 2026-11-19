@@ -496,9 +496,17 @@ first region before emitting any text. Advancing only the base candidate's
 frontiers at hidden ACK caused that reuse; START-ACK reserves the complete
 shell range at the same acknowledgement boundary.
 
-CURRENT and input additionally require the frame on screen's draw to be the
-screen's last and its owner the producer's, and the current SHSN model to
-equal the part's copied model. Unacknowledged parts never route input.
+CURRENT additionally requires the frame on screen's draw to be the screen's
+last and its owner the producer's, and the current SHSN model to equal the
+part's copied model. Input requires the owner, and the SHSN model of the
+screen's last completed draw to equal the part's copied model apart from the
+epoch every paint advances. A paint that changed nothing the shell shows,
+such as an application repainting a pane for a change the pane does not
+display, therefore leaves the frame's clicks routing, as clicks route through
+a frame with no shell part, and a click is not lost to a repaint that showed
+nothing new. While a paint is open, or after one that changed the shell's
+model, no input routes until the terminal acknowledges the frame that shows
+it. Unacknowledged parts never route input.
 
 A shell ACTIVATE must match a unique retained CONTROL and correlation, the
 canonical parent band and translated slot, source lifecycle tuple, copied label

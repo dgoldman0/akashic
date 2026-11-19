@@ -111,7 +111,7 @@ _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
 _SD-CREPLACE @ 0= _SS-A _SD-PREPLACE @ 0= _SS-A
 _SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A _RSHSP-PENDING-PART 0= _SS-A
 \ The taskbar keeps its acknowledged identities, so a task click resolves.
-_RSHSP-CURRENT? _SS-A
+_RSHSP-ROUTES? _SS-A
 11 _SX-KB _SD-FIND _RTE-CONTROL.ID @ DUP 11 _SX-KA _SD-FIND _RTE-CONTROL.ID @ = _SS-A
 _RSHSP-INPUT-ID ! RTE-INTENT-ACTIVATE _RSHSP-INPUT-INTENT !
 _RSHSP-CONTROL-FIND DUP 0<> _SS-A _RSHSP-INPUT-CONTROL ! _RSHSP-SHELL-TARGET? _SS-A
@@ -121,14 +121,14 @@ _SS-DONE
 
 def test_a_click_reads_the_batch_of_the_part_it_routes_through():
     """A click finds its control in the part of the frame the terminal
-    acknowledged, which it found current, not in whichever part a check read
-    last.  Normal mode checks a built part only when a START is
-    acknowledged, so a click after later frames read a batch whose block a
-    newer frame might have rewritten in another layout.  Here no check
-    reads either part."""
+    acknowledged, which it found still showing the shell, not in whichever
+    part a check read last.  Normal mode checks a built part only when a
+    START is acknowledged, so a click after later frames read a batch whose
+    block a newer frame might have rewritten in another layout.  Here no
+    check reads either part."""
     staged_run(DELTA + r'''
 : _SR-FIND ( -- control|0 )
-    _RSHSP-CURRENT? 0= IF 0 EXIT THEN
+    _RSHSP-ROUTES? 0= IF 0 EXIT THEN
     11 _RSHSP-ACTIVE-PART _SD-FIND _RTE-CONTROL.ID @ _RSHSP-INPUT-ID !
     _RSHSP-CONTROL-FIND ;
 : _SR-IN? ( control block -- flag ) 2DUP U< 0= >R 131072 + U< R> AND ;
@@ -141,6 +141,47 @@ _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 _SR-FIND DUP 0<> _SS-A _SX-KB _SR-IN? _SS-A
 _SS-DONE
 ''', minimum=8)
+
+
+def test_a_click_routes_through_a_frame_a_later_paint_left_as_it_was():
+    """A paint that changes nothing the shell shows, as when an application
+    repaints a pane for a change it cannot see, leaves the frame on screen
+    showing the shell.  That frame is no longer the screen's last draw, so
+    it is not current and the next frame is built, but a click the terminal
+    sent from it still routes through it, as through a frame with no part of
+    the shell's.  While a paint is open the shell's model is not yet known,
+    and a paint that changed what the shell shows, here its task's label,
+    routes no click until the terminal has the frame that shows it."""
+    staged_run(DELTA + r'''
+: _SR-TASK-CLICK ( -- found? )
+    _RSHSP-ROUTES? 0= IF 0 EXIT THEN
+    11 _RSHSP-ACTIVE-PART _SD-FIND _RTE-CONTROL.ID @ _RSHSP-INPUT-ID !
+    RTE-INTENT-ACTIVATE _RSHSP-INPUT-INTENT !
+    _RSHSP-CONTROL-FIND DUP 0= IF EXIT THEN _RSHSP-INPUT-CONTROL !
+    _RSHSP-SHELL-TARGET? ;
+: _SR-COMPLETE ( -- )
+    _SD-PAINT @ EXECUTE _SX-H AHOST-SHELL-DRAW-COMPLETE _SS-OK
+    SCR-DRAW-COMPLETE ASHELL-DRAW-COMPLETE _ASHELL-DRAW-OBSERVE _SS-OK ;
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
+_RSHSP-CURRENT? _SS-A _SR-TASK-CLICK _SS-A
+\ The pane is painted again as it was: only the epoch moves.
+' _SD-HELLO _SD-DRAW
+_RSHSP-CURRENT? 0= _SS-A _RSHSP-ACTIVE-PART _SX-KA = _SS-A
+_SR-TASK-CLICK _SS-A
+_RSHSP-INPUT-CORR @ RSHPL-CORRELATION.ROW @ 11 = _SS-A
+\ So is a pane whose text changed; the shell's part shows the same.
+' _SD-HELLP _SD-DRAW _SR-TASK-CLICK _SS-A
+\ A paint that has begun and not finished.
+ASHELL-DRAW-BEGIN _ASHELL-DRAW-OBSERVE _SS-OK
+_SR-TASK-CLICK 0= _SS-A
+_SR-COMPLETE _SR-TASK-CLICK _SS-A
+\ A paint that renames the task, Edit to Edix, changes what the shell shows.
+1 _SS-M SHM-ENTRY SHME.LABEL-OFF @ _SS-M + 3 + 120 SWAP C!
+' _SD-HELLP _SD-DRAW
+_RSHSP-ROUTES? 0= _SS-A _SR-TASK-CLICK 0= _SS-A
+_SS-DONE
+''', minimum=12)
 
 def test_more_and_fewer_runs_define_new_slots_and_hide_unused_ones():
     staged_run(DELTA + r'''
@@ -628,7 +669,7 @@ def test_safe_mode_checks_the_acknowledged_part_again_before_using_it():
 \ A click on the taskbar's task, routed through the acknowledged part as
 \ RSHSP-CONTROL-TARGET@ routes it once the sidecar is proved.
 : _SB-CLICK ( -- found? )
-    _RSHSP-CURRENT? 0= IF 0 EXIT THEN
+    _RSHSP-ROUTES? 0= IF 0 EXIT THEN
     _RSHSP-ACTIVE-INTACT? 0= IF 0 EXIT THEN
     _SX-P _RTHP-ACTIVE-SEALED? 0= IF 0 EXIT THEN
     11 _RSHSP-ACTIVE-PART _SD-FIND _RTE-CONTROL.ID @ _RSHSP-INPUT-ID !
@@ -663,12 +704,12 @@ _RSHSP-ACTIVE-INTACT? _SS-A _SB-CLICK _SS-A CHK-DAMAGE-COUNT @ 2 = _SS-A
 _SS-DONE
 ''', minimum=22)
     # The public entry checks the part, and then the seal of the bank that
-    # names it, right after it finds the part current.
+    # names it, right after it finds the part still showing the shell.
     source = (Path(__file__).resolve().parents[1]
               / "akashic/tui/rich-terminal/shell-screen-producer.f").read_text()
     target = source[source.index(": RSHSP-CONTROL-TARGET@"):]
     target = target[:target.index("\n;") if "\n;" in target else len(target)]
-    assert ("_RSHSP-CURRENT? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
+    assert ("_RSHSP-ROUTES? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
             "    _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
             "    _RSHSP-P @ _RTHP-ACTIVE-SEALED? 0= IF _RSHSP-INPUT-NONE EXIT THEN") in target
 

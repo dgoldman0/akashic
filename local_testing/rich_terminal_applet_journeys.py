@@ -529,12 +529,6 @@ class PadAloneJourney(_AppletJourney):
         SIDEBAR_EXPANDED,
     ) = range(24)
 
-    # How many EXPANDs of the documents place Pad's sidebar may take before
-    # it lists the saved file.  A frame that supersedes the one an EXPAND
-    # was sent from can leave it naming a control the guest no longer has,
-    # and the guest then drops it, so it is sent again from the newer frame.
-    SIDEBAR_EXPANDS = 3
-
     def __init__(self, ready_markers: tuple[str, ...], *, user_volume: bool = False):
         super().__init__(ready_markers)
         # What Pad's Open prompt is given for notes.md: a bare path, which
@@ -555,8 +549,6 @@ class PadAloneJourney(_AppletJourney):
         # each lasts a second or two, so the input after it may be retried
         # once it is gone.
         self._noticed: set[int] = set()
-        # The EXPANDs of the documents place sent so far.
-        self._expands = 0
 
     @property
     def final_stage(self) -> int:
@@ -903,38 +895,29 @@ class PadAloneJourney(_AppletJourney):
                                  StatusSeverity.NEUTRAL):
             return self._wait(f"Pad's notice {PAD_SAVED_NOTICE!r}")
         _require_cell_text_in(offer, PAD_SAVED_AS, bounds, _WHERE)
-        return self._expand_documents("pad-saved-as", offer, generation, projection, sender)
-
-    def _expand_documents(self, milestone, offer, generation, projection,
-                          sender) -> JourneyProgress:
-        """Open the documents place's row in Pad's sidebar."""
-
+        # The EXPAND goes out while the notice still shows, from a frame
+        # with a part of Desk's shell, which a later paint may supersede
+        # before the guest reads it; the one EXPAND must still open the place.
         sidebar, (documents, _records, _origin) = self._require_sidebar(projection)
-        self._expands += 1
-        return self._step(milestone, "item_expand", sidebar.value(documents.item_key),
+        return self._step("pad-saved-as", "item_expand", sidebar.value(documents.item_key),
                           self.SIDEBAR_EXPANDED, offer, generation, sender)
 
     def _sidebar_lists_saved(self, offer, generation, projection,
                              sender) -> JourneyProgress:
         """The documents place opened in Pad's sidebar lists the saved file.
-        A frame that shows the place still closed sends the EXPAND again,
-        at most SIDEBAR_EXPANDS times in all."""
+        A frame the guest painted before it read the EXPAND still shows the
+        place closed."""
 
         sidebar, (documents, _records, _origin) = self._require_sidebar(projection)
-        if documents.state & ItemState.EXPANDED:
-            if not any(
-                item.parent_key == documents.item_key
-                and item.fields[0].text == PAD_SAVED_AS
-                for item in sidebar.content.items
-            ):
-                return self._wait(f"{PAD_SAVED_AS} under Documents in Pad's sidebar")
-            return self._done("pad-sidebar-lists-saved", offer)
-        if self._expands >= self.SIDEBAR_EXPANDS:
-            raise PhysicalDesktopAcceptanceError(
-                f"Pad's sidebar kept Documents closed through {self._expands} EXPANDs"
-            )
-        return self._expand_documents(f"pad-sidebar-expand-{self._expands + 1}", offer,
-                                      generation, projection, sender)
+        if not documents.state & ItemState.EXPANDED:
+            return self._wait("Documents opened in Pad's sidebar")
+        if not any(
+            item.parent_key == documents.item_key
+            and item.fields[0].text == PAD_SAVED_AS
+            for item in sidebar.content.items
+        ):
+            return self._wait(f"{PAD_SAVED_AS} under Documents in Pad's sidebar")
+        return self._done("pad-sidebar-lists-saved", offer)
 
     def _save_as(self, offer, generation, projection, sender, prompt, path) -> JourneyProgress:
         """Save As: it opens holding PATH; select all of it, type the new

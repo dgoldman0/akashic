@@ -1772,10 +1772,10 @@ VARIABLE _RSHSP-IA VARIABLE _RSHSP-IU VARIABLE _RSHSP-ISOURCE VARIABLE _RSHSP-IS
 \ the part it names.
 : _RSHSP-PUBLISH ( -- )
     _RSHSP-ACTIVE-PART ?DUP IF _RSHSP-FRONTIERS! THEN ;
-\ The shell's part of the frame on screen still shows the shell: the
-\ frame's draw is the screen's last and its owner the producer's, and the
-\ part's model is the shell's snapshot for that draw.  A frame with no part
-\ of the shell's is current as far as the shell can tell.
+\ The shell's part of the frame on screen is current: the frame's draw is
+\ the screen's last and its owner the producer's, and the part's model is
+\ the shell's snapshot for that draw.  A frame with no part of the shell's
+\ is current as far as the shell can tell.
 : _RSHSP-CURRENT? ( -- flag )
     _RSHSP-ACTIVE-BANK DUP _RSHSP-PART-OF DUP 0= IF 2DROP -1 EXIT THEN _RSHSP-PART !
     DUP _RTHP-TB.DRAW @ SCR-DRAW-GENERATION@ <>
@@ -1935,6 +1935,21 @@ VARIABLE _RSHSP-DM-WHY
 VARIABLE _RSHSP-DM-UA
 : _RSHSP-DM-RANGE= ( start end -- flag )
     OVER - >R _RSHSP-DM-A @ OVER + R@ ROT _RSHSP-DM-B @ + R> COMPARE 0= ;
+\ The two models are equal apart from the epoch: as long as each other,
+\ and every byte the same but the epoch's.
+: _RSHSP-DM-SAME? ( -- flag )
+    7 _RSHSP-DM-WHY !
+    _RSHSP-DM-UA @ _RSHSP-DM-U @ <> IF 0 EXIT THEN
+    8 _RSHSP-DM-WHY !
+    0 0 SHM.EPOCH _RSHSP-DM-RANGE= 0= IF 0 EXIT THEN
+    9 _RSHSP-DM-WHY !
+    0 SHM.WIDTH _RSHSP-DM-U @ _RSHSP-DM-RANGE= ;
+\ Two shell models show the same shell when they are equal apart from the
+\ epoch every paint advances.
+: _RSHSP-SAME-SHELL? ( a1 u1 a2 u2 -- flag )
+    _RSHSP-DM-U ! _RSHSP-DM-B ! _RSHSP-DM-UA ! _RSHSP-DM-A !
+    _RSHSP-DM-UA @ SHM-HEADER-SIZE U< IF 0 EXIT THEN
+    _RSHSP-DM-SAME? ;
 : _RSHSP-D-NOTICES= ( -- flag )
     _RSHSP-DM-A @ SHM.NOTICE-U @ ?DUP 0= IF -1 EXIT THEN
     _RSHSP-DM-A @ SHM.NOTICE-OFF @ OVER + _RSHSP-DM-UA @ U> IF DROP 0 EXIT THEN
@@ -1970,12 +1985,7 @@ VARIABLE _RSHSP-DM-UA
         0 SHM.WIDTH 0 SHM.STATUS-U _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
         SHM-HEADER-SIZE SWAP _RSHSP-DM-RANGE= EXIT
     THEN
-    7 _RSHSP-DM-WHY !
-    _RSHSP-DM-UA @ _RSHSP-DM-U @ <> IF 0 EXIT THEN
-    8 _RSHSP-DM-WHY !
-    0 0 SHM.EPOCH _RSHSP-DM-RANGE= 0= IF 0 EXIT THEN
-    9 _RSHSP-DM-WHY !
-    0 SHM.WIDTH _RSHSP-DM-U @ _RSHSP-DM-RANGE= ;
+    _RSHSP-DM-SAME? ;
 
 \ Before a changed draw is built: only a draw whose shell model matches the
 \ acknowledged one can become a DELTA.  This cheap check is advisory; the
@@ -2488,8 +2498,25 @@ VARIABLE _RSHSP-INPUT-INTENT VARIABLE _RSHSP-INPUT-CONTROL VARIABLE _RSHSP-INPUT
 VARIABLE _RSHSP-INPUT-MODEL VARIABLE _RSHSP-INPUT-ENTRY VARIABLE _RSHSP-INPUT-MATCHES
 VARIABLE _RSHSP-INPUT-BATCH
 : _RSHSP-INPUT-NONE ( -- row col revision false ) 0 0 0 0 ;
+\ A click the terminal sent from the frame on screen routes through the
+\ shell's part of it while the part still shows the shell: the frame's
+\ owner is the producer's, and the shell's model for the screen's last
+\ draw is the part's apart from the epoch every paint advances.  A paint
+\ since the frame that changed nothing the shell shows leaves its clicks
+\ routing, as a frame with no part of the shell's does; while a paint is
+\ open, or once one has changed what the shell shows, no click routes until
+\ the terminal has the frame that shows it.
+: _RSHSP-ROUTES? ( -- flag )
+    _RSHSP-ACTIVE-BANK DUP _RSHSP-PART-OF DUP 0= IF 2DROP -1 EXIT THEN _RSHSP-PART !
+    DUP _RTHP-TB.OWNER @ _RSHSP-P @ _RTHP.OWNER @ <>
+    SWAP _RTHP-TB.GENERATION @ _RSHSP-P @ _RTHP.OWNER-GEN @ <> OR IF 0 EXIT THEN
+    SCR-DRAW-GENERATION@ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
+        SHSN-S-OK <> IF 2DROP 0 EXIT THEN
+    _RSHSP-PART @ DUP RSHSP-PART.MODEL @ + _RSHSP-PART @ RSHSP-PART.MODEL-U @
+    _RSHSP-SAME-SHELL? ;
 \ The control a click names, in the batch of the part it is routed
-\ through: the acknowledged one, which _RSHSP-CURRENT? found current.
+\ through: the acknowledged one, which _RSHSP-ROUTES? found still showing
+\ the shell.
 : _RSHSP-CONTROL-FIND ( -- item|0 )
     0 _RSHSP-INPUT-MATCHES ! 0 _RSHSP-INPUT-CONTROL !
     _RSHSP-PART @ DUP RSHSP-PART.BATCH @ + _RSHSP-INPUT-BATCH !
@@ -2601,7 +2628,7 @@ VARIABLE _RSHSP-INPUT-ROOT VARIABLE _RSHSP-INPUT-CHILD VARIABLE _RSHSP-INPUT-SAV
     _RSHSP-ACTIVE-PART 0= IF
         _RSHSP-INPUT-OWNER @ _RSHSP-INPUT-GEN @ _RSHSP-INPUT-ID @ _RSHSP-INPUT-INTENT @
         _RSHSP-P @ RTHP-CONTROL-TARGET@ EXIT THEN
-    _RSHSP-CURRENT? 0= IF _RSHSP-INPUT-NONE EXIT THEN
+    _RSHSP-ROUTES? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-P @ _RTHP-ACTIVE-SEALED? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-INPUT-OWNER @ _RSHSP-ACTIVE-BANK _RTHP-TB.OWNER @ <>
