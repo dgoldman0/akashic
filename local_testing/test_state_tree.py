@@ -116,7 +116,9 @@ def build_snapshot():
         ': TA  ( -- addr u ) _TB _TL @ ;',
         'CREATE _UB 512 ALLOT',
         'CREATE _WB 4096 ALLOT',
-        ': T-INIT  65536 A-XMEM ARENA-NEW ABORT" arena fail"  256 ST-DOC-NEW  DROP ;',
+        # 256 nodes and the 128-entry journal leave a 128 KiB document room
+        # for strings and for a journal resized to 500 entries.
+        ': T-INIT  131072 A-XMEM ARENA-NEW ABORT" arena fail"  256 ST-DOC-NEW  DROP ;',
     ]
 
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
@@ -861,7 +863,7 @@ def test_array_insert():
         'T-INIT',
         ': _RUN-LINE S" alice" S" n" ST-ARRAY-APPEND-STR ; _RUN-LINE',
         ': _RUN-LINE S" charlie" S" n" ST-ARRAY-APPEND-STR ; _RUN-LINE',
-        'S" bob" 1 S" n" ST-ARRAY-INSERT-STR',
+        ': _RUN-LINE S" bob" 1 S" n" ST-ARRAY-INSERT-STR ; _RUN-LINE',
         'S" n" 1 ST-ARRAY-NTH ST-GET-STR TYPE CR',
     ], 'bob')
 

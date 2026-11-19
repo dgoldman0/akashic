@@ -792,13 +792,18 @@ VARIABLE _STJR-I
 VARIABLE _STJR-SRC
 VARIABLE _STJR-DST
 
+\ ST-DOC-NEW gives the document's strings the rest of its arena, so the
+\ new slab comes from the top of the string region, which shrinks by the
+\ slab; the old slab stays in the arena.  A journal the string region has
+\ no room for aborts, as an arena allotment does.
 : ST-JRNL-SIZE!  ( new-max -- )
     DUP 1 < IF DROP EXIT THEN
     _STJR-NEW !
     ST-DOC SD.JRNL-MAX @ _STJR-OLD !
-    \ allot new slab from arena
-    ST-DOC SD.ARENA @
-    _STJR-NEW @ _ST-JRNL-ENTRY * ARENA-ALLOT
+    ST-DOC SD.STR-END @ ST-DOC SD.STR-PTR @ - _ST-JRNL-ENTRY /
+    _STJR-NEW @ < ABORT" ST-JRNL-SIZE!: no room for the journal"
+    ST-DOC SD.STR-END @ _STJR-NEW @ _ST-JRNL-ENTRY * -
+    DUP ST-DOC SD.STR-END !
     _STJR-DST !
     \ copy existing entries (up to min of old-cnt, new-max)
     ST-DOC SD.JRNL-CNT @  _STJR-NEW @ MIN
@@ -839,7 +844,7 @@ VARIABLE _STV-LEN
 
 : _STV-APPEND  ( addr len -- )
     DUP _STV-LEN @ + 255 > IF 2DROP EXIT THEN
-    _STV-BUF _STV-LEN @ + SWAP CMOVE
+    TUCK _STV-BUF _STV-LEN @ + SWAP CMOVE
     _STV-LEN +! ;
 
 : _STV-PATH  ( -- addr len )  _STV-BUF _STV-LEN @ ;
@@ -882,20 +887,21 @@ VARIABLE _STV-ERR
             STR-STR= 0= IF 1 _STV-ERR ! THEN
         ELSE DROP THEN
     ELSE DROP THEN
-    \ Check min constraint (integer/float)
+    \ Check min constraint (integer/float): an error when the value lies
+    \ below the minimum.
     2DUP S" min" _ST-SCHEMA-PATH
     ST-NAVIGATE DUP 0<> IF
         _STV-NODE @ SN.TYPE @ ST-T-INTEGER = IF
-            ST-GET-INT _STV-NODE @ ST-GET-INT
-            < IF 1 _STV-ERR ! THEN
+            ST-GET-INT _STV-NODE @ ST-GET-INT      ( min value )
+            > IF 1 _STV-ERR ! THEN
         ELSE DROP THEN
     ELSE DROP THEN
-    \ Check max constraint
+    \ Check max constraint: an error when the value lies above the maximum.
     2DUP S" max" _ST-SCHEMA-PATH
     ST-NAVIGATE DUP 0<> IF
         _STV-NODE @ SN.TYPE @ ST-T-INTEGER = IF
-            ST-GET-INT _STV-NODE @ ST-GET-INT
-            > IF 1 _STV-ERR ! THEN
+            ST-GET-INT _STV-NODE @ ST-GET-INT      ( max value )
+            < IF 1 _STV-ERR ! THEN
         ELSE DROP THEN
     ELSE DROP THEN
     \ Check min-length (string)
@@ -995,7 +1001,7 @@ VARIABLE _ST-SUB-CNT
 : _ST-FNV1A  ( addr len -- hash )
     2166136261 -ROT     ( hash addr len )
     0 ?DO               ( hash addr )
-        OVER I + C@     ( hash addr byte )
+        DUP I + C@      ( hash addr byte )
         ROT XOR         ( addr hash' )
         16777619 *      ( addr hash'' )
         SWAP            ( hash addr )
@@ -1008,12 +1014,9 @@ VARIABLE _ST-SUB-CNT
     _ST-SUB-CNT @ _ST-SUB-MAX >= IF
         DROP R> DROP -1 EXIT
     THEN
-    _ST-SUB-CNT @ _ST-SUB-ENTRY
-    OVER SWAP !                 ( hash ; entry.hash = hash )
-    _ST-SUB-CNT @ _ST-SUB-ENTRY 8 +
-    R> SWAP !                   ( ; entry.xt = xt )
-    _ST-SUB-CNT @ _ST-SUB-ENTRY 16 +
-    1 SWAP !                    ( ; entry.active = 1 )
+    _ST-SUB-CNT @ _ST-SUB-ENTRY !          ( ; entry.hash = hash )
+    R> _ST-SUB-CNT @ _ST-SUB-ENTRY 8 + !   ( ; entry.xt = xt )
+    1 _ST-SUB-CNT @ _ST-SUB-ENTRY 16 + !   ( ; entry.active = 1 )
     _ST-SUB-CNT @
     1 _ST-SUB-CNT +!  ;
 
@@ -1027,7 +1030,7 @@ VARIABLE _ST-SUB-CNT
     _ST-SUB-CNT @ 0 ?DO
         I _ST-SUB-ENTRY     ( path-a path-l hash entry )
         DUP 16 + @ 0<> IF   ( active? )
-            DUP @ 3 PICK = IF  ( hash matches? )
+            DUP @ 2 PICK = IF  ( hash matches? )
                 8 + @ EXECUTE
             ELSE DROP THEN
         ELSE DROP THEN

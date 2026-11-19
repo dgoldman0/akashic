@@ -532,9 +532,12 @@ preserving existing entries up to the new capacity.
 : ST-JRNL-SIZE!  ( new-max -- )
 ```
 
-Allocates a new journal slab from the arena, copies existing entries
-(most-recent-first, up to `min(count, new-max)`), and updates the
-descriptor.  A `new-max` less than 1 is a no-op.
+Takes the new journal slab from the top of the document's string region,
+which `ST-DOC-NEW` gives the rest of the arena, so the region shrinks by
+the slab and the old slab stays in the arena.  It then copies existing
+entries (most-recent-first, up to `min(count, new-max)`) and updates the
+descriptor.  A `new-max` less than 1 is a no-op; one the string region has
+no room for aborts.
 
 ### Example
 
