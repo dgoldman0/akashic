@@ -2498,25 +2498,87 @@ VARIABLE _RSHSP-INPUT-INTENT VARIABLE _RSHSP-INPUT-CONTROL VARIABLE _RSHSP-INPUT
 VARIABLE _RSHSP-INPUT-MODEL VARIABLE _RSHSP-INPUT-ENTRY VARIABLE _RSHSP-INPUT-MATCHES
 VARIABLE _RSHSP-INPUT-BATCH
 : _RSHSP-INPUT-NONE ( -- row col revision false ) 0 0 0 0 ;
-\ A click the terminal sent from the frame on screen routes through the
-\ shell's part of it while the part still shows the shell: the frame's
-\ owner is the producer's, and the shell's model for the screen's last
-\ draw is the part's apart from the epoch every paint advances.  A paint
-\ since the frame that changed nothing the shell shows leaves its clicks
-\ routing, as a frame with no part of the shell's does; while a paint is
-\ open, or once one has changed what the shell shows, no click routes until
-\ the terminal has the frame that shows it.
-: _RSHSP-ROUTES? ( -- flag )
-    _RSHSP-ACTIVE-BANK DUP _RSHSP-PART-OF DUP 0= IF 2DROP -1 EXIT THEN _RSHSP-PART !
+\ A click the terminal sent from the frame on screen is read against the
+\ shell as the screen's last completed draw left it.  With the frame's part
+\ of the shell's in _RSHSP-PART: the shell's model for that draw, when the
+\ producer's owner sent the frame and no paint is open.
+: _RSHSP-LIVE-MODEL ( -- model bytes found? )
+    _RSHSP-ACTIVE-BANK DUP _RSHSP-PART-OF _RSHSP-PART !
     DUP _RTHP-TB.OWNER @ _RSHSP-P @ _RTHP.OWNER @ <>
-    SWAP _RTHP-TB.GENERATION @ _RSHSP-P @ _RTHP.OWNER-GEN @ <> OR IF 0 EXIT THEN
+    SWAP _RTHP-TB.GENERATION @ _RSHSP-P @ _RTHP.OWNER-GEN @ <> OR IF 0 0 0 EXIT THEN
     SCR-DRAW-GENERATION@ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
-        SHSN-S-OK <> IF 2DROP 0 EXIT THEN
-    _RSHSP-PART @ DUP RSHSP-PART.MODEL @ + _RSHSP-PART @ RSHSP-PART.MODEL-U @
-    _RSHSP-SAME-SHELL? ;
+    SHSN-S-OK = ;
+\ The part's own copy of the shell's model, as the frame showed it.
+: _RSHSP-PART-MODEL ( -- model bytes )
+    _RSHSP-PART @ DUP RSHSP-PART.MODEL @ + _RSHSP-PART @ RSHSP-PART.MODEL-U @ ;
+\ A click on the shell's own chrome, a task, a launcher or Desk's prompt,
+\ routes through the shell's part of the frame on screen while the part
+\ still shows the shell: the shell's model for the screen's last completed
+\ draw is the part's apart from the epoch every paint advances.  A paint
+\ since the frame that changed nothing the shell shows leaves these clicks
+\ routing; while a paint is open, or once one has changed what the shell
+\ shows, none routes until the terminal has the frame that shows it.  A
+\ frame with no part of the shell's routes as far as the shell can tell.
+: _RSHSP-ROUTES? ( -- flag )
+    _RSHSP-ACTIVE-PART 0= IF -1 EXIT THEN
+    _RSHSP-LIVE-MODEL 0= IF 2DROP 0 EXIT THEN
+    _RSHSP-PART-MODEL _RSHSP-SAME-SHELL? ;
+
+\ Two shell models lay out the applications' panes alike: as wide, as high
+\ and as blocked, under the same owner, with the same panes in the same
+\ order, each with the same key at the same place for the same instance,
+\ and alike in whether it is minimized, disabled or an overlay.  Their
+\ tasks, launchers, notices, prompts, status and selection may differ.
+SHM-F-MINIMIZED SHM-F-DISABLED OR SHM-F-OVERLAY OR CONSTANT _RSHSP-PANE-FLAGS
+\ An entry's bytes from its row through its identity.
+0 SHME.ACTION 0 SHME.ROW - CONSTANT _RSHSP-PANE-BYTES
+VARIABLE _RSHSP-PL-A VARIABLE _RSHSP-PL-B VARIABLE _RSHSP-PL-I VARIABLE _RSHSP-PL-J
+\ The index of MODEL's first pane at INDEX or after it, or its count.
+: _RSHSP-PANE-FROM ( index model -- index' )
+    >R
+    BEGIN DUP R@ SHM.COUNT @ < WHILE
+        DUP R@ SHM-ENTRY SHME.KIND @ SHM-K-PANE = IF R> DROP EXIT THEN
+        1+
+    REPEAT R> DROP ;
+: _RSHSP-PANE= ( entry-a entry-b -- flag )
+    OVER SHME.KEY @ OVER SHME.KEY @ <> IF 2DROP 0 EXIT THEN
+    OVER SHME.FLAGS @ _RSHSP-PANE-FLAGS AND
+        OVER SHME.FLAGS @ _RSHSP-PANE-FLAGS AND <> IF 2DROP 0 EXIT THEN
+    SHME.ROW _RSHSP-PANE-BYTES ROT SHME.ROW _RSHSP-PANE-BYTES COMPARE 0= ;
+: _RSHSP-PANES-ALIKE? ( model-a model-b -- flag )
+    _RSHSP-PL-B ! _RSHSP-PL-A !
+    _RSHSP-PL-A @ SHM.OWNER-ID 2 CELLS _RSHSP-PL-B @ SHM.OWNER-ID 2 CELLS
+        COMPARE IF 0 EXIT THEN
+    _RSHSP-PL-A @ SHM.WIDTH 3 CELLS _RSHSP-PL-B @ SHM.WIDTH 3 CELLS
+        COMPARE IF 0 EXIT THEN
+    0 _RSHSP-PL-I ! 0 _RSHSP-PL-J !
+    BEGIN
+        _RSHSP-PL-I @ _RSHSP-PL-A @ _RSHSP-PANE-FROM _RSHSP-PL-I !
+        _RSHSP-PL-J @ _RSHSP-PL-B @ _RSHSP-PANE-FROM _RSHSP-PL-J !
+        _RSHSP-PL-I @ _RSHSP-PL-A @ SHM.COUNT @ <
+        _RSHSP-PL-J @ _RSHSP-PL-B @ SHM.COUNT @ <
+        2DUP <> IF 2DROP 0 EXIT THEN AND
+    WHILE
+        _RSHSP-PL-I @ _RSHSP-PL-A @ SHM-ENTRY
+        _RSHSP-PL-J @ _RSHSP-PL-B @ SHM-ENTRY _RSHSP-PANE= 0= IF 0 EXIT THEN
+        1 _RSHSP-PL-I +! 1 _RSHSP-PL-J +!
+    REPEAT -1 ;
+\ A click on an application's control routes through the shell's part of
+\ the frame on screen while the panes the part laid out still stand: the
+\ shell's model for the screen's last completed draw lays out the panes as
+\ the part's does.  A notice that came or went, Desk's status or prompt, or
+\ another task selected moves no pane, so the click still reaches the
+\ application whose control it names, as through a frame with no part of
+\ the shell's; the application then reads it against its own state.  While
+\ a paint is open, or once one has moved, added or removed a pane, none
+\ routes until the terminal has the frame that shows it.
+: _RSHSP-STANDS? ( -- flag )
+    _RSHSP-ACTIVE-PART 0= IF -1 EXIT THEN
+    _RSHSP-LIVE-MODEL 0= IF 2DROP 0 EXIT THEN
+    DROP _RSHSP-PART-MODEL DROP _RSHSP-PANES-ALIKE? ;
 \ The control a click names, in the batch of the part it is routed
-\ through: the acknowledged one, which _RSHSP-ROUTES? found still showing
-\ the shell.
+\ through: the acknowledged one, whose panes _RSHSP-STANDS? found still
+\ standing.
 : _RSHSP-CONTROL-FIND ( -- item|0 )
     0 _RSHSP-INPUT-MATCHES ! 0 _RSHSP-INPUT-CONTROL !
     _RSHSP-PART @ DUP RSHSP-PART.BATCH @ + _RSHSP-INPUT-BATCH !
@@ -2628,16 +2690,21 @@ VARIABLE _RSHSP-INPUT-ROOT VARIABLE _RSHSP-INPUT-CHILD VARIABLE _RSHSP-INPUT-SAV
     _RSHSP-ACTIVE-PART 0= IF
         _RSHSP-INPUT-OWNER @ _RSHSP-INPUT-GEN @ _RSHSP-INPUT-ID @ _RSHSP-INPUT-INTENT @
         _RSHSP-P @ RTHP-CONTROL-TARGET@ EXIT THEN
-    _RSHSP-ROUTES? 0= IF _RSHSP-INPUT-NONE EXIT THEN
+    _RSHSP-STANDS? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-P @ _RTHP-ACTIVE-SEALED? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-INPUT-OWNER @ _RSHSP-ACTIVE-BANK _RTHP-TB.OWNER @ <>
     _RSHSP-INPUT-GEN @ _RSHSP-ACTIVE-BANK _RTHP-TB.GENERATION @ <> OR IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-CONTROL-FIND DUP 0= IF DROP _RSHSP-INPUT-NONE EXIT THEN _RSHSP-INPUT-CONTROL !
+    \ The shell's own chrome routes only while the shell shows what the
+    \ frame showed.
     _RSHSP-PART @ RSHSP-PART.PROMPT @ ?DUP IF
-        _RSHSP-INPUT-ID @ = IF _RSHSP-PROMPT-TARGET EXIT THEN
+        _RSHSP-INPUT-ID @ = IF
+            _RSHSP-ROUTES? IF _RSHSP-PROMPT-TARGET ELSE _RSHSP-INPUT-NONE THEN EXIT
+        THEN
     THEN
     _RSHSP-INPUT-CONTROL @ _RTE-CONTROL.KIND @ DUP RTE-CONTROL-TASK = SWAP RTE-CONTROL-LAUNCHER = OR IF
+        _RSHSP-ROUTES? 0= IF _RSHSP-INPUT-NONE EXIT THEN
         _RSHSP-SHELL-TARGET? 0= IF _RSHSP-INPUT-NONE EXIT THEN
         _RSHSP-INPUT-CORR @ RSHPL-CORRELATION.ROW @
         _RSHSP-INPUT-CORR @ RSHPL-CORRELATION.COL @ _RSHSP-INPUT-MODEL @ SHM.EPOCH @ -1 EXIT

@@ -498,15 +498,23 @@ shell range at the same acknowledgement boundary.
 
 CURRENT additionally requires the frame on screen's draw to be the screen's
 last and its owner the producer's, and the current SHSN model to equal the
-part's copied model. Input requires the owner, and the SHSN model of the
-screen's last completed draw to equal the part's copied model apart from the
-epoch every paint advances. A paint that changed nothing the shell shows,
-such as an application repainting a pane for a change the pane does not
-display, therefore leaves the frame's clicks routing, as clicks route through
-a frame with no shell part, and a click is not lost to a repaint that showed
-nothing new. While a paint is open, or after one that changed the shell's
-model, no input routes until the terminal acknowledges the frame that shows
-it. Unacknowledged parts never route input.
+part's copied model. Input is read against the shell as the screen's last
+completed draw left it, and requires the owner and that draw's SHSN model.
+A click on the shell's own chrome, a task, a launcher or Desk's prompt,
+routes while that model equals the part's copied model apart from the epoch
+every paint advances, so its position, label and action are the ones the
+terminal showed. A click on an application's control routes while that
+model lays out the applications' panes as the part's does: the same panes,
+in the same order and places, for the same instances, with the same
+minimized, disabled and overlay state, under an unchanged width, height and
+input block. A notice that came or went, Desk's status or prompt, another
+task selected, or a paint that changed nothing therefore moves no pane, and
+the click reaches the application, as clicks route through a frame with no
+shell part; the application reads it against its own state, as a tree reads
+an item key it no longer shows. While a paint is open, or after one that
+changed what the click needs, no input routes until the terminal
+acknowledges the frame that shows it. Unacknowledged parts never route
+input.
 
 A shell ACTIVATE must match a unique retained CONTROL and correlation, the
 canonical parent band and translated slot, source lifecycle tuple, copied label

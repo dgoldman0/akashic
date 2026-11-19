@@ -149,9 +149,11 @@ def test_a_click_routes_through_a_frame_a_later_paint_left_as_it_was():
     showing the shell.  That frame is no longer the screen's last draw, so
     it is not current and the next frame is built, but a click the terminal
     sent from it still routes through it, as through a frame with no part of
-    the shell's.  While a paint is open the shell's model is not yet known,
-    and a paint that changed what the shell shows, here its task's label,
-    routes no click until the terminal has the frame that shows it."""
+    the shell's.  While a paint is open the shell's model is not yet known.
+    A paint that changed what the shell shows, here its task's label, routes
+    no click on the shell's own chrome until the terminal has the frame that
+    shows it, while a click on an application's control still routes, since
+    the paint moved no pane; a paint that moves the pane routes neither."""
     staged_run(DELTA + r'''
 : _SR-TASK-CLICK ( -- found? )
     _RSHSP-ROUTES? 0= IF 0 EXIT THEN
@@ -180,8 +182,42 @@ _SR-COMPLETE _SR-TASK-CLICK _SS-A
 1 _SS-M SHM-ENTRY SHME.LABEL-OFF @ _SS-M + 3 + 120 SWAP C!
 ' _SD-HELLP _SD-DRAW
 _RSHSP-ROUTES? 0= _SS-A _SR-TASK-CLICK 0= _SS-A
+\ It moved no pane, so an application's control still routes.
+_RSHSP-STANDS? _SS-A
+\ A paint that moves the pane's bottom edge up a row routes neither.
+0 _SS-M SHM-ENTRY SHME.HEIGHT DUP @ 1- SWAP !
+' _SD-HELLP _SD-DRAW
+_RSHSP-STANDS? 0= _SS-A _RSHSP-ROUTES? 0= _SS-A
 _SS-DONE
-''', minimum=12)
+''', minimum=15)
+
+
+def test_panes_stand_alike_until_one_moves_or_input_is_blocked():
+    """What a click on an application's control needs of the shell: the
+    shell's model lays out the applications' panes as the frame's did.  The
+    epoch, a task's label and which pane is selected move no pane.  A pane
+    moved, widened, made an overlay or given to another instance, a pane
+    more, or the shell blocking input each make the click wait for the
+    frame that shows the change."""
+    staged_run(DELTA + r'''
+CREATE _SP-CS 4103 ALLOT : _SP-C _SP-CS 7 + -8 AND ;
+: _SP-COPY ( -- ) _SS-M _SP-C _SS-M SHM.USED @ MOVE ;
+: _SP-ALIKE? ( -- flag ) _SS-M _SP-C _RSHSP-PANES-ALIKE? ;
+_SX-SETUP
+_SP-COPY _SP-ALIKE? _SS-A
+_SP-COPY 5 _SP-C SHM.EPOCH +! _SP-ALIKE? _SS-A
+_SP-COPY 1 _SP-C SHM-ENTRY SHME.LABEL-OFF @ _SP-C + 120 SWAP C! _SP-ALIKE? _SS-A
+_SP-COPY 0 _SP-C SHM-ENTRY SHME.FLAGS DUP @ SHM-F-SELECTED XOR SWAP !
+    _SP-ALIKE? _SS-A
+_SP-COPY 1 0 _SP-C SHM-ENTRY SHME.ROW +! _SP-ALIKE? 0= _SS-A
+_SP-COPY 1 0 _SP-C SHM-ENTRY SHME.WIDTH +! _SP-ALIKE? 0= _SS-A
+_SP-COPY 0 _SP-C SHM-ENTRY SHME.FLAGS DUP @ SHM-F-OVERLAY OR SWAP !
+    _SP-ALIKE? 0= _SS-A
+_SP-COPY 1 0 _SP-C SHM-ENTRY SHME.OWNER-ID +! _SP-ALIKE? 0= _SS-A
+_SP-COPY SHM-K-PANE 1 _SP-C SHM-ENTRY SHME.KIND ! _SP-ALIKE? 0= _SS-A
+_SP-COPY SHM-F-INPUT-BLOCKED _SP-C SHM.FLAGS ! _SP-ALIKE? 0= _SS-A
+_SS-DONE
+''', minimum=10)
 
 def test_more_and_fewer_runs_define_new_slots_and_hide_unused_ones():
     staged_run(DELTA + r'''
@@ -704,14 +740,17 @@ _RSHSP-ACTIVE-INTACT? _SS-A _SB-CLICK _SS-A CHK-DAMAGE-COUNT @ 2 = _SS-A
 _SS-DONE
 ''', minimum=22)
     # The public entry checks the part, and then the seal of the bank that
-    # names it, right after it finds the part still showing the shell.
+    # names it, right after it finds the part's panes still standing.
     source = (Path(__file__).resolve().parents[1]
               / "akashic/tui/rich-terminal/shell-screen-producer.f").read_text()
     target = source[source.index(": RSHSP-CONTROL-TARGET@"):]
     target = target[:target.index("\n;") if "\n;" in target else len(target)]
-    assert ("_RSHSP-ROUTES? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
+    assert ("_RSHSP-STANDS? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
             "    _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
             "    _RSHSP-P @ _RTHP-ACTIVE-SEALED? 0= IF _RSHSP-INPUT-NONE EXIT THEN") in target
+    # The shell's own chrome, Desk's prompt and the taskbar's tasks and
+    # launchers, routes only while the shell shows what the frame showed.
+    assert target.count("_RSHSP-ROUTES?") == 2
 
 
 def test_safe_mode_seals_the_frame_s_bank_with_its_part_and_finds_its_text_changed():
