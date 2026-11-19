@@ -709,14 +709,23 @@ whose order must survive a power cut. It answers 0 at once on a binding with
 medium, and is `VFS-SYNC` on any other. The checked replacement and the copy
 library both take their barriers through it.
 
-The cache takes its memory from the heap, `ALLOCATE`, a page at a time:
-dentry pages of 64 slots (5,128 bytes), vnode pages of 32 (6,152 bytes),
-name chunks of at least 4 KiB, and the indexes' segments and directories.
-`VFS-CACHE-BYTES` counts what it holds. Each kind of page has one size, so a
-page given back serves the next page of its kind whole, and the heap's free
-list stays short. A page the heap refuses returns `VFS-E-NOMEM` without
-publishing a partial namespace mutation. `ALLOCATE` serves core 0 only, so a
-lookup on another core that needs a page fails the same way.
+The cache takes its memory from the heap, `ALLOCATE`, a page at a time, and
+every page is 4,096 bytes whatever it holds: a dentry page holds 51 dentries,
+a vnode page 21 vnodes, a name chunk names, an index segment 512 buckets and
+an index directory 512 segments. `VFS-CACHE-BYTES` counts what it holds.
+KDOS's heap takes the first free block that fits a request, splits off the
+rest, and never joins free blocks again. Pages of several sizes therefore
+leave it pieces that serve no later request: a dentry page that took the hole
+a vnode page left sent the next vnode page to fresh memory on every mount, so
+a volume mounted and unmounted again and again grew the heap by a page each
+time. With one size, a page given back serves the next page of any kind
+whole, and a caller's smaller block, such as a read buffer, finds its own
+hole. An instance's indexes hold at least a page of buckets and a page of
+directory each, 16 KiB in all; a directory doubles only past 512 segments,
+about a quarter of a million buckets. A page the heap refuses returns
+`VFS-E-NOMEM` without publishing a partial namespace mutation. `ALLOCATE`
+serves core 0 only, so a lookup on another core that needs a page fails the
+same way.
 
 Each instance has a cache budget, the heap bytes its cache may take before
 eviction. It starts at a thirty-second of the heap free when `VFS-NEW` runs,

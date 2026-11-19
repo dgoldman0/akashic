@@ -478,9 +478,9 @@ def test_slab_growth_nospace_is_transactional():
         '40000 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _AR',
         '_AR VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN CONSTANT _V1',
         'CREATE _NAME 2 ALLOT',
-        ': T-FILL-SLAB  63 0 DO  102 _NAME C! I 64 + _NAME 1+ C!  _NAME 2 _V1 VFS-MKFILE? ?DUP IF THROW THEN DROP  LOOP ;',
+        ': T-FILL-SLAB  _VFS-SLAB-SLOTS 1- 0 DO  102 _NAME C! I 64 + _NAME 1+ C!  _NAME 2 _V1 VFS-MKFILE? ?DUP IF THROW THEN DROP  LOOP ;',
         'T-FILL-SLAB  HOG',
-        ': T-SLAB-NOMEM  S" overflow" _V1 VFS-MKFILE? DUP VFS-IOR-REASON 20 = IF ." NOMEM " THEN  DROP 0= IF ." NO-INODE " THEN  _V1 V.ICOUNT @ 64 = IF ." COUNT " THEN  S" overflow" _V1 VFS-RESOLVE 0= IF ." NO-NAME" THEN ;',
+        ': T-SLAB-NOMEM  S" overflow" _V1 VFS-MKFILE? DUP VFS-IOR-REASON 20 = IF ." NOMEM " THEN  DROP 0= IF ." NO-INODE " THEN  _V1 V.ICOUNT @ _VFS-SLAB-SLOTS = IF ." COUNT " THEN  S" overflow" _V1 VFS-RESOLVE 0= IF ." NO-NAME" THEN ;',
         'T-SLAB-NOMEM UNHOG CR',
     ], "NOMEM NO-INODE COUNT NO-NAME")
 
@@ -1940,11 +1940,13 @@ _INDEX_PUBLISH_LINES = [
 def test_cache_index_files_entries_through_growth_and_a_full_heap():
     """The index finds every filed entry as it grows and when it cannot.
 
-    1,000 entries split the table to 1,000 buckets and double the segment
-    directory twice, and removing every other entry leaves the rest
-    findable.  With the heap refusing every page after the first segment,
-    the splits stop at that segment's 64 buckets, and 300 entries stay
-    findable in longer chains.
+    1,000 entries split the table to 1,000 buckets, into its second
+    segment, within the directory's first page, and removing every other
+    entry leaves the rest findable.  With the heap refusing every page
+    after the first segment, the splits stop at that segment's 512 buckets,
+    and 700 entries stay findable in longer chains.  A directory made to
+    look full at one segment doubles when the table needs a second, as a
+    table past 512 segments does, and every entry stays findable.
     """
     check_emitted("cache index growth and a full heap", [
         *HEAP_HOG_LINES,
@@ -1965,20 +1967,25 @@ def test_cache_index_files_entries_through_growth_and_a_full_heap():
         '_FX _VIX.ENTRIES @ CONSTANT _ENT1',
         '_FX _VIX.ROUND @ _FX _VIX.SPLIT @ + CONSTANT _BUCKETS1',
         '_FX _VIX.DIR-CAP @ CONSTANT _CAP1',
+        '_FX _VIX.DIR @ CELL+ @ 0<> CONSTANT _SEG1',
         '1000 T-REMOVE-EVEN  1000 T-MISMATCH CONSTANT _MISMATCH1',
         '_FX _VIX.ENTRIES @ CONSTANT _ENT2',
         '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT2  HOG',
-        '300 T-FILE-ALL  300 T-MISSING CONSTANT _MISS2  UNHOG',
+        '700 T-FILE-ALL  700 T-MISSING CONSTANT _MISS2  UNHOG',
         '_FX _VIX.ENTRIES @ CONSTANT _ENT3',
         '_FX _VIX.ROUND @ CONSTANT _ROUND3  _FX _VIX.SPLIT @ CONSTANT _SPLIT3',
+        '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT4  1 _FX _VIX.DIR-CAP !',
+        '700 T-FILE-ALL  700 T-MISSING CONSTANT _MISS4',
+        '_FX _VIX.DIR-CAP @ CONSTANT _CAP4  _FX _VIX.DIR @ CELL+ @ 0<> CONSTANT _SEG4',
         ': T-INDEX  CR',
         '  _INIT1 _MISS1 0= AND _ENT1 1000 = AND IF ." FILED" CR THEN',
-        '  _BUCKETS1 1000 = _CAP1 16 = AND IF ." GREW" CR THEN',
+        '  _BUCKETS1 1000 = _CAP1 _VFS-IX-DIR-INITIAL = AND _SEG1 AND IF ." GREW" CR THEN',
         '  _MISMATCH1 0= _ENT2 500 = AND IF ." REMOVED" CR THEN',
-        '  _INIT2 _MISS2 0= AND _ENT3 300 = AND IF ." CROWDED" CR THEN',
-        '  _ROUND3 64 = _SPLIT3 0= AND IF ." STOPPED" CR THEN ;',
+        '  _INIT2 _MISS2 0= AND _ENT3 700 = AND IF ." CROWDED" CR THEN',
+        '  _ROUND3 _VFS-IX-SEGMENT = _SPLIT3 0= AND IF ." STOPPED" CR THEN',
+        '  _INIT4 _MISS4 0= AND _CAP4 2 = AND _SEG4 AND IF ." DOUBLED" CR THEN ;',
         'T-INDEX',
-    ], ["FILED", "GREW", "REMOVED", "CROWDED", "STOPPED"])
+    ], ["FILED", "GREW", "REMOVED", "CROWDED", "STOPPED", "DOUBLED"])
 
 
 def test_name_index_finds_each_parents_children():
@@ -2000,7 +2007,7 @@ def test_name_index_finds_each_parents_children():
         '  _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ _NE0 - 400 = IF ." NAMES" CR THEN',
         '  _V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ _VE0 - 400 = IF ." VNODES" CR THEN',
         '  _V1 _VFS-NAME-INDEX DUP _VIX.ROUND @ SWAP _VIX.SPLIT @ +',
-        '  _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ = IF ." SPLIT" CR THEN ;',
+        '  _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ _VFS-IX-SEGMENT MAX = IF ." SPLIT" CR THEN ;',
         'T-PER-PARENT',
     ], ["FOUND", "ABSENT", "NAMES", "VNODES", "SPLIT"])
 

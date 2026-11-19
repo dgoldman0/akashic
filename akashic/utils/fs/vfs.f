@@ -108,13 +108,15 @@ VFS-OP-COUNT CELLS CONSTANT VFS-OPS-SIZE
 \ Default pool sizes
 256 CONSTANT _VFS-FD-DEFAULT   \ default FD pool slots
 
-\ Slab page: 1 cell header + N slots.  The header cell points at the next
-\ page, 0 for the last.  A dentry page holds 64 dentries, 5,128 bytes,
-\ and a vnode page 32 vnodes, 6,152 bytes; each is one heap allocation.
-64  CONSTANT _VFS-SLAB-SLOTS
-8 _VFS-SLAB-SLOTS VFS-INODE-SIZE * + CONSTANT _VFS-SLAB-SIZE
-32  CONSTANT _VFS-VSLAB-SLOTS
-8 _VFS-VSLAB-SLOTS VFS-VNODE-SIZE * + CONSTANT _VFS-VSLAB-SIZE
+\ Every block the cache takes from the heap is one page of _VFS-PAGE bytes
+\ (see Cache Pages).  A slab page is a one-cell header, which points at the
+\ next page, 0 for the last, and as many slots as fit after it: 51
+\ dentries in a dentry page, 21 vnodes in a vnode page.
+4096 CONSTANT _VFS-PAGE
+_VFS-PAGE 8 - VFS-INODE-SIZE / CONSTANT _VFS-SLAB-SLOTS
+_VFS-PAGE CONSTANT _VFS-SLAB-SIZE
+_VFS-PAGE 8 - VFS-VNODE-SIZE / CONSTANT _VFS-VSLAB-SLOTS
+_VFS-PAGE CONSTANT _VFS-VSLAB-SIZE
 
 \ The cache budget.  An entry takes about 320 bytes of the cache: its
 \ dentry, its vnode, a short name and its share of the index buckets.
@@ -637,11 +639,17 @@ VARIABLE _VPR-IOR
 \ =====================================================================
 \
 \  The cache takes its memory from the heap a page at a time: dentry and
-\  vnode pages, name chunks and index buckets.  V.CACHE-BYTES counts what
-\  it holds.  A page is one ALLOCATE of a fixed size per kind, so a page
-\  given back serves the next page of its kind whole and the heap's free
-\  list stays short.  ALLOCATE serves core 0 only; a lookup on another
-\  core that needs a page gets none, and its operation VFS-E-NOMEM.
+\  vnode pages, name chunks, and the indexes' segments and directories.
+\  V.CACHE-BYTES counts what it holds.  Every page is one ALLOCATE of
+\  _VFS-PAGE bytes, whatever it holds.  KDOS's heap takes the first free
+\  block that fits a request, splits off what is left, and never joins
+\  free blocks again, so pages of several sizes would leave the heap
+\  pieces that serve none: a dentry page taking the hole a vnode page left
+\  sends the vnode page to fresh memory, mount after mount.  A page given
+\  back serves the next page of any kind whole, and a request smaller than
+\  a page, such as a caller's buffer, finds its own hole.  ALLOCATE serves
+\  core 0 only; a lookup on another core that needs a page gets none, and
+\  its operation VFS-E-NOMEM.
 
 \ _VFS-PAGE-NEW ( bytes vfs -- addr | 0 )   A page for the cache.
 : _VFS-PAGE-NEW  ( bytes vfs -- addr | 0 )
@@ -682,7 +690,7 @@ VARIABLE _VPR-IOR
 \  first payload cell links the next entry of its list.  New entries come
 \  from the newest chunk, between V.STR-PTR and V.STR-END.
 
-4096 CONSTANT _VFS-STR-CHUNK
+_VFS-PAGE CONSTANT _VFS-STR-CHUNK
 32 CONSTANT _VFS-STR-CLASSES
 _VFS-STR-CLASSES 1+ CELLS 24 + CONSTANT _VFS-STR-POOL-SIZE
 
@@ -900,12 +908,15 @@ VARIABLE _VSB-N
 \  buckets, each filing splits the bucket the split pointer names between
 \  itself and a partner one round above it, so the table grows a bucket
 \  at a time and is never rehashed whole.  Buckets live in segments of
-\  _VFS-IX-SEGMENT cells taken from the heap as the table reaches them,
-\  and the directory of segment addresses doubles when it fills, giving
-\  the old directory back.  A split that finds the heap full is skipped:
-\  searches stay exact while chains lengthen, and later filings retry the
-\  split.  The buckets stay at the table's largest size until VFS-DESTROY,
-\  about sixteen bytes for each entry the cache held at once.
+\  _VFS-IX-SEGMENT cells, one cache page each, taken from the heap as the
+\  table reaches them.  The directory of segment addresses starts as one
+\  page, room for _VFS-IX-DIR-INITIAL segments; a table past that, some
+\  quarter of a million buckets, doubles it, giving the old directory back.
+\  A split that finds the heap full is skipped: searches stay exact while
+\  chains lengthen, and later filings retry the split.  The buckets stay at
+\  the table's largest size until VFS-DESTROY, about sixteen bytes for each
+\  entry the cache held at once, and each index holds at least a page of
+\  them and a page of directory.
 \
 \  Index record:
 \    +0   offset of the chain link within an entry
@@ -919,9 +930,10 @@ VARIABLE _VSB-N
 \  V.INDEX holds the name index's record, and the identity index's record
 \  follows it.
 
-64 CONSTANT _VFS-IX-SEGMENT
-6 CONSTANT _VFS-IX-SEGMENT-SHIFT
-4 CONSTANT _VFS-IX-DIR-INITIAL
+\ A segment of 512 buckets, and a directory of 512 segments, fill a page.
+9 CONSTANT _VFS-IX-SEGMENT-SHIFT
+1 _VFS-IX-SEGMENT-SHIFT LSHIFT CONSTANT _VFS-IX-SEGMENT
+_VFS-PAGE 8 / CONSTANT _VFS-IX-DIR-INITIAL
 56 CONSTANT _VFS-IX-SIZE
 1 63 LSHIFT CONSTANT _VFS-IX-FILED
 
