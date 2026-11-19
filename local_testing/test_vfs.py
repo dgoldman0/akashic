@@ -484,6 +484,105 @@ def test_slab_growth_nospace_is_transactional():
         'T-SLAB-NOMEM UNHOG CR',
     ], "NOMEM NO-INODE COUNT NO-NAME")
 
+def test_entry_makers_answer_nomem_with_their_stack_effect():
+    """With the dentry slab full and the heap refusing a page, each word
+    that makes an entry answers VFS-E-NOMEM and leaves the stack as its
+    stack effect says: no entry and the ior, or the ior alone for
+    VFS-MKDIR.  VFS-CACHE-DENTRY runs both ways, for a new identity and as
+    a second name of a cached file."""
+    check("entry makers answer NOMEM cleanly", [
+        *HEAP_HOG_LINES,
+        ': T-SYMLINK-OP  ( ta tu inode vfs -- ior )  2DROP 2DROP 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-SYMLINK-OP _BIND VB.OPS @ VFS-OP-SYMLINK CELLS + !",
+        '_BIND VB.CAPS DUP @ VFS-CAP-SYMLINK OR SWAP !',
+        '40000 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _AR',
+        '_AR _BIND 0 VFS-NEW ?DUP IF THROW THEN CONSTANT _V1',
+        'S" first" _V1 VFS-MKFILE? ?DUP IF THROW THEN CONSTANT _FILE',
+        'CREATE _NAME 2 ALLOT',
+        ': T-FILL-SLAB  BEGIN _V1 V.IFREE @ WHILE',
+        '  102 _NAME C! _V1 V.ICOUNT @ 64 + _NAME 1+ C!',
+        '  _NAME 2 _V1 VFS-MKFILE? ?DUP IF THROW THEN DROP REPEAT ;',
+        'T-FILL-SLAB  HOG',
+        'VARIABLE _D0',
+        ': T-NOMEM  ( ior -- )',
+        '  VFS-IOR-REASON VFS-R-NOMEM = IF ." NOMEM " ELSE ." OTHER " THEN ;',
+        ': T-NONE  ( entry -- )  0= IF ." NONE " ELSE ." ENTRY " THEN ;',
+        ': T-KEPT  DEPTH _D0 @ = IF ." KEPT " ELSE ." DEPTH " THEN ;',
+        ': T-ID  ( -- bid gen )  _FILE IN.BID @ _FILE D.VNODE @ VN.GEN @ ;',
+        ': T-ALL',
+        '  _V1 V.IFREE @ 0= IF ." FULL " THEN',
+        '  DEPTH _D0 !  S" over" _V1 VFS-MKFILE? T-NOMEM T-NONE T-KEPT',
+        '  DEPTH _D0 !  S" over" _V1 VFS-MKDIR T-NOMEM T-KEPT',
+        '  DEPTH _D0 !  S" over" _FILE _V1 V.CWD @ _V1 VFS-LINK',
+        '  T-NOMEM T-NONE T-KEPT',
+        '  DEPTH _D0 !  S" first" S" over" _V1 V.CWD @ _V1 VFS-SYMLINK',
+        '  T-NOMEM T-NONE T-KEPT',
+        '  DEPTH _D0 !  S" over" VFS-T-FILE 9000 1 _V1 V.CWD @ _V1',
+        '  VFS-CACHE-DENTRY T-NOMEM T-NONE T-KEPT',
+        '  DEPTH _D0 !  S" over" VFS-T-FILE T-ID _V1 V.CWD @ _V1',
+        '  VFS-CACHE-DENTRY T-NOMEM T-NONE T-KEPT ;',
+        'T-ALL UNHOG CR',
+    ], "FULL NOMEM NONE KEPT NOMEM KEPT NOMEM NONE KEPT NOMEM NONE KEPT "
+       "NOMEM NONE KEPT NOMEM NONE KEPT")
+
+def test_a_refused_create_gives_back_the_pages_it_grew():
+    """A create the binding refuses when the dentry slab or the vnode slab
+    is full gives back the page its allocation added, so both page chains
+    and both free lists are as they were: for files, folders, second
+    names and symbolic links on a full dentry slab, and for files, folders
+    and symbolic links on a full vnode slab.
+
+    Every refused create uses the same name.  The first refusal of each
+    round, before the note, leaves the name on the pool's free list and
+    files it once in the parent's index, so the refusals after it take
+    nothing new from the pool or the index, and the cache's byte count
+    holds still with the pages."""
+    check("refused create gives pages back", [
+        'VARIABLE _REFUSE  VARIABLE _RAM-CREATE',
+        ': T-CREATE  ( inode vfs -- ior )',
+        '  _REFUSE @ IF 2DROP VFS-E-IO EXIT THEN _RAM-CREATE @ EXECUTE ;',
+        ': T-LINK  ( dentry target vfs -- ior )  DROP 2DROP VFS-E-IO ;',
+        ': T-SYMLINK  ( ta tu inode vfs -- ior )  2DROP 2DROP VFS-E-IO ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        '_BIND VB.OPS @ VFS-OP-CREATE CELLS + @ _RAM-CREATE !',
+        "' T-CREATE _BIND VB.OPS @ VFS-OP-CREATE CELLS + !",
+        "' T-CREATE _BIND VB.OPS @ VFS-OP-MKDIR CELLS + !",
+        "' T-LINK _BIND VB.OPS @ VFS-OP-LINK CELLS + !",
+        "' T-SYMLINK _BIND VB.OPS @ VFS-OP-SYMLINK CELLS + !",
+        '_BIND VB.CAPS DUP @ VFS-CAP-SYMLINK OR SWAP !',
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" first" _V1 VFS-MKFILE? ?DUP IF THROW THEN CONSTANT _FILE',
+        'CREATE _NAME 4 ALLOT  102 _NAME C!',
+        ': T-NAME  ( i -- a u )  DUP 100 / 48 + _NAME 1+ C!',
+        '  DUP 10 / 10 MOD 48 + _NAME 2 + C!  10 MOD 48 + _NAME 3 + C!  _NAME 4 ;',
+        'VARIABLE _N',
+        ': T-MAKE  _N @ T-NAME _V1 VFS-MKFILE? ?DUP IF THROW THEN DROP 1 _N +! ;',
+        'VARIABLE _IS VARIABLE _VS VARIABLE _IF VARIABLE _VF',
+        'VARIABLE _B VARIABLE _IC',
+        ': T-NOTE  _V1 V.ISLAB @ _IS !  _V1 V.VSLAB @ _VS !',
+        '  _V1 V.IFREE @ _IF !  _V1 V.VFREE @ _VF !',
+        '  _V1 VFS-CACHE-BYTES _B !  _V1 V.ICOUNT @ _IC ! ;',
+        ': T-SAME?  ( -- flag )  _V1 V.ISLAB @ _IS @ =  _V1 V.VSLAB @ _VS @ = AND',
+        '  _V1 V.IFREE @ _IF @ = AND  _V1 V.VFREE @ _VF @ = AND',
+        '  _V1 VFS-CACHE-BYTES _B @ = AND  _V1 V.ICOUNT @ _IC @ = AND ;',
+        ': T-SHOW  ( flag -- )  IF ." SAME " ELSE ." CHANGED " THEN ;',
+        ': T-REFUSED  ( entry ior -- )',
+        '  VFS-IOR-REASON VFS-R-IO = SWAP 0= AND T-SAME? AND T-SHOW ;',
+        ': T-FILE  S" zz" _V1 VFS-MKFILE? T-REFUSED ;',
+        ': T-DIR  S" zz" _V1 VFS-MKDIR VFS-IOR-REASON VFS-R-IO = T-SAME? AND T-SHOW ;',
+        ': T-HARD  S" zz" _FILE _V1 V.CWD @ _V1 VFS-LINK T-REFUSED ;',
+        ': T-SOFT  S" first" S" zz" _V1 V.CWD @ _V1 VFS-SYMLINK T-REFUSED ;',
+        ': T-FIRST-REFUSAL  TRUE _REFUSE !  S" zz" _V1 VFS-MKFILE? 2DROP  T-NOTE ;',
+        ': T-DENTRIES-FULL  BEGIN _V1 V.IFREE @ WHILE T-MAKE REPEAT',
+        '  T-FIRST-REFUSAL  _IF @ 0= IF ." FULL " THEN',
+        '  T-FILE T-DIR T-HARD T-SOFT  FALSE _REFUSE ! ;',
+        ': T-VNODES-FULL  BEGIN _V1 V.VFREE @ WHILE T-MAKE REPEAT',
+        '  T-FIRST-REFUSAL  _VF @ 0= IF ." VFULL " THEN',
+        '  T-FILE T-DIR T-SOFT  FALSE _REFUSE ! ;',
+        'T-DENTRIES-FULL T-VNODES-FULL CR',
+    ], "FULL SAME SAME SAME SAME VFULL SAME SAME SAME")
+
 def test_the_cache_grows_past_its_arena():
     """A RAM volume in a 40,000-byte arena caches 500 files, whose records
     take several times the arena, and every page the cache counts goes back
