@@ -405,7 +405,13 @@ every file under `akashic/` to it.
    these are done. Done ahead of it: the run confirmed
    that a sync was refused while a removed file was open, and the driver
    now lands that sync and takes other writes, keeping the file's record
-   until its last close.
+   until its last close. Done: File Explorer copies, cuts and pastes files
+   and folders across its set's places, a folder through a stage folder
+   one rename publishes; a paste runs a step a pass with its progress in
+   the status bar and Esc to cancel it; its table selects only what File
+   Explorer selects; and the VFS cache takes its pages from the heap
+   within a budget, so a folder of a thousand files lists and copies past
+   the user volume's arena (Decided, 2026-11-19).
 7. The other writers on ext4: Daybook, Grid, the Agent, Streams, the
    catalogs, the sandbox store, the head. Each store's home becomes a
    folder of its own under the records place (Decided, 2026-11-18), and
@@ -427,8 +433,8 @@ emulator or the simulator").
 
 ## Status
 
-Slices 1, 2 and 3 are in the tree, and slice 4 is but for what "What
-slice 4 leaves" lists. The linked build declares one place and
+Slices 1, 2, 3, 5 and 6 are in the tree, and slice 4 is but for what
+"What slice 4 leaves" lists. The linked build declares one place and
 everything below runs on it; a build with `--user-volume` declares the
 shipping form's places.
 
@@ -592,11 +598,8 @@ What slice 4 leaves:
   binds its folder in its home once when it opens and composes its paths
   under that folder, through one helper both share, and the persistence
   layer keeps taking an instance and a path (Decided, 2026-11-17).
-- File Explorer copies and moves files only and refuses a folder on its
-  clipboard. Copying a folder is a walk that calls the copy for each file,
-  which the tests make and no applet makes yet.
-- File Explorer across volumes is slice 6, and power cuts during a save,
-  a copy's stage write and its rename are qualified in slice 8.
+- Power cuts during a save, a copy's stage write and its rename are
+  qualified in slice 8.
 
 ## Open
 
