@@ -3213,6 +3213,13 @@ VARIABLE _UDK-WREV
             2DROP UTUI-FOCUS-PREV -1 EXIT THEN
     THEN
 
+    \ An open menu closes on Escape before a shortcut sees the key, so an
+    \ application may bind Escape to a cancel of its own and the menu still
+    \ closes first.
+    OVER KEY-ESC = _UTUI-MENU-OPEN @ 0<> AND IF
+        2DROP _UTUI-MENU-CLOSE -1 EXIT
+    THEN
+
     \ Shortcut table
     2DUP _UTUI-SHORT-MATCH            ( code mods elem|0 )
     ?DUP IF

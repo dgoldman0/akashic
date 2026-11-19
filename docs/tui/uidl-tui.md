@@ -755,9 +755,14 @@ Called once during `UTUI-LOAD`, after materialization.
 
 ### UTUI-DISPATCH-KEY — `( ev -- handled? )`
 
-1. Check global shortcut table
-2. If focused element exists, call its `event-xt` from the registry
-3. Return `-1` if consumed, `0` otherwise
+1. Tab and Shift+Tab move focus, and so do the arrows when the focused
+   element has no mounted widget of its own
+2. Escape closes an open menu, before any shortcut sees it, so an
+   application may bind Escape to a cancel of its own
+3. Check global shortcut table
+4. If focused element exists, call its `event-xt` from the registry;
+   Enter or Space on a focusable element fires its `do=` action
+5. Return `-1` if consumed, `0` otherwise
 
 ### UTUI-DISPATCH-MOUSE — `( row col btn -- handled? )`
 
