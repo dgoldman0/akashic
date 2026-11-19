@@ -442,7 +442,7 @@ every file under `akashic/` to it.
    Explorer selects; and the VFS cache takes its pages from the heap
    within a budget, so a folder of a thousand files lists and copies past
    the user volume's arena (Decided, 2026-11-19).
-7. The other writers on ext4: Daybook, Grid, the Agent, Streams, the
+7. Done: the other writers on ext4: Daybook, Grid, the Agent, Streams, the
    catalogs, the sandbox store, the head. Each store's home becomes a
    folder of its own under the records place (Decided, 2026-11-18), and
    Streams and Library compose their layouts under it. The user volume's writer
@@ -455,7 +455,7 @@ every file under `akashic/` to it.
    user volume. Once both pass, the shipping form with the user volume
    becomes the builder's default (Decided, 2026-11-18).
 
-Slices 2, 5 and 6 change files the ext4 tests read. Those tests run on
+Slices 2, 5, 6 and 7 change files the ext4 tests read. Those tests run on
 MegaPad's simulator, so each of these slices runs them whole and ends
 with the standing sample on the emulator; the four ext4 files run whole
 on the emulator once after slice 8 (`local_testing/README.md`, "On the
@@ -463,7 +463,7 @@ emulator or the simulator").
 
 ## Status
 
-Slices 1, 2, 3, 5 and 6 are in the tree, and slice 4 is but for what
+Slices 1, 2, 3, 5, 6 and 7 are in the tree, and slice 4 is but for what
 "What slice 4 leaves" lists. The linked build declares one place and
 everything below runs on it; a build with `--user-volume` declares the
 shipping form's places.
@@ -600,9 +600,10 @@ shipping form's places.
   fills from Daybook's owner (`SDOC-PATH$`), and Pad finds the shared
   document's file there; `pad-resource-contracts` covers it. The source
   rule is `local_testing/test_applet_writes_through_places.py`.
-- Slice 7 has begun. A set may grant a place over a folder inside its
-  declared folder (`PLSET-GRANT-IN`), and a path that leaves its holder, in
-  a locator or the held-files table, starts at the declared folder
+- The other writers on ext4 (slice 7). A set may grant a place over a
+  folder inside its declared folder (`PLSET-GRANT-IN`), and a path that
+  leaves its holder, in a locator or the held-files table, starts at the
+  declared folder
   (`PLACE-DECLARED-PATH`, `PLSET-FIND-PATH`). Each applet's home is a folder
   named by its id where the activation's home is a records place, as the
   `practice-contracts` profile checks; `local_testing/test_practice_contracts.py`
