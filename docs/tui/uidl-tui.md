@@ -494,8 +494,9 @@ Full repaint cycle:
 
 Work that no input announces. Each `<media>` element whose picture is still
 decoding, or whose document needs a part read or a picture's file made,
-advances one bounded slice (`MEDIA-SERVICE`), and an element whose view
-changed is marked dirty, which requests a repaint. Returns true when any
+advances one bounded slice (`MEDIA-SERVICE`). A media widget whose view
+changed counts the change in its own revision, which asks for a paint, and
+the paint pass repaints its element, which nothing marks. Returns true when any
 slice ran, so the caller's loop takes another pass instead of sleeping, and
 returns false at once when no picture anywhere is decoding (`PICT-WORK?`)
 and no document view has work (`DOCV-WORK?`). The app
