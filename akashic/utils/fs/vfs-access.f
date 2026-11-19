@@ -31,28 +31,16 @@ REQUIRE vfs.f
 : _VFA-DROP8  ( x1 x2 x3 x4 x5 x6 x7 x8 -- )
     2DROP 2DROP 2DROP 2DROP ;
 
-: _VFA-VFS-OWNS-SPAN?  ( address length vfs -- flag )
-    DUP 0= IF 2DROP DROP 0 EXIT THEN
-    V.ARENA @ DUP 0= IF 2DROP DROP 0 EXIT THEN
-    DUP 32 MSPAN-NONWRAPPING? 0= IF 2DROP DROP 0 EXIT THEN
-    DUP A.SIZE @ >R
-    A.BASE @ >R
-    R>                              ( address length base ; R: size )
-    R@ 0< IF DROP 2DROP R> DROP 0 EXIT THEN
-    DUP 0= IF DROP 2DROP R> DROP 0 EXIT THEN
-    2 PICK OVER U< IF DROP 2DROP R> DROP 0 EXIT THEN
-    ROT SWAP - SWAP R> _VFA-RANGE? ;
-
+\ The volume's current directory, before a scope reads through it: a
+\ dentry in one of the cache's dentry pages that the volume owns, with a
+\ vnode in one of its vnode pages, for a directory.
 : _VFA-VFS-CWD?  ( vfs -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
     DUP V.CWD @ DUP 0= IF 2DROP 0 EXIT THEN
-    DUP VFS-INODE-SIZE 3 PICK _VFA-VFS-OWNS-SPAN? 0= IF
-        2DROP 0 EXIT
-    THEN
+    DUP 2 PICK _VFS-HOLDS-DENTRY? 0= IF 2DROP 0 EXIT THEN
     DUP 2 PICK _VFS-DENTRY-OWNED? 0= IF 2DROP 0 EXIT THEN
     DUP D.VNODE @ DUP 0= IF DROP 2DROP 0 EXIT THEN
-    DUP VFS-VNODE-SIZE 4 PICK _VFA-VFS-OWNS-SPAN? 0= IF
-        2DROP DROP 0 EXIT
-    THEN
+    DUP 3 PICK _VFS-HOLDS-VNODE? 0= IF 2DROP DROP 0 EXIT THEN
     VN.TYPE @ VFS-T-DIR = >R 2DROP R> ;
 
 \ =====================================================================
