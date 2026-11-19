@@ -725,13 +725,9 @@ VARIABLE _DVL-AT          \ where the drawn text starts in the block's text
 VARIABLE _DVL-ROW
 VARIABLE _DVL-PAD         \ cells before a right-to-left line
 
-\ The look at a byte of the drawn text: its meaning's, with the block's
-\ attributes as well, or the block's.
-: _DVL-LOOK  ( byte -- fg attrs )
-    _DVL-AT @ + _DVD-C @ DCT-MAP + C@
-    DUP TSTY-VALID? 0= IF DROP _DVL-BASE-FG @ _DVL-BASE-A @ EXIT THEN
-    DUP SPAL-DEFAULT SPAL-FG@
-    SWAP SPAL-DEFAULT SPAL-ATTRS@ _DVL-BASE-A @ OR ;
+\ The meanings of the drawn text: the block's map from where the text
+\ starts.
+: _DVL-MAP  ( -- map )  _DVD-C @ DCT-MAP _DVL-AT @ + ;
 
 \ The block's own look over the owner's style: a heading's, underlined at
 \ levels 1 and 2; a caption's, muted and italic; or the style itself.
@@ -748,14 +744,16 @@ VARIABLE _DVL-PAD         \ cells before a right-to-left line
     THEN
     _DVD-KIND @ DOC-B-PAGE = IF _DOCV-MUTED _DVL-BASE-FG ! THEN ;
 
+\ The line in the block's look, each meaning in the default palette's look
+\ with the block's attributes as well.
 : _DVL-PAINT  ( -- )
     _DVL-BASE-FG @ DRW-FG! _DVL-BASE-A @ DRW-ATTR!
     _DVD-KIND @ DOC-B-CODE = IF _DOCV-CODE-BG DRW-BG! THEN
     _DV-TLN TLINES-ROW ?DUP IF
-        _DVL-ROW @ _DVD-X @ _DVL-PAD @ + 0 0 0 ['] _DVL-LOOK DRW-TROW-STYLED
-        EXIT
+        _DVL-ROW @ _DVD-X @ _DVL-PAD @ + 0 0 0 _DVL-MAP SPAL-DEFAULT
+        DRW-TROW-STYLED EXIT
     THEN
-    _DV-TLN TLINES-BYTES _DVL-ROW @ _DVD-X @ ['] _DVL-LOOK
+    _DV-TLN TLINES-BYTES _DVL-ROW @ _DVD-X @ 0 0 0 _DVL-MAP SPAL-DEFAULT
     DRW-TEXT-STYLED-UNTRUSTED ;
 
 \ A page's break: a rule's line across the cells the label's line leaves,

@@ -8,6 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 UTF8 = ROOT / "akashic" / "text" / "utf8.f"
 CELL_WIDTH = ROOT / "akashic" / "text" / "cell-width.f"
 DRAW = ROOT / "akashic" / "tui" / "draw.f"
+TEXT_STYLE = ROOT / "akashic" / "text" / "text-style.f"
+STYLE_PALETTE = ROOT / "akashic" / "tui" / "style-palette.f"
+STYLED_CALLERS = tuple(
+    ROOT / "akashic" / "tui" / "widgets" / name
+    for name in ("textarea.f", "list.f", "document.f")
+)
 STREAMS_SOURCE_STORE = (
     ROOT / "akashic" / "tui" / "applets" / "streams" / "source-store.f"
 )
@@ -25,10 +31,6 @@ def _definition(source: str, word: str) -> str:
     )
     assert match is not None, f"missing Forth definition {word}"
     return match.group(0)
-
-
-# How a styled draw calls its caller's style word inside the borrow.
-STYLE_CALL = "_DRW-TEXT-STYLE-XT @ EXECUTE"
 
 
 def _has_token(source: str, token: str) -> bool:
@@ -256,14 +258,7 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
     assert body.index("_DRW-TEXT-COL @ _DRW-TEXT-HIGH @ >= IF EXIT THEN") < first_decode
     assert body.index("_DRW-PLANE-COLS @ _DRW-TEXT-BUDGET !") < first_decode
     assert body.count("-1 _DRW-TEXT-BUDGET +!") == 1
-    # A styled draw's style word is the one caller word the borrow runs,
-    # in the printable-ASCII body and the one-scalar body only; it keeps
-    # the borrow's rule (docs/tui/draw.md), so those two calls are the only
-    # EXECUTE the bodies hold.
-    styled = {name for name, text in bodies.items() if STYLE_CALL in text}
-    assert styled == {"_DRW-TEXT-ASCII-BODY", "_DRW-TEXT-BODY"}, styled
     for name, text in bodies.items():
-        text = text.replace(STYLE_CALL, "")
         for forbidden in (
             "SCR-",
             "DRW-CHAR",
@@ -281,9 +276,19 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
             assert not _has_token(text, forbidden), (name, forbidden)
         assert not _has_token(text, "UTF8-DECODE")
 
+    # A styled character's look comes from the map, the palette and the
+    # meanings, read through these words inside the borrow.
+    palette = STYLE_PALETTE.read_text(encoding="utf-8")
+    look_closure = (
+        _definition(source, "_DRW-TEXT-LOOK")
+        + _definition(source, "_DRW-TEXT-MARKED?")
+        + _definition(TEXT_STYLE.read_text(encoding="utf-8"), "TSTY-VALID?")
+        + _definition(palette, "SPAL-LOOK@")
+        + _definition(palette, "_SPAL-ENTRY")
+    )
     helper_closure = (
-        "".join(bodies.values()).replace(STYLE_CALL, "") + row_visible
-        + next_cp + make_cell + plane_set + pair_set
+        "".join(bodies.values()) + row_visible + next_cp + make_cell
+        + plane_set + pair_set + look_closure
     )
     for axis in ("ROW", "COL"):
         helper_closure += _definition(source, f"_DRW-LOCAL-{axis}-LOW")
@@ -327,6 +332,98 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
     assert "TROW-F-UNTRUSTED _DRW-TEXT-START" in _definition(
         source, "DRW-TEXT-UNTRUSTED"
     )
+
+
+def test_styled_draws_resolve_each_look_from_the_map_and_palette() -> None:
+    """The styled draws take styles as data and run no caller word."""
+
+    source = DRAW.read_text(encoding="utf-8")
+    assert "REQUIRE ../text/text-style.f" in source
+    assert "REQUIRE style-palette.f" in source
+    assert "STYLE-XT" not in source
+
+    # The entry points keep the map and the palette their callers pass.
+    start = _definition(source, "_DRW-TEXT-STYLED-START")
+    trow = _definition(source, "DRW-TROW-STYLED")
+    for definition in (start, trow):
+        assert "_DRW-TEXT-PAL ! _DRW-TEXT-MAP !" in definition
+        assert "_DRW-TEXT-MARK!" in definition
+        assert "_DRW-TEXT-STYLED-CALL" in definition
+        assert not _has_token(definition, "EXECUTE")
+    assert "( addr len row col start end attrs map palette -- )" in (
+        _definition(source, "DRW-TEXT-STYLED")
+    )
+    assert "( addr len row col start end attrs map palette -- )" in (
+        _definition(source, "DRW-TEXT-STYLED-UNTRUSTED")
+    )
+    assert "( trow row col start end attrs map palette -- )" in trow
+
+    # Whether the run returns or throws, the base style comes back and the
+    # map is cleared for the next draw.
+    call = _definition(source, "_DRW-TEXT-STYLED-CALL")
+    restore = call.index("_DRW-TEXT-BASE-FG @ _DRW-FG !")
+    assert call.index("CATCH") < restore < call.index("0 _DRW-TEXT-MAP !")
+    assert call.index("0 _DRW-TEXT-MAP !") < call.index("THROW")
+
+    # One word resolves a styled character's look: the meaning the map
+    # holds at its first byte, the palette's look for a valid meaning over
+    # the base attributes, the base style otherwise, and the mark.
+    look = _definition(source, "_DRW-TEXT-LOOK")
+    for required in (
+        "_DRW-TEXT-MAP @ + C@",
+        "TSTY-VALID?",
+        "_DRW-TEXT-PAL @ SPAL-LOOK@ _DRW-TEXT-BASE-A @ OR",
+        "_DRW-TEXT-BASE-FG @ _DRW-FG !",
+        "_DRW-TEXT-MARKED?",
+        "_DRW-ATTRS !",
+    ):
+        assert required in look, required
+    assert "WITHIN" in _definition(source, "_DRW-TEXT-MARKED?")
+    assert "2DUP < R> AND _DRW-TEXT-MARK !" in _definition(
+        source, "_DRW-TEXT-MARK!"
+    )
+
+    # Printable ASCII and the one-scalar body take each look inside the
+    # borrow; laid-out text takes it before the borrow, by the character's
+    # first byte and logical start.
+    ascii_body = _definition(source, "_DRW-TEXT-ASCII-BODY")
+    scalar_body = _definition(source, "_DRW-TEXT-BODY")
+    prepare = _definition(source, "_DRW-TEXT-PREPARE?")
+    assert "I _DRW-TEXT-ORIGIN @ - DUP _DRW-TEXT-LOOK" in ascii_body
+    assert (
+        "_DRW-TEXT-A @ _DRW-TEXT-ORIGIN @ -\n"
+        "            _DRW-TEXT-COL @ _DRW-TEXT-FIRST @ - _DRW-TEXT-LOOK"
+    ) in scalar_body
+    assert "DUP TROW.BYTE OVER TROW.START _DRW-TEXT-LOOK" in prepare
+    for definition in (ascii_body, scalar_body, prepare, look):
+        assert definition.count("_DRW-TEXT-MAP @") == 1
+        assert not _has_token(definition, "EXECUTE")
+
+    # The canonical callers pass a map and a palette, and none of them
+    # keeps a style word of the old ( byte -- fg attrs ) shape.
+    drawers = {}
+    for path in STYLED_CALLERS:
+        caller = path.read_text(encoding="utf-8")
+        assert "( byte -- fg attrs )" not in caller, path.name
+        for match in re.finditer(
+            r"(?ms)^:\s+(\S+)(?:\s|$).*?\s;\s*(?:\\[^\n]*)?$", caller
+        ):
+            definition = match.group(0)
+            if any(
+                _has_token(definition, word)
+                for word in (
+                    "DRW-TEXT-STYLED",
+                    "DRW-TEXT-STYLED-UNTRUSTED",
+                    "DRW-TROW-STYLED",
+                )
+            ):
+                drawers[match.group(1)] = definition
+    assert set(drawers) == {
+        "_TXTA-DRAW-STYLED", "_LST-PUT", "_LST-PUT-ROW", "_DVL-PAINT",
+    }
+    for name, definition in drawers.items():
+        assert not _has_token(definition, "[']"), name
+        assert "SPAL-DEFAULT" in definition or "_TXTA-PALETTE" in definition
 
 
 def _decode_one(data: bytes, pos: int) -> tuple[int, int]:

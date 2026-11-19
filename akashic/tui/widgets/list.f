@@ -718,27 +718,20 @@ VARIABLE _LST-SF-W
     _LST-SF-A @ _LST-SF-U @ _LST-SM-A @ _LST-SF-I @ _LST-SF-C @ _LST-SF-W @
     _LST-SF-W @ _LST-O-STYLE-XT + @ EXECUTE ;
 
-VARIABLE _LST-BASE-FG    \ the drawing style under a styled field
-VARIABLE _LST-BASE-A
 VARIABLE _LST-TX-STYLED  \ the field about to be drawn has meanings
-VARIABLE _LST-LOOK-AT    \ where the drawn text starts in its field
-0 _LST-LOOK-AT !
+VARIABLE _LST-TX-AT      \ where the drawn text starts in its field
+0 _LST-TX-AT !
 
-\ _LST-LOOK ( byte -- fg attrs )   A styled field's look at that byte of
-\   the drawn text.
-: _LST-LOOK  ( byte -- fg attrs )
-    _LST-LOOK-AT @ + _LST-SM-A @ + C@ DUP TSTY-VALID? 0= IF
-        DROP _LST-BASE-FG @ _LST-BASE-A @ EXIT
-    THEN
-    DUP SPAL-DEFAULT SPAL-FG@
-    SWAP SPAL-DEFAULT SPAL-ATTRS@ _LST-BASE-A @ OR ;
+\ _LST-TX-MAP ( -- map )   The meanings of a styled field's drawn text:
+\   its field's map from where the text starts.
+: _LST-TX-MAP  ( -- map )  _LST-SM-A @ _LST-TX-AT @ + ;
 
 \ _LST-PUT ( addr len row col -- )   Draw text as the list draws it:
-\   styled when it has meanings, untrusted in LST-UNTRUSTED mode.
+\   styled when it has meanings, each in the default palette's look,
+\   untrusted in LST-UNTRUSTED mode.
 : _LST-PUT  ( addr len row col -- )
     _LST-TX-STYLED @ IF
-        DRW-FG@ _LST-BASE-FG !  DRW-ATTR@ _LST-BASE-A !
-        ['] _LST-LOOK
+        0 0 0 _LST-TX-MAP SPAL-DEFAULT
         _LST-DRW-W @ _LST-UNTRUSTED? IF
             DRW-TEXT-STYLED-UNTRUSTED
         ELSE
@@ -753,8 +746,7 @@ VARIABLE _LST-LOOK-AT    \ where the drawn text starts in its field
 \   direction controls.
 : _LST-PUT-ROW  ( trow row col -- )
     _LST-TX-STYLED @ IF
-        DRW-FG@ _LST-BASE-FG !  DRW-ATTR@ _LST-BASE-A !
-        0 0 0 ['] _LST-LOOK DRW-TROW-STYLED EXIT
+        0 0 0 _LST-TX-MAP SPAL-DEFAULT DRW-TROW-STYLED EXIT
     THEN
     DRW-TROW ;
 
@@ -863,21 +855,21 @@ VARIABLE _LST-CD-PAD      \ cells before a right-to-left line
     1 _LST-CD-LINE +! ;
 
 : _LST-CD-SINGLE  ( -- )
-    0 _LST-CD-TROW ! 0 _LST-CD-PAD ! 0 _LST-LOOK-AT !
+    0 _LST-CD-TROW ! 0 _LST-CD-PAD ! 0 _LST-TX-AT !
     _LST-CD-FA @ _LST-DRW-A ! _LST-CD-FU @ _LST-DRW-U !
     _LST-CD-LINE-DRAW ;
 
 \ Set up the line the cursor has read: bytes, or its laid-out row.
 : _LST-CD-TAKE-LINE  ( -- )
     _LST-TLN TLINES-ROW DUP _LST-CD-TROW ! IF
-        _LST-TLN TLINES-PARAGRAPH _LST-CD-FA @ - _LST-LOOK-AT !
+        _LST-TLN TLINES-PARAGRAPH _LST-CD-FA @ - _LST-TX-AT !
         _LST-TLN TLINES-RTL? IF
             _LST-CD-LIMIT @ _LST-TLN TLINES-WIDTH - 0 MAX
         ELSE 0 THEN _LST-CD-PAD !
         EXIT
     THEN
     _LST-TLN TLINES-BYTES 2DUP _LST-DRW-U ! _LST-DRW-A !
-    DROP _LST-CD-FA @ - _LST-LOOK-AT !
+    DROP _LST-CD-FA @ - _LST-TX-AT !
     0 _LST-CD-PAD ! ;
 
 \ A wrapping field's lines, read until the body is full.
@@ -905,7 +897,7 @@ VARIABLE _LST-CD-PAD      \ cells before a right-to-left line
             _LST-STYLE-FIELD _LST-TX-STYLED !
         I _LST-DRW-W @ _LST-COL-WRAP? IF _LST-CD-WRAPPED ELSE _LST-CD-SINGLE THEN
     LOOP
-    0 _LST-LOOK-AT ! ;
+    0 _LST-TX-AT ! ;
 
 VARIABLE _LST-SL-FIRST
 
