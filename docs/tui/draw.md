@@ -314,6 +314,13 @@ offset where the character starts, so one call draws a highlighted line.
 Printable ASCII calls `xt` for each byte, other text for each character. The
 style in force before the call is back in force after it. A text area uses
 these with its style map ([textarea](widgets/textarea.md)).
+
+`xt` runs inside the draw's one bounded back-plane borrow for printable ASCII
+and for the one-cell-per-scalar fallback, and before the borrow for laid-out
+text, so it keeps the borrow's rule: it answers from data the caller prepared
+before the call, as the text area's, the list's and the document view's look
+words answer from their style maps, and it does not yield, allocate, draw,
+call the screen or change the selected screen.
 `DRW-TEXT-STYLED-UNTRUSTED` draws as `DRW-TEXT-UNTRUSTED` does, for styled
 text from outside the application, such as a list's cards in
 `LST-UNTRUSTED` mode ([list](widgets/list.md)).

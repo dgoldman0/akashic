@@ -803,7 +803,11 @@ VARIABLE _DRW-TEXT-SC-U
 VARIABLE _DRW-TEXT-REC
 VARIABLE _DRW-TEXT-C
 VARIABLE _DRW-TEXT-W
-VARIABLE _DRW-TEXT-STYLE-XT  0 _DRW-TEXT-STYLE-XT !  \ ( byte -- fg attrs )
+\ A styled draw's style word ( byte -- fg attrs ).  It is the one caller
+\ word the back-plane borrow runs, and it keeps the borrow's rule: it
+\ answers from data the caller prepared, and does not yield, allocate,
+\ draw or change the selected screen (docs/tui/draw.md).
+VARIABLE _DRW-TEXT-STYLE-XT  0 _DRW-TEXT-STYLE-XT !
 VARIABLE _DRW-TEXT-BASE-FG
 VARIABLE _DRW-TEXT-BASE-A
 VARIABLE _DRW-TEXT-ORIGIN    \ a styled text's first byte
@@ -1135,7 +1139,9 @@ VARIABLE _DRW-TC-CAP  0 _DRW-TC-CAP !
 \   As DRW-TEXT, but each character first takes the foreground and
 \   attributes XT ( byte -- fg attrs ) gives for the byte offset where the
 \   character starts, so one call draws a highlighted line.  The style in
-\   force before the call is back in force after it.
+\   force before the call is back in force after it.  XT may run inside
+\   the back-plane borrow, so it answers from data the caller prepared and
+\   does not yield, allocate, draw or change the selected screen.
 \   DRW-TEXT-STYLED-UNTRUSTED draws as DRW-TEXT-UNTRUSTED does.
 : _DRW-TEXT-STYLED-START  ( addr len row col xt flags -- )
     _DRW-TEXT-FLAGS !

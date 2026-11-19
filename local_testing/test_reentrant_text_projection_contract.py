@@ -27,6 +27,10 @@ def _definition(source: str, word: str) -> str:
     return match.group(0)
 
 
+# How a styled draw calls its caller's style word inside the borrow.
+STYLE_CALL = "_DRW-TEXT-STYLE-XT @ EXECUTE"
+
+
 def _has_token(source: str, token: str) -> bool:
     source = re.sub(r"(?m)\\.*$", "", source)
     return re.search(rf"(?<!\S){re.escape(token)}(?!\S)", source) is not None
@@ -252,7 +256,14 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
     assert body.index("_DRW-TEXT-COL @ _DRW-TEXT-HIGH @ >= IF EXIT THEN") < first_decode
     assert body.index("_DRW-PLANE-COLS @ _DRW-TEXT-BUDGET !") < first_decode
     assert body.count("-1 _DRW-TEXT-BUDGET +!") == 1
+    # A styled draw's style word is the one caller word the borrow runs,
+    # in the printable-ASCII body and the one-scalar body only; it keeps
+    # the borrow's rule (docs/tui/draw.md), so those two calls are the only
+    # EXECUTE the bodies hold.
+    styled = {name for name, text in bodies.items() if STYLE_CALL in text}
+    assert styled == {"_DRW-TEXT-ASCII-BODY", "_DRW-TEXT-BODY"}, styled
     for name, text in bodies.items():
+        text = text.replace(STYLE_CALL, "")
         for forbidden in (
             "SCR-",
             "DRW-CHAR",
@@ -271,8 +282,8 @@ def test_text_draw_uses_one_bounded_non_yielding_plane_borrow() -> None:
         assert not _has_token(text, "UTF8-DECODE")
 
     helper_closure = (
-        "".join(bodies.values()) + row_visible + next_cp + make_cell
-        + plane_set + pair_set
+        "".join(bodies.values()).replace(STYLE_CALL, "") + row_visible
+        + next_cp + make_cell + plane_set + pair_set
     )
     for axis in ("ROW", "COL"):
         helper_closure += _definition(source, f"_DRW-LOCAL-{axis}-LOW")
