@@ -8,6 +8,7 @@ the physical runner would present and checks the one input each sends.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -2297,9 +2298,10 @@ def test_only_file_explorer_and_pad_follow_the_user_volume() -> None:
         assert applet_journey(name, ready)._place_labels == (FEXP_PLACE_LABEL,)
         journey = applet_journey(name, ready, user_volume=True)
         assert journey._place_labels == USER_VOLUME_PLACE_LABELS
-    # Pad ends on the user volume once it has saved the file in Documents.
+    # Pad ends on the user volume once its sidebar lists the file it saved
+    # in Documents.
     pad = applet_journey("pad", PAD_READY, user_volume=True)
-    assert pad.final_stage == PadAloneJourney.SAVED_AS
+    assert pad.final_stage == PadAloneJourney.SIDEBAR_EXPANDED
     assert pad.final_cell_markers == ("[1:Akashic Pa*]", PAD_SAVED_AS)
     assert applet_journey("pad", PAD_READY).final_stage == PadAloneJourney.LINK_FOLLOWED
     assert isinstance(applet_journey("daybook", DAYBOOK_READY, user_volume=True),
@@ -2554,6 +2556,25 @@ def test_fexp_on_the_user_volume_refuses_what_its_places_do_not_allow() -> None:
                                                     selected=FEXP_FOLDER), sender)
 
 
+def _pad_documents_open(frame, *children: str):
+    """FRAME with Pad's sidebar showing the user volume's places, Documents
+    open with CHILDREN listed under it."""
+
+    items = []
+    for index, label in enumerate(USER_VOLUME_PLACE_LABELS):
+        opened = index == 0
+        items.append(ViewItem(index + 1, 0, len(items), 0,
+                              ItemState.EXPANDABLE
+                              | (ItemState.EXPANDED if opened else ItemState(0)),
+                              ItemRole.ITEM, (ItemField(label),)))
+        if opened:
+            for offset, child in enumerate(children):
+                items.append(ViewItem(100 + offset, 1, len(items), 1, ItemState(0),
+                                      ItemRole.ITEM, (ItemField(child),)))
+    sidebar = _tree_claim(PAD_SIDEBAR_ID, tuple(items), (0, 3, 40, 60))
+    return replace(frame, semantic_item_view_claims=(sidebar,))
+
+
 def _pad_shipped_frame(*, prompt=None, notice=None, status="/" + PAD_SHIPPED):
     """Pad on the user volume showing pad.toml, with PROMPT held over it."""
 
@@ -2597,6 +2618,11 @@ def test_pad_on_the_user_volume_saves_a_read_only_file_into_documents() -> None:
         (_cells((81, 1, saved)), _pad_shipped_frame(status=saved)),
         (_cells(_notice_cells(PAD_SAVED_NOTICE), (81, 1, saved)),
          _pad_shipped_frame(status=saved, notice=_notice(PAD_SAVED_NOTICE))),
+        # A frame the guest painted before it read the EXPAND, then
+        # Documents open, listing the saved file.
+        (_cells((81, 1, saved)), _pad_shipped_frame(status=saved)),
+        (_cells((81, 1, saved)),
+         _pad_documents_open(_pad_shipped_frame(status=saved), "welcome.txt", PAD_SAVED_AS)),
     )
     journey = PadAloneJourney(PAD_READY, user_volume=True)
     journey.stage = PadAloneJourney.LINK_FOLLOWED
@@ -2618,7 +2644,9 @@ def test_pad_on_the_user_volume_saves_a_read_only_file_into_documents() -> None:
         (None, []),
         ("pad-save-as-name-typed", [("send_key", "enter")]),
         (None, []),
-        ("pad-saved-as", []),
+        ("pad-saved-as", [("item_expand", f"1,1,{PAD_SIDEBAR_ID},1")]),
+        (None, []),
+        ("pad-sidebar-lists-saved", []),
     ]
     assert results[-1][0].complete
 
@@ -2748,29 +2776,24 @@ def test_the_driver_checks_what_a_journey_leaves_on_the_user_volume(tmp_path, mo
     ]
 
 
-def test_fexp_selects_another_row_first_when_the_highlight_is_not_its_selection() -> None:
-    """A listing File Explorer makes for a folder leaves the table's
-    highlight on its first row while File Explorer's selection is the
-    folder, and a SELECT on that row changes nothing; the journey selects
-    another row first, and the row it wants once the highlight has moved."""
+def test_fexp_fails_when_the_table_highlights_a_row_file_explorer_has_not_selected() -> None:
+    """File Explorer's table shows a row selected only when that row is File
+    Explorer's selection, so the listing of a folder, whose selection is
+    the folder itself, highlights none, and a SELECT on the row the journey
+    wants chooses it.  A table that highlights that row while the status
+    bar shows another selection fails the journey: a SELECT there would
+    change nothing."""
 
     origin = USER_VOLUME_PLACE_LABELS[2]
     folder = f"{origin}/{FEXP_SHIPPED_FOLDER}"
     journey = _fexp_at(FexpAloneJourney.SHIPPED_LISTED)
-    steps = (
-        (_cells(), _listing(SHIPPED_ROWS, status=folder, selected=FEXP_SHIPPED, place=origin)),
-        (_cells(), _listing(SHIPPED_ROWS, status=f"{folder}/fexplorer.uidl",
-                            selected="fexplorer.uidl", place=origin)),
-    )
-    results = _run(journey, steps)
+    results = _run(journey, ((_cells(), _listing(SHIPPED_ROWS, status=folder, place=origin)),))
     assert [(result.milestone, sent) for result, sent in results] == [
-        ("fexp-highlight-is-not-the-selection",
-         [("item_select", _row(SHIPPED_ROWS, "fexplorer.uidl"))]),
         ("fexp-shipped-listed", [("item_select", _row(SHIPPED_ROWS, FEXP_SHIPPED))]),
     ]
     assert journey.stage == FexpAloneJourney.SHIPPED_SELECTED
-    # With no other row, the journey cannot move the highlight.
     journey = _fexp_at(FexpAloneJourney.SHIPPED_LISTED)
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="no other row"):
-        _run(journey, ((_cells(), _listing((SHIPPED_ROW,), status=folder,
+    with pytest.raises(PhysicalDesktopAcceptanceError,
+                       match=re.escape(f"highlights {FEXP_SHIPPED}, which File Explorer has not")):
+        _run(journey, ((_cells(), _listing(SHIPPED_ROWS, status=folder,
                                            selected=FEXP_SHIPPED, place=origin)),))
