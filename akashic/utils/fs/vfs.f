@@ -1346,6 +1346,34 @@ VARIABLE _VGB-N
         THEN
     LOOP DROP FALSE ;
 
+\ _VFS-PAGE-HOLDS? ( address length first-cell bytes -- flag )
+\   Whether ADDRESS and LENGTH lie inside the slots of one page of the
+\   chain FIRST-CELL heads, each page BYTES long with its link first.  A
+\   caller about to read through a pointer it was handed proves with this
+\   that the pointer names the cache's own memory: the cache keeps its
+\   entries in heap pages, outside the instance's arena.
+: _VFS-PAGE-HOLDS?  ( address length first-cell bytes -- flag )
+    >R @ >R
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP R> R> 2DROP FALSE EXIT THEN
+    R>                                    ( address length page ; R: bytes )
+    BEGIN DUP WHILE
+        2 PICK OVER 8 + U< 0= IF
+            2 PICK 2 PICK + OVER R@ + U> 0= IF
+                DROP 2DROP R> DROP TRUE EXIT
+            THEN
+        THEN
+        @
+    REPEAT
+    DROP 2DROP R> DROP FALSE ;
+
+\ _VFS-HOLDS-DENTRY? ( dentry vfs -- flag )   In one of VFS's dentry pages.
+: _VFS-HOLDS-DENTRY?  ( dentry vfs -- flag )
+    >R VFS-INODE-SIZE R> V.ISLAB _VFS-SLAB-SIZE _VFS-PAGE-HOLDS? ;
+
+\ _VFS-HOLDS-VNODE? ( vnode vfs -- flag )   In one of VFS's vnode pages.
+: _VFS-HOLDS-VNODE?  ( vnode vfs -- flag )
+    >R VFS-VNODE-SIZE R> V.VSLAB _VFS-VSLAB-SIZE _VFS-PAGE-HOLDS? ;
+
 \ _VFS-PAGES-GIVE-BACK ( first-cell bytes live-xt vfs -- freed? )
 \   Unlink and free each page of the chain whose first page FIRST-CELL
 \   names that LIVE-XT ( page -- flag ) finds empty.  TRUE when any went.
