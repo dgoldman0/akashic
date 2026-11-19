@@ -99,7 +99,7 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("FS-DIR", BOTH,
      "the boot volume's directory, read into memory: each file's sectors, length, time and checksum"),
     ("FD-POOL", BOTH, "the file descriptors: the place and length of the file opened last"),
-    ("FR-LEN", BOTH, "FREAD's cell for the length asked for last"),
+    ("FR-LEN", (LINKED,), "FREAD's cell for the length asked for last"),
     ("FR-REM", BOTH, "FREAD's cell for the bytes that remained"),
     ("FR-POS", BOTH, "FREAD's cell for its place in the file"),
     # KDOS: the loader.
@@ -128,10 +128,10 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     # Akashic: the cold-source loader's record of the container loaded last.
     ("_CSL-HEADER", BOTH, "that container's header: its sizes and checksum"),
     ("_CSL-FILE-U", BOTH, "its length"),
-    ("_CSL-PAYLOAD-U", BOTH, "its payload's length"),
-    ("_CSL-RAW-U", BOTH, "its content's length"),
+    ("_CSL-PAYLOAD-U", (LINKED,), "its payload's length"),
+    ("_CSL-RAW-U", (LINKED,), "its content's length"),
     ("_CSL-CRC", BOTH, "its content's checksum"),
-    ("_CSL-READ-U", BOTH, "the bytes read from it"),
+    ("_CSL-READ-U", (LINKED,), "the bytes read from it"),
     # Akashic: the ext4 driver.  The two boots mount different volumes, one
     # of source files and one of token files, and each routine of the driver
     # keeps what it worked on last in cells named with the routine's prefix.
@@ -141,14 +141,15 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("_EXT4-BM-*", (VOLUME,), "the block bitmap check: the bitmap's stored checksum"),
     ("_EXT4-OCV-*", (VOLUME,), "the orphan file check: its block's stored checksum"),
     ("_EXT4-CRC-STATE", (VOLUME,), "the CRC-32C of the block checked last"),
-    ("_EXT4-BX-*", (VOLUME,), "the length of the span comparison made last"),
     ("_EXT4-RAR-*", (VOLUME,), "the block range whose allocation was checked last"),
     ("_EXT4-IR-*", (VOLUME,), "the inode loaded last: its number, place and checksum"),
     ("_EXT4-EV-*", (VOLUME,), "the extents of the file whose extent tree was walked last"),
+    ("_EXT4-MAP-*", (VOLUME,), "the extent mapping made last: its logical block and lengths"),
+    ("_EXT4-RB-*", (VOLUME,), "the block the driver read last"),
+    ("_EXT4-FG-*", (VOLUME,), "the block the read gate checked last"),
     ("_EXT4-RD-*", (VOLUME,), "the descriptor of the file read last"),
     ("_EXT4-DR-*", (VOLUME,), "the read made last: its blocks, offset and lengths"),
     ("_EXT4-DS-*", (VOLUME,), "the directory search made last: the name's length and the inode found"),
-    ("_EXT4-DN-*", (VOLUME,), "the length of the directory entry's name compared last"),
     ("_EXT4-DV-*", (VOLUME,), "the directory block checked last: its stored checksum and last record"),
     ("_EXT4-PS-*", (VOLUME,), "the driver's copies of the blocks it read last"),
     ("_EXT4-JMM-*", (VOLUME,), "the key of the journal snapshot: the volume's journal tuple and sizes"),
@@ -160,7 +161,8 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     # Akashic: the VFS over those volumes, and its MP64FS binding.
     ("_VR-PATH-A", (VOLUME,), "the path resolved last"),
     ("_VFC-H", BOTH, "the hash of the name looked up last"),
-    ("_VUC-U", (VOLUME,), "the length of the name looked up last"),
+    ("_SYSVOL-BD", (VOLUME,),
+     "the system volume's record of its last request: the sector of another block"),
     ("_VCDN-*", (VOLUME,), "the directory entry cached last: its name's length and its file's id"),
     ("_VFV-*", (VOLUME,), "the file looked up last: its id and that id's hash"),
     ("_VRD-*", (VOLUME,), "the read made last: the length asked for and the bytes given"),
