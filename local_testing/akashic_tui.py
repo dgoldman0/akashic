@@ -652,7 +652,8 @@ TEST_ROOT_PLACE = "\n" + TEST_ROOT_PLACE_F.read_text(encoding="utf-8")
 # deployed as the profile deploys its source, and autoexec.f mounts the
 # volume and makes it the source of LOAD and REQUIRE before the profile's
 # own REQUIREs run (docs/utils/fs/system-volume.md).  The arena is the
-# mount's storage: its records and its cache of entries and names.
+# mount's storage, its records; the cache of entries and names takes its
+# pages from the heap.
 SYSTEM_VOLUME_MODULE = "utils/fs/system-volume.f"
 SYSTEM_VOLUME_ARENA_BYTES = 524288
 SYSTEM_VOLUME_BOOT_ENTRY = "_BOOT-SYSTEM-VOLUME"

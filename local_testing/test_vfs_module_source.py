@@ -328,7 +328,7 @@ def test_directories_a_load_returns_to_survive_eviction(
     machine.mount()
     # Let the cache keep two entries, so every path resolved evicts what
     # the loads before it left behind.
-    assert machine.run("2 T-VFS @ VFS-SET-HWM") == ()
+    assert machine.run("2 _VFS-ENTRY-BYTES * T-VFS @ VFS-SET-CACHE-BUDGET") == ()
 
     assert machine.run("REQUIRE mods/a.f") == ()
 

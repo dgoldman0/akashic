@@ -25,8 +25,9 @@
 \  and SYSVOL-SOURCE selects the system volume again.
 \
 \  ARENA is the mount's storage and stays the caller's: the VFS and the
-\  ext4 driver keep the mount's records and its cache of entries and
-\  names inside it.  The volume is mounted once and stays mounted.
+\  ext4 driver keep the mount's records inside it, and the cache of entries
+\  and names takes its pages from the heap.  The volume is mounted once and
+\  stays mounted.
 \
 \  A failed mount gives the unit back.  SYSVOL-SOURCE throws
 \  VFS-E-NOVOLUME before a mount, so a boot that ignored a failed mount

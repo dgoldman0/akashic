@@ -42,6 +42,7 @@ from system import MegapadSystem
 from forth_snapshot import (
     failure_message, printed_output, run_file_tests, transcript_checks,
 )
+from heap_hog import HEAP_HOG_LINES
 
 BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
 KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
@@ -1023,10 +1024,9 @@ def test_structured_volume_error_translation():
 def test_mount_population_nomem_rolls_back():
     """Mount reports NOMEM without publishing a partial FAT root."""
     check("FAT mount population NOMEM rollback", [
+        *HEAP_HOG_LINES,
         ': _OOM-MOUNT  ( vfs -- ior )',
-        '  DUP V.STR-PTR @ OVER V.STR-END !',
-        '  DUP V.ARENA @ DUP ARENA-FREE _VFAT-CTX-SIZE 2048 + -',
-        '  ARENA-ALLOT? 2DROP VFAT-INIT ;',
+        '  DUP V.STR-PTR @ OVER V.STR-END !  HOG  VFAT-INIT ;',
         'CREATE _OOM-OPS VFS-OPS-SIZE ALLOT',
         'VFAT-OPS _OOM-OPS VFS-OPS-SIZE CMOVE',
         "' _OOM-MOUNT _OOM-OPS VFS-OP-MOUNT CELLS + !",
@@ -1048,26 +1048,27 @@ def test_mount_population_nomem_rolls_back():
         '_OV VFAT-INIT _OI = AND',
         '_OAR A.PTR @ _AP @ = AND',
         '_OV V.LAST-IOR @ _OI = AND',
-        'IF ." FAT-MOUNT-NOMEM-OK" THEN',
+        'IF ." FAT-MOUNT-NOMEM-OK" THEN  UNHOG',
     ], "FAT-MOUNT-NOMEM-OK")
 
 
 def test_readdir_population_nomem_rolls_back():
     """A failed lazy scan restores its children, counts and live names."""
     check("FAT readdir population NOMEM rollback", [
+        *HEAP_HOG_LINES,
         'T-VFAT-NEW CONSTANT _V',
         'S" /DOCS" _V VFS-RESOLVE CONSTANT _D',
         'VARIABLE _IC VARIABLE _VC VARIABLE _SP',
         '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V _VFS-STR-LIVE _SP !',
         '_V V.STR-PTR @ _V V.STR-END !',
-        '_V V.ARENA @ DUP ARENA-FREE 2048 - ARENA-ALLOT? 2DROP',
+        'HOG',
         '_D _V _VFAT-READDIR VFS-IOR-REASON VFS-R-NOMEM =',
         '_D IN.CHILD @ 0= AND',
         '_V V.ICOUNT @ _IC @ = AND',
         '_V V.VCOUNT @ _VC @ = AND',
         '_V _VFS-STR-LIVE _SP @ = AND',
         '_D IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
-        'IF ." FAT-READDIR-NOMEM-OK" THEN',
+        'IF ." FAT-READDIR-NOMEM-OK" THEN  UNHOG',
     ], "FAT-READDIR-NOMEM-OK")
 
 

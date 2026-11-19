@@ -42,7 +42,8 @@ own `MODULE-SOURCE!`, and code that only reads files from the volume takes
 ## The arena
 
 `arena` is the mount's storage and stays the caller's. The VFS and the ext4
-driver keep the mount's records and its cache of entries and names inside it.
+driver keep the mount's records inside it, and the cache of entries and names
+takes its pages from the heap ([vfs.md](vfs.md#sync-and-eviction)).
 The volume is mounted once and stays mounted; a second `SYSVOL-MOUNT` answers
 `VFS-E-BUSY` and leaves the first mount in place.
 

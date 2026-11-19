@@ -26,9 +26,11 @@ the profile with which
 [`user-volume-20261115.md`](../../../local_testing/evidence/user-volume-20261115.md)
 measured what a write to the volume costs; the driver sizes the workspace
 for them, 45,408 bytes. The mount's own arena, `ARENA-BYTES` of extended
-memory, holds the VFS's and the driver's records for the mount and its cache
-of entries and names; composition passes 524,288 bytes, the arena the costs
-were measured with.
+memory, holds the VFS's and the driver's records for the mount; composition
+passes 524,288 bytes, the arena the costs were measured with, of which the
+mount uses 194,168 (measured on 2026-11-19). The cache of entries and names
+takes its pages from the heap within its budget
+([vfs.md](vfs.md#sync-and-eviction)).
 
 The module then reports the outcome, and nothing it does stops a boot:
 

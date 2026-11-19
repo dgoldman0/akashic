@@ -1,8 +1,11 @@
 \ vfs.f — Abstract VFS data structure for KDOS Forth
 \
-\ Arena-backed virtual filesystem.  Each VFS instance lives in a
-\ single KDOS arena, enabling multiple simultaneous filesystems
-\ and O(1) bulk teardown via ARENA-DESTROY.
+\ Each VFS instance keeps its fixed records in a KDOS arena of its own:
+\ the descriptor, the file-descriptor pool, the pool and index records,
+\ and a RAM binding's file buffers.  Its cache of entries, vnodes, names
+\ and index buckets takes pages from the heap as it grows, up to the
+\ instance's cache budget, and gives back each page eviction empties.
+\ VFS-DESTROY frees the pages and then the arena.
 \
 \ The VFS is a pure in-memory dentry tree with shared vnodes, a file-
 \ descriptor pool, string pool, and path resolver.  It knows
@@ -105,12 +108,22 @@ VFS-OP-COUNT CELLS CONSTANT VFS-OPS-SIZE
 \ Default pool sizes
 256 CONSTANT _VFS-FD-DEFAULT   \ default FD pool slots
 
-\ Slab page: 1 cell header + N inode slots
-\ Header cell = pointer to next slab page (0 = last page)
-\ We size each slab page to hold 64 inodes + header:
-\   8 + (64 × 64) = 4104 bytes
+\ Slab page: 1 cell header + N slots.  The header cell points at the next
+\ page, 0 for the last.  A dentry page holds 64 dentries, 5,128 bytes,
+\ and a vnode page 32 vnodes, 6,152 bytes; each is one heap allocation.
 64  CONSTANT _VFS-SLAB-SLOTS
-8 64 VFS-INODE-SIZE * + CONSTANT _VFS-SLAB-SIZE
+8 _VFS-SLAB-SLOTS VFS-INODE-SIZE * + CONSTANT _VFS-SLAB-SIZE
+32  CONSTANT _VFS-VSLAB-SLOTS
+8 _VFS-VSLAB-SLOTS VFS-VNODE-SIZE * + CONSTANT _VFS-VSLAB-SIZE
+
+\ The cache budget.  An entry takes about 320 bytes of the cache: its
+\ dentry, its vnode, a short name and its share of the index buckets.
+\ The eviction mark is the budget over that, so a longer name makes an
+\ entry take more.  A new instance's budget is one thirty-second of the
+\ heap free when it is made, and never less than 256 entries' worth.
+320 CONSTANT _VFS-ENTRY-BYTES
+32  CONSTANT _VFS-BUDGET-SHARE
+256 _VFS-ENTRY-BYTES * CONSTANT _VFS-BUDGET-MIN
 
 \ =====================================================================
 \  Binding operation slots and capabilities
@@ -304,10 +317,10 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 \
 \    +0   binding       validated ABI-1 binding descriptor
 \    +8   flags         VFS-F-RO, VFS-F-DIRTY, …
-\   +16   inode-slab    first slab page address
-\   +24   inode-free    free-list head across slab pages
+\   +16   inode-slab    first dentry page address
+\   +24   inode-free    free-list head across dentry pages
 \   +32   inode-count   live (allocated) inodes
-\   +40   inode-hwm     high-water mark for eviction
+\   +40   inode-hwm     the eviction mark, the budget in entries
 \   +48   fd-pool       FD slot array base
 \   +56   fd-free       FD free-list head
 \   +64   fd-max        number of FD slots
@@ -328,8 +341,11 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 \  +184   vnode-count   live vnode records
 \  +192   next-bid      next synthetic binding id (RAM and synthetic bindings)
 \  +200   cache-index   the name and identity indexes' records
+\  +208   vnode-slab    first vnode page address
+\  +216   budget        heap bytes the cache may take before eviction
+\  +224   cache-bytes   heap bytes the cache holds: pages, chunks, buckets
 
-208 CONSTANT VFS-DESC-SIZE
+232 CONSTANT VFS-DESC-SIZE
 
 : V.BINDING    ;              \ +0
 : V.FLAGS      8 + ;          \ +8
@@ -357,6 +373,9 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 : V.VCOUNT     184 + ;        \ +184
 : V.NEXT-BID   192 + ;        \ +192 (RAM and synthetic bindings)
 : V.INDEX      200 + ;        \ +200
+: V.VSLAB      208 + ;        \ +208
+: V.BUDGET     216 + ;        \ +216
+: V.CACHE-BYTES 224 + ;       \ +224
 
 0 CONSTANT VFS-L-NEW
 1 CONSTANT VFS-L-MOUNTED
@@ -614,18 +633,41 @@ VARIABLE _VPR-IOR
     ." read-only filesystem" CR  -1 ;
 
 \ =====================================================================
+\  Cache Pages
+\ =====================================================================
+\
+\  The cache takes its memory from the heap a page at a time: dentry and
+\  vnode pages, name chunks and index buckets.  V.CACHE-BYTES counts what
+\  it holds.  A page is one ALLOCATE of a fixed size per kind, so a page
+\  given back serves the next page of its kind whole and the heap's free
+\  list stays short.  ALLOCATE serves core 0 only; a lookup on another
+\  core that needs a page gets none, and its operation VFS-E-NOMEM.
+
+\ _VFS-PAGE-NEW ( bytes vfs -- addr | 0 )   A page for the cache.
+: _VFS-PAGE-NEW  ( bytes vfs -- addr | 0 )
+    COREID IF 2DROP 0 EXIT THEN
+    >R DUP ALLOCATE IF 2DROP R> DROP 0 EXIT THEN
+    SWAP R> V.CACHE-BYTES +! ;
+
+\ _VFS-PAGE-FREE ( addr bytes vfs -- )   Give a page of the cache back.
+: _VFS-PAGE-FREE  ( addr bytes vfs -- )
+    V.CACHE-BYTES SWAP NEGATE SWAP +!  FREE ;
+
+\ =====================================================================
 \  String Pool
 \ =====================================================================
 \
-\  The pool holds the names the cache keeps.  It grows from the VFS arena
-\  in chunks as names arrive, so the storage the caller gave the VFS is
-\  its only bound.  A released name goes onto the free list of its
+\  The pool holds the names the cache keeps.  It grows from the heap in
+\  chunks as names arrive.  A released name goes onto the free list of its
 \  capacity, which the next name of that capacity takes first, so rename
-\  and cache churn reuse entries instead of growing the pool.
+\  and cache churn reuse entries instead of growing the pool; a chunk
+\  whose names are all released goes back to the heap after an eviction
+\  pass (_VFS-STR-GIVE-BACK).
 \
 \  Pool record, at V.STR-POOL:
 \    +0   newest chunk; a chunk's first cell links the chunk before it,
-\         its second cell holds its size, and its entries follow
+\         its second its size, its third where its entries end (for the
+\         newest chunk V.STR-PTR says), and its entries follow
 \    +8   live entries
 \   +16   bytes of chunk storage the pool holds
 \   +24   free-list heads for capacities 8, 16, ... 256, then one for
@@ -700,20 +742,23 @@ VARIABLE _VSA-V
     _VSA-V @ V.STR-PTR !
     _VSA-REQ @ _VSA-CAP ! ;
 
-\ Take a chunk from the VFS arena with room for an entry of _VSA-REQ bytes,
-\ and at least _VFS-STR-CHUNK bytes, and make it the newest.
+\ Take a chunk from the heap with room for an entry of _VSA-REQ bytes, and
+\ at least _VFS-STR-CHUNK bytes, and make it the newest.  The chunk that
+\ was newest keeps where its entries end.
 : _VFS-STR-GROW  ( -- flag )
-    _VSA-REQ @ 32 + _VFS-STR-CHUNK MAX _VSA-SIZE !
-    _VSA-V @ V.ARENA @ _VSA-SIZE @ ARENA-ALLOT? IF DROP FALSE EXIT THEN
+    _VSA-REQ @ 40 + _VFS-STR-CHUNK MAX _VSA-SIZE !
+    _VSA-SIZE @ _VSA-V @ _VFS-PAGE-NEW DUP 0= IF EXIT THEN
+    _VSA-V @ V.STR-PTR @ ?DUP IF _VSA-V @ V.STR-POOL @ @ 16 + ! THEN
     _VSA-V @ V.STR-POOL @ @ OVER !
     _VSA-SIZE @ OVER 8 + !
+    DUP 24 + OVER 16 + !
     DUP _VSA-V @ V.STR-POOL @ !
-    DUP 16 + _VSA-V @ V.STR-PTR !
+    DUP 24 + _VSA-V @ V.STR-PTR !
     _VSA-SIZE @ + _VSA-V @ V.STR-END !
     _VSA-SIZE @ _VSA-V @ V.STR-POOL @ 16 + +!
     TRUE ;
 
-\ With the arena full, a free entry of a larger capacity serves.
+\ With the heap full, a free entry of a larger capacity serves.
 : _VFS-STR-TAKE-LARGER  ( -- handle | 0 )
     _VSA-REQ @ _VFS-STR-CLASSES 8 * U> IF 0 EXIT THEN
     _VSA-REQ @ 8 +
@@ -725,7 +770,7 @@ VARIABLE _VSA-V
     _VSA-V @ _VFS-STR-FREE-HEAD _VFS-STR-TAKE ;
 
 \ A name entry for the bytes at SRC-A: a free entry of its capacity, the
-\ newest chunk's room, a new chunk, or with the arena full a larger free
+\ newest chunk's room, a new chunk, or with the heap full a larger free
 \ entry; 0 when none is left.
 : _VFS-STR-ALLOC  ( src-a src-u vfs -- handle )
     _VSA-V ! _VSA-LEN ! _VSA-SRC !
@@ -763,6 +808,66 @@ VARIABLE _VSR-V
     _VSR-H @ SWAP !
     -1 _VSR-V @ V.STR-POOL @ 8 + +! ;
 
+\ _VFS-STR-CHUNK-END ( chunk vfs -- end )   Where CHUNK's entries end.
+: _VFS-STR-CHUNK-END  ( chunk vfs -- end )
+    2DUP V.STR-POOL @ @ = IF NIP V.STR-PTR @ EXIT THEN
+    DROP 16 + @ ;
+
+\ _VFS-STR-CHUNK-FREE? ( chunk vfs -- flag )   No entry of CHUNK is live.
+: _VFS-STR-CHUNK-FREE?  ( chunk vfs -- flag )
+    OVER SWAP _VFS-STR-CHUNK-END SWAP 24 +
+    BEGIN 2DUP U> WHILE
+        DUP 8 + @ IF 2DROP FALSE EXIT THEN
+        DUP @ 32 RSHIFT + 16 +
+    REPEAT 2DROP TRUE ;
+
+VARIABLE _VSB-V
+VARIABLE _VSB-C
+VARIABLE _VSB-PREV
+VARIABLE _VSB-N
+
+\ _VFS-STR-RELIST ( vfs -- )
+\   File every free entry of the pool's chunks on its capacity's list
+\   again, once chunks have gone back to the heap.
+: _VFS-STR-RELIST  ( vfs -- )
+    _VSB-V !
+    _VSB-V @ V.STR-POOL @ 24 + _VFS-STR-CLASSES 1+ CELLS 0 FILL
+    _VSB-V @ V.STR-POOL @ @
+    BEGIN ?DUP WHILE
+        DUP _VSB-C !
+        DUP _VSB-V @ _VFS-STR-CHUNK-END SWAP 24 +
+        BEGIN 2DUP U> WHILE
+            DUP 8 + @ 0= IF
+                DUP @ 32 RSHIFT _VSB-V @ _VFS-STR-FREE-HEAD
+                2DUP @ SWAP 16 + !  OVER SWAP !
+            THEN
+            DUP @ 32 RSHIFT + 16 +
+        REPEAT 2DROP
+        _VSB-C @ @
+    REPEAT ;
+
+\ _VFS-STR-GIVE-BACK ( vfs -- )
+\   Give back to the heap every chunk but the newest whose entries are all
+\   free, then file the free entries left on their lists again.
+: _VFS-STR-GIVE-BACK  ( vfs -- )
+    DUP _VSB-V !  V.STR-POOL @ ?DUP 0= IF EXIT THEN
+    @ ?DUP 0= IF EXIT THEN
+    DUP _VSB-PREV !  @
+    0 _VSB-N !
+    BEGIN ?DUP WHILE
+        DUP _VSB-C !
+        DUP _VSB-V @ _VFS-STR-CHUNK-FREE? IF
+            @ _VSB-PREV @ !
+            _VSB-C @ 8 + @ NEGATE _VSB-V @ V.STR-POOL @ 16 + +!
+            _VSB-C @ DUP 8 + @ _VSB-V @ _VFS-PAGE-FREE
+            -1 _VSB-N !
+            _VSB-PREV @ @
+        ELSE
+            DUP _VSB-PREV !  @
+        THEN
+    REPEAT
+    _VSB-N @ IF _VSB-V @ _VFS-STR-RELIST THEN ;
+
 : _VFS-STR-MATCH?  ( c-addr u handle -- flag )
     DUP 0= IF  DROP 2DROP FALSE EXIT  THEN
     _VFS-STR-GET             ( c-addr u addr2 len2 )
@@ -795,10 +900,12 @@ VARIABLE _VSR-V
 \  buckets, each filing splits the bucket the split pointer names between
 \  itself and a partner one round above it, so the table grows a bucket
 \  at a time and is never rehashed whole.  Buckets live in segments of
-\  _VFS-IX-SEGMENT cells taken from the VFS arena as the table reaches
-\  them, and the directory of segment addresses doubles when it fills.  A
-\  split that finds the arena full is skipped: searches stay exact while
-\  chains lengthen, and later filings retry the split.
+\  _VFS-IX-SEGMENT cells taken from the heap as the table reaches them,
+\  and the directory of segment addresses doubles when it fills, giving
+\  the old directory back.  A split that finds the heap full is skipped:
+\  searches stay exact while chains lengthen, and later filings retry the
+\  split.  The buckets stay at the table's largest size until VFS-DESTROY,
+\  about sixteen bytes for each entry the cache held at once.
 \
 \  Index record:
 \    +0   offset of the chain link within an entry
@@ -873,20 +980,22 @@ VARIABLE _VIXG-X
 VARIABLE _VIXG-V
 
 \ Give the index its segment SEGMENT, doubling the directory first when
-\ the directory is full.  FALSE when the arena has no room; a directory
+\ the directory is full.  FALSE when the heap has no room; a directory
 \ already doubled stays in use.
 : _VFS-IX-GROW  ( segment index vfs -- flag )
     _VIXG-V ! _VIXG-X ! _VIXG-S !
     _VIXG-S @ _VIXG-X @ _VIX.DIR-CAP @ U< 0= IF
-        _VIXG-V @ V.ARENA @ _VIXG-X @ _VIX.DIR-CAP @ 2* CELLS ARENA-ALLOT?
-        IF DROP FALSE EXIT THEN
+        _VIXG-X @ _VIX.DIR-CAP @ 2* CELLS _VIXG-V @ _VFS-PAGE-NEW
+        DUP 0= IF EXIT THEN
         DUP _VIXG-X @ _VIX.DIR-CAP @ 2* CELLS 0 FILL
         _VIXG-X @ _VIX.DIR @ OVER _VIXG-X @ _VIX.DIR-CAP @ CELLS MOVE
+        _VIXG-X @ _VIX.DIR @ _VIXG-X @ _VIX.DIR-CAP @ CELLS
+            _VIXG-V @ _VFS-PAGE-FREE
         _VIXG-X @ _VIX.DIR !
         _VIXG-X @ _VIX.DIR-CAP DUP @ 2* SWAP !
     THEN
-    _VIXG-V @ V.ARENA @ _VFS-IX-SEGMENT CELLS ARENA-ALLOT?
-    IF DROP FALSE EXIT THEN
+    _VFS-IX-SEGMENT CELLS _VIXG-V @ _VFS-PAGE-NEW
+    DUP 0= IF EXIT THEN
     DUP _VFS-IX-SEGMENT CELLS 0 FILL
     _VIXG-X @ _VIX.DIR @ _VIXG-S @ CELLS + !
     TRUE ;
@@ -970,7 +1079,7 @@ VARIABLE _VIXI-V
 
 \ Set up the index record at INDEX for entries whose chain link and filed
 \ hash sit at the given offsets: one segment of buckets and a directory
-\ with room for _VFS-IX-DIR-INITIAL.  FALSE when the arena has no room.
+\ with room for _VFS-IX-DIR-INITIAL.  FALSE when the heap has no room.
 : _VFS-IX-INIT  ( link-offset hash-offset index vfs -- flag )
     _VIXI-V ! _VIXI-X !
     _VIXI-X @ _VIX.HASH !
@@ -978,12 +1087,27 @@ VARIABLE _VIXI-V
     0 _VIXI-X @ _VIX.ENTRIES !
     _VFS-IX-SEGMENT _VIXI-X @ _VIX.ROUND !
     0 _VIXI-X @ _VIX.SPLIT !
-    _VIXI-V @ V.ARENA @ _VFS-IX-DIR-INITIAL CELLS ARENA-ALLOT?
-    IF DROP FALSE EXIT THEN
+    _VFS-IX-DIR-INITIAL CELLS _VIXI-V @ _VFS-PAGE-NEW
+    DUP 0= IF EXIT THEN
     DUP _VFS-IX-DIR-INITIAL CELLS 0 FILL
     _VIXI-X @ _VIX.DIR !
     _VFS-IX-DIR-INITIAL _VIXI-X @ _VIX.DIR-CAP !
     0 _VIXI-X @ _VIXI-V @ _VFS-IX-GROW ;
+
+VARIABLE _VIXF-X
+VARIABLE _VIXF-V
+
+\ Give INDEX's segments and directory back to the heap.
+: _VFS-IX-RELEASE  ( index vfs -- )
+    _VIXF-V ! _VIXF-X !
+    _VIXF-X @ _VIX.DIR @ 0= IF EXIT THEN
+    _VIXF-X @ _VIX.DIR-CAP @ 0 ?DO
+        _VIXF-X @ _VIX.DIR @ I CELLS + @ ?DUP IF
+            _VFS-IX-SEGMENT CELLS _VIXF-V @ _VFS-PAGE-FREE
+        THEN
+    LOOP
+    _VIXF-X @ _VIX.DIR @ _VIXF-X @ _VIX.DIR-CAP @ CELLS _VIXF-V @ _VFS-PAGE-FREE
+    0 _VIXF-X @ _VIX.DIR ! ;
 
 \ File CHILD in the name index under its name and parent.
 : _VFS-NAME-FILE  ( child -- )
@@ -1059,16 +1183,14 @@ VARIABLE _VFI-A
 \  Dentry and vnode allocation
 \ =====================================================================
 
-\ _VFS-SLAB-GROW ( vfs -- )
-\   Allocate a new slab page from the arena and link it.
+\ _VFS-SLAB-GROW ( vfs -- flag )
+\   Take a new dentry page from the heap and link it.
 VARIABLE _VSG-V
 VARIABLE _VSG-S
 
 : _VFS-SLAB-GROW  ( vfs -- flag )
     _VSG-V !
-    \ Allocate slab page from arena
-    _VSG-V @ V.ARENA @ _VFS-SLAB-SIZE ARENA-ALLOT?
-    IF DROP FALSE EXIT THEN _VSG-S !
+    _VFS-SLAB-SIZE _VSG-V @ _VFS-PAGE-NEW DUP 0= IF EXIT THEN _VSG-S !
     \ Link: new-page.next = old slab head
     _VSG-V @ V.ISLAB @   _VSG-S @ !
     \ New page becomes slab head
@@ -1092,18 +1214,32 @@ VARIABLE _VDA-V
     _VDA-V @ OVER D.OWNER !
     ;
 
+VARIABLE _VVG-V
+VARIABLE _VVG-S
+
+\ _VFS-VSLAB-GROW ( vfs -- flag )
+\   Take a vnode page from the heap and put its slots on the free list.
+\   A free vnode is zero but for its link, as a released one is.
+: _VFS-VSLAB-GROW  ( vfs -- flag )
+    _VVG-V !
+    _VFS-VSLAB-SIZE _VVG-V @ _VFS-PAGE-NEW DUP 0= IF EXIT THEN _VVG-S !
+    _VVG-S @ _VFS-VSLAB-SIZE 0 FILL
+    _VVG-V @ V.VSLAB @ _VVG-S @ !  _VVG-S @ _VVG-V @ V.VSLAB !
+    _VFS-VSLAB-SLOTS 0 DO
+        _VVG-S @ 8 + I VFS-VNODE-SIZE * +
+        _VVG-V @ V.VFREE @ OVER VN.NEXT !  _VVG-V @ V.VFREE !
+    LOOP TRUE ;
+
 VARIABLE _VVA-TY
 VARIABLE _VVA-V
 VARIABLE _VVA-VN
 
 : _VFS-VNODE-ALLOC  ( type vfs -- vnode | 0 )
     _VVA-V ! _VVA-TY !
-    _VVA-V @ V.VFREE @ ?DUP IF
-        DUP VN.NEXT @ _VVA-V @ V.VFREE !
-    ELSE
-        _VVA-V @ V.ARENA @ VFS-VNODE-SIZE ARENA-ALLOT?
-        IF DROP 0 EXIT THEN
+    _VVA-V @ V.VFREE @ 0= IF
+        _VVA-V @ _VFS-VSLAB-GROW 0= IF 0 EXIT THEN
     THEN
+    _VVA-V @ V.VFREE @ DUP VN.NEXT @ _VVA-V @ V.VFREE !
     DUP _VVA-VN ! VFS-VNODE-SIZE 0 FILL
     _VVA-TY @ _VVA-VN @ VN.TYPE !
     1 _VVA-VN @ VN.NLINK !
@@ -1164,6 +1300,126 @@ VARIABLE _VDF-VN
 
 : _VFS-INODE-EVICT  ( inode vfs -- )
     >R FALSE R> _VFS-DENTRY-RELEASE ;
+
+\ =====================================================================
+\  Giving cache pages back
+\ =====================================================================
+\
+\  After an eviction pass the cache gives back to the heap each dentry
+\  page that holds no dentry, each vnode page that holds no vnode, and
+\  each name chunk but the newest that holds no name, and links what is
+\  free in the pages left into the free lists again.  A dentry is free
+\  when it has no owner, a vnode when no dentry or open file holds it and
+\  it has no type, and a name when nothing refers to it: the same tests
+\  that put them on the free lists, so an entry an operation is building
+\  is never taken for a free one.
+
+VARIABLE _VGB-V
+VARIABLE _VGB-P
+VARIABLE _VGB-PREV
+VARIABLE _VGB-N
+
+: _VFS-SLAB-LIVE?  ( page -- flag )
+    8 + _VFS-SLAB-SLOTS 0 DO
+        DUP I VFS-INODE-SIZE * + D.OWNER @ IF DROP TRUE UNLOOP EXIT THEN
+    LOOP DROP FALSE ;
+
+: _VFS-VNODE-FREE?  ( vnode -- flag )
+    DUP VN.DREFS @ OVER VN.OPEN-REFS @ OR SWAP VN.TYPE @ OR 0= ;
+
+: _VFS-VSLAB-LIVE?  ( page -- flag )
+    8 + _VFS-VSLAB-SLOTS 0 DO
+        DUP I VFS-VNODE-SIZE * + _VFS-VNODE-FREE? 0= IF
+            DROP TRUE UNLOOP EXIT
+        THEN
+    LOOP DROP FALSE ;
+
+\ _VFS-PAGES-GIVE-BACK ( first-cell bytes live-xt vfs -- freed? )
+\   Unlink and free each page of the chain whose first page FIRST-CELL
+\   names that LIVE-XT ( page -- flag ) finds empty.  TRUE when any went.
+VARIABLE _VGB-BYTES
+VARIABLE _VGB-XT
+: _VFS-PAGES-GIVE-BACK  ( first-cell bytes live-xt vfs -- freed? )
+    _VGB-V ! _VGB-XT ! _VGB-BYTES !  DUP _VGB-PREV !
+    0 _VGB-N !
+    @ BEGIN ?DUP WHILE
+        DUP _VGB-P !
+        DUP _VGB-XT @ EXECUTE IF
+            _VGB-PREV !  _VGB-P @ @
+        ELSE
+            @ _VGB-PREV @ !
+            _VGB-P @ _VGB-BYTES @ _VGB-V @ _VFS-PAGE-FREE
+            -1 _VGB-N !
+            _VGB-PREV @ @
+        THEN
+    REPEAT
+    _VGB-N @ ;
+
+\ Link the free dentries of the pages left into the free list again.
+: _VFS-SLAB-RELINK  ( vfs -- )
+    DUP _VGB-V !  0 SWAP V.IFREE !
+    _VGB-V @ V.ISLAB @
+    BEGIN ?DUP WHILE
+        DUP 8 + _VFS-SLAB-SLOTS 0 DO
+            DUP I VFS-INODE-SIZE * + DUP D.OWNER @ 0= IF
+                _VGB-V @ V.IFREE @ OVER !  _VGB-V @ V.IFREE !
+            ELSE DROP THEN
+        LOOP DROP
+        @
+    REPEAT ;
+
+\ Link the free vnodes of the pages left into the free list again.
+: _VFS-VSLAB-RELINK  ( vfs -- )
+    DUP _VGB-V !  0 SWAP V.VFREE !
+    _VGB-V @ V.VSLAB @
+    BEGIN ?DUP WHILE
+        DUP 8 + _VFS-VSLAB-SLOTS 0 DO
+            DUP I VFS-VNODE-SIZE * + DUP _VFS-VNODE-FREE? IF
+                _VGB-V @ V.VFREE @ OVER VN.NEXT !  _VGB-V @ V.VFREE !
+            ELSE DROP THEN
+        LOOP DROP
+        @
+    REPEAT ;
+
+\ _VFS-CACHE-GIVE-BACK ( vfs -- )
+\   Give back the pages an eviction pass emptied.  Only core 0 frees, as
+\   only core 0 allocates.
+: _VFS-CACHE-GIVE-BACK  ( vfs -- )
+    COREID IF DROP EXIT THEN
+    >R
+    R@ V.ISLAB _VFS-SLAB-SIZE ['] _VFS-SLAB-LIVE? R@ _VFS-PAGES-GIVE-BACK
+        IF R@ _VFS-SLAB-RELINK THEN
+    R@ V.VSLAB _VFS-VSLAB-SIZE ['] _VFS-VSLAB-LIVE? R@ _VFS-PAGES-GIVE-BACK
+        IF R@ _VFS-VSLAB-RELINK THEN
+    R> _VFS-STR-GIVE-BACK ;
+
+VARIABLE _VCRL-V
+
+\ _VFS-CACHE-RELEASE ( vfs -- )
+\   Give every page of the cache back to the heap: the dentry and vnode
+\   pages, the name chunks, and the index buckets with their directories.
+\   What is left of the instance lies in its arena.  Another core leaves
+\   the pages where they are, as it cannot free them.
+: _VFS-CACHE-RELEASE  ( vfs -- )
+    COREID IF DROP EXIT THEN
+    _VCRL-V !
+    _VCRL-V @ V.ISLAB @ BEGIN ?DUP WHILE
+        DUP @ SWAP _VFS-SLAB-SIZE _VCRL-V @ _VFS-PAGE-FREE
+    REPEAT  0 _VCRL-V @ V.ISLAB !  0 _VCRL-V @ V.IFREE !
+    _VCRL-V @ V.VSLAB @ BEGIN ?DUP WHILE
+        DUP @ SWAP _VFS-VSLAB-SIZE _VCRL-V @ _VFS-PAGE-FREE
+    REPEAT  0 _VCRL-V @ V.VSLAB !  0 _VCRL-V @ V.VFREE !
+    _VCRL-V @ V.STR-POOL @ ?DUP IF
+        DUP @ BEGIN ?DUP WHILE
+            DUP @ SWAP DUP 8 + @ _VCRL-V @ _VFS-PAGE-FREE
+        REPEAT
+        _VFS-STR-POOL-SIZE 0 FILL
+        0 _VCRL-V @ V.STR-PTR !  0 _VCRL-V @ V.STR-END !
+    THEN
+    _VCRL-V @ V.INDEX @ ?DUP IF
+        DUP _VCRL-V @ _VFS-IX-RELEASE
+        _VFS-IX-SIZE + _VCRL-V @ _VFS-IX-RELEASE
+    THEN ;
 
 \ =====================================================================
 \  FD Alloc / Free
@@ -1450,14 +1706,17 @@ VFS-RAM-OPS ,
 \  ( arena binding volume -- vfs ior )
 \
 \  Allocates from the arena:
-\    1. VFS descriptor (208 bytes)
-\    2. Initial inode slab page (_VFS-SLAB-SIZE bytes)
-\    3. FD pool (256 × 64 = 16384 bytes)
-\    4. String pool record (_VFS-STR-POOL-SIZE bytes)
-\    5. Cache index records, each with a directory and its first segment;
-\       the pool, slab pages, vnodes, index segments and file buffers then
-\       grow from the rest
-\  Creates root directory inode (type VFS-T-DIR, name "/").
+\    1. VFS descriptor (VFS-DESC-SIZE bytes)
+\    2. FD pool (256 × 64 = 16384 bytes)
+\    3. String pool record (_VFS-STR-POOL-SIZE bytes)
+\    4. Cache index records
+\  and from the heap the first dentry page, each index's directory and
+\  first segment, the root's vnode page and the first name chunk; the
+\  cache grows from the heap after that, and a RAM binding's file buffers
+\  from the arena.  The cache budget starts at _VFS-BUDGET-SHARE of the
+\  heap free, at least _VFS-BUDGET-MIN.  A failure gives back what the
+\  call took from both.  Creates root directory inode (type VFS-T-DIR,
+\  name "/").
 
 VARIABLE _VN-AR
 VARIABLE _VN-BINDING
@@ -1467,8 +1726,18 @@ VARIABLE _VN-IOR
 VARIABLE _VN-ENTRY-PTR
 
 : _VFS-NEW-ROLLBACK  ( -- vfs ior )
+    _VN-VFS @ ?DUP IF _VFS-CACHE-RELEASE THEN
     _VN-ENTRY-PTR @ _VN-AR @ A.PTR !
     0 VFS-E-NOMEM ;
+
+\ _VFS-HEAP-FREE ( -- u )   Bytes the heap has free for ALLOCATE.
+: _VFS-HEAP-FREE  ( -- u )  XMEM? IF XMEM-FREE ELSE HEAP-FREE-BYTES THEN ;
+
+\ _VFS-BUDGET! ( bytes vfs -- )   Set the cache budget and the mark it
+\   gives, the budget in entries.
+: _VFS-BUDGET!  ( bytes vfs -- )
+    SWAP 0 MAX 2DUP SWAP V.BUDGET !
+    _VFS-ENTRY-BYTES / SWAP V.IHWM ! ;
 
 : VFS-NEW  ( arena binding volume -- vfs ior )
     _VN-VOLUME ! _VN-BINDING ! _VN-AR !
@@ -1489,9 +1758,12 @@ VARIABLE _VN-ENTRY-PTR
     THEN
     _VN-AR @ A.PTR @ _VN-ENTRY-PTR !
 
-    \ 1. Allocate descriptor
+    \ 1. Allocate descriptor.  It starts zeroed, so a rollback finds no
+    \    page it did not take.
+    0 _VN-VFS !
     _VN-AR @ VFS-DESC-SIZE ARENA-ALLOT?
-    IF DROP _VFS-NEW-ROLLBACK EXIT THEN _VN-VFS !
+    IF DROP _VFS-NEW-ROLLBACK EXIT THEN
+    DUP VFS-DESC-SIZE 0 FILL  _VN-VFS !
 
     \ Store binding, explicit attachment, and arena.
     _VN-BINDING @ _VN-VFS @ V.BINDING !
@@ -1521,14 +1793,15 @@ VARIABLE _VN-ENTRY-PTR
         THEN
     THEN
 
-    \ 2. Allocate initial inode slab page
-    _VN-AR @ _VFS-SLAB-SIZE ARENA-ALLOT?
-    IF DROP _VFS-NEW-ROLLBACK EXIT THEN
+    \ 2. The first dentry page, from the heap, and the cache budget
+    _VFS-SLAB-SIZE _VN-VFS @ _VFS-PAGE-NEW
+    DUP 0= IF DROP _VFS-NEW-ROLLBACK EXIT THEN
     _VN-VFS @ V.ISLAB !
     0 _VN-VFS @ V.ISLAB @ !
     0  _VN-VFS @ V.IFREE !
     0  _VN-VFS @ V.ICOUNT !
-    256  _VN-VFS @ V.IHWM !       \ default eviction threshold
+    _VFS-HEAP-FREE _VFS-BUDGET-SHARE / _VFS-BUDGET-MIN MAX
+        _VN-VFS @ _VFS-BUDGET!
 
     \ Init slab free-list
     _VN-VFS @ V.ISLAB @  _VN-VFS @  _VFS-SLAB-INIT
@@ -1543,7 +1816,7 @@ VARIABLE _VN-ENTRY-PTR
     \ Init FD free-list
     _VN-VFS @  _VFS-FD-INIT
 
-    \ 4. String pool record.  Its chunks come from the arena as names
+    \ 4. String pool record.  Its chunks come from the heap as names
     \    arrive, beginning with the root's.
     _VN-AR @ _VFS-STR-POOL-SIZE ARENA-ALLOT?
     IF DROP _VFS-NEW-ROLLBACK EXIT THEN
@@ -1556,6 +1829,7 @@ VARIABLE _VN-ENTRY-PTR
     \    its first segment of buckets.
     _VN-AR @ _VFS-IX-SIZE 2* ARENA-ALLOT?
     IF DROP _VFS-NEW-ROLLBACK EXIT THEN
+    DUP _VFS-IX-SIZE 2* 0 FILL
     _VN-VFS @ V.INDEX !
     0 D.HNEXT 0 D.HASH _VN-VFS @ _VFS-NAME-INDEX _VN-VFS @ _VFS-IX-INIT
     0= IF _VFS-NEW-ROLLBACK EXIT THEN
@@ -1601,8 +1875,9 @@ VARIABLE _VN-ENTRY-PTR
 \
 \  ( vfs -- )
 \
-\  Force-unmounts through the binding, then destroys the arena.
-\  All dentries, vnodes, FDs, strings, and buffers are reclaimed in bulk.
+\  Force-unmounts through the binding, gives the cache's pages back to
+\  the heap, then destroys the arena, which reclaims the descriptor, the
+\  FDs and a RAM binding's buffers in bulk.
 
 1 CONSTANT VFS-UNMOUNT-F-FORCE
 
@@ -1639,6 +1914,7 @@ VARIABLE _VUM-V
 
 : VFS-DESTROY  ( vfs -- )
     DUP >R VFS-UNMOUNT-F-FORCE SWAP VFS-UNMOUNT DROP
+    R@ _VFS-CACHE-RELEASE
     R> V.ARENA @ ARENA-DESTROY ;
 
 \ =====================================================================
@@ -3341,10 +3617,10 @@ VARIABLE _VFY-V
 \  _VFS-EVICT ( vfs -- )
 \
 \  Called automatically by VFS-OPEN / VFS-RESOLVE when inode-count
-\  exceeds inode-hwm.  A binding without targeted LOOKUP returns at
-\  once: it could not bring an evicted name back, so none of its
-\  dentries is evictable.  Otherwise walks all slab pages; for each
-\  live inode that is:
+\  exceeds inode-hwm, the cache budget in entries.  A binding without
+\  targeted LOOKUP returns at once: it could not bring an evicted name
+\  back, so none of its dentries is evictable.  Otherwise walks all slab
+\  pages; for each live inode that is:
 \     - NOT the active CWD
 \     - NOT pinned (VFS-IF-PINNED clear)
 \     - NOT dirty  (VFS-IF-DIRTY clear) — already sync'd
@@ -3357,7 +3633,8 @@ VARIABLE _VFY-V
 \  incomplete.
 \
 \  Strategy: single pass, evict up to (count - hwm/2) inodes to
-\  avoid thrashing on the boundary.
+\  avoid thrashing on the boundary, then give back to the heap the pages
+\  the pass emptied (_VFS-CACHE-GIVE-BACK).
 
 VARIABLE _VEV-V
 VARIABLE _VEV-P       \ slab page
@@ -3429,11 +3706,20 @@ VARIABLE _VEV-EVICTED \ evicted so far
             THEN
         LOOP
         _VEV-P @ @  _VEV-P !
-    REPEAT ;
+    REPEAT
+    _VEV-V @ _VFS-CACHE-GIVE-BACK ;
 
-\ VFS-SET-HWM ( n vfs -- )
-\   Adjust the eviction high-water mark.
-: VFS-SET-HWM  ( n vfs -- )  V.IHWM ! ;
+\ VFS-SET-CACHE-BUDGET ( bytes vfs -- )
+\   Set how many heap bytes the instance's cache may take before an
+\   eviction pass; the eviction mark is the budget in entries of
+\   _VFS-ENTRY-BYTES.  The next lookup past the mark evicts.
+: VFS-SET-CACHE-BUDGET  ( bytes vfs -- )  _VFS-BUDGET! ;
+
+\ VFS-CACHE-BUDGET ( vfs -- bytes )   The instance's cache budget.
+: VFS-CACHE-BUDGET  ( vfs -- bytes )  V.BUDGET @ ;
+
+\ VFS-CACHE-BYTES ( vfs -- bytes )   Heap bytes the cache holds now.
+: VFS-CACHE-BYTES  ( vfs -- bytes )  V.CACHE-BYTES @ ;
 
 \ VFS-INODE-PATH ( inode buf cap -- len )
 \   Walk parent chain building "/a/b/c" into buf.
@@ -3550,7 +3836,9 @@ GUARD _vfs-guard
 ' VFS-SYNC         CONSTANT _vfs-sync-xt
 ' VFS-BARRIER      CONSTANT _vfs-barrier-xt
 ' VFS-FSYNC        CONSTANT _vfs-fsync-xt
-' VFS-SET-HWM      CONSTANT _vfs-set-hwm-xt
+' VFS-SET-CACHE-BUDGET CONSTANT _vfs-set-budget-xt
+' VFS-CACHE-BUDGET CONSTANT _vfs-budget-xt
+' VFS-CACHE-BYTES  CONSTANT _vfs-cache-bytes-xt
 ' VFS-INODE-PATH   CONSTANT _vfs-inode-path-xt
 ' VFS-TRANSACTION  CONSTANT _vfs-transaction-xt
 
@@ -3604,7 +3892,9 @@ GUARD _vfs-guard
 : VFS-SYNC         _vfs-sync-xt     _vfs-guard WITH-GUARD ;
 : VFS-BARRIER      _vfs-barrier-xt  _vfs-guard WITH-GUARD ;
 : VFS-FSYNC        _vfs-fsync-xt    _vfs-guard WITH-GUARD ;
-: VFS-SET-HWM      _vfs-set-hwm-xt  _vfs-guard WITH-GUARD ;
+: VFS-SET-CACHE-BUDGET _vfs-set-budget-xt _vfs-guard WITH-GUARD ;
+: VFS-CACHE-BUDGET _vfs-budget-xt   _vfs-guard WITH-GUARD ;
+: VFS-CACHE-BYTES  _vfs-cache-bytes-xt _vfs-guard WITH-GUARD ;
 : VFS-INODE-PATH   _vfs-inode-path-xt _vfs-guard WITH-GUARD ;
 : VFS-TRANSACTION  _vfs-transaction-xt _vfs-guard WITH-GUARD ;
 

@@ -2945,7 +2945,7 @@ that sets neither refuses a lookup in an indexed folder with the write-policy
 detail, while READDIR still lists it.
 
 With `LOOKUP` advertised, the VFS evicts clean ext4 dentries once its cache
-passes the high-water mark. An evicted name returns through LOOKUP with its
+passes its budget's mark. An evicted name returns through LOOKUP with its
 inode number and generation, and a folder that loses a child loses its
 completeness flag, so its next listing reads it again. An open descriptor keeps
 its dentry, file or directory.

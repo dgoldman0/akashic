@@ -16,7 +16,7 @@ Tests:
   - VFS-STAT prints file/dir metadata
   - VFS-RM removes files and empty directories
   - VFS-SYNC flushes dirty inodes
-  - VFS-SET-HWM adjusts eviction threshold
+  - VFS-SET-CACHE-BUDGET sets the cache budget and its eviction mark
   - VFS-DESTROY tears down without crash
   - Multiple VFS instances coexist
   - Write-then-read round-trip through ramdisk binding
@@ -56,6 +56,7 @@ sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
 from forth_snapshot import run_file_tests, transcript_checks
+from heap_hog import HEAP_HOG_LINES
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -471,16 +472,37 @@ def test_constructor_nospace_rolls_back_arena():
     ], "NOMEM NO-VFS ROLLED-BACK")
 
 def test_slab_growth_nospace_is_transactional():
-    """A failed second slab allocation leaves the tree and count unchanged."""
+    """A dentry page the heap refuses leaves the tree and count unchanged."""
     check("slab growth NOMEM is transactional", [
+        *HEAP_HOG_LINES,
         '40000 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _AR',
         '_AR VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN CONSTANT _V1',
         'CREATE _NAME 2 ALLOT',
         ': T-FILL-SLAB  63 0 DO  102 _NAME C! I 64 + _NAME 1+ C!  _NAME 2 _V1 VFS-MKFILE? ?DUP IF THROW THEN DROP  LOOP ;',
-        'T-FILL-SLAB',
+        'T-FILL-SLAB  HOG',
         ': T-SLAB-NOMEM  S" overflow" _V1 VFS-MKFILE? DUP VFS-IOR-REASON 20 = IF ." NOMEM " THEN  DROP 0= IF ." NO-INODE " THEN  _V1 V.ICOUNT @ 64 = IF ." COUNT " THEN  S" overflow" _V1 VFS-RESOLVE 0= IF ." NO-NAME" THEN ;',
-        'T-SLAB-NOMEM CR',
+        'T-SLAB-NOMEM UNHOG CR',
     ], "NOMEM NO-INODE COUNT NO-NAME")
+
+def test_the_cache_grows_past_its_arena():
+    """A RAM volume in a 40,000-byte arena caches 500 files, whose records
+    take several times the arena, and every page the cache counts goes back
+    to the heap when it is released."""
+    check("cache grows from the heap", [
+        '40000 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _AR',
+        '_AR VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN CONSTANT _V1',
+        'CREATE _NAME 4 ALLOT  102 _NAME C!',
+        ': T-NAME  ( i -- a u )  DUP 100 / 48 + _NAME 1+ C!',
+        '  DUP 10 / 10 MOD 48 + _NAME 2 + C!  10 MOD 48 + _NAME 3 + C!  _NAME 4 ;',
+        ': T-MAKE  ( n -- )  0 DO I T-NAME _V1 VFS-MKFILE? ?DUP IF THROW THEN DROP LOOP ;',
+        ': T-FOUND  ( n -- count )  0 SWAP 0 DO I T-NAME _V1 VFS-RESOLVE 0<> - LOOP ;',
+        '500 T-MAKE',
+        ': T-GROWN',
+        '  _V1 V.ICOUNT @ 501 = 500 T-FOUND 500 = AND IF ." CACHED " THEN',
+        '  _V1 VFS-CACHE-BYTES 150000 > IF ." GREW " THEN',
+        '  _V1 _VFS-CACHE-RELEASE  _V1 VFS-CACHE-BYTES 0= IF ." RELEASED" THEN ;',
+        'T-GROWN CR',
+    ], "CACHED GREW RELEASED")
 
 def test_multi_slab_chain_is_traversed_by_sync():
     """A grown slab retains the older-page link used by full-cache walks."""
@@ -1123,7 +1145,7 @@ def test_lookup_backed_eviction_reloads_entry():
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         ': T-EVICT-RELOAD',
         '  S" disk" _V1 VFS-RESOLVE? ?DUP IF THROW THEN DUP IN.BID @ 99 = IF ." FIRST " THEN DROP',
-        '  1 _V1 VFS-SET-HWM',
+        '  _VFS-ENTRY-BYTES _V1 VFS-SET-CACHE-BUDGET',
         '  S" disk" _V1 VFS-RESOLVE? ?DUP IF THROW THEN DUP IN.BID @ 99 = OVER D.VNODE @ VN.GEN @ 7 = AND IF ." RELOADED " THEN DROP',
         '  _LOOKUP-CALLS @ 2 = IF ." TWICE " THEN',
         '  _V1 V.ICOUNT @ 2 = _V1 V.VCOUNT @ 2 = AND IF ." BOUNDED" THEN ;',
@@ -1259,10 +1281,10 @@ def test_lookup_binding_eviction_and_drop_reload_complete_listings():
         '_BIND VB.CAPS DUP @ VFS-CAP-LOOKUP OR SWAP !',
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _L1 _V1 V.ROOT @ T-COUNT CONSTANT _N1',
-        '1 _V1 VFS-SET-HWM',
+        '_VFS-ENTRY-BYTES _V1 VFS-SET-CACHE-BUDGET',
         'S" b" _V1 VFS-RESOLVE CONSTANT _B',
         '_V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _FLAG2 _V1 V.ROOT @ T-COUNT CONSTANT _N2',
-        '256 _V1 VFS-SET-HWM',
+        '256 _VFS-ENTRY-BYTES * _V1 VFS-SET-CACHE-BUDGET',
         '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _L2 _V1 V.ROOT @ T-COUNT CONSTANT _N3',
         'S" c" _V1 VFS-RESOLVE _V1 VFS-CACHE-DROP CONSTANT _DROP',
         '_V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _FLAG3',
@@ -1283,7 +1305,7 @@ def test_eviction_keeps_an_open_directory():
         *_lookup_binding_lines(),
         'S" shelf" VFS-FF-READ _V1 VFS-OPEN? CONSTANT _OPEN-IOR CONSTANT _FD',
         '_FD FD.INODE @ CONSTANT _SHELF',
-        '1 _V1 VFS-SET-HWM',
+        '_VFS-ENTRY-BYTES _V1 VFS-SET-CACHE-BUDGET',
         'S" disk" _V1 VFS-RESOLVE CONSTANT _DISK',
         ': T-OPEN-DIR',
         '  _OPEN-IOR 0= _SHELF IN.TYPE @ VFS-T-DIR = AND IF ." OPENED " THEN',
@@ -1293,6 +1315,50 @@ def test_eviction_keeps_an_open_directory():
         '  _FD VFS-CLOSE? 0= IF ." CLOSED" THEN ;',
         'T-OPEN-DIR CR',
     ], "OPENED KEPT ATTACHED RESOLVED CLOSED")
+
+def test_eviction_gives_emptied_pages_back_to_the_heap():
+    """An eviction pass gives back the pages it empties, and every name it
+    evicted comes back through LOOKUP.
+
+    LOOKUP answers any name nNNN as a file with BID 1000 + NNN.  300 names
+    fill five dentry pages and ten vnode pages.  A budget of 16 entries
+    then evicts all but eight at the next lookup, which empties four
+    dentry pages and eight vnode pages, about 70,000 bytes, and the heap
+    takes them back.  With a larger budget all 300 names resolve again.
+    """
+    check("eviction gives pages back", [
+        'VARIABLE _LK-A VARIABLE _LK-U VARIABLE _LK-P VARIABLE _LK-V',
+        ': T-NUM  ( a -- n )',
+        '  DUP 1+ C@ 48 - 100 *  OVER 2 + C@ 48 - 10 * +  SWAP 3 + C@ 48 - + ;',
+        ': T-LOOKUP  _LK-V ! _LK-P ! _LK-U ! _LK-A !',
+        '  _LK-U @ 4 <> _LK-A @ C@ 110 <> OR IF 0 VFS-E-NOENT EXIT THEN',
+        '  _LK-A @ _LK-U @ VFS-T-FILE _LK-A @ T-NUM 1000 + 7',
+        '  _LK-P @ _LK-V @ VFS-CACHE-DENTRY ;',
+        ': T-READDIR  2DROP 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-LOOKUP _BIND VB.OPS @ VFS-OP-LOOKUP CELLS + !",
+        "' T-READDIR _BIND VB.OPS @ VFS-OP-READDIR CELLS + !",
+        '_BIND VB.CAPS DUP @ VFS-CAP-LOOKUP OR SWAP !',
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'CREATE _NAME 4 ALLOT  110 _NAME C!',
+        ': T-NAME  ( i -- a u )  DUP 100 / 48 + _NAME 1+ C!',
+        '  DUP 10 / 10 MOD 48 + _NAME 2 + C!  10 MOD 48 + _NAME 3 + C!  _NAME 4 ;',
+        ': T-BIDS  ( n -- count )  0 SWAP 0 DO',
+        '  I T-NAME _V1 VFS-RESOLVE ?DUP IF IN.BID @ I 1000 + = - THEN LOOP ;',
+        '300 T-BIDS CONSTANT _FOUND1',
+        '_V1 V.ICOUNT @ CONSTANT _IC1  _V1 VFS-CACHE-BYTES CONSTANT _B1',
+        '16 _VFS-ENTRY-BYTES * _V1 VFS-SET-CACHE-BUDGET',
+        'S" n299" _V1 VFS-RESOLVE DROP',
+        '_V1 V.ICOUNT @ CONSTANT _IC2  _V1 VFS-CACHE-BYTES CONSTANT _B2',
+        '1200 _VFS-ENTRY-BYTES * _V1 VFS-SET-CACHE-BUDGET',
+        '300 T-BIDS CONSTANT _FOUND2',
+        ': T-GIVEN-BACK',
+        '  _FOUND1 300 = _IC1 301 = AND IF ." CACHED " THEN',
+        '  _IC2 10 < IF ." EVICTED " THEN',
+        '  _B1 _B2 - 60000 > IF ." GIVEN-BACK " THEN',
+        '  _FOUND2 300 = _V1 V.ICOUNT @ 301 = AND IF ." RETURNED" THEN ;',
+        'T-GIVEN-BACK CR',
+    ], "CACHED EVICTED GIVEN-BACK RETURNED")
 
 def _eviction_walk_lines(lookup):
     """List twelve clean names past a high-water mark of 4, then resolve one.
@@ -1327,7 +1393,7 @@ def _eviction_walk_lines(lookup):
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _LISTED',
         '_V1 V.ICOUNT @ CONSTANT _FULL',
-        '4 _V1 VFS-SET-HWM',
+        '4 _VFS-ENTRY-BYTES * _V1 VFS-SET-CACHE-BUDGET',
         '0 _VEV-V !',
         'S" a" _V1 VFS-RESOLVE CONSTANT _A',
     ]
@@ -1837,13 +1903,14 @@ def test_name_pool_reuses_released_entries_without_growing():
     ], "NAME GONE LIVE HELD REUSED")
 
 
-def test_name_pool_refuses_when_the_arena_is_full():
-    """With no room for a chunk, a name takes a larger free entry or fails."""
-    check("name pool on a full arena", [
+def test_name_pool_refuses_when_the_heap_is_full():
+    """With no chunk to be had, a name takes a larger free entry or fails."""
+    check("name pool on a full heap", [
+        *HEAP_HOG_LINES,
         'T-VFS-NEW CONSTANT _V1',
         'S" forty-byte-name-of-the-file-that-leaves" _V1 VFS-MKFILE DROP',
         '_V1 V.STR-PTR @ _V1 V.STR-END !',
-        '_V1 V.ARENA @ DUP ARENA-FREE 2048 - ARENA-ALLOT? 2DROP',
+        'HOG',
         '_V1 _VFS-STR-LIVE CONSTANT _LIVE',
         'S" another" _V1 VFS-MKFILE? CONSTANT _FULL-IOR CONSTANT _FULL',
         '_V1 _VFS-STR-LIVE CONSTANT _AFTER-FULL',
@@ -1858,7 +1925,7 @@ def test_name_pool_refuses_when_the_arena_is_full():
         '  _REUSE-IOR 0= _REUSED 0<> AND IF ." LARGER " THEN',
         '  S" another" _V1 VFS-RESOLVE _REUSED = IF ." RESOLVES " THEN',
         '  _REUSED IN.NAME @ @ 32 RSHIFT 40 = IF ." CAPACITY" THEN ;',
-        'T-FULL CR',
+        'T-FULL UNHOG CR',
     ], "NOMEM NO-LEAK REMOVED LARGER RESOLVES CAPACITY")
 
 
@@ -1870,17 +1937,18 @@ _INDEX_PUBLISH_LINES = [
 ]
 
 
-def test_cache_index_files_entries_through_growth_and_a_full_arena():
+def test_cache_index_files_entries_through_growth_and_a_full_heap():
     """The index finds every filed entry as it grows and when it cannot.
 
-    In a roomy arena 1,000 entries split the table to 1,000 buckets and
-    double the segment directory twice, and removing every other entry
-    leaves the rest findable.  An arena with room for two segments stops
-    the splits at 128 buckets, and 300 entries stay findable in longer
-    chains.
+    1,000 entries split the table to 1,000 buckets and double the segment
+    directory twice, and removing every other entry leaves the rest
+    findable.  With the heap refusing every page after the first segment,
+    the splits stop at that segment's 64 buckets, and 300 entries stay
+    findable in longer chains.
     """
-    check_emitted("cache index growth and a full arena", [
-        'CREATE _FV VFS-DESC-SIZE ALLOT',
+    check_emitted("cache index growth and a full heap", [
+        *HEAP_HOG_LINES,
+        'CREATE _FV VFS-DESC-SIZE ALLOT  _FV VFS-DESC-SIZE 0 FILL',
         'CREATE _FX _VFS-IX-SIZE ALLOT',
         '16000 A-XMEM ARENA-NEW IF -1 THROW THEN A.BASE @ CONSTANT _FE',
         ': T-ENTRY  ( i -- entry )  16 * _FE + ;',
@@ -1892,7 +1960,6 @@ def test_cache_index_files_entries_through_growth_and_a_full_arena():
         ': T-MISMATCH  ( n -- count )',
         '  0 SWAP 0 DO I T-FOUND? I 1 AND 0<> <> IF 1+ THEN LOOP ;',
         ': T-REMOVE-EVEN  ( n -- )  0 DO I T-ENTRY _FX _VFS-IX-REMOVE 2 +LOOP ;',
-        '65536 A-XMEM ARENA-NEW IF -1 THROW THEN _FV V.ARENA !',
         '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT1',
         '1000 T-FILE-ALL  1000 T-MISSING CONSTANT _MISS1',
         '_FX _VIX.ENTRIES @ CONSTANT _ENT1',
@@ -1900,9 +1967,8 @@ def test_cache_index_files_entries_through_growth_and_a_full_arena():
         '_FX _VIX.DIR-CAP @ CONSTANT _CAP1',
         '1000 T-REMOVE-EVEN  1000 T-MISMATCH CONSTANT _MISMATCH1',
         '_FX _VIX.ENTRIES @ CONSTANT _ENT2',
-        '1200 A-XMEM ARENA-NEW IF -1 THROW THEN _FV V.ARENA !',
-        '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT2',
-        '300 T-FILE-ALL  300 T-MISSING CONSTANT _MISS2',
+        '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT2  HOG',
+        '300 T-FILE-ALL  300 T-MISSING CONSTANT _MISS2  UNHOG',
         '_FX _VIX.ENTRIES @ CONSTANT _ENT3',
         '_FX _VIX.ROUND @ CONSTANT _ROUND3  _FX _VIX.SPLIT @ CONSTANT _SPLIT3',
         ': T-INDEX  CR',
@@ -1910,7 +1976,7 @@ def test_cache_index_files_entries_through_growth_and_a_full_arena():
         '  _BUCKETS1 1000 = _CAP1 16 = AND IF ." GREW" CR THEN',
         '  _MISMATCH1 0= _ENT2 500 = AND IF ." REMOVED" CR THEN',
         '  _INIT2 _MISS2 0= AND _ENT3 300 = AND IF ." CROWDED" CR THEN',
-        '  _ROUND3 128 = _SPLIT3 0= AND IF ." STOPPED" CR THEN ;',
+        '  _ROUND3 64 = _SPLIT3 0= AND IF ." STOPPED" CR THEN ;',
         'T-INDEX',
     ], ["FILED", "GREW", "REMOVED", "CROWDED", "STOPPED"])
 
@@ -2056,7 +2122,7 @@ def test_slab_walks_tell_free_slots_in_reused_memory():
         'VFS-IF-DIRTY _FRESH IN.FLAGS DUP @ ROT OR SWAP !',
         '_V2 VFS-SYNC CONSTANT _SYNC-IOR',
         '_V2 V.ICOUNT @ CONSTANT _IC0',
-        '0 _V2 VFS-SET-HWM  _V2 _VFS-EVICT',
+        '0 _V2 VFS-SET-CACHE-BUDGET  _V2 _VFS-EVICT',
         ': T-WALKS  CR',
         '  _SYNC-IOR 0= _FRESH IN.FLAGS @ VFS-IF-DIRTY AND 0= AND IF ." SYNCED" CR THEN',
         '  _DISK 0<> S" disk" _V2 V.ROOT @ _VFS-FIND-CHILD 0= AND',
@@ -2267,15 +2333,16 @@ def test_read_only_legacy_open_is_readable():
                        ("WRITE-BLOCKED", "OPEN", "READ-ONLY", "DATA")),
     desc="expected explicit write refusal and successful legacy read")
 
-# ── VFS-SET-HWM ──
+# ── VFS-SET-CACHE-BUDGET ──
 
-def test_set_hwm():
-    """VFS-SET-HWM changes the eviction threshold."""
-    check("VFS-SET-HWM", [
+def test_set_cache_budget():
+    """VFS-SET-CACHE-BUDGET sets the budget, and the eviction mark is the
+    budget in entries of _VFS-ENTRY-BYTES."""
+    check("VFS-SET-CACHE-BUDGET", [
         'T-VFS-NEW  CONSTANT _V1',
-        '512 _V1 VFS-SET-HWM',
-        '_V1 V.IHWM @ . CR',
-    ], "512")
+        '512 _VFS-ENTRY-BYTES * _V1 VFS-SET-CACHE-BUDGET',
+        '_V1 V.IHWM @ . _V1 VFS-CACHE-BUDGET . CR',
+    ], "512 163840")
 
 # ── VFS-DESTROY ──
 
@@ -2325,13 +2392,13 @@ def test_large_write_read():
         'T-VFS-NEW  CONSTANT _V1',
         '  S" big.bin" _V1 VFS-MKFILE DROP',
         '  S" big.bin" _V1 VFS-OPEN  CONSTANT _FD',
-        # Fill _TB with 256 bytes (all 0x41 = 'A')
-        '  256 0 DO  65 _TB I + C!  LOOP',
+        # 256 bytes of 0x41 ('A'), read back whole and the same.
+        '  _TB 256 65 FILL',
         '  _TB 256 _FD VFS-WRITE DROP',
         '  _FD VFS-REWIND',
-        '  _RB 256 _FD VFS-READ . CR',    # should print "256"
+        '  _RB 256 _FD VFS-READ .  _RB 256 _TB 256 COMPARE 0= . CR',
         '  _FD VFS-CLOSE',
-    ], "256")
+    ], "256 -1")
 
 # ── Nested directory navigation ──
 

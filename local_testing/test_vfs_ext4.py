@@ -15893,7 +15893,7 @@ def test_lookup_eviction_relists_every_name_and_spares_open_directories(
         ),
         "_LKE-FD FD.INODE @ CONSTANT _LKE-SUB",
         "_LKE-V V.ICOUNT @ CONSTANT _LKE-ICOUNT-FULL",
-        "16 _LKE-V VFS-SET-HWM",
+        "16 _VFS-ENTRY-BYTES * _LKE-V VFS-SET-CACHE-BUDGET",
         'S" /lk-one/alpha" _LKE-V VFS-RESOLVE? CONSTANT _LKE-A-IOR DROP',
         "_LKE-V V.ICOUNT @ CONSTANT _LKE-ICOUNT-EVICTED",
         'S" /lk-idx0" _LKE-V VFS-RESOLVE? CONSTANT _LKE-D1-IOR CONSTANT _LKE-D1',
@@ -15905,7 +15905,7 @@ def test_lookup_eviction_relists_every_name_and_spares_open_directories(
         "_LKE-SUB D.OWNER @ CONSTANT _LKE-SUB-OWNER",
         'S" sub" _LKE-SUB IN.PARENT @ _VFS-FIND-CHILD CONSTANT _LKE-SUB-CACHED',
         "_LKE-FD VFS-CLOSE? CONSTANT _LKE-CLOSE-IOR",
-        "256 _LKE-V VFS-SET-HWM",
+        "256 _VFS-ENTRY-BYTES * _LKE-V VFS-SET-CACHE-BUDGET",
     ]
     names = len(_LOOKUP_IDX0_NAMES)
     checks = [

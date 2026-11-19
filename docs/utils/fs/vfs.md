@@ -1,9 +1,12 @@
 # akashic-vfs — validated virtual-filesystem contract
 
-`vfs.f` provides an arena-backed VFS core for KDOS. It separates namespace
-entries (dentries) from shared file identity and metadata (vnodes), dispatches
+`vfs.f` provides the VFS core for KDOS. It separates namespace entries
+(dentries) from shared file identity and metadata (vnodes), dispatches
 filesystem work through a validated binding descriptor, and carries an
-explicit KDOS volume attachment when a binding needs block storage.
+explicit KDOS volume attachment when a binding needs block storage. An
+instance keeps its fixed records in the arena its caller gives it, and its
+cache of entries and names takes pages from the heap within a budget (see
+[Sync and eviction](#sync-and-eviction)).
 
 ```forth
 REQUIRE utils/fs/vfs.f
@@ -368,7 +371,12 @@ Read-only authority is cumulative. `VFS-BF-READ-ONLY` or
 writable. No binding can use a writable descriptor to weaken a read-only
 volume attachment.
 
-Pre-mount capacity failures return `0 VFS-E-NOMEM` and restore the arena bump
+`VFS-NEW` takes from the arena the descriptor (`VFS-DESC-SIZE`, 232 bytes),
+the FD pool, the name pool's record and the two index records; a RAM
+binding's file buffers come from the arena later. From the heap it takes the
+first dentry page, each index's directory and first segment, the root's
+vnode page and the first name chunk. Pre-mount capacity failures, of either,
+return `0 VFS-E-NOMEM`, give the heap pages back and restore the arena bump
 pointer to its entry value. A mount callback failure returns the complete,
 inspectable VFS plus its ior, but does not publish it as mounted.
 
@@ -379,9 +387,11 @@ except when stale was returned or latched, in which case stale remains
 terminal. Unmount checks the attachment before callback dispatch; drift latches
 stale without issuing I/O through a closed or rebound volume.
 
-`VFS-DESTROY` force-unmounts and destroys the arena. It cannot report the
-unmount result; callers needing a reportable durability boundary must call
-`VFS-SYNC` and `VFS-UNMOUNT` first.
+`VFS-DESTROY` force-unmounts, gives every page of the cache back to the heap
+and destroys the arena. It cannot report the unmount result; callers needing a
+reportable durability boundary must call `VFS-SYNC` and `VFS-UNMOUNT` first.
+An instance dropped by `ARENA-DESTROY` alone keeps its cache pages from the
+heap.
 
 Lifecycle values are `VFS-L-NEW`, `VFS-L-MOUNTED`,
 `VFS-L-UNMOUNTING`, `VFS-L-UNMOUNTED`, and `VFS-L-STALE`.
@@ -682,7 +692,9 @@ The stable fields are `VSF.BSIZE`, `VSF.FRSIZE`, `VSF.BLOCKS`, `VSF.BFREE`,
 VFS-SYNC       ( vfs -- ior )
 VFS-BARRIER    ( vfs -- ior )
 VFS-FSYNC      ( fd -- ior )
-VFS-SET-HWM    ( n vfs -- )
+VFS-SET-CACHE-BUDGET  ( bytes vfs -- )
+VFS-CACHE-BUDGET      ( vfs -- bytes )
+VFS-CACHE-BYTES       ( vfs -- bytes )
 ```
 
 `VFS-SYNC` invokes the binding's `SYNCFS` exactly once. The binding owns data,
@@ -697,15 +709,34 @@ whose order must survive a power cut. It answers 0 at once on a binding with
 medium, and is `VFS-SYNC` on any other. The checked replacement and the copy
 library both take their barriers through it.
 
-The dentry slab grows in 64-slot pages. Growth uses checked allocation; an
-exhausted arena returns `VFS-E-NOMEM` without publishing a partial namespace
-mutation. Each new page retains the older-page link so sync and eviction walk
-the complete cache. A new page's slots start zeroed, and a released dentry is
+The cache takes its memory from the heap, `ALLOCATE`, a page at a time:
+dentry pages of 64 slots (5,128 bytes), vnode pages of 32 (6,152 bytes),
+name chunks of at least 4 KiB, and the indexes' segments and directories.
+`VFS-CACHE-BYTES` counts what it holds. Each kind of page has one size, so a
+page given back serves the next page of its kind whole, and the heap's free
+list stays short. A page the heap refuses returns `VFS-E-NOMEM` without
+publishing a partial namespace mutation. `ALLOCATE` serves core 0 only, so a
+lookup on another core that needs a page fails the same way.
+
+Each instance has a cache budget, the heap bytes its cache may take before
+eviction. It starts at a thirty-second of the heap free when `VFS-NEW` runs,
+and at least 256 entries' worth; `VFS-SET-CACHE-BUDGET` sets another. An
+entry takes about 320 bytes (`_VFS-ENTRY-BYTES`): its dentry, its vnode, a
+short name and its share of the index buckets. The eviction mark is the
+budget in such entries, so entries with long names take more than the budget
+counts.
+
+Each new page retains the older-page link so sync and eviction walk the
+complete cache. A new page's slots start zeroed, and a released dentry is
 zeroed but for its free-list link, so the walks tell a free slot by its zero
 `D.OWNER` without searching the free list. Once the cache holds more dentries
-than its high-water mark, 256 unless `VFS-SET-HWM` sets another, each path
-resolution starts an eviction pass, which walks the slab and evicts eligible
-dentries until the count falls to half the mark. Eviction removes cached
+than the mark, each path resolution starts an eviction pass, which walks the
+slab and evicts eligible dentries until the count falls to half the mark, and
+then gives back to the heap each dentry page that holds no dentry, each vnode
+page that holds no vnode, and each name chunk but the newest that holds no
+name, linking what is free in the pages left into the free lists again. A
+listing loads a whole folder, so a folder larger than the mark is cached
+whole and evicted at the next lookup after it. Eviction removes cached
 dentries without changing backend link counts. It runs only for bindings with
 targeted `LOOKUP`, which can bring an evicted name back on its own. On a
 `READDIR`-only binding the pass returns before it walks the slab, so the
@@ -718,17 +749,15 @@ parent's cached children incomplete, so the parent loses `VFS-IF-CHILDREN`:
 the parent's next listing runs `READDIR` again, and the evicted name returns
 through `LOOKUP` with its binding identity.
 
-The name pool grows the same way. It takes chunks of at least 4 KiB from the
-VFS arena as names arrive, so the storage the caller gave the VFS is its only
-bound, and a folder lists in full however many names it holds. A released
-name goes onto the free list of its capacity, in 8-byte classes up to 256
-bytes and one list for longer names, and the next name of that capacity takes
-it first, so cache churn and repeated renames reuse entries without growing
-the pool. With the arena full, a free entry of a larger capacity serves;
-without one the allocation returns `VFS-E-NOMEM`. The pool keeps its chunks,
-as the slab keeps its pages. A binding whose load fails rolls back by
-releasing the dentries it cached, which releases their names; no binding
-touches the pool's fields.
+The name pool grows the same way, a chunk of at least 4 KiB at a time as
+names arrive, and a folder lists in full however many names it holds. A
+released name goes onto the free list of its capacity, in 8-byte classes up
+to 256 bytes and one list for longer names, and the next name of that
+capacity takes it first, so cache churn and repeated renames reuse entries
+without growing the pool. With the heap full, a free entry of a larger
+capacity serves; without one the allocation returns `VFS-E-NOMEM`. A binding
+whose load fails rolls back by releasing the dentries it cached, which
+releases their names; no binding touches the pool's fields.
 
 Two hash indexes keep the cache's searches independent of its size. The name
 index files every listed child under its parent and name, and finds a cached
@@ -744,10 +773,12 @@ it moves to another directory. Finding a child, finding a vnode and removing
 a child therefore cost the same however many names are cached, and caching a
 folder of N names costs time in proportion to N. Each index grows by linear
 hashing: once its entries outnumber its buckets, each new entry splits one
-bucket, so the table never rehashes whole. Buckets come from the VFS arena in
-segments of 64, recorded in a directory that doubles when it fills. A split
-that finds the arena full is skipped; searches stay exact while chains
-lengthen, so the index never makes an operation fail.
+bucket, so the table never rehashes whole. Buckets come from the heap in
+segments of 64, recorded in a directory that doubles when it fills and gives
+the old one back. A split that finds the heap full is skipped; searches stay
+exact while chains lengthen, so the index never makes an operation fail. The
+buckets stay at the table's largest size until `VFS-DESTROY`, about 16 bytes
+for each entry the cache held at once.
 
 Bindings populate lookup/readdir results through:
 

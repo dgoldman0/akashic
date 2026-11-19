@@ -18,9 +18,9 @@
 \    USERVOL-VFS    ( -- vfs | 0 )          The mounted volume, or 0.
 \
 \  The mount's arena, ARENA-BYTES of extended memory, holds the VFS's and
-\  the driver's records for the mount and its cache of entries and names.
-\  The writer's workspace is an arena of its own, at the size the driver
-\  asks for the writer's credits.  Both stay with the mount, and a mount
+\  the driver's records for the mount; the cache of entries and names takes
+\  its pages from the heap (vfs.f).  The writer's workspace is an arena of
+\  its own, at the size the driver asks for the writer's credits.  Both stay with the mount, and a mount
 \  that fails gives both back, and the unit.
 \
 \  docs/utils/fs/user-volume.md describes the module and the volume.
