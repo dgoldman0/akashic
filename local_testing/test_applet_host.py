@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -22,7 +23,7 @@ PICTURE = qoi_codec.encode(
 
 
 PROFILE = "applet-host-contracts"
-IMAGE = Path("/tmp/akashic-applet-host-contracts.img")
+IMAGE = Path(tempfile.gettempdir()) / "akashic-applet-host-contracts.img"
 
 AUTOEXEC = r'''\ autoexec.f - generic applet-host contracts
 ENTER-USERLAND
@@ -675,8 +676,11 @@ VARIABLE _ah-ew
 
     \ A picture a child's <media> element shows decodes from the host's
     \ per-pass service, one bounded slice a pass, and only the slot whose
-    \ document changed is marked for repaint.  With nothing decoding the
-    \ service does nothing.
+    \ document changed is marked for repaint.  The media widget counts
+    \ the change in its own revision and asks for the paint, so its
+    \ element stays unmarked, and the slot's paint repaints the element
+    \ because its widget moved.  With nothing decoding the service does
+    \ nothing.
     _ah-host AHOST-SERVICE 0= _ah-assert
     _ah-slot-a @ AHS-CTX-SWITCH
     S" /pic.qoi" _ah-vfs @ S" picture" UTUI-BY-ID UTUI-WIDGET@
@@ -693,11 +697,14 @@ VARIABLE _ah-ew
     _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
     _ah-slot-b @ AHS.DIRTY @ 0= _ah-assert
     _ah-slot-a @ AHS-CTX-SWITCH
-    S" picture" UTUI-BY-ID DUP UIDL-DIRTY? _ah-assert
+    S" picture" UTUI-BY-ID DUP UIDL-DIRTY? 0= _ah-assert
+    DUP _UTUI-WIDGET-MOVED? _ah-assert
     UTUI-WIDGET@ MEDIA-PICTURE@ PICT-CELL-COPY@ PIC-STATE@
         PIC-ST-READY = _ah-assert
     0 0 _ah-host AHOST-PAINT
     _ah-slot-a @ AHS.DIRTY @ 0= _ah-assert
+    _ah-slot-a @ AHS-CTX-SWITCH
+    S" picture" UTUI-BY-ID _UTUI-WIDGET-MOVED? 0= _ah-assert
     _ah-stack
     ." AH-M7C-SERVICE" CR
 
