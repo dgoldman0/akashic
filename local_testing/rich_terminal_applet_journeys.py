@@ -107,10 +107,34 @@ FEXP_RENAMED_NOTICE = "Renamed"
 FEXP_PHOTO = "spice-market.qoi"
 FEXP_PHOTO_SIZE = (2160, 1620)
 FEXP_PHOTO_FACTS = "QOI, 2160 \u00d7 1620"
-# The label of the place the image declares (akashic_tui.PLACES_BOOT_LABEL):
-# the first row of File Explorer's folder tree, which opens onto the boot
-# volume's root.
+# The label of the place the linked build declares
+# (akashic_tui.PLACES_BOOT_LABEL): the one row of File Explorer's and Pad's
+# folder trees, which opens onto the boot volume's root.
 FEXP_PLACE_LABEL = "Files"
+# With the user volume the build declares the shipping form's places
+# (akashic_tui.USER_VOLUME_DOCUMENTS, USER_VOLUME_RECORDS and
+# USER_VOLUME_ORIGIN).  File Explorer's and Pad's sets hold them in this
+# order, by label: the documents place, the one they write, then the records
+# place and the origin, which they read.  A full locator names a file of the
+# origin by the origin's name.
+USER_VOLUME_PLACE_LABELS = ("Documents", "Records", "System")
+USER_VOLUME_ORIGIN_NAME = "system"
+# On the user volume, File Explorer makes a folder in the documents place
+# through its New folder prompt, and moves a sample document into it.
+FEXP_FOLDER_LABEL = "New folder:"
+FEXP_FOLDER = "drafts"
+FEXP_FOLDER_NOTICE = "Folder created"
+FEXP_MOVED = "welcome.txt"
+# It then copies its own shipped configuration from the origin into the
+# documents place, and tries a paste into the origin and a cut from the
+# records place, both read-only to it.  These are the notices it shows.
+FEXP_SHIPPED_FOLDER = "tui/applets/fexplorer"
+FEXP_SHIPPED = "fexplorer.toml"
+FEXP_COPIED_NOTICE = "Copied to clipboard"
+FEXP_CUT_NOTICE = "Cut to clipboard"
+FEXP_PASTED_NOTICE = "Pasted!"
+FEXP_READ_ONLY_NOTICE = "Paste refused: this place is read-only"
+FEXP_READ_ONLY_SOURCE_NOTICE = "Paste refused: the source's place is read-only"
 # A picture file the terminal cannot decode (akashic_tui.py's damaged
 # check), and what CELL says of it once the terminal has refused it.
 FEXP_DAMAGED = "damaged.png"
@@ -153,6 +177,29 @@ FEXP_TABLE_COLUMNS = (
     (ItemColumnKind.TEXT, "Type"),
 )
 PAD_OPEN_PROMPT_MARKER = "Open:"
+# On the user volume Pad opens its own shipped configuration from the
+# origin by its full locator, where a save is refused, and saves it as a
+# name typed into Save As, which puts it in the documents place.
+PAD_SHIPPED = "tui/applets/pad/pad.toml"
+PAD_SHIPPED_LOCATOR = f"vfs://{USER_VOLUME_ORIGIN_NAME}/{PAD_SHIPPED}"
+PAD_SHIPPED_LINE = "[pad.theme]"
+PAD_READ_ONLY_NOTICE = "This place is read-only"
+PAD_SAVE_AS_PROMPT_MARKER = "Save as:"
+PAD_SAVED_NOTICE = "Saved"
+PAD_SAVED_AS = "pad-theme.toml"
+# What the journeys on the user volume leave there, which
+# physical_desktop_acceptance.py checks on the host once a run has passed:
+# each file by its path in the documents place, with the file whose bytes
+# it holds, a file the image ships, by its path under akashic/, or a sample
+# document the user volume is built with; or None where nothing may be.
+USER_VOLUME_FILES = {
+    "fexp": {
+        FEXP_SHIPPED: ("shipped", f"{FEXP_SHIPPED_FOLDER}/{FEXP_SHIPPED}"),
+        f"{FEXP_FOLDER}/{FEXP_MOVED}": ("document", FEXP_MOVED),
+        FEXP_MOVED: None,
+    },
+    "pad": {PAD_SAVED_AS: ("shipped", PAD_SHIPPED)},
+}
 DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
 # The notice Desk shows when the reminder the Daybook-alone boot makes
 # fires (akashic_tui.DAYBOOK_REMINDER_TITLE).
@@ -313,6 +360,19 @@ def _status_shows(projection: RichScreenProjection, marker: str, bounds) -> bool
     )
 
 
+def _place_rows(tree, labels: tuple[str, ...], owner: str):
+    """The top rows of TREE, an explorer's folder tree, which must be the
+    places of OWNER's set, by their LABELS in order, each able to open."""
+
+    rows = tuple(item for item in tree.content.items if item.depth == 0)
+    shown = tuple(item.fields[0].text for item in rows)
+    if shown != labels or not all(item.state & ItemState.EXPANDABLE for item in rows):
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s tree lists the places {shown!r}, not {labels!r}"
+        )
+    return rows
+
+
 class _AppletJourney(FrameBoundJourney):
     """A journey through Desk holding the one applet FOCUS_MARKER names."""
 
@@ -423,6 +483,18 @@ class PadAloneJourney(_AppletJourney):
     and strong text's style runs, and a FOLLOW on the link, sent where the
     viewer finds the link as a Ctrl press would, opens example.f, whose
     keywords its runs mark.
+
+    Pad's sidebar is a TREE whose top rows are the places of Pad's set, by
+    label: in the linked build the one place, and with the user volume
+    (USER_VOLUME) the documents place, the records place and the origin,
+    in that order.  On the user volume Pad then opens pad.toml, its own
+    configuration, from the origin by its full locator; Ctrl+S on it is
+    refused with a warning that the place is read-only.  Ctrl+Shift+S opens
+    Save As holding the file's path; a PLACE at its start and an EXTEND to
+    its end select it, the name typed over it has no place of its own, and
+    Enter saves the file under that name in the documents place, with Pad's
+    notice that it saved and the name in its status bar; the driver then
+    finds the file in the documents place's folder on the host.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -441,13 +513,27 @@ class PadAloneJourney(_AppletJourney):
         PATH_TYPED,
         NOTES_OPENED,
         LINK_FOLLOWED,
-    ) = range(14)
+        # On the user volume only.
+        SHIPPED_PROMPT,
+        SHIPPED_TYPED,
+        SHIPPED_OPENED,
+        SAVE_REFUSED,
+        SAVE_AS_PROMPT,
+        SAVE_AS_PLACED,
+        SAVE_AS_SELECTED,
+        SAVE_AS_TYPED,
+        SAVED_AS,
+    ) = range(23)
 
-    def __init__(self, ready_markers: tuple[str, ...]):
+    def __init__(self, ready_markers: tuple[str, ...], *, user_volume: bool = False):
         super().__init__(ready_markers)
         # What Pad's Open prompt is given for notes.md: a bare path, which
         # Pad takes in the set's documents place in every build.
         self._notes_path = styled_text.NOTES_PATH
+        self._user_volume = user_volume
+        self._place_labels = (
+            USER_VOLUME_PLACE_LABELS if user_volume else (FEXP_PLACE_LABEL,)
+        )
         self._editor_bounds: tuple[int, int, int, int] | None = None
         # The caret each input was sent from, by the stage the input leads
         # to.  A stage a caret move leads to waits for the caret to leave
@@ -455,14 +541,48 @@ class PadAloneJourney(_AppletJourney):
         # discarded, is decided again from that frame and sent again; its
         # caret must not stand for the stage it was sent from.
         self._before: dict[int, tuple[int, int]] = {}
+        # Whether a frame has shown Pad's notice for the stage it is in:
+        # each lasts a second or two, so the input after it may be retried
+        # once it is gone.
+        self._noticed: set[int] = set()
 
     @property
     def final_stage(self) -> int:
-        return self.LINK_FOLLOWED
+        return self.SAVED_AS if self._user_volume else self.LINK_FOLLOWED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
+        if self._user_volume:
+            return (self.focus_marker, PAD_SAVED_AS)
         return (self.focus_marker, styled_text.EXAMPLE_LINE)
+
+    @staticmethod
+    def _sidebar(projection: RichScreenProjection):
+        """Pad's sidebar: the one TREE in Desk's tile, or None."""
+
+        trees = FexpAloneJourney._content_views(projection, ItemViewRole.TREE)
+        return trees[0] if len(trees) == 1 else None
+
+    def _require_sidebar(self, projection: RichScreenProjection):
+        """Pad's sidebar, listing the places of its set; its rows."""
+
+        sidebar = self._sidebar(projection)
+        if sidebar is None:
+            raise PhysicalDesktopAcceptanceError("Desk with Pad shows no sidebar tree")
+        return sidebar, _place_rows(sidebar, self._place_labels, "Pad")
+
+    def _notice_seen(self, offer, projection, message: str, severity) -> bool:
+        """Whether a frame in this stage has shown Pad's notice MESSAGE,
+        which must carry SEVERITY and show in CELL on its row."""
+
+        if self.stage in self._noticed:
+            return True
+        notice = _notice_claim(projection, message)
+        if notice is None:
+            return False
+        _require_notice(offer, notice, severity)
+        self._noticed.add(self.stage)
+        return True
 
     def _editor(self, projection: RichScreenProjection):
         """Pad's editor: of its text areas (it also has panels for build
@@ -485,6 +605,8 @@ class PadAloneJourney(_AppletJourney):
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
+        if self.stage >= self.SHIPPED_PROMPT:
+            return self._shipped(offer, generation, projection, sender)
         if self.stage >= self.OPEN_PROMPT:
             return self._styled(offer, generation, projection, sender)
         if self.stage >= self.CLOSE_ASKED:
@@ -521,6 +643,7 @@ class PadAloneJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError(
                     f"Pad did not start with an empty buffer: {text!r}"
                 )
+            self._require_sidebar(projection)
             self._editor_bounds = (claim.left, claim.top, claim.right, claim.bottom)
             return self._send_from(state, "pad-ready", "send_text", full, self.TYPED,
                                    offer, generation, sender)
@@ -683,7 +806,141 @@ class PadAloneJourney(_AppletJourney):
         if runs != styled_text.EXAMPLE_LINE_RUNS:
             raise PhysicalDesktopAcceptanceError(f"example.f's style runs are {runs!r}")
         _require_cell_text_in(offer, styled_text.EXAMPLE_LINE, bounds, _WHERE)
+        if self._user_volume:
+            return self._step("pad-link-followed-to-forth", "send_key", "ctrl+o",
+                              self.SHIPPED_PROMPT, offer, generation, sender)
         return self._done("pad-link-followed-to-forth", offer)
+
+    def _shipped(self, offer, generation, projection, sender) -> JourneyProgress:
+        """On the user volume: open pad.toml from the origin by its full
+        locator, see its save refused, and save it as a typed name, which
+        Save As puts in the documents place."""
+
+        bounds = _desk_content_bounds(projection)
+        prompts = {
+            label: _prompt_claim(projection, label, bounds)
+            for label in (PAD_OPEN_PROMPT_MARKER, PAD_SAVE_AS_PROMPT_MARKER)
+        }
+        for open_prompt in prompts.values():
+            if open_prompt is not None:
+                _require_held_beneath_overlay(projection, open_prompt, bounds,
+                                              PAD_MENU_SIGNATURE, "Pad")
+                if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
+                    raise PhysicalDesktopAcceptanceError("Pad's prompt withheld its editor")
+        prompt = prompts[
+            PAD_OPEN_PROMPT_MARKER
+            if self.stage in (self.SHIPPED_PROMPT, self.SHIPPED_TYPED)
+            else PAD_SAVE_AS_PROMPT_MARKER
+        ]
+        if self.stage == self.SHIPPED_PROMPT:
+            if prompt is None:
+                return self._wait("Pad's Open prompt after Ctrl+O")
+            if prompt.content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Pad's Open prompt opened holding {prompt.content.text!r}"
+                )
+            return self._step("pad-shipped-prompt-shown", "send_text", PAD_SHIPPED_LOCATOR,
+                              self.SHIPPED_TYPED, offer, generation, sender)
+        if self.stage == self.SHIPPED_TYPED:
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's Open prompt closed before its locator was entered"
+                )
+            if prompt.content.text != PAD_SHIPPED_LOCATOR:
+                return self._wait("the typed locator in Pad's Open prompt")
+            return self._step("pad-shipped-locator-typed", "send_key", "enter",
+                              self.SHIPPED_OPENED, offer, generation, sender)
+        path = "/" + PAD_SHIPPED
+        if self.SAVE_AS_PROMPT <= self.stage <= self.SAVE_AS_TYPED:
+            return self._save_as(offer, generation, projection, sender, prompt, path)
+        if any(open_prompt is not None for open_prompt in prompts.values()):
+            return self._wait("Pad's prompt to close")
+        if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
+            return self._wait("Pad's menu bar after its prompt")
+        claim = self._editor(projection)
+        if claim is None:
+            return self._wait("Pad's editor after its prompt")
+        if _claim_item_text(claim, 1) != PAD_SHIPPED_LINE:
+            if self.stage == self.SHIPPED_OPENED:
+                return self._wait(f"{PAD_SHIPPED} in Pad's editor")
+            raise PhysicalDesktopAcceptanceError(
+                f"Pad's editor lost {PAD_SHIPPED}: {_claim_item_text(claim, 1)!r}"
+            )
+        if self.stage == self.SHIPPED_OPENED:
+            if not _status_shows(projection, path, bounds):
+                return self._wait(f"{path} in Pad's status bar")
+            _require_cell_text_in(offer, PAD_SHIPPED_LINE, bounds, _WHERE)
+            return self._step("pad-shipped-opened", "send_key", "ctrl+s",
+                              self.SAVE_REFUSED, offer, generation, sender)
+        if self.stage == self.SAVE_REFUSED:
+            if not self._notice_seen(offer, projection, PAD_READ_ONLY_NOTICE,
+                                     StatusSeverity.WARNING):
+                return self._wait(f"Pad's warning {PAD_READ_ONLY_NOTICE!r}")
+            return self._step("pad-shipped-save-refused", "send_key", "ctrl+shift+s",
+                              self.SAVE_AS_PROMPT, offer, generation, sender)
+        saved = "/" + PAD_SAVED_AS
+        if not _status_shows(projection, saved, bounds):
+            return self._wait(f"{saved} in Pad's status bar")
+        if _status_shows(projection, saved + " *", bounds):
+            raise PhysicalDesktopAcceptanceError(
+                f"Pad still marks {saved} changed after Save As"
+            )
+        if not self._notice_seen(offer, projection, PAD_SAVED_NOTICE,
+                                 StatusSeverity.NEUTRAL):
+            return self._wait(f"Pad's notice {PAD_SAVED_NOTICE!r}")
+        _require_cell_text_in(offer, PAD_SAVED_AS, bounds, _WHERE)
+        return self._done("pad-saved-as", offer)
+
+    def _save_as(self, offer, generation, projection, sender, prompt, path) -> JourneyProgress:
+        """Save As: it opens holding PATH; select all of it, type the new
+        name over it, and enter it."""
+
+        if prompt is None:
+            if self.stage == self.SAVE_AS_PROMPT:
+                return self._wait("Pad's Save As prompt after Ctrl+Shift+S")
+            raise PhysicalDesktopAcceptanceError("Pad's Save As prompt closed early")
+        content = prompt.content
+        identity = prompt.identity
+        value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id},0,{{}}"
+        if self.stage == self.SAVE_AS_PROMPT:
+            if content.text != path:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Pad's Save As prompt holds {content.text!r}, not {path!r}"
+                )
+            _require_cell_text_in(offer, PAD_SAVE_AS_PROMPT_MARKER,
+                                  _desk_content_bounds(projection), _WHERE)
+            return self._step("pad-save-as-prompt-shown", "text_place", value.format(0),
+                              self.SAVE_AS_PLACED, offer, generation, sender)
+        if self.stage == self.SAVE_AS_PLACED:
+            if content.text != path:
+                raise PhysicalDesktopAcceptanceError(
+                    f"placing the caret changed Pad's Save As prompt to {content.text!r}"
+                )
+            if content.caret != 0:
+                return self._wait("the Save As prompt's caret at its start")
+            return self._step("pad-save-as-caret-placed", "text_extend",
+                              value.format(len(path)), self.SAVE_AS_SELECTED,
+                              offer, generation, sender)
+        if self.stage == self.SAVE_AS_SELECTED:
+            if content.text != path:
+                raise PhysicalDesktopAcceptanceError(
+                    f"selecting in Pad's Save As prompt changed it to {content.text!r}"
+                )
+            if (content.anchor, content.caret) != (0, len(path)):
+                return self._wait("the whole path selected in the Save As prompt")
+            return self._step("pad-save-as-path-selected", "send_text", PAD_SAVED_AS,
+                              self.SAVE_AS_TYPED, offer, generation, sender)
+        # The guest may paint after each typed scalar.
+        if content.text == path or content.text in {
+            PAD_SAVED_AS[:length] for length in range(1, len(PAD_SAVED_AS))
+        }:
+            return self._wait("the typed name in the Save As prompt")
+        if content.text != PAD_SAVED_AS:
+            raise PhysicalDesktopAcceptanceError(
+                f"typing over the selected path gave {content.text!r}, not {PAD_SAVED_AS!r}"
+            )
+        return self._step("pad-save-as-name-typed", "send_key", "enter",
+                          self.SAVED_AS, offer, generation, sender)
 
     def _send_from(self, state, milestone, method, value, target, offer, generation,
                    sender) -> JourneyProgress:
@@ -980,9 +1237,13 @@ class FexpAloneJourney(_AppletJourney):
     in its folder tree, all through item and tab events.
 
     The detail table is a TABLE item view with Name, Size (a number column),
-    and Type columns, and the sidebar a TREE whose first row is the place
-    the image declares, by its label.  A SELECT
-    on large.txt's row selects it and the status bar shows its path.  F2
+    and Type columns, and the sidebar a TREE whose top rows are the places
+    of File Explorer's set, by label: in the linked build the one place over
+    the boot volume's root, and with the user volume (USER_VOLUME) the
+    documents place, the records place and the origin, in that order, the
+    first listed in the table.  A SELECT on large.txt's row selects it and
+    the status bar shows its path, after its place's label when the set
+    holds several places.  F2
     opens the rename prompt holding the name, a TEXT field in a modal region
     over the tile with the table and tree rich and inactive beneath it; a
     PLACE at the name's start and an EXTEND to the end of its stem, as the
@@ -1018,8 +1279,26 @@ class FexpAloneJourney(_AppletJourney):
     JPEG photograph and its picture of samples each shown rich as an IMAGE,
     with CELL beneath saying what the photograph is.  encrypted.pdf, read
     with the empty password, shows the same title.  sunset.qoi, selected
-    once more, shows rich again.  An OPEN on a directory's row lists that
-    directory.  An EXPAND on the
+    once more, shows rich again.
+
+    On the user volume File Explorer then works across its places, each
+    through the place's row in the tree and each change with File
+    Explorer's notice.  Ctrl+Shift+N opens the New folder prompt, a TEXT
+    field in a modal region over the tile, and the name typed into it makes
+    a folder in the documents place, listed and selected.  welcome.txt, cut
+    and pasted onto the folder, leaves the listing, and the folder, opened,
+    lists it.  A SELECT on the origin's row lists its folder, Go to takes
+    the folder of File Explorer's own shipped configuration there, and
+    fexplorer.toml, copied there and pasted with the documents place's row
+    selected, appears in the documents place with the size it showed in the
+    origin.  The same paste with the origin's row selected is refused with
+    a warning that the place is read-only.  A file of the records place,
+    cut and pasted into the documents place, is refused with a warning that
+    the source's place is read-only; the records place lists it still, and
+    the documents place lists neither it nor welcome.txt.
+
+    An OPEN on a directory's row lists that directory: on the user volume
+    the folder the journey made.  An EXPAND on the
     tree's root shows its entries, a SELECT on one of its directories lists
     that directory, and a COLLAPSE on the root hides them, which moves the
     selection back to the root and lists it again.  CELL shows the rows
@@ -1082,13 +1361,39 @@ class FexpAloneJourney(_AppletJourney):
         PICTURE_RESELECTED,
         PICTURE_PREVIEWED_LAST,
         DETAILS_SHOWN,
+        # On the user volume only, from here to DOCUMENTS_RELISTED.
+        FOLDER_PROMPT,
+        FOLDER_TYPED,
+        FOLDER_MADE,
+        MOVE_SELECTED,
+        MOVE_CUT,
+        FOLDER_TARGETED,
+        MOVED,
+        FOLDER_OPENED,
+        ORIGIN_LISTED,
+        ORIGIN_GOTO,
+        ORIGIN_GOTO_TYPED,
+        SHIPPED_LISTED,
+        SHIPPED_SELECTED,
+        SHIPPED_COPIED,
+        DOCUMENTS_TARGETED,
+        COPY_PASTED,
+        ORIGIN_TARGETED,
+        ORIGIN_REFUSED,
+        RECORDS_LISTED,
+        RECORD_SELECTED,
+        RECORD_CUT,
+        RECORD_TARGETED,
+        RECORD_REFUSED,
+        RECORDS_KEPT,
+        DOCUMENTS_RELISTED,
         DIRECTORY_OPENED,
         TREE_EXPANDED,
         TREE_CHILD_SELECTED,
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(45)
+    ) = range(70)
     _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
                         LINKED_DOCUMENT)
     _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_OUTLINE_CLOSED,
@@ -1101,8 +1406,21 @@ class FexpAloneJourney(_AppletJourney):
         PICTURE_PREVIEWED_LAST: (True, DETAILS_SHOWN),
     }
 
-    def __init__(self, ready_markers: tuple[str, ...], *, paced_link: bool = False):
+    def __init__(self, ready_markers: tuple[str, ...], *, paced_link: bool = False,
+                 user_volume: bool = False):
         super().__init__(ready_markers)
+        self._user_volume = user_volume
+        self._place_labels = (
+            USER_VOLUME_PLACE_LABELS if user_volume else (FEXP_PLACE_LABEL,)
+        )
+        # The stages in which a frame has shown the notice the stage waits
+        # for; each lasts a second or two, so the input after it may be
+        # retried once it is gone.
+        self._noticed: set[int] = set()
+        # What the origin's listing showed of the shipped file in its Size
+        # column, and the records place's file a cut takes.
+        self._shipped_size: str | None = None
+        self._cut_file: str | None = None
         self._directory: str | None = None
         # The document's top, as (block key, rows above), before the last
         # scroll step.
@@ -1228,30 +1546,352 @@ class FexpAloneJourney(_AppletJourney):
         return (self.focus_marker, FEXP_RENAMED)
 
     def _goto(self, offer, generation, sender, goto) -> JourneyProgress:
-        """The Go to prompt: it opens holding the root; type a path that
-        names nothing after it, and Enter."""
+        """The Go to prompt: it opens holding the listed folder, a place's
+        root; type a path after it, and Enter.  In the documents place the
+        path names nothing; in the origin it is the folder of File
+        Explorer's shipped configuration."""
 
+        if self.stage in (self.GOTO_PROMPT, self.GOTO_TYPED):
+            opened, typing, entered = self.GOTO_PROMPT, self.GOTO_TYPED, self.GOTO_WARNED
+            path, name = FEXP_GOTO_MISSING, "goto"
+        else:
+            opened, typing, entered = self.ORIGIN_GOTO, self.ORIGIN_GOTO_TYPED, self.SHIPPED_LISTED
+            path, name = FEXP_SHIPPED_FOLDER, "origin-goto"
         if goto is None:
-            if self.stage == self.GOTO_PROMPT:
+            if self.stage == opened:
                 return self._wait("File Explorer's Go to prompt after Ctrl+G")
             raise PhysicalDesktopAcceptanceError("File Explorer's Go to prompt closed early")
         text = goto.content.text
-        if self.stage == self.GOTO_PROMPT:
+        if self.stage == opened:
             if text != "/":
                 raise PhysicalDesktopAcceptanceError(
                     f"File Explorer's Go to prompt opened holding {text!r}"
                 )
-            return self._step("fexp-goto-opened", "send_text", FEXP_GOTO_MISSING,
-                              self.GOTO_TYPED, offer, generation, sender)
-        typed = "/" + FEXP_GOTO_MISSING
+            return self._step(f"fexp-{name}-opened", "send_text", path,
+                              typing, offer, generation, sender)
+        typed = "/" + path
         if text != typed:
             if typed.startswith(text):
                 return self._wait("the path typed into the Go to prompt")
             raise PhysicalDesktopAcceptanceError(
                 f"typing into File Explorer's Go to prompt gave {text!r}"
             )
-        return self._step("fexp-goto-typed", "send_key", "enter", self.GOTO_WARNED,
+        return self._step(f"fexp-{name}-typed", "send_key", "enter", entered,
                           offer, generation, sender)
+
+    def _status_path(self, path: str, label: str | None = None) -> str:
+        """PATH, a path in the place labelled LABEL, by default the documents
+        place, as File Explorer's status bar shows it: after the place's
+        label when its set holds several places."""
+
+        if len(self._place_labels) == 1:
+            return path
+        return (self._place_labels[0] if label is None else label) + path
+
+    def _notice_seen(self, offer, projection, message: str, severity) -> bool:
+        """Whether a frame in this stage has shown File Explorer's notice
+        MESSAGE, which must carry SEVERITY and show in CELL on its row."""
+
+        if self.stage in self._noticed:
+            return True
+        notice = _notice_claim(projection, message)
+        if notice is None:
+            return False
+        _require_notice(offer, notice, severity)
+        self._noticed.add(self.stage)
+        return True
+
+    @staticmethod
+    def _selected(table, name: str) -> bool:
+        selected = table.selected
+        return selected is not None and selected.fields[0].text == name
+
+    def _select_row(self, table, name, milestone, target, offer, generation, sender,
+                    *, selection_shown: bool):
+        """Select NAME's row in the table, scrolling it into view first.
+        SELECTION_SHOWN says whether the status bar already shows that row's
+        path as the selection.
+
+        A listing File Explorer makes for a folder it selected, through the
+        tree, Go to or an OPEN, leaves the list's own selection on its first
+        row while File Explorer's selection is the folder (LST-ROWS!), and a
+        SELECT on that row is no change, so File Explorer never selects it.
+        While the row to select is highlighted but not the selection, another
+        row is selected first."""
+
+        row = table.named(name)
+        if row is None:
+            raise PhysicalDesktopAcceptanceError(f"File Explorer's listing has no {name}")
+        if not self._shown(table, row):
+            toward = -1 if row.ordinal < table.content.viewport_first else 1
+            return self._step("fexp-table-scrolled", "item_scroll", table.value(toward),
+                              self.stage, offer, generation, sender)
+        highlighted = table.selected
+        if (
+            highlighted is not None
+            and highlighted.item_key == row.item_key
+            and not selection_shown
+        ):
+            others = [item for item in table.content.shown_items()
+                      if item.item_key != row.item_key]
+            if not others:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's table highlights {name}, which File Explorer has "
+                    "not selected, and shows no other row to select first"
+                )
+            return self._step("fexp-highlight-is-not-the-selection", "item_select",
+                              table.value(others[0].item_key), self.stage, offer,
+                              generation, sender)
+        return self._step(milestone, "item_select", table.value(row.item_key), target,
+                          offer, generation, sender)
+
+    def _place_listed(self, tree, place, projection, bounds) -> bool:
+        """Whether PLACE's row in the tree is selected, which lists its
+        folder: the status bar then shows that folder in the place."""
+
+        chosen = tree.selected
+        return (
+            chosen is not None
+            and chosen.item_key == place.item_key
+            and _status_shows(projection, self._status_path("/", place.fields[0].text), bounds)
+        )
+
+    def _open_directory(self, table, milestone, offer, generation, sender):
+        """Open the first directory the listing shows."""
+
+        directories = [
+            item
+            for item in table.content.shown_items()
+            if item.fields[-1].text == "dir"
+        ]
+        if not directories:
+            raise PhysicalDesktopAcceptanceError(
+                "File Explorer's root shows no directory to open"
+            )
+        self._directory = directories[0].fields[0].text
+        return self._step(milestone, "item_open", table.value(directories[0].item_key),
+                          self.DIRECTORY_OPENED, offer, generation, sender)
+
+    def _across(self, offer, generation, projection, sender, table, tree, places, goto):
+        """On the user volume: make a folder in the documents place and move
+        a document into it, copy a shipped file from the origin into the
+        documents place, and see a paste into the origin and a cut from the
+        records place refused, each through the place's row in the tree."""
+
+        bounds = _desk_content_bounds(projection)
+        documents, records, origin = places
+        documents_label = documents.fields[0].text
+        folder = _prompt_claim(projection, FEXP_FOLDER_LABEL, bounds)
+        if folder is not None:
+            _require_held_beneath_overlay(
+                projection, folder, bounds, FEXPLORER_MENU_SIGNATURE, "File Explorer"
+            )
+        stage = self.stage
+        if stage == self.FOLDER_PROMPT:
+            if folder is None:
+                return self._wait("File Explorer's New folder prompt after Ctrl+Shift+N")
+            if folder.content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's New folder prompt opened holding {folder.content.text!r}"
+                )
+            _require_cell_text_in(offer, FEXP_FOLDER_LABEL, bounds, _WHERE)
+            return self._step("fexp-folder-prompt-opened", "send_text", FEXP_FOLDER,
+                              self.FOLDER_TYPED, offer, generation, sender)
+        if stage == self.FOLDER_TYPED:
+            if folder is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's New folder prompt closed early"
+                )
+            text = folder.content.text
+            if text != FEXP_FOLDER:
+                if FEXP_FOLDER.startswith(text):
+                    return self._wait("the folder's name typed into the New folder prompt")
+                raise PhysicalDesktopAcceptanceError(
+                    f"typing into File Explorer's New folder prompt gave {text!r}"
+                )
+            return self._step("fexp-folder-named", "send_key", "enter", self.FOLDER_MADE,
+                              offer, generation, sender)
+        if folder is not None:
+            return self._wait("File Explorer's New folder prompt closed")
+        if stage in (self.ORIGIN_GOTO, self.ORIGIN_GOTO_TYPED):
+            return self._goto(offer, generation, sender, goto)
+        if goto is not None:
+            return self._wait("the Go to prompt closed")
+
+        def shows(path: str, place=documents) -> bool:
+            return _status_shows(projection, self._status_path(path, place.fields[0].text),
+                                 bounds)
+
+        def notice(message: str, severity=StatusSeverity.NEUTRAL) -> bool:
+            return self._notice_seen(offer, projection, message, severity)
+
+        def step(milestone: str, method: str, value: str, target: int) -> JourneyProgress:
+            return self._step(milestone, method, value, target, offer, generation, sender)
+
+        def to_place(milestone: str, place, target: int) -> JourneyProgress:
+            return step(milestone, "item_select", tree.value(place.item_key), target)
+
+        folder_path = "/" + FEXP_FOLDER
+        if stage == self.FOLDER_MADE:
+            row = table.named(FEXP_FOLDER)
+            if row is None or not self._selected(table, FEXP_FOLDER) or not shows(folder_path):
+                return self._wait(f"{FEXP_FOLDER} listed and selected in {documents_label}")
+            if row.fields[-1].text != "dir":
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer made {FEXP_FOLDER} a {row.fields[-1].text}, not a folder"
+                )
+            if not notice(FEXP_FOLDER_NOTICE):
+                return self._wait(f"File Explorer's notice {FEXP_FOLDER_NOTICE!r}")
+            return self._select_row(table, FEXP_MOVED, "fexp-folder-made", self.MOVE_SELECTED,
+                                    offer, generation, sender,
+                                    selection_shown=shows("/" + FEXP_MOVED))
+        if stage == self.MOVE_SELECTED:
+            if not self._selected(table, FEXP_MOVED) or not shows("/" + FEXP_MOVED):
+                return self._wait(f"{FEXP_MOVED} selected")
+            return step("fexp-move-selected", "send_key", "ctrl+x", self.MOVE_CUT)
+        if stage == self.MOVE_CUT:
+            if not notice(FEXP_CUT_NOTICE):
+                return self._wait(f"File Explorer's notice {FEXP_CUT_NOTICE!r}")
+            return self._select_row(table, FEXP_FOLDER, "fexp-move-cut", self.FOLDER_TARGETED,
+                                    offer, generation, sender,
+                                    selection_shown=shows(folder_path))
+        if stage == self.FOLDER_TARGETED:
+            if not self._selected(table, FEXP_FOLDER) or not shows(folder_path):
+                return self._wait(f"{FEXP_FOLDER} selected")
+            return step("fexp-folder-targeted", "send_key", "ctrl+v", self.MOVED)
+        if stage == self.MOVED:
+            if not notice(FEXP_PASTED_NOTICE):
+                return self._wait(f"File Explorer's notice {FEXP_PASTED_NOTICE!r}")
+            if table.named(FEXP_MOVED) is not None:
+                return self._wait(f"{FEXP_MOVED} gone from {documents_label}'s listing")
+            row = table.named(FEXP_FOLDER)
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{documents_label} lost {FEXP_FOLDER} in the move"
+                )
+            return step("fexp-moved", "item_open", table.value(row.item_key),
+                        self.FOLDER_OPENED)
+        if stage == self.FOLDER_OPENED:
+            if (
+                table.named(FEXP_MOVED) is None
+                or table.named(FEXP_RENAMED) is not None
+                or not shows(folder_path)
+            ):
+                return self._wait(f"{FEXP_FOLDER} listing {FEXP_MOVED}")
+            return to_place("fexp-moved-into-folder", origin, self.ORIGIN_LISTED)
+        if stage == self.ORIGIN_LISTED:
+            if not self._place_listed(tree, origin, projection, bounds):
+                return self._wait(f"{origin.fields[0].text} selected and listed")
+            return step("fexp-origin-listed", "send_key", "ctrl+g", self.ORIGIN_GOTO)
+        shipped_folder = "/" + FEXP_SHIPPED_FOLDER
+        if stage == self.SHIPPED_LISTED:
+            if not shows(shipped_folder, origin) or table.named(FEXP_SHIPPED) is None:
+                return self._wait(f"{shipped_folder} listed in {origin.fields[0].text}")
+            return self._select_row(
+                table, FEXP_SHIPPED, "fexp-shipped-listed", self.SHIPPED_SELECTED, offer,
+                generation, sender,
+                selection_shown=shows(f"{shipped_folder}/{FEXP_SHIPPED}", origin))
+        if stage == self.SHIPPED_SELECTED:
+            if (
+                not self._selected(table, FEXP_SHIPPED)
+                or not shows(f"{shipped_folder}/{FEXP_SHIPPED}", origin)
+            ):
+                return self._wait(f"{FEXP_SHIPPED} selected in {origin.fields[0].text}")
+            row = table.selected
+            if row.fields[-1].text != "file":
+                raise PhysicalDesktopAcceptanceError(f"{FEXP_SHIPPED} is not listed as a file")
+            self._shipped_size = row.fields[1].text
+            return step("fexp-shipped-selected", "send_key", "ctrl+c", self.SHIPPED_COPIED)
+        if stage == self.SHIPPED_COPIED:
+            if not notice(FEXP_COPIED_NOTICE):
+                return self._wait(f"File Explorer's notice {FEXP_COPIED_NOTICE!r}")
+            return to_place("fexp-shipped-copied", documents, self.DOCUMENTS_TARGETED)
+        if stage == self.DOCUMENTS_TARGETED:
+            if (
+                not self._place_listed(tree, documents, projection, bounds)
+                or table.named(FEXP_FOLDER) is None
+            ):
+                return self._wait(f"{documents_label} selected and listed")
+            if table.named(FEXP_SHIPPED) is not None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{documents_label} lists {FEXP_SHIPPED} before the paste"
+                )
+            return step("fexp-documents-targeted", "send_key", "ctrl+v", self.COPY_PASTED)
+        if stage == self.COPY_PASTED:
+            if not notice(FEXP_PASTED_NOTICE):
+                return self._wait(f"File Explorer's notice {FEXP_PASTED_NOTICE!r}")
+            row = table.named(FEXP_SHIPPED)
+            if row is None:
+                return self._wait(f"the copy of {FEXP_SHIPPED} in {documents_label}")
+            shown = (row.fields[1].text, row.fields[-1].text)
+            if shown != (self._shipped_size, "file"):
+                raise PhysicalDesktopAcceptanceError(
+                    f"the copy of {FEXP_SHIPPED} shows {shown!r}, not "
+                    f"{(self._shipped_size, 'file')!r}"
+                )
+            _require_cell_text_in(offer, FEXP_SHIPPED, bounds, _WHERE)
+            return to_place("fexp-shipped-pasted", origin, self.ORIGIN_TARGETED)
+        if stage == self.ORIGIN_TARGETED:
+            if not self._place_listed(tree, origin, projection, bounds):
+                return self._wait(f"{origin.fields[0].text} selected and listed")
+            return step("fexp-origin-targeted", "send_key", "ctrl+v", self.ORIGIN_REFUSED)
+        if stage == self.ORIGIN_REFUSED:
+            if not notice(FEXP_READ_ONLY_NOTICE, StatusSeverity.WARNING):
+                return self._wait(f"File Explorer's warning {FEXP_READ_ONLY_NOTICE!r}")
+            return to_place("fexp-origin-paste-refused", records, self.RECORDS_LISTED)
+        if stage == self.RECORDS_LISTED:
+            if not self._place_listed(tree, records, projection, bounds):
+                return self._wait(f"{records.fields[0].text} selected and listed")
+            files = [
+                item for item in table.content.shown_items() if item.fields[-1].text == "file"
+            ]
+            if not files:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's {records.fields[0].text} lists no file"
+                )
+            self._cut_file = files[0].fields[0].text
+            return self._select_row(
+                table, self._cut_file, "fexp-records-listed", self.RECORD_SELECTED, offer,
+                generation, sender, selection_shown=shows("/" + self._cut_file, records))
+        record = "/" + self._cut_file if self._cut_file is not None else None
+        if stage == self.RECORD_SELECTED:
+            if not self._selected(table, self._cut_file) or not shows(record, records):
+                return self._wait(f"{self._cut_file} selected in {records.fields[0].text}")
+            return step("fexp-record-selected", "send_key", "ctrl+x", self.RECORD_CUT)
+        if stage == self.RECORD_CUT:
+            if not notice(FEXP_CUT_NOTICE):
+                return self._wait(f"File Explorer's notice {FEXP_CUT_NOTICE!r}")
+            return to_place("fexp-record-cut", documents, self.RECORD_TARGETED)
+        if stage == self.RECORD_TARGETED:
+            if not self._place_listed(tree, documents, projection, bounds):
+                return self._wait(f"{documents_label} selected and listed")
+            return step("fexp-record-targeted", "send_key", "ctrl+v", self.RECORD_REFUSED)
+        if stage == self.RECORD_REFUSED:
+            if not notice(FEXP_READ_ONLY_SOURCE_NOTICE, StatusSeverity.WARNING):
+                return self._wait(f"File Explorer's warning {FEXP_READ_ONLY_SOURCE_NOTICE!r}")
+            return to_place("fexp-record-paste-refused", records, self.RECORDS_KEPT)
+        if stage == self.RECORDS_KEPT:
+            if not self._place_listed(tree, records, projection, bounds):
+                return self._wait(f"{records.fields[0].text} selected and listed")
+            if table.named(self._cut_file) is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the refused cut took {self._cut_file} from {records.fields[0].text}"
+                )
+            return to_place("fexp-record-kept", documents, self.DOCUMENTS_RELISTED)
+        if (
+            not self._place_listed(tree, documents, projection, bounds)
+            or table.named(FEXP_FOLDER) is None
+        ):
+            return self._wait(f"{documents_label} selected and listed")
+        for name in (self._cut_file, FEXP_MOVED):
+            if table.named(name) is not None:
+                raise PhysicalDesktopAcceptanceError(f"{documents_label} lists {name}")
+        if table.named(FEXP_SHIPPED) is None:
+            raise PhysicalDesktopAcceptanceError(
+                f"{documents_label} no longer lists the copy of {FEXP_SHIPPED}"
+            )
+        return self._open_directory(table, "fexp-documents-relisted", offer, generation,
+                                    sender)
 
     def _rename(self, offer, generation, projection, sender, rename) -> JourneyProgress:
         """The rename prompt: select the name's stem, type over it, enter it."""
@@ -1466,7 +2106,8 @@ class FexpAloneJourney(_AppletJourney):
             if (
                 document is None
                 or document.block_with(FEXP_LINKED_TEXT) is None
-                or not _status_shows(projection, "/" + FEXP_LINKED_NAME, bounds)
+                or not _status_shows(projection, self._status_path("/" + FEXP_LINKED_NAME),
+                                     bounds)
             ):
                 return self._wait(f"{FEXP_LINKED_NAME} selected and previewed as a document")
             details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
@@ -1748,12 +2389,8 @@ class FexpAloneJourney(_AppletJourney):
                 f"File Explorer's detail table has columns {columns!r}"
             )
         bounds = _desk_content_bounds(projection)
-        root = tree.content.items[0]
-        if (root.fields[0].text != FEXP_PLACE_LABEL
-                or not root.state & ItemState.EXPANDABLE):
-            raise PhysicalDesktopAcceptanceError(
-                f"File Explorer's tree starts with {root.fields[0].text!r}"
-            )
+        places = _place_rows(tree, self._place_labels, "File Explorer")
+        root = places[0]
 
         if self.stage == self.READY:
             row = table.named(FEXP_FILE)
@@ -1793,7 +2430,7 @@ class FexpAloneJourney(_AppletJourney):
             selected = table.selected
             if selected is None or selected.fields[0].text != name:
                 return self._wait(f"{name}'s row selected")
-            if not _status_shows(projection, "/" + name, bounds):
+            if not _status_shows(projection, self._status_path("/" + name), bounds):
                 return self._wait("the selected file's path in the status bar")
             if _image_claims_in(projection, bounds):
                 raise PhysicalDesktopAcceptanceError(
@@ -1846,7 +2483,7 @@ class FexpAloneJourney(_AppletJourney):
             selected = table.selected
             if selected is None or selected.fields[0].text != name:
                 return self._wait(f"{name}'s row selected")
-            if not _status_shows(projection, "/" + name, bounds):
+            if not _status_shows(projection, self._status_path("/" + name), bounds):
                 return self._wait(f"{name}'s path in the status bar")
             tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
             if selected_tab:
@@ -1895,22 +2532,19 @@ class FexpAloneJourney(_AppletJourney):
                 return self._step(f"fexp-details-{self.stage}", "item_select",
                                   table.value(row.item_key), target, offer,
                                   generation, sender)
-            directories = [
-                item
-                for item in table.content.shown_items()
-                if item.fields[-1].text == "dir"
-            ]
-            if not directories:
-                raise PhysicalDesktopAcceptanceError(
-                    "File Explorer's root shows no directory to open"
-                )
-            self._directory = directories[0].fields[0].text
-            return self._step("fexp-details-last", "item_open",
-                              table.value(directories[0].item_key),
-                              self.DIRECTORY_OPENED, offer, generation, sender)
+            if self._user_volume:
+                # The documents place holds no folder until File Explorer
+                # makes one there.
+                return self._step("fexp-details-last", "send_key", "ctrl+shift+n",
+                                  self.FOLDER_PROMPT, offer, generation, sender)
+            return self._open_directory(table, "fexp-details-last", offer, generation,
+                                        sender)
+        if self.FOLDER_PROMPT <= self.stage <= self.DOCUMENTS_RELISTED:
+            return self._across(offer, generation, projection, sender, table, tree, places,
+                                goto)
         if self.stage == self.DIRECTORY_OPENED:
             if table.named(FEXP_RENAMED) is not None or not _status_shows(
-                projection, "/" + self._directory, bounds
+                projection, self._status_path("/" + self._directory), bounds
             ):
                 return self._wait(f"the table listing /{self._directory}")
             if root.state & ItemState.EXPANDED:
@@ -1943,7 +2577,8 @@ class FexpAloneJourney(_AppletJourney):
             if (
                 selected is None
                 or selected.fields[0].text != self._directory
-                or not _status_shows(projection, "/" + self._directory, bounds)
+                or not _status_shows(projection, self._status_path("/" + self._directory),
+                                     bounds)
             ):
                 return self._wait(f"/{self._directory} selected in the tree")
             return self._step("fexp-tree-directory-selected", "item_collapse",
@@ -3393,10 +4028,14 @@ def applet_journey(
     ready_markers: tuple[str, ...],
     *,
     paced_link: bool = False,
+    user_volume: bool = False,
 ) -> FrameBoundJourney:
     """The journey for Desk holding only the applet NAME, or for the check
     NAME of Desk holding one applet.  On a PACED_LINK, File Explorer's also
-    checks that the screen answers input while a picture uploads."""
+    checks that the screen answers input while a picture uploads.  In a
+    build with the USER_VOLUME, File Explorer's and Pad's follow the
+    shipping form's places and work across them; the others run as in the
+    linked build."""
 
     journeys = {
         "pad": PadAloneJourney,
@@ -3413,5 +4052,8 @@ def applet_journey(
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")
     if name == "fexp":
-        return FexpAloneJourney(ready_markers, paced_link=paced_link)
+        return FexpAloneJourney(ready_markers, paced_link=paced_link,
+                                user_volume=user_volume)
+    if name == "pad":
+        return PadAloneJourney(ready_markers, user_volume=user_volume)
     return journeys[name](ready_markers)

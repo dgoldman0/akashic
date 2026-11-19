@@ -68,7 +68,27 @@ from rich_terminal_applet_journeys import (
     DAYBOOK_REMINDER_NOTICE,
     DESK_PROMPT_OVER,
     DESK_PROMPT_TEXT,
+    FEXP_COPIED_NOTICE,
+    FEXP_CUT_NOTICE,
+    FEXP_FOLDER,
+    FEXP_FOLDER_LABEL,
+    FEXP_FOLDER_NOTICE,
+    FEXP_MOVED,
+    FEXP_PASTED_NOTICE,
     FEXP_PLACE_LABEL,
+    FEXP_READ_ONLY_NOTICE,
+    FEXP_READ_ONLY_SOURCE_NOTICE,
+    FEXP_SHIPPED,
+    FEXP_SHIPPED_FOLDER,
+    PAD_READ_ONLY_NOTICE,
+    PAD_SAVED_AS,
+    PAD_SAVED_NOTICE,
+    PAD_SHIPPED,
+    PAD_SHIPPED_LINE,
+    PAD_SHIPPED_LOCATOR,
+    USER_VOLUME_FILES,
+    USER_VOLUME_ORIGIN_NAME,
+    USER_VOLUME_PLACE_LABELS,
     SMALL_TERMINAL_LARGE_LINE,
     SMALL_TERMINAL_LARGE_PATH,
     STREAMS_CARDS,
@@ -215,6 +235,31 @@ def _held(frame: RichScreenProjection, prompt) -> RichScreenProjection:
     )
 
 
+def _places_tree(labels: tuple[str, ...], *, selected: str | None = None):
+    """An explorer's folder tree: a row for each place, by LABELS in order,
+    each able to open, SELECTED's row selected."""
+
+    return tuple(
+        ViewItem(index + 1, 0, index, 0,
+                 ItemState.EXPANDABLE | (ItemState.SELECTED if label == selected
+                                         else ItemState(0)),
+                 ItemRole.ITEM, (ItemField(label),))
+        for index, label in enumerate(labels)
+    )
+
+
+def _tree_claim(control_id: int, items, bounds=(0, 2, 29, 60)):
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, control_id), *bounds,
+        ItemViewContent(1, ItemViewRole.TREE, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT),), len(items), 0, len(items),
+                        items),
+    )
+
+
+PAD_SIDEBAR_ID = 20_010
+
+
 def _pad_frame(
     text: str,
     primary: tuple[int, int],
@@ -222,9 +267,13 @@ def _pad_frame(
     focused: bool = True,
     lines: tuple[str, ...] | None = None,
     style_runs: tuple[tuple[int, int, int, int], ...] = (),
+    places: tuple[str, ...] = (FEXP_PLACE_LABEL,),
+    status: str = "",
 ):
     """Pad's editor showing TEXT, or several LINES with STYLE_RUNS as
-    (item key, start, length, meaning), with the caret at PRIMARY."""
+    (item key, start, length, meaning), with the caret at PRIMARY; its
+    sidebar's tree listing PLACES; and STATUS, a document's path, in its
+    status bar."""
 
     lines = (text,) if lines is None else lines
     caret_line = lines[primary[0] - 1]
@@ -233,7 +282,7 @@ def _pad_frame(
         {
             0: " File  Build  Edit  Selection  View  Go  Help",
             2: " Untitled",
-            81: f" Ln {primary[0]}, Col {before + 1}",
+            81: f" {status}  Ln {primary[0]}, Col {before + 1}",
             ROWS - 1: "[1:Akashic Pa*]" if focused else "[1:Akashic Pa]",
         },
         (acceptance_runner.PAD_MENU_SIGNATURE,),
@@ -277,8 +326,10 @@ def _pad_frame(
         content_state=_area_state(("",), (1, 0)),
         state=state,
     )
+    sidebar = _tree_claim(PAD_SIDEBAR_ID, _places_tree(places), (0, 3, 40, 60))
     projection = replace(
-        projection, semantic_collection_claims=(results, editor, output)
+        projection, semantic_collection_claims=(results, editor, output),
+        semantic_item_view_claims=(sidebar,),
     )
     for row, line in enumerate(lines):
         projection = _place_cells(
@@ -2212,3 +2263,514 @@ def test_agent_alone_refuses_a_long_review_that_fits_or_unlocks_early() -> None:
     with pytest.raises(PhysicalDesktopAcceptanceError, match="does not open at its reason"):
         journey_at(AgentAloneJourney.LONG_REVIEW).after_present(
             REVIEW_OFFER, 9, elsewhere, sender)
+
+
+# File Explorer and Pad on the user volume.  The journeys follow the places
+# the build declares (akashic_tui._user_volume_boot_lines), and the files
+# they leave there name what the image ships.
+
+def test_the_user_volume_journeys_follow_the_builds_declaration() -> None:
+    tui = akashic_tui
+    assert FEXP_PLACE_LABEL == tui.PLACES_BOOT_LABEL
+    assert USER_VOLUME_PLACE_LABELS == tuple(
+        place[2] for place in (tui.USER_VOLUME_DOCUMENTS, tui.USER_VOLUME_RECORDS,
+                               tui.USER_VOLUME_ORIGIN)
+    )
+    assert USER_VOLUME_ORIGIN_NAME == tui.USER_VOLUME_ORIGIN[0]
+    assert PAD_SHIPPED_LOCATOR == f"vfs://{tui.USER_VOLUME_ORIGIN[0]}/{PAD_SHIPPED}"
+    # Each applet's own shipped configuration, which its profile ships.
+    shipped = f"{FEXP_SHIPPED_FOLDER}/{FEXP_SHIPPED}"
+    assert shipped in tui.PROFILES["desktop-apt1-fexp"].resources
+    assert PAD_SHIPPED in tui.PROFILES["desktop-apt1-pad"].resources
+    assert (tui.SOURCE_ROOT / PAD_SHIPPED).read_text().splitlines()[0] == PAD_SHIPPED_LINE
+    assert FEXP_MOVED in tui.SAMPLE_FILES
+    assert USER_VOLUME_FILES == {
+        "fexp": {FEXP_SHIPPED: ("shipped", shipped),
+                 f"{FEXP_FOLDER}/{FEXP_MOVED}": ("document", FEXP_MOVED),
+                 FEXP_MOVED: None},
+        "pad": {PAD_SAVED_AS: ("shipped", PAD_SHIPPED)},
+    }
+
+
+def test_only_file_explorer_and_pad_follow_the_user_volume() -> None:
+    for name, ready in (("fexp", FEXP_READY), ("pad", PAD_READY)):
+        assert applet_journey(name, ready)._place_labels == (FEXP_PLACE_LABEL,)
+        journey = applet_journey(name, ready, user_volume=True)
+        assert journey._place_labels == USER_VOLUME_PLACE_LABELS
+    # Pad ends on the user volume once it has saved the file in Documents.
+    pad = applet_journey("pad", PAD_READY, user_volume=True)
+    assert pad.final_stage == PadAloneJourney.SAVED_AS
+    assert pad.final_cell_markers == ("[1:Akashic Pa*]", PAD_SAVED_AS)
+    assert applet_journey("pad", PAD_READY).final_stage == PadAloneJourney.LINK_FOLLOWED
+    assert isinstance(applet_journey("daybook", DAYBOOK_READY, user_volume=True),
+                      DaybookAloneJourney)
+
+
+DOCS = (("encrypted.pdf", "1K", "file"), ("guide.md", "4K", "file"),
+        ("notes.txt", "2K", "file"), ("sunset.qoi", "9K", "file"),
+        (FEXP_MOVED, "50", "file"))
+FOLDER_ROW = (FEXP_FOLDER, "", "dir")
+SHIPPED_ROW = (FEXP_SHIPPED, "903", "file")
+DOCS_FOLDER = (FOLDER_ROW,) + DOCS
+DOCS_MOVED = tuple(row for row in DOCS_FOLDER if row[0] != FEXP_MOVED)
+DOCS_COPIED = DOCS_MOVED + (SHIPPED_ROW,)
+ORIGIN_ROWS = (("autoexec.f", "10K", "file"), ("tui", "", "dir"))
+SHIPPED_ROWS = (SHIPPED_ROW, ("fexplorer.uidl", "1K", "file"))
+RECORD = "practice-head-a.bin"
+RECORD_ROWS = ((RECORD, "4K", "file"),)
+
+
+def _listing(rows, *, status: str, selected: str | None = None, place: str = "Documents",
+             labels: tuple[str, ...] = USER_VOLUME_PLACE_LABELS, prompt=None, notice=None):
+    """Desk with File Explorer: its table listing ROWS, each (name, size,
+    type), SELECTED's selected; its folder tree, the rows of LABELS with
+    PLACE's selected; STATUS in its status bar; PROMPT, a prompt held over
+    it; and NOTICE, its notice."""
+
+    frame = _screen({0: " File  Edit  View  Tools", 81: f" {status}",
+                     ROWS - 1: "[1:File Explo*]"},
+                    (acceptance_runner.FEXPLORER_MENU_SIGNATURE,))
+    items = tuple(
+        ViewItem(ordinal + 1, 0, ordinal, 0,
+                 ItemState.SELECTED if name == selected else ItemState(0), ItemRole.ITEM,
+                 (ItemField(name), ItemField(size), ItemField(kind)))
+        for ordinal, (name, size, kind) in enumerate(rows)
+    )
+    table = acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, TABLE_ID), 30, 2, COLS, 60,
+        ItemViewContent(1, ItemViewRole.TABLE, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT, "Name"),
+                         ItemColumn(ItemColumnKind.NUMBER, "Size"),
+                         ItemColumn(ItemColumnKind.TEXT, "Type")),
+                        len(items), 0, len(items), items),
+    )
+    tree = _tree_claim(TREE_ID, _places_tree(labels, selected=place))
+    frame = replace(frame, semantic_item_view_claims=(table, tree))
+    if prompt is not None:
+        frame = _held(frame, prompt)
+    if notice is not None:
+        frame = _noticed(frame, notice)
+    return frame
+
+
+def _row(rows, name: str) -> str:
+    """The value of an input naming NAME's row of a listing of ROWS."""
+
+    return f"1,1,{TABLE_ID},{[row[0] for row in rows].index(name) + 1}"
+
+
+def _place(label: str) -> str:
+    """The value of an input naming the tree's row of the place LABEL."""
+
+    return f"1,1,{TREE_ID},{USER_VOLUME_PLACE_LABELS.index(label) + 1}"
+
+
+def _cells(*placements):
+    return _cell_offer(1, tuple(placements))
+
+
+def _notice_cells(message: str):
+    return (ROWS - 1, (COLS - len(message) - 4) // 2 + 2, message)
+
+
+def _fexp_at(stage: int, *, user_volume: bool = True) -> FexpAloneJourney:
+    journey = FexpAloneJourney(FEXP_READY, user_volume=user_volume)
+    journey.stage = stage
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    return journey
+
+
+def test_fexp_on_the_user_volume_works_across_its_places() -> None:
+    """From the last preview's Details tab to the folder it opens: a folder
+    made and a document moved into it, a shipped file copied from the
+    origin, a paste into the origin and a cut from the records place
+    refused, each with its notice."""
+
+    blank = _cells()
+    warning = StatusSeverity.WARNING
+    origin, records = USER_VOLUME_PLACE_LABELS[2], USER_VOLUME_PLACE_LABELS[1]
+    shipped_folder = f"{origin}/{FEXP_SHIPPED_FOLDER}"
+    steps = (
+        (blank, _listing(DOCS, status="Documents/sunset.qoi", selected="sunset.qoi")),
+        (_cells((81, 1, "New folder: ")),
+         _listing(DOCS, status="", prompt=_prompt(FEXP_FOLDER_LABEL, "", row=81))),
+        # The guest may paint between typed characters.
+        (blank, _listing(DOCS, status="", prompt=_prompt(FEXP_FOLDER_LABEL, "dra", row=81))),
+        (blank, _listing(DOCS, status="", prompt=_prompt(FEXP_FOLDER_LABEL, FEXP_FOLDER,
+                                                         row=81))),
+        # The folder stands, and its notice is not up yet.
+        (blank, _listing(DOCS_FOLDER, status="Documents/drafts", selected=FEXP_FOLDER)),
+        (_cells(_notice_cells(FEXP_FOLDER_NOTICE)),
+         _listing(DOCS_FOLDER, status="Documents/drafts", selected=FEXP_FOLDER,
+                  notice=_notice(FEXP_FOLDER_NOTICE))),
+        (blank, _listing(DOCS_FOLDER, status=f"Documents/{FEXP_MOVED}", selected=FEXP_MOVED)),
+        (_cells(_notice_cells(FEXP_CUT_NOTICE)),
+         _listing(DOCS_FOLDER, status=f"Documents/{FEXP_MOVED}", selected=FEXP_MOVED,
+                  notice=_notice(FEXP_CUT_NOTICE))),
+        (blank, _listing(DOCS_FOLDER, status="Documents/drafts", selected=FEXP_FOLDER)),
+        (_cells(_notice_cells(FEXP_PASTED_NOTICE)),
+         _listing(DOCS_MOVED, status="Documents/drafts", selected=FEXP_FOLDER,
+                  notice=_notice(FEXP_PASTED_NOTICE))),
+        (blank, _listing(((FEXP_MOVED, "50", "file"),), status="Documents/drafts")),
+        (blank, _listing(ORIGIN_ROWS, status=f"{origin}/", place=origin)),
+        (blank, _listing(ORIGIN_ROWS, status="", place=origin,
+                         prompt=_prompt("Go to:", "/", row=81))),
+        (blank, _listing(ORIGIN_ROWS, status="", place=origin,
+                         prompt=_prompt("Go to:", "/" + FEXP_SHIPPED_FOLDER, row=81))),
+        (blank, _listing(SHIPPED_ROWS, status=shipped_folder, place=origin)),
+        (blank, _listing(SHIPPED_ROWS, status=f"{shipped_folder}/{FEXP_SHIPPED}",
+                         selected=FEXP_SHIPPED, place=origin)),
+        (_cells(_notice_cells(FEXP_COPIED_NOTICE)),
+         _listing(SHIPPED_ROWS, status=f"{shipped_folder}/{FEXP_SHIPPED}",
+                  selected=FEXP_SHIPPED, place=origin, notice=_notice(FEXP_COPIED_NOTICE))),
+        (blank, _listing(DOCS_MOVED, status="Documents/")),
+        (_cells(_notice_cells(FEXP_PASTED_NOTICE), (5, 31, FEXP_SHIPPED)),
+         _listing(DOCS_COPIED, status="Documents/", notice=_notice(FEXP_PASTED_NOTICE))),
+        (blank, _listing(ORIGIN_ROWS, status=f"{origin}/", place=origin)),
+        (_cells(_notice_cells(FEXP_READ_ONLY_NOTICE)),
+         _listing(ORIGIN_ROWS, status=f"{origin}/", place=origin,
+                  notice=_notice(FEXP_READ_ONLY_NOTICE, warning))),
+        (blank, _listing(RECORD_ROWS, status=f"{records}/", place=records)),
+        (blank, _listing(RECORD_ROWS, status=f"{records}/{RECORD}", selected=RECORD,
+                         place=records)),
+        (_cells(_notice_cells(FEXP_CUT_NOTICE)),
+         _listing(RECORD_ROWS, status=f"{records}/{RECORD}", selected=RECORD,
+                  place=records, notice=_notice(FEXP_CUT_NOTICE))),
+        (blank, _listing(DOCS_COPIED, status="Documents/")),
+        (_cells(_notice_cells(FEXP_READ_ONLY_SOURCE_NOTICE)),
+         _listing(DOCS_COPIED, status="Documents/",
+                  notice=_notice(FEXP_READ_ONLY_SOURCE_NOTICE, warning))),
+        (blank, _listing(RECORD_ROWS, status=f"{records}/", place=records)),
+        (blank, _listing(DOCS_COPIED, status="Documents/")),
+    )
+    journey = _fexp_at(FexpAloneJourney.DETAILS_SHOWN)
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("fexp-details-last", [("send_key", "ctrl+shift+n")]),
+        ("fexp-folder-prompt-opened", [("send_text", FEXP_FOLDER)]),
+        (None, []),
+        ("fexp-folder-named", [("send_key", "enter")]),
+        (None, []),
+        ("fexp-folder-made", [("item_select", _row(DOCS_FOLDER, FEXP_MOVED))]),
+        ("fexp-move-selected", [("send_key", "ctrl+x")]),
+        ("fexp-move-cut", [("item_select", _row(DOCS_FOLDER, FEXP_FOLDER))]),
+        ("fexp-folder-targeted", [("send_key", "ctrl+v")]),
+        ("fexp-moved", [("item_open", _row(DOCS_MOVED, FEXP_FOLDER))]),
+        ("fexp-moved-into-folder", [("item_select", _place(origin))]),
+        ("fexp-origin-listed", [("send_key", "ctrl+g")]),
+        ("fexp-origin-goto-opened", [("send_text", FEXP_SHIPPED_FOLDER)]),
+        ("fexp-origin-goto-typed", [("send_key", "enter")]),
+        ("fexp-shipped-listed", [("item_select", _row(SHIPPED_ROWS, FEXP_SHIPPED))]),
+        ("fexp-shipped-selected", [("send_key", "ctrl+c")]),
+        ("fexp-shipped-copied", [("item_select", _place("Documents"))]),
+        ("fexp-documents-targeted", [("send_key", "ctrl+v")]),
+        ("fexp-shipped-pasted", [("item_select", _place(origin))]),
+        ("fexp-origin-targeted", [("send_key", "ctrl+v")]),
+        ("fexp-origin-paste-refused", [("item_select", _place(records))]),
+        ("fexp-records-listed", [("item_select", _row(RECORD_ROWS, RECORD))]),
+        ("fexp-record-selected", [("send_key", "ctrl+x")]),
+        ("fexp-record-cut", [("item_select", _place("Documents"))]),
+        ("fexp-record-targeted", [("send_key", "ctrl+v")]),
+        ("fexp-record-paste-refused", [("item_select", _place(records))]),
+        ("fexp-record-kept", [("item_select", _place("Documents"))]),
+        ("fexp-documents-relisted", [("item_open", _row(DOCS_COPIED, FEXP_FOLDER))]),
+    ]
+    assert journey.stage == FexpAloneJourney.DIRECTORY_OPENED
+    assert journey._directory == FEXP_FOLDER
+
+
+def test_fexp_in_the_linked_build_opens_a_directory_after_its_previews() -> None:
+    journey = _fexp_at(FexpAloneJourney.DETAILS_SHOWN, user_volume=False)
+    rows = (("tui", "", "dir"),) + DOCS
+    (result, sent), = _run(journey, ((_cells(), _listing(
+        rows, status="/sunset.qoi", selected="sunset.qoi", place=FEXP_PLACE_LABEL,
+        labels=(FEXP_PLACE_LABEL,))),))
+    assert (result.milestone, sent) == ("fexp-details-last", [("item_open", _row(rows, "tui"))])
+    assert journey.stage == FexpAloneJourney.DIRECTORY_OPENED
+
+
+def test_fexp_requires_the_places_of_its_build_in_order() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    frame = _listing(DOCS, status="Documents/sunset.qoi", selected="sunset.qoi")
+    for labels, user_volume in (
+        ((FEXP_PLACE_LABEL,), True),
+        (("Records", "Documents", "System"), True),
+        (USER_VOLUME_PLACE_LABELS, False),
+    ):
+        listed = _listing(DOCS, status="/sunset.qoi", selected="sunset.qoi",
+                          place=labels[0], labels=labels)
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="lists the places"):
+            _fexp_at(FexpAloneJourney.DETAILS_SHOWN, user_volume=user_volume).after_present(
+                _cells(), 9, listed, sender)
+    # A place's row that cannot open is no place.
+    tree = frame.semantic_item_view_claims[1]
+    items = (replace(tree.content.items[0], state=ItemState(0)),) + tree.content.items[1:]
+    closed = replace(frame, semantic_item_view_claims=(
+        frame.semantic_item_view_claims[0],
+        replace(tree, content=replace(tree.content, items=items))))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="lists the places"):
+        _fexp_at(FexpAloneJourney.DETAILS_SHOWN).after_present(_cells(), 9, closed, sender)
+
+
+def test_fexp_on_the_user_volume_refuses_what_its_places_do_not_allow() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    origin, records = USER_VOLUME_PLACE_LABELS[2], USER_VOLUME_PLACE_LABELS[1]
+    pasted = _cells(_notice_cells(FEXP_PASTED_NOTICE), (5, 31, FEXP_SHIPPED))
+    # The copy shows another size than its source did.
+    journey = _fexp_at(FexpAloneJourney.COPY_PASTED)
+    journey._shipped_size = "903"
+    resized = tuple((name, "1K", kind) if name == FEXP_SHIPPED else (name, size, kind)
+                    for name, size, kind in DOCS_COPIED)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="shows \\('1K', 'file'\\)"):
+        journey.after_present(pasted, 9, _listing(resized, status="Documents/",
+                                                  notice=_notice(FEXP_PASTED_NOTICE)), sender)
+    # A refusal is a warning.
+    journey = _fexp_at(FexpAloneJourney.ORIGIN_REFUSED)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="NEUTRAL, not WARNING"):
+        journey.after_present(
+            _cells(_notice_cells(FEXP_READ_ONLY_NOTICE)), 9,
+            _listing(ORIGIN_ROWS, status=f"{origin}/", place=origin,
+                     notice=_notice(FEXP_READ_ONLY_NOTICE)), sender)
+    # The refused cut took the record away, or moved it into Documents.
+    journey = _fexp_at(FexpAloneJourney.RECORDS_KEPT)
+    journey._cut_file = RECORD
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="refused cut took"):
+        journey.after_present(_cells(), 9, _listing((), status=f"{records}/", place=records),
+                              sender)
+    journey = _fexp_at(FexpAloneJourney.DOCUMENTS_RELISTED)
+    journey._cut_file = RECORD
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=f"lists {RECORD}"):
+        journey.after_present(_cells(), 9, _listing(DOCS_COPIED + RECORD_ROWS,
+                                                    status="Documents/"), sender)
+    # A folder File Explorer made a file.
+    journey = _fexp_at(FexpAloneJourney.FOLDER_MADE)
+    filed = ((FEXP_FOLDER, "0", "file"),) + DOCS
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not a folder"):
+        journey.after_present(_cells(), 9, _listing(filed, status="Documents/drafts",
+                                                    selected=FEXP_FOLDER), sender)
+
+
+def _pad_shipped_frame(*, prompt=None, notice=None, status="/" + PAD_SHIPPED):
+    """Pad on the user volume showing pad.toml, with PROMPT held over it."""
+
+    frame = _pad_frame("", (1, 0), lines=(PAD_SHIPPED_LINE, ""),
+                       places=USER_VOLUME_PLACE_LABELS, status=status)
+    if prompt is not None:
+        frame = _held(frame, prompt)
+    if notice is not None:
+        frame = _noticed(frame, notice)
+    return frame
+
+
+def test_pad_on_the_user_volume_saves_a_read_only_file_into_documents() -> None:
+    blank = _cells()
+    example = _pad_frame("", (3, 0), lines=(styled_text.EXAMPLE_LINE, "9 SQUARE .", ""),
+                         style_runs=_keyed(1, styled_text.EXAMPLE_LINE_RUNS),
+                         places=USER_VOLUME_PLACE_LABELS)
+    path = "/" + PAD_SHIPPED
+    saved = "/" + PAD_SAVED_AS
+    steps = (
+        (_pad_offer(styled_text.EXAMPLE_LINE), example),
+        (_pad_prompt_offer(), _held(example, _prompt("Open:", "", row=81))),
+        (blank, _held(example, _prompt("Open:", PAD_SHIPPED_LOCATOR, row=81))),
+        # Enter has not closed the prompt yet, then pad.toml shows.
+        (blank, _held(example, _prompt("Open:", PAD_SHIPPED_LOCATOR, row=81))),
+        (_pad_offer(PAD_SHIPPED_LINE), _pad_shipped_frame()),
+        # The warning is not up yet.
+        (blank, _pad_shipped_frame()),
+        (_cells(_notice_cells(PAD_READ_ONLY_NOTICE)),
+         _pad_shipped_frame(notice=_notice(PAD_READ_ONLY_NOTICE, StatusSeverity.WARNING))),
+        (_cells((81, 1, "Save as: " + path)),
+         _pad_shipped_frame(prompt=_prompt("Save as:", path, row=81, caret=len(path)))),
+        (blank, _pad_shipped_frame(prompt=_prompt("Save as:", path, row=81, caret=0))),
+        (blank, _pad_shipped_frame(prompt=replace(
+            _prompt("Save as:", path, row=81, caret=len(path)),
+            content=replace(_prompt("Save as:", path, row=81).content, anchor=0)))),
+        # The guest may paint between typed characters.
+        (blank, _pad_shipped_frame(prompt=_prompt("Save as:", PAD_SAVED_AS[:3], row=81))),
+        (blank, _pad_shipped_frame(prompt=_prompt("Save as:", PAD_SAVED_AS, row=81))),
+        # Saved, and the notice is not up yet.
+        (_cells((81, 1, saved)), _pad_shipped_frame(status=saved)),
+        (_cells(_notice_cells(PAD_SAVED_NOTICE), (81, 1, saved)),
+         _pad_shipped_frame(status=saved, notice=_notice(PAD_SAVED_NOTICE))),
+    )
+    journey = PadAloneJourney(PAD_READY, user_volume=True)
+    journey.stage = PadAloneJourney.LINK_FOLLOWED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey._editor_bounds = (0, 3, 229, 60)
+    results = _run(journey, steps)
+    value = f"1,1,{PROMPT_ID},0,{{}}".format
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("pad-link-followed-to-forth", [("send_key", "ctrl+o")]),
+        ("pad-shipped-prompt-shown", [("send_text", PAD_SHIPPED_LOCATOR)]),
+        ("pad-shipped-locator-typed", [("send_key", "enter")]),
+        (None, []),
+        ("pad-shipped-opened", [("send_key", "ctrl+s")]),
+        (None, []),
+        ("pad-shipped-save-refused", [("send_key", "ctrl+shift+s")]),
+        ("pad-save-as-prompt-shown", [("text_place", value(0))]),
+        ("pad-save-as-caret-placed", [("text_extend", value(len(path)))]),
+        ("pad-save-as-path-selected", [("send_text", PAD_SAVED_AS)]),
+        (None, []),
+        ("pad-save-as-name-typed", [("send_key", "enter")]),
+        (None, []),
+        ("pad-saved-as", []),
+    ]
+    assert results[-1][0].complete
+
+
+def test_pad_lists_the_places_of_its_build_in_its_sidebar() -> None:
+    def sender(*_args):
+        return "progress"
+
+    linked = _pad_frame("", (1, 0))
+    shipping = _pad_frame("", (1, 0), places=USER_VOLUME_PLACE_LABELS)
+    for frame, user_volume in ((linked, True), (shipping, False)):
+        journey = PadAloneJourney(PAD_READY, user_volume=user_volume)
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad's tree lists the places"):
+            journey.after_present(_cell_offer(1, ()), 9, frame, sender)
+    journey = PadAloneJourney(PAD_READY, user_volume=True)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    assert journey.after_present(_cell_offer(1, ()), 9, shipping, sender).milestone == (
+        "pad-ready")
+
+
+def test_pad_on_the_user_volume_refuses_a_save_that_stood_or_left_its_mark() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage):
+        journey = PadAloneJourney(PAD_READY, user_volume=True)
+        journey.stage = stage
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        journey._editor_bounds = (0, 3, 229, 60)
+        return journey
+
+    # The save in the read-only place was taken as done.
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="NEUTRAL, not WARNING"):
+        journey_at(PadAloneJourney.SAVE_REFUSED).after_present(
+            _cells(_notice_cells(PAD_READ_ONLY_NOTICE)), 9,
+            _pad_shipped_frame(notice=_notice(PAD_READ_ONLY_NOTICE)), sender)
+    saved = "/" + PAD_SAVED_AS
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="still marks"):
+        journey_at(PadAloneJourney.SAVED_AS).after_present(
+            _cells(_notice_cells(PAD_SAVED_NOTICE)), 9,
+            _pad_shipped_frame(status=saved + " *", notice=_notice(PAD_SAVED_NOTICE)), sender)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="Save As prompt holds"):
+        journey_at(PadAloneJourney.SAVE_AS_PROMPT).after_present(
+            _cells(), 9, _pad_shipped_frame(prompt=_prompt("Save as:", "", row=81)), sender)
+
+
+def _fake_tools(responses):
+    """A pinned toolchain whose e2fsck, dumpe2fs and debugfs answer from
+    RESPONSES: the e2fsck return code, where the journal starts, and each
+    path's bytes or None where debugfs finds nothing."""
+
+    def run(argv, env, capture_output, check):
+        assert env == {"PINNED": "1"} and capture_output and not check
+        if argv[0] == "e2fsck":
+            assert argv[1:3] == ("-f", "-n")
+            return SimpleNamespace(returncode=responses["e2fsck"], stdout=b"Pass 5\n",
+                                   stderr=b"")
+        if argv[0] == "dumpe2fs":
+            assert argv[1] == "-h"
+            header = ("Filesystem features:      has_journal needs_recovery extent\n"
+                      f"Journal start:            {responses['journal']}\n")
+            return SimpleNamespace(returncode=0, stdout=header.encode(), stderr=b"")
+        assert argv[0] == "debugfs" and argv[1] == "-R"
+        path = argv[2].removeprefix("cat ")
+        content = responses["paths"].get(path)
+        banner = b"debugfs 1.47.4 (6-Mar-2025)\n"
+        if content is None:
+            return SimpleNamespace(returncode=0, stdout=b"",
+                                   stderr=banner + f"{path}: File not found by ext2_lookup \n"
+                                   .encode())
+        return SimpleNamespace(returncode=0, stdout=content, stderr=banner)
+
+    toolchain = ({}, {"PINNED": "1"}, {"e2fsck": {"path": "e2fsck"},
+                                       "dumpe2fs": {"path": "dumpe2fs"},
+                                       "debugfs": {"path": "debugfs"}})
+    return run, toolchain
+
+
+def test_the_driver_checks_what_a_journey_leaves_on_the_user_volume(tmp_path, monkeypatch) -> None:
+    tui = akashic_tui
+    expected = physical_desktop_acceptance.user_volume_expected("fexp", tui)
+    shipped = (tui.SOURCE_ROOT / FEXP_SHIPPED_FOLDER / FEXP_SHIPPED).read_bytes()
+    folder = tui.USER_VOLUME_DOCUMENTS[1]
+    assert expected == {
+        f"{folder}/{FEXP_SHIPPED}": shipped,
+        f"{folder}/{FEXP_FOLDER}/{FEXP_MOVED}": tui.SAMPLE_FILES[FEXP_MOVED],
+        f"{folder}/{FEXP_MOVED}": None,
+    }
+    assert physical_desktop_acceptance.user_volume_expected("pad", tui) == {
+        f"{folder}/{PAD_SAVED_AS}": (tui.SOURCE_ROOT / PAD_SHIPPED).read_bytes(),
+    }
+    assert physical_desktop_acceptance.user_volume_expected("daybook", tui) == {}
+    image = tmp_path / "desktop-user.img"
+    image.write_bytes(bytes(1024))
+    check = physical_desktop_acceptance.user_volume_problems
+    good = {"e2fsck": 0, "journal": 0,
+            "paths": {path: content for path, content in expected.items()
+                      if content is not None}}
+    run, toolchain = _fake_tools(good)
+    monkeypatch.setattr(physical_desktop_acceptance.subprocess, "run", run)
+    problems, record = check(image, expected, toolchain)
+    assert problems == [] and record["problems"] == []
+    assert record["e2fsck"]["returncode"] == 0
+    assert record["journal"] == {"start": "0", "needs_recovery": True}
+    assert record["paths"][f"{folder}/{FEXP_MOVED}"]["found"] == "absent"
+    assert record["paths"][f"{folder}/{FEXP_SHIPPED}"]["bytes"] == len(shipped)
+    # A volume e2fsck refuses, a journal with transactions neither tool
+    # replays, a copy that differs, a file that is missing, and a moved file
+    # still in its old place.
+    bad = {"e2fsck": 4, "journal": 17, "paths": {
+        f"{folder}/{FEXP_SHIPPED}": shipped[:-1] + b"!",
+        f"{folder}/{FEXP_MOVED}": tui.SAMPLE_FILES[FEXP_MOVED],
+    }}
+    run, toolchain = _fake_tools(bad)
+    monkeypatch.setattr(physical_desktop_acceptance.subprocess, "run", run)
+    problems, _record = check(image, expected, toolchain)
+    assert problems[0].startswith("e2fsck -f -n answered 4")
+    assert problems[1] == ("its journal starts at 17, so e2fsck -n and debugfs read it "
+                           "without transactions it holds")
+    assert problems[2:] == [
+        f"{folder}/{FEXP_SHIPPED} holds {len(shipped)} bytes that differ from the "
+        f"{len(shipped)} it should",
+        f"{folder}/{FEXP_FOLDER}/{FEXP_MOVED} cannot be read: "
+        f"['{folder}/{FEXP_FOLDER}/{FEXP_MOVED}: File not found by ext2_lookup ']",
+        f"{folder}/{FEXP_MOVED} is still there",
+    ]
+
+
+def test_fexp_selects_another_row_first_when_the_highlight_is_not_its_selection() -> None:
+    """A listing File Explorer makes for a folder leaves the table's
+    highlight on its first row while File Explorer's selection is the
+    folder, and a SELECT on that row changes nothing; the journey selects
+    another row first, and the row it wants once the highlight has moved."""
+
+    origin = USER_VOLUME_PLACE_LABELS[2]
+    folder = f"{origin}/{FEXP_SHIPPED_FOLDER}"
+    journey = _fexp_at(FexpAloneJourney.SHIPPED_LISTED)
+    steps = (
+        (_cells(), _listing(SHIPPED_ROWS, status=folder, selected=FEXP_SHIPPED, place=origin)),
+        (_cells(), _listing(SHIPPED_ROWS, status=f"{folder}/fexplorer.uidl",
+                            selected="fexplorer.uidl", place=origin)),
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("fexp-highlight-is-not-the-selection",
+         [("item_select", _row(SHIPPED_ROWS, "fexplorer.uidl"))]),
+        ("fexp-shipped-listed", [("item_select", _row(SHIPPED_ROWS, FEXP_SHIPPED))]),
+    ]
+    assert journey.stage == FexpAloneJourney.SHIPPED_SELECTED
+    # With no other row, the journey cannot move the highlight.
+    journey = _fexp_at(FexpAloneJourney.SHIPPED_LISTED)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no other row"):
+        _run(journey, ((_cells(), _listing((SHIPPED_ROW,), status=folder,
+                                           selected=FEXP_SHIPPED, place=origin)),))

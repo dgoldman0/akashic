@@ -44,7 +44,14 @@ With --user-volume the build also writes a fresh ext4 user volume of
 --user-volume-mib MiB (64 by default) beside the boot image, attached as the
 fourth storage unit, and the boot mounts it and declares the shipping form's
 places: documents and records on it, records the home, and a read-only origin
-(utils/fs/user-volume.f).  The build needs the same pinned e2fsprogs.
+(utils/fs/user-volume.f).  The build needs the same pinned e2fsprogs.  File
+Explorer's and Pad's journeys then follow those places and work across them.
+Once the run ends, the pinned e2fsck must pass the user volume's image
+without changing it and its journal must be empty, and after a journey that
+passed, each file the journey leaves on the volume must hold the bytes it
+should (rich_terminal_applet_journeys.USER_VOLUME_FILES), as the pinned
+debugfs reads them; the record of these checks is user-volume-check.json
+beside the evidence.
 
 With --token-modules the image is first built and booted from source in the
 simulator, which records what the interpreter does with each source file,
@@ -221,7 +228,110 @@ def child(args) -> int:
              "megapad": git_binding(args.megapad_root, clean=clean)}
     if after != bindings:
         raise RuntimeError("paired source revisions changed during physical acceptance")
+    if args.user_volume:
+        expected = user_volume_expected(args.applet, tui) if result == 0 else {}
+        problems, record = user_volume_problems(
+            tui.user_image_path(args.artifact / "desktop.img"), expected,
+            tui._system_volume_toolchain(),
+        )
+        write_json(args.artifact / "user-volume-check.json", record)
+        for problem in problems:
+            print(f"User volume: {problem}", flush=True)
+        if not problems:
+            print("User volume: e2fsck passes it and its journal is empty"
+                  + ("; every file the journey leaves holds what it should "
+                     f"({len(expected)} checked)" if result == 0 else ""), flush=True)
+        elif result == 0:
+            result = 1
     return result
+
+
+def user_volume_expected(applet: str | None, tui) -> dict[str, bytes | None]:
+    """What the journey of APPLET leaves on the user volume, as
+    rich_terminal_applet_journeys.USER_VOLUME_FILES names it: each path on
+    the volume, with the bytes of the file the image ships or the sample
+    document the volume is built with that it must hold, or None where
+    nothing may be.  TUI is the image builder's module, akashic_tui."""
+
+    from rich_terminal_applet_journeys import USER_VOLUME_FILES
+
+    folder = tui.USER_VOLUME_DOCUMENTS[1]
+    expected: dict[str, bytes | None] = {}
+    for path, source in USER_VOLUME_FILES.get(applet, {}).items():
+        content = None
+        if source is not None:
+            kind, name = source
+            content = (
+                (tui.SOURCE_ROOT / name).read_bytes() if kind == "shipped"
+                else tui.SAMPLE_FILES[name]
+            )
+        expected[f"{folder}/{path}"] = content
+    return expected
+
+
+def user_volume_problems(image: Path, expected: dict[str, bytes | None],
+                         toolchain) -> tuple[list[str], dict]:
+    """Check the user volume's IMAGE on the host once its run has ended:
+    the pinned e2fsck must pass it without changing it, and each path of
+    EXPECTED must hold its bytes, or be gone where it maps to None, as the
+    pinned debugfs reads it.  The machine is stopped with the volume still
+    mounted, so e2fsck finds it marked for recovery and replays nothing;
+    its journal must then be empty, every transaction already in place,
+    or neither tool would see the volume a remount sees.  TOOLCHAIN is
+    akashic_tui's pinned e2fsprogs, (manifest, environment, tools).
+    Returns what failed and the record of every check."""
+
+    _manifest, environment, tools = toolchain
+
+    def run(*argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(argv, env=environment, capture_output=True, check=False)
+
+    def complaints(stderr: bytes) -> list[str]:
+        # debugfs names itself on stderr first, and reports a command that
+        # failed there while it still exits zero.
+        return [line for line in stderr.decode(errors="replace").splitlines()
+                if line.strip() and not line.startswith("debugfs ")]
+
+    problems: list[str] = []
+    checked = run(tools["e2fsck"]["path"], "-f", "-n", str(image))
+    output = (checked.stdout + checked.stderr).decode(errors="replace")
+    record: dict = {"image": str(image), "image_bytes": image.stat().st_size,
+                    "e2fsck": {"returncode": checked.returncode, "output": output},
+                    "paths": {}}
+    if checked.returncode != 0:
+        problems.append(f"e2fsck -f -n answered {checked.returncode}: "
+                        + " | ".join(output.strip().splitlines()[-6:]))
+    header = run(tools["dumpe2fs"]["path"], "-h", str(image)).stdout.decode(errors="replace")
+    fields = dict(line.split(":", 1) for line in header.splitlines() if ":" in line)
+    journal_start = fields.get("Journal start", "").strip()
+    record["journal"] = {
+        "start": journal_start,
+        "needs_recovery": "needs_recovery" in fields.get("Filesystem features", ""),
+    }
+    if journal_start != "0":
+        problems.append(f"its journal starts at {journal_start or 'no block dumpe2fs names'}, "
+                        "so e2fsck -n and debugfs read it without transactions it holds")
+    for path, content in expected.items():
+        read = run(tools["debugfs"]["path"], "-R", f"cat {path}", str(image))
+        missing = complaints(read.stderr)
+        entry = {"expected": "absent" if content is None
+                 else hashlib.sha256(content).hexdigest(),
+                 "found": "absent" if missing else hashlib.sha256(read.stdout).hexdigest(),
+                 "bytes": None if missing else len(read.stdout),
+                 "debugfs": missing}
+        record["paths"][path] = entry
+        if content is None:
+            if not missing:
+                problems.append(f"{path} is still there")
+            elif not all("File not found" in line for line in missing):
+                problems.append(f"debugfs could not look {path} up: {missing}")
+        elif missing:
+            problems.append(f"{path} cannot be read: {missing}")
+        elif read.stdout != content:
+            problems.append(f"{path} holds {len(read.stdout)} bytes that differ from "
+                            f"the {len(content)} it should")
+    record["problems"] = problems
+    return problems, record
 
 
 def supervise(args) -> int:

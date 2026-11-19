@@ -36399,13 +36399,16 @@ def accept_physical_desktop(
     terminal_link_pace=None,
     screen_profile: bool = False,
     safe_mode: str | None = None,
+    user_volume: bool = False,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
     has the simulator record what each PRESENT carries and the guest words
     each step runs under, in ARTIFACT_ROOT/screen-profile.  SAFE_MODE says
     why the guest is in safe mode, "boot" or "config", so the journey must
-    see the notice that says so."""
+    see the notice that says so.  USER_VOLUME says the image was built with
+    the user volume, so a single applet's journey follows the shipping
+    form's places."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -36437,6 +36440,7 @@ def accept_physical_desktop(
         journey = applet_journey(
             profile_name.removeprefix("desktop-apt1-"), ready_markers,
             paced_link=terminal_link_pace is not None,
+            user_volume=user_volume,
         )
     command = _session_server_command(
         profile_name,
@@ -38674,6 +38678,7 @@ def main() -> int:
                 else "config" if args.settings_safe_mode
                 else None
             ),
+            user_volume=args.user_volume,
         ) else 1
     serve(
         args.profile,

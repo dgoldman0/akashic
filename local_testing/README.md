@@ -396,15 +396,28 @@ build without the option removes the user volume's image again and builds
 what it built before. [`docs/utils/fs/user-volume.md`](../docs/utils/fs/user-volume.md)
 describes the module, the volume and the places.
 
-Desk with Pad runs its journey on the user volume; there Pad opens the sample
-`notes.md` by its locator in the documents place, since Pad's own default
-place is the home:
+Desk with File Explorer and Desk with Pad run their journeys on the user
+volume, and the driver tells each journey the form it runs in. Their
+sidebars then list Documents, Records and System, in that order, and both
+journeys work across those places. File Explorer makes a folder in Documents
+and moves a sample document into it, copies its own `fexplorer.toml` from
+System into Documents, and sees a paste into System and a cut from Records
+refused, each with its notice. Pad opens its `pad.toml` from System by its
+full locator, sees a save there refused with "This place is read-only", and
+saves the file as a typed name, which Save As puts in Documents:
 
 ```bash
-python3 local_testing/physical_desktop_acceptance.py --applet pad --user-volume \
+python3 local_testing/physical_desktop_acceptance.py --applet fexp --user-volume \
   --akashic-root . --megapad-root ../megapad \
   --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
 ```
+
+Once a run with `--user-volume` ends, the driver checks the user volume's
+image with the pinned tools: `e2fsck -f -n` passes it and its journal is
+empty, and after a journey that passed, each file the journey leaves there
+holds the bytes it should as `debugfs` reads them
+(`rich_terminal_applet_journeys.USER_VOLUME_FILES`).
+`user-volume-check.json` beside the evidence records each check.
 
 `test_user_volume.py` mounts, refuses and misses the volume, boots Desk with
 Pad in the three outcomes of the boot policy, and saves a document that the
