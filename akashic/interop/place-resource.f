@@ -6,6 +6,12 @@
 \  back in the reader's own place set, so a resource that names a place
 \  the reader was not given fails: that is where a Practice's choice of
 \  places takes effect.  CINST-PLACES is how a component obtains its set.
+\
+\  The path in the text starts at the folder the place's declaration
+\  names, which every set granted that declaration shares.  A holder whose
+\  home is a folder of its own inside a place names its files with that
+\  folder in front, and a reader finds them in whichever of its places
+\  of that name holds the deepest folder of the path.
 \ =====================================================================
 
 PROVIDED akashic-interop-place-resource
@@ -34,21 +40,29 @@ REQUIRE ../utils/fs/places.f
 : CINST-ORIGIN  ( instance -- place | 0 )
     CINST-PLACES DUP IF PLSET-ORIGIN THEN ;
 
+CREATE _IRP-PATH VFS-PATH-MAX ALLOT
+
 \ IRES-PLACE! ( path-a path-u place value -- ior )
-\   Make VALUE the locator of PATH in PLACE.
+\   Make VALUE the locator of PATH in PLACE, its path from the folder
+\   PLACE's declaration names.  IRES-S-INVALID when that path is longer
+\   than a VFS path may be.
 : IRES-PLACE!  ( path-a path-u place value -- ior )
     >R DUP 0= IF DROP 2DROP R> DROP IRES-S-INVALID EXIT THEN
-    PLACE-NAME 2SWAP R> IRES-VFS! ;
+    DUP >R _IRP-PATH VFS-PATH-MAX PLACE-DECLARED-PATH   ( len ior )
+    IF DROP R> R> 2DROP IRES-S-INVALID EXIT THEN
+    R> PLACE-NAME ROT _IRP-PATH SWAP R> IRES-VFS! ;
 
 \ IRES-PLACE-PARSE ( uri-a uri-u set -- path-a path-u place ior )
-\   The place of SET a locator names and the path in it.  The path lies in
-\   the URI.  IRES-S-NO-PLACE when SET has no place of that name.
+\   The place of SET that holds the file a locator names, and the file's
+\   path in that place: of SET's places with the locator's place name, the
+\   one over the deepest folder of the path (PLSET-FIND-PATH).  The path
+\   lies in the URI.  IRES-S-NO-PLACE when no place of SET holds it.
 : IRES-PLACE-PARSE  ( uri-a uri-u set -- path-a path-u place ior )
     >R IRES-VFS-PARSE 0= IF
         2DROP 2DROP R> DROP 0 0 0 IRES-S-INVALID EXIT
     THEN                                        ( place-a place-u path-a path-u )
-    2SWAP R> DUP 0= IF DROP 2DROP 2DROP 0 0 0 IRES-S-NO-PLACE EXIT THEN
-    PLSET-FIND                                  ( path-a path-u place|0 )
+    R> DUP 0= IF DROP 2DROP 2DROP 0 0 0 IRES-S-NO-PLACE EXIT THEN
+    PLSET-FIND-PATH                             ( path-a path-u place|0 )
     DUP 0= IF DROP 2DROP 0 0 0 IRES-S-NO-PLACE EXIT THEN
     IRES-S-OK ;
 

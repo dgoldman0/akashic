@@ -18,12 +18,14 @@ REQUIRE utils/fs/held-files.f
 ## Entries
 
 An entry is a file and the service that lends the document it keeps. The file
-is named by its place's declared name and its path. A declared name is the same
-in every set the place is granted to, so a table that Desk fills through its
-own place for a folder answers an applet that asks through its own place for
-the same folder. A path starts at the place's folder with its slash, as the
-`PLACE-` words take it. Entries are heap records, so their number follows
-need.
+is named by its place's declared name and its path from the folder that
+declaration names (`PLACE-DECLARED-PATH`). Both are the same in every set the
+declaration is granted to, so a table that Desk fills through an owner's home,
+a folder of the owner's own inside the records place, answers an applet that
+asks through its own place over the whole records folder. Callers give and take
+paths as the `PLACE-` words do, from their own place's folder with its slash,
+and the table turns them into the declared form. Entries are heap records, so
+their number follows need.
 
 ## The words
 
@@ -42,8 +44,9 @@ service SVC lends, and refuses a missing place, path or service with
 `VFS-E-INVALID`. `HELD-RELEASE` forgets every file of one service, and
 `HELD-CLEAR` every file. `HELD-HOLDER` answers the service whose document a
 file keeps, or `0 0`. `HELD-FILE` answers the file of a service's document: its
-path and its place's name, which `PLSET-FIND` turns into a place of the asking
-holder's own set.
+path from the declared folder and its place's name, which `PLSET-FIND-PATH`
+turns into the place of the asking holder's own set that holds the file and the
+path as it reads there.
 
 ## Who fills it
 
@@ -59,6 +62,8 @@ set, so the tab's saves reach the document again.
 ## Tests
 
 `local_testing/test_held_files.py` fills a table through one set's place and
-asks it through another set's place for the same folder. It also checks
-release, clearing and refused holds. `pad-resource-contracts` drives Pad
+asks it through another set's place for the same folder, and fills it through
+an owner's place over a folder of its own inside records, asked through a
+place over all of records. It also checks release, clearing and refused
+holds. `pad-resource-contracts` drives Pad
 against a table that a stand-in for Desk fills the same way.

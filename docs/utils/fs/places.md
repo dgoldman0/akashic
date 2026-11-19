@@ -127,9 +127,10 @@ PLACES-CHECK    ( -- decl ior )
 PLSET-NEW       ( -- set ior )
 PLSET-FREE      ( set -- )
 PLSET-GRANT     ( access decl set -- place ior )
+PLSET-GRANT-IN  ( access sub-a sub-u place set -- place' ior )
 PLSET-HOME!  PLSET-ORIGIN!  PLSET-DOCUMENTS!   ( place set -- )
 PLSET-READ-ONLY!  ( set -- )
-PLSET-DERIVE    ( needs set -- set' ior )
+PLSET-DERIVE    ( needs folder-a folder-u set -- set' ior )
 PLACES-DEFAULT! ( set -- )
 PLACES-DEFAULT  ( -- set | 0 )
 ```
@@ -139,14 +140,23 @@ unavailable until `PVOL-ATTACH`; `PVOL-REFUSE` records why a mount
 failed, and `PVOL-DETACH` returns a volume to missing. `PLACES-CHECK`
 answers the first required place that is unavailable, with its status, or
 0 0. `PLSET-GRANT` refuses an access wider than the declaration's and a
-second grant of the same place. `PLSET-READ-ONLY!` narrows every member,
-which is what recovery does. `PLSET-DERIVE` makes one holder's set from
-another by what NEEDS asks, a sum of `PLACES-NEED-HOME`,
+second grant of the same place. `PLSET-GRANT-IN` grants a place's
+declaration over SUB, a folder inside that place's folder named by plain
+names joined by single slashes, with no `.` or `..`; the folder need not
+exist yet, and the new place reports it missing until it does. A set holds
+one grant of a declaration per folder, so it may hold a place and a folder
+of its own inside it under the same name. `PLSET-READ-ONLY!` narrows every
+member, which is what recovery does. `PLSET-DERIVE` makes one holder's set
+from another by what NEEDS asks, a sum of `PLACES-NEED-HOME`,
 `PLACES-NEED-DOCUMENTS` and `PLACES-NEED-LIST`: the home and the documents
 place at the access the set grants them, every place read-only for the
-list, and the origin read-only always. It keeps the set's order, carries
-over the origin and documents marks, and marks the home only for
-`PLACES-NEED-HOME`; the activation uses it for each applet instance.
+list, and the origin read-only always. Each place is over the folder it is
+over in the set. It keeps the set's order, carries over the origin and
+documents marks, and marks the home only for `PLACES-NEED-HOME`. With a
+FOLDER, the home is instead a folder of that name inside the set's home,
+granted after the place it lies in and made when it is missing and the
+set's home is writable; the set's home itself then comes only as another
+need asks. The activation uses it for each applet instance.
 
 Applet side, where a `place` is the handle a set gives out:
 
@@ -154,6 +164,7 @@ Applet side, where a `place` is the handle a set gives out:
 PLSET-FIRST  PLSET-HOME  PLSET-ORIGIN  PLSET-DOCUMENTS   ( set -- place | 0 )
 PLACE-NEXT      ( place -- place | 0 )
 PLSET-FIND      ( name-a name-u set -- place | 0 )
+PLSET-FIND-PATH ( name-a name-u path-a path-u set -- path'-a path'-u place )
 PLSET-MEMBER?   ( x set -- flag )
 PLSET-REVISION  ( set -- n )
 PLACE-NAME  PLACE-LABEL   ( place -- a u )
@@ -174,6 +185,7 @@ PLACE-BIND      ( path-a path-u place buf cap -- vfs len ior )
 PLACE-BIND-WRITE  ( path-a path-u place buf cap -- vfs len ior )
 PLACE-NAME-LIMIT  ( place -- n )
 PLACE-VREPL!    ( path-a path-u place write? replacement -- ior )
+PLACE-DECLARED-PATH ( path-a path-u place buf cap -- len ior )
 ```
 
 A path inside a place starts at its folder, so `/` is that folder and a
@@ -183,6 +195,15 @@ among its parents, checked along the entry's parent chain, so neither
 answers `VFS-E-XDEV`. A changing word answers `VFS-E-READONLY` on a
 read-only place and the place's status on an unavailable one. No word
 removes or renames a place's own folder.
+
+A path that leaves its holder, in a resource locator or the held-files
+table, starts at the folder the place's declaration names, which every set
+granted that declaration shares. `PLACE-DECLARED-PATH` writes a path of a
+place that way: the path itself for a place over the declared folder, and
+for a place over a folder inside it, that folder's part below the declared
+one in front. `PLSET-FIND-PATH` reads such a path back in a set: of the
+set's places with that name, the one over the deepest folder that holds the
+path, and the path as it reads there.
 
 `PLACE-STATUS` is 0 for a usable place, `VFS-E-NOVOLUME` while the volume
 is missing, the recorded refusal when its mount was refused, and the
@@ -255,10 +276,13 @@ IRES-PLACE@   ( value set -- path-a path-u place ior )
 CINST-PLACES  ( instance -- set | 0 )
 ```
 
-`IRES-PLACE@` looks the name up in the reader's own set, so a resource
-naming a place the reader was not given fails with `IRES-S-NO-PLACE`,
-which is where a Practice's choice takes effect. `IRES-PLACE-PARSE` is the
-same for a URI's text, and `CINST-PLACES` is the service lookup described
+`IRES-PLACE!` writes the path from the place's declared folder
+(`PLACE-DECLARED-PATH`), so a file in a holder's own folder carries that
+folder in its locator. `IRES-PLACE@` looks the name and path up in the
+reader's own set (`PLSET-FIND-PATH`), so a resource naming a place the
+reader was not given fails with `IRES-S-NO-PLACE`, which is where a
+Practice's choice takes effect. `IRES-PLACE-PARSE` is the same for a URI's
+text, and `CINST-PLACES` is the service lookup described
 above, with `CINST-HOME` and `CINST-ORIGIN` for the two roles. A schema
 bounds a locator by `IRES-VFS-URI-MAX`, 773 bytes: the prefix, a name of
 any length the rule allows, and a path of 512 bytes, the path capacity the

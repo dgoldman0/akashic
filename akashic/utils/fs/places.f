@@ -81,12 +81,17 @@ REQUIRE ../string.f
 : _PS.DOCUMENTS  ( set -- a ) 40 + ;
 48 CONSTANT _PS-SIZE
 
+\ A grant over a folder of its own inside its declaration's folder keeps
+\ that folder's path from the volume's root in a block of its own; a grant
+\ over the declared folder itself keeps none.
 : _PG.MAGIC   ( place -- a ) ;
 : _PG.NEXT    ( place -- a )  8 + ;
 : _PG.SET     ( place -- a ) 16 + ;
 : _PG.DECL    ( place -- a ) 24 + ;
 : _PG.ACCESS  ( place -- a ) 32 + ;
-40 CONSTANT _PG-SIZE
+: _PG.FOLDER-A  ( place -- a ) 40 + ;
+: _PG.FOLDER-U  ( place -- a ) 48 + ;
+56 CONSTANT _PG-SIZE
 
 VARIABLE _PL-VOLUMES     0 _PL-VOLUMES !
 VARIABLE _PL-DECLS       0 _PL-DECLS !
@@ -106,6 +111,19 @@ VARIABLE _PL-CHANGES     0 _PL-CHANGES !
 : _PD-NAME    ( decl -- a u )  DUP _PD.NAME SWAP _PD.NAME-U @ ;
 : _PD-FOLDER  ( decl -- a u )
     DUP _PD.NAME OVER _PD.NAME-U @ + SWAP _PD.FOLDER-U @ ;
+
+\ The folder a place's paths start at: its own, or its declaration's.
+: _PG-FOLDER  ( place -- a u )
+    DUP _PG.FOLDER-A @ IF DUP _PG.FOLDER-A @ SWAP _PG.FOLDER-U @ EXIT THEN
+    _PG.DECL @ _PD-FOLDER ;
+
+\ The part of a place's folder below its declaration's, "/name..." for a
+\ place over a folder of its own, empty for one over the declared folder.
+: _PG-SUB  ( place -- a u )
+    DUP _PG.FOLDER-A @ 0= IF DROP 0 0 EXIT THEN
+    DUP _PG-FOLDER ROT _PG.DECL @ _PD-FOLDER NIP     ( a u decl-u )
+    DUP 1 = IF DROP EXIT THEN                         \ declared at the root
+    /STRING ;
 
 \ =====================================================================
 \  Volumes
@@ -262,19 +280,24 @@ VARIABLE _PDC-D
     DUP 0= IF 2DROP EXIT THEN
     SWAP 0<> SWAP _PD.REQUIRED ! ;
 
-\ _PD-ROOT? ( decl -- inode ior )
-\   The place's folder as it is now.  The status is VFS-E-NOVOLUME while
-\   the volume is missing, the recorded reason when its mount was
-\   refused, and the resolver's answer when the folder is absent.
-: _PD-ROOT?  ( decl -- inode ior )
-    DUP _PD.VOLUME @ _PV.VFS @ ?DUP 0= IF
-        _PD.VOLUME @ _PV.REFUSAL @ ?DUP 0= IF VFS-E-NOVOLUME THEN
-        0 SWAP EXIT
-    THEN                                        ( decl vfs )
-    >R _PD-FOLDER R> VFS-RESOLVE?               ( inode ior )
+\ _PL-ROOT? ( folder-a folder-u decl -- inode ior )
+\   FOLDER on the declaration's volume as it is now.  The status is
+\   VFS-E-NOVOLUME while the volume is missing, the recorded reason when
+\   its mount was refused, and the resolver's answer when the folder is
+\   absent.
+: _PL-ROOT?  ( folder-a folder-u decl -- inode ior )
+    _PD.VOLUME @ DUP _PV.VFS @ ?DUP 0= IF
+        _PV.REFUSAL @ ?DUP 0= IF VFS-E-NOVOLUME THEN
+        >R 2DROP 0 R> EXIT
+    THEN NIP                                    ( folder-a folder-u vfs )
+    VFS-RESOLVE?                                ( inode ior )
     DUP IF EXIT THEN DROP
     DUP IN.TYPE @ VFS-T-DIR <> IF DROP 0 VFS-E-NOTDIR EXIT THEN
     0 ;
+
+\ The declared folder, and a place's own folder, as they are now.
+: _PD-ROOT?  ( decl -- inode ior )   DUP _PD-FOLDER ROT _PL-ROOT? ;
+: _PG-ROOT?  ( place -- inode ior )  DUP _PG-FOLDER ROT _PG.DECL @ _PL-ROOT? ;
 
 \ PLACES-CHECK ( -- decl ior )
 \   The first required place that is unavailable, with its status, or
@@ -312,6 +335,7 @@ VARIABLE _PDC-D
     DUP _PS.FIRST @
     BEGIN ?DUP WHILE
         DUP _PG.NEXT @ SWAP
+        DUP _PG.FOLDER-A @ ?DUP IF FREE THEN
         0 OVER _PG.MAGIC !  FREE
     REPEAT
     0 OVER _PS.MAGIC !  FREE ;
@@ -321,13 +345,22 @@ VARIABLE _PDC-D
 VARIABLE _PGR-SET
 VARIABLE _PGR-DECL
 VARIABLE _PGR-ACCESS
+VARIABLE _PGR-FA   VARIABLE _PGR-FU     \ the new place's folder, 0 0 for
+                                        \ the declared folder
 
-\ PLSET-GRANT ( access decl set -- place ior )
-\   Add the declared place to the set, after its other places, with
-\   ACCESS.  An access wider than the declaration's answers
-\   VFS-E-READONLY, and a place the set already has, VFS-E-EXISTS.
-: PLSET-GRANT  ( access decl set -- place ior )
-    _PGR-SET ! _PGR-DECL ! _PGR-ACCESS !
+\ Whether the place is over the folder the grant being made is over.
+: _PGR-SAME?  ( place -- flag )
+    DUP _PG.DECL @ _PGR-DECL @ <> IF DROP 0 EXIT THEN
+    _PG-FOLDER _PGR-FU @ IF
+        _PGR-FA @ _PGR-FU @
+    ELSE
+        _PGR-DECL @ _PD-FOLDER
+    THEN STR-STR= ;
+
+\ _PL-GRANT ( -- place ior )
+\   Add a place of _PGR-DECL over _PGR-FA _PGR-FU to _PGR-SET, after its
+\   other places, with _PGR-ACCESS, copying the folder's path.
+: _PL-GRANT  ( -- place ior )
     _PGR-SET @ _PLSET? 0= _PGR-DECL @ 0= OR IF 0 VFS-E-INVALID EXIT THEN
     _PGR-ACCESS @ _PL-ACCESS? 0= IF 0 VFS-E-INVALID EXIT THEN
     _PGR-ACCESS @ PLACE-WRITABLE =
@@ -336,7 +369,7 @@ VARIABLE _PGR-ACCESS
     THEN
     _PGR-SET @ _PS.FIRST @
     BEGIN ?DUP WHILE
-        DUP _PG.DECL @ _PGR-DECL @ = IF DROP 0 VFS-E-EXISTS EXIT THEN
+        DUP _PGR-SAME? IF DROP 0 VFS-E-EXISTS EXIT THEN
         _PG.NEXT @
     REPEAT
     _PG-SIZE ALLOCATE IF DROP 0 VFS-E-NOMEM EXIT THEN
@@ -345,6 +378,12 @@ VARIABLE _PGR-ACCESS
     _PGR-SET @ OVER _PG.SET !
     _PGR-DECL @ OVER _PG.DECL !
     _PGR-ACCESS @ OVER _PG.ACCESS !             ( place )
+    0 OVER _PG.FOLDER-A !  0 OVER _PG.FOLDER-U !
+    _PGR-FU @ IF
+        _PGR-FU @ ALLOCATE IF DROP FREE 0 VFS-E-NOMEM EXIT THEN
+        _PGR-FA @ OVER _PGR-FU @ CMOVE
+        OVER _PG.FOLDER-A !  _PGR-FU @ OVER _PG.FOLDER-U !
+    THEN
     _PGR-SET @ _PS.FIRST @ ?DUP IF
         BEGIN DUP _PG.NEXT @ ?DUP WHILE NIP REPEAT
         OVER SWAP _PG.NEXT !
@@ -353,6 +392,46 @@ VARIABLE _PGR-ACCESS
     THEN
     _PGR-SET @ _PLSET-CHANGED
     0 ;
+
+\ PLSET-GRANT ( access decl set -- place ior )
+\   Add the declared place to the set, after its other places, with
+\   ACCESS.  An access wider than the declaration's answers
+\   VFS-E-READONLY, and a place the set already has over the declared
+\   folder, VFS-E-EXISTS.
+: PLSET-GRANT  ( access decl set -- place ior )
+    _PGR-SET ! _PGR-DECL ! _PGR-ACCESS !  0 _PGR-FA ! 0 _PGR-FU !
+    _PL-GRANT ;
+
+CREATE _PGI-PATH VFS-PATH-MAX ALLOT
+VARIABLE _PGI-U
+
+: _PGI+  ( a u -- ok? )
+    DUP _PGI-U @ + VFS-PATH-MAX > IF 2DROP 0 EXIT THEN
+    TUCK _PGI-PATH _PGI-U @ + SWAP CMOVE  _PGI-U +!  -1 ;
+
+\ PLSET-GRANT-IN ( access sub-a sub-u place set -- place' ior )
+\   Add to SET, after its other places, a place of PLACE's declaration over
+\   the folder SUB inside PLACE's folder, with ACCESS: a holder's own
+\   folder in a place it shares, as the home PLSET-DERIVE gives a holder.
+\   SUB is one name, or names joined by single slashes, none of them `.`
+\   or `..`.  The folder need not exist yet; the new place reports it
+\   missing until it does.  An access wider than the declaration's answers
+\   VFS-E-READONLY, and a place the set already has over that folder,
+\   VFS-E-EXISTS.
+: PLSET-GRANT-IN  ( access sub-a sub-u place set -- place' ior )
+    _PGR-SET ! DUP _PLACE? 0= IF 2DROP 2DROP 0 VFS-E-INVALID EXIT THEN
+    DUP _PG.DECL @ _PGR-DECL !                  ( access sub-a sub-u place )
+    _PG-FOLDER DUP _PGI-U !
+    VFS-PATH-MAX > IF 2DROP 2DROP 0 VFS-E-NAMETOOLONG EXIT THEN
+    _PGI-PATH _PGI-U @ CMOVE                     ( access sub-a sub-u )
+    \ A folder at the volume's root is "/", which already ends in a slash.
+    _PGI-U @ 1 = IF 0 _PGI-U ! THEN
+    S" /" _PGI+ 0= IF 2DROP DROP 0 VFS-E-NAMETOOLONG EXIT THEN
+    _PGI+ 0= IF DROP 0 VFS-E-NAMETOOLONG EXIT THEN
+    _PGR-ACCESS !
+    _PGI-PATH _PGI-U @ _PL-FOLDER-PATH? 0= IF 0 VFS-E-INVALID EXIT THEN
+    _PGI-PATH _PGR-FA !  _PGI-U @ _PGR-FU !
+    _PL-GRANT ;
 
 : PLSET-FIRST   ( set -- place | 0 )  _PS.FIRST @ ;
 : PLSET-HOME    ( set -- place | 0 )  _PS.HOME @ ;
@@ -395,72 +474,6 @@ VARIABLE _PGR-ACCESS
     REPEAT
     _PLSET-CHANGED ;
 
-\ What a holder needs of the set it is given, which a component states
-\ in its descriptor (COMP.PLACE-NEEDS, runtime/instance.f).  The origin
-\ is always granted, read-only, for the holder's shipped files.
-1 CONSTANT PLACES-NEED-HOME       \ write its own records in the home
-2 CONSTANT PLACES-NEED-DOCUMENTS  \ write the documents place
-4 CONSTANT PLACES-NEED-LIST       \ see every place, read-only unless
-                                  \ another need lets it write there
-
-VARIABLE _PDV-NEEDS
-VARIABLE _PDV-FROM
-VARIABLE _PDV-TO
-VARIABLE _PDV-PLACE    \ the place of FROM being derived
-VARIABLE _PDV-ACCESS   \ the access the needs give it, -1 for none
-
-: _PDV-WIDEN  ( access -- )
-    DUP _PDV-ACCESS @ > IF _PDV-ACCESS ! ELSE DROP THEN ;
-
-: _PDV-ORIGIN?     ( -- flag ) _PDV-PLACE @ _PDV-FROM @ PLSET-ORIGIN = ;
-: _PDV-DOCUMENTS?  ( -- flag ) _PDV-PLACE @ _PDV-FROM @ PLSET-DOCUMENTS = ;
-: _PDV-HOME?       ( -- flag )
-    _PDV-NEEDS @ PLACES-NEED-HOME AND 0<>
-    _PDV-PLACE @ _PDV-FROM @ PLSET-HOME = AND ;
-
-\ The access the needs give _PDV-PLACE: never wider than FROM grants it.
-: _PDV-ACCESS-OF  ( -- )
-    -1 _PDV-ACCESS !
-    _PDV-ORIGIN? IF PLACE-READ-ONLY _PDV-WIDEN THEN
-    _PDV-NEEDS @ PLACES-NEED-LIST AND IF PLACE-READ-ONLY _PDV-WIDEN THEN
-    _PDV-HOME? IF _PDV-PLACE @ _PG.ACCESS @ _PDV-WIDEN THEN
-    _PDV-NEEDS @ PLACES-NEED-DOCUMENTS AND 0<> _PDV-DOCUMENTS? AND IF
-        _PDV-PLACE @ _PG.ACCESS @ _PDV-WIDEN
-    THEN ;
-
-\ Grant _PDV-PLACE in TO at _PDV-ACCESS and carry over the marks it has
-\ in FROM: the origin and the documents place always, the home only for
-\ PLACES-NEED-HOME.
-: _PDV-GRANT  ( -- ior )
-    _PDV-ACCESS @ _PDV-PLACE @ _PG.DECL @ _PDV-TO @ PLSET-GRANT
-    ?DUP IF NIP EXIT THEN                       ( place )
-    _PDV-ORIGIN? IF DUP _PDV-TO @ PLSET-ORIGIN! THEN
-    _PDV-DOCUMENTS? IF DUP _PDV-TO @ PLSET-DOCUMENTS! THEN
-    _PDV-HOME? IF DUP _PDV-TO @ PLSET-HOME! THEN
-    DROP 0 ;
-
-\ PLSET-DERIVE ( needs set -- set' ior )
-\   A new set for one holder, made from SET by what NEEDS asks: the home
-\   at the access SET grants it for PLACES-NEED-HOME, the documents place
-\   likewise for PLACES-NEED-DOCUMENTS, every place read-only for
-\   PLACES-NEED-LIST, and the origin read-only always.  Places keep SET's
-\   order; a place no need names is left out.  The caller frees the new
-\   set with PLSET-FREE.
-: PLSET-DERIVE  ( needs set -- set' ior )
-    _PDV-FROM ! _PDV-NEEDS !
-    _PDV-FROM @ _PLSET? 0= IF 0 VFS-E-INVALID EXIT THEN
-    PLSET-NEW ?DUP IF EXIT THEN  _PDV-TO !
-    _PDV-FROM @ _PS.FIRST @
-    BEGIN ?DUP WHILE
-        _PDV-PLACE !
-        _PDV-ACCESS-OF
-        _PDV-ACCESS @ 0< 0= IF
-            _PDV-GRANT ?DUP IF _PDV-TO @ PLSET-FREE 0 SWAP EXIT THEN
-        THEN
-        _PDV-PLACE @ _PG.NEXT @
-    REPEAT
-    _PDV-TO @ 0 ;
-
 \ PLSET-REVISION ( set -- n )
 \   Moves when the set's membership, marks or access change and when any
 \   volume or declaration changes, so a list of places knows to redraw.
@@ -489,18 +502,18 @@ VARIABLE _PDV-ACCESS   \ the access the needs give it, -1 for none
 
 : PLACE-STATUS  ( place -- ior )
     DUP _PLACE? 0= IF DROP VFS-E-INVALID EXIT THEN
-    _PG.DECL @ _PD-ROOT? NIP ;
+    _PG-ROOT? NIP ;
 
 \ PLACE-WHY ( place -- a u )
 \   Why the place is unavailable, in a few words a person can read; empty
 \   for a usable place.
 : PLACE-WHY  ( place -- a u )
     DUP _PLACE? 0= IF DROP 0 0 EXIT THEN
-    _PG.DECL @ DUP _PD.VOLUME @ DUP _PV.VFS @ 0= IF
+    DUP _PG.DECL @ _PD.VOLUME @ DUP _PV.VFS @ 0= IF
         NIP _PV.REFUSAL @ IF S" mount refused" ELSE S" volume missing" THEN
         EXIT
     THEN
-    DROP _PD-ROOT? NIP IF S" folder missing" ELSE 0 0 THEN ;
+    DROP _PG-ROOT? NIP IF S" folder missing" ELSE 0 0 THEN ;
 
 : PLACE-VFS  ( place -- vfs | 0 )
     DUP _PLACE? 0= IF DROP 0 EXIT THEN
@@ -518,7 +531,7 @@ VARIABLE _PDV-ACCESS   \ the access the needs give it, -1 for none
 \   The place's folder, valid until the next VFS operation.
 : PLACE-ROOT  ( place -- inode | 0 )
     DUP _PLACE? 0= IF DROP 0 EXIT THEN
-    _PG.DECL @ _PD-ROOT? DROP ;
+    _PG-ROOT? DROP ;
 
 \ PLACE-NAME-LIMIT ( place -- n )
 \   The longest entry name the place's volume takes (VFS-NAME-LIMIT), and
@@ -541,7 +554,7 @@ VARIABLE _PLB-ROOT     \ its folder
 : _PL-ENTER  ( place -- ior )
     DUP _PLACE? 0= IF DROP VFS-E-INVALID EXIT THEN
     DUP _PLB-P !
-    _PG.DECL @ _PD-ROOT? ?DUP IF NIP EXIT THEN
+    _PG-ROOT? ?DUP IF NIP EXIT THEN
     _PLB-ROOT !
     _PLB-P @ PLACE-VFS _PLB-V !
     0 ;
@@ -614,17 +627,19 @@ VARIABLE _PLF-END
     REPEAT
     IN.PARENT @ 0= ;
 
-\ _PL-ROOT-OF ( inode decl -- root | 0 )
-\   The declared folder as a live entry's ancestor, or the entry itself,
+\ _PL-ROOT-OF ( inode place -- root | 0 )
+\   The place's folder as a live entry's ancestor, or the entry itself,
 \   found on the entry's own parent chain; 0 when the entry is not in
 \   the folder.  Nothing is looked up, so the entry stays as it is.
-: _PL-ROOT-OF  ( inode decl -- root | 0 )
+: _PL-ROOT-OF  ( inode place -- root | 0 )
     >R
-    DUP D.OWNER @ R@ _PD.VOLUME @ _PV.VFS @ <> IF DROP R> DROP 0 EXIT THEN
-    DUP _PL-DEPTH R@ _PD-FOLDER _PL-NAMES -         ( inode steps )
+    DUP D.OWNER @ R@ _PG.DECL @ _PD.VOLUME @ _PV.VFS @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP _PL-DEPTH R@ _PG-FOLDER _PL-NAMES -         ( inode steps )
     DUP 0< IF 2DROP R> DROP 0 EXIT THEN
     0 ?DO IN.PARENT @ LOOP                          ( candidate )
-    DUP R> _PD-FOLDER _PL-IS-FOLDER? 0= IF DROP 0 THEN ;
+    DUP R> _PG-FOLDER _PL-IS-FOLDER? 0= IF DROP 0 THEN ;
 
 \ _PL-UNDER? ( inode root -- flag )
 \   ROOT is INODE or one of its parents.
@@ -675,7 +690,7 @@ VARIABLE _PLK-POLICY
 
 : _PL-HOLDS?  ( inode place -- flag )
     OVER 0= OVER _PLACE? 0= OR IF 2DROP 0 EXIT THEN
-    _PG.DECL @ _PL-ROOT-OF 0<> ;
+    _PL-ROOT-OF 0<> ;
 
 \ PLACE-HOLDS? ( inode place -- flag )
 \   Whether a live entry lies in the place.  The entry is not disturbed.
@@ -731,7 +746,7 @@ VARIABLE _PLP-CAP
     _PLP-CAP ! _PLP-BUF !
     OVER 0= OVER _PLACE? 0= OR IF 2DROP 0 VFS-E-INVALID EXIT THEN
     DUP PLACE-VFS 0= IF NIP PLACE-STATUS 0 SWAP EXIT THEN
-    OVER SWAP _PG.DECL @ _PL-ROOT-OF                ( inode root|0 )
+    OVER SWAP _PL-ROOT-OF                           ( inode root|0 )
     DUP 0= IF 2DROP 0 VFS-E-XDEV EXIT THEN
     _PLP-BUF @ _PLP-CAP @ _PL-PATH ;
 
@@ -850,7 +865,7 @@ VARIABLE _PLN-P
     DUP 0= IF DROP 2DROP VFS-E-INVALID EXIT THEN
     _PLN-P @ PLACE-VFS 0= IF DROP 2DROP _PLN-P @ PLACE-STATUS EXIT THEN
     _PLN-P @ PLACE-WRITABLE? 0= IF DROP 2DROP VFS-E-READONLY EXIT THEN
-    DUP _PLN-P @ _PG.DECL @ _PL-ROOT-OF             ( new-a new-u inode root|0 )
+    DUP _PLN-P @ _PL-ROOT-OF                        ( new-a new-u inode root|0 )
     DUP 0= IF 2DROP 2DROP VFS-E-XDEV EXIT THEN
     OVER = IF DROP 2DROP VFS-E-INVALID EXIT THEN
     _PLN-P @ PLACE-VFS VFS-RENAME ;
@@ -939,3 +954,185 @@ VARIABLE _PLD-BUF0
 \   refuses.
 : PLACE-BIND-WRITE  ( path-a path-u place buf cap -- vfs len ior )
     ['] _PL-BIND-WRITE VFS-TRANSACTION ;
+
+\ =====================================================================
+\  Paths as other holders read them
+\ =====================================================================
+\  A place over a folder of its own inside its declared folder, such as
+\  a holder's home, starts its paths there.  A path that leaves the
+\  holder, in a resource locator or the held-files table, starts at the
+\  declared folder instead, which every set the place is granted to
+\  shares.
+
+VARIABLE _PLX-BUF   VARIABLE _PLX-CAP   VARIABLE _PLX-LEN
+
+: _PLX+  ( a u -- ok? )
+    DUP _PLX-LEN @ + _PLX-CAP @ > IF 2DROP 0 EXIT THEN
+    TUCK _PLX-BUF @ _PLX-LEN @ + SWAP CMOVE  _PLX-LEN +!  -1 ;
+
+\ PLACE-DECLARED-PATH ( path-a path-u place buf cap -- len ior )
+\   PATH, a path in PLACE, as it reads from the place's declared folder,
+\   in BUF: the path that names the same entry in any set the place's
+\   declaration is granted to.  It is PATH itself for a place over the
+\   declared folder.  VFS-E-NAMETOOLONG when it does not fit in CAP bytes.
+: PLACE-DECLARED-PATH  ( path-a path-u place buf cap -- len ior )
+    _PLX-CAP ! _PLX-BUF ! 0 _PLX-LEN !
+    DUP _PLACE? 0= IF DROP 2DROP 0 VFS-E-INVALID EXIT THEN
+    _PG-SUB _PLX+ 0= IF 2DROP 0 VFS-E-NAMETOOLONG EXIT THEN
+    _PL-TRIM DUP IF
+        S" /" _PLX+ 0= IF 2DROP 0 VFS-E-NAMETOOLONG EXIT THEN
+        _PLX+ 0= IF 0 VFS-E-NAMETOOLONG EXIT THEN
+    ELSE
+        2DROP _PLX-LEN @ 0= IF
+            S" /" _PLX+ 0= IF 0 VFS-E-NAMETOOLONG EXIT THEN
+        THEN
+    THEN
+    _PLX-LEN @ 0 ;
+
+VARIABLE _PFP-NA  VARIABLE _PFP-NU  VARIABLE _PFP-PA  VARIABLE _PFP-PU
+VARIABLE _PFP-OA  VARIABLE _PFP-OU  VARIABLE _PFP-BEST  VARIABLE _PFP-DEPTH
+
+\ Whether PATH, trimmed of its leading slashes, lies in the folder whose
+\ part below the declared folder is SUB ("/name..."): it is SUB's names,
+\ then the end or a slash.
+: _PFP-UNDER?  ( sub-a sub-u -- flag )
+    1 /STRING                                   \ SUB without its slash
+    DUP _PFP-PU @ > IF 2DROP 0 EXIT THEN
+    TUCK _PFP-PA @ OVER STR-STR= 0= IF DROP 0 EXIT THEN
+    DUP _PFP-PU @ = IF DROP -1 EXIT THEN
+    _PFP-PA @ + C@ [CHAR] / = ;
+
+\ PLSET-FIND-PATH ( name-a name-u path-a path-u set -- path'-a path'-u place )
+\   The place of SET named NAME that holds PATH, a path from that place's
+\   declared folder, as the resource form and the held-files table keep
+\   it, and PATH as it reads in that place: of the places so named, the
+\   one over the deepest folder PATH lies in.  PATH itself for a place over
+\   the declared folder.  0 0 0 when no place of that name holds it.
+: PLSET-FIND-PATH  ( name-a name-u path-a path-u set -- path'-a path'-u place )
+    >R 2DUP _PFP-OU ! _PFP-OA !
+    _PL-TRIM _PFP-PU ! _PFP-PA ! _PFP-NU ! _PFP-NA !
+    0 _PFP-BEST !  -1 _PFP-DEPTH !
+    R> _PS.FIRST @
+    BEGIN ?DUP WHILE
+        DUP PLACE-NAME _PFP-NA @ _PFP-NU @ STR-STR= IF
+            DUP _PG-SUB DUP 0= IF
+                2DROP 0
+            ELSE
+                2DUP _PFP-UNDER? IF NIP ELSE 2DROP -1 THEN
+            THEN                                ( place depth|-1 )
+            DUP _PFP-DEPTH @ > IF
+                _PFP-DEPTH ! DUP _PFP-BEST !
+            ELSE DROP THEN
+        THEN
+        _PG.NEXT @
+    REPEAT
+    _PFP-BEST @ ?DUP 0= IF 0 0 0 EXIT THEN
+    >R _PFP-DEPTH @ ?DUP IF
+        1- _PFP-PA @ _PFP-PU @ ROT /STRING
+        DUP 0= IF 2DROP S" /" THEN
+    ELSE
+        _PFP-OA @ _PFP-OU @
+    THEN R> ;
+
+\ =====================================================================
+\  Deriving a holder's set
+\ =====================================================================
+
+\ What a holder needs of the set it is given, which a component states
+\ in its descriptor (COMP.PLACE-NEEDS, runtime/instance.f).  The origin
+\ is always granted, read-only, for the holder's shipped files.
+1 CONSTANT PLACES-NEED-HOME       \ write its own records in the home
+2 CONSTANT PLACES-NEED-DOCUMENTS  \ write the documents place
+4 CONSTANT PLACES-NEED-LIST       \ see every place, read-only unless
+                                  \ another need lets it write there
+
+VARIABLE _PDV-NEEDS
+VARIABLE _PDV-FROM
+VARIABLE _PDV-TO
+VARIABLE _PDV-PLACE    \ the place of FROM being derived
+VARIABLE _PDV-ACCESS   \ the access the needs give it, -1 for none
+VARIABLE _PDV-FA  VARIABLE _PDV-FU   \ the home's own folder in FROM's home
+
+: _PDV-WIDEN  ( access -- )
+    DUP _PDV-ACCESS @ > IF _PDV-ACCESS ! ELSE DROP THEN ;
+
+: _PDV-ORIGIN?     ( -- flag ) _PDV-PLACE @ _PDV-FROM @ PLSET-ORIGIN = ;
+: _PDV-DOCUMENTS?  ( -- flag ) _PDV-PLACE @ _PDV-FROM @ PLSET-DOCUMENTS = ;
+: _PDV-HOME?       ( -- flag )
+    _PDV-NEEDS @ PLACES-NEED-HOME AND 0<>
+    _PDV-PLACE @ _PDV-FROM @ PLSET-HOME = AND ;
+\ The home is FROM's home itself, or a folder of its own inside it.
+: _PDV-SHARED-HOME?  ( -- flag )  _PDV-HOME? _PDV-FU @ 0= AND ;
+: _PDV-OWN-HOME?     ( -- flag )  _PDV-HOME? _PDV-FU @ 0<> AND ;
+
+\ The access the needs give _PDV-PLACE: never wider than FROM grants it.
+: _PDV-ACCESS-OF  ( -- )
+    -1 _PDV-ACCESS !
+    _PDV-ORIGIN? IF PLACE-READ-ONLY _PDV-WIDEN THEN
+    _PDV-NEEDS @ PLACES-NEED-LIST AND IF PLACE-READ-ONLY _PDV-WIDEN THEN
+    _PDV-SHARED-HOME? IF _PDV-PLACE @ _PG.ACCESS @ _PDV-WIDEN THEN
+    _PDV-NEEDS @ PLACES-NEED-DOCUMENTS AND 0<> _PDV-DOCUMENTS? AND IF
+        _PDV-PLACE @ _PG.ACCESS @ _PDV-WIDEN
+    THEN ;
+
+\ Grant _PDV-PLACE in TO, over the folder it is over in FROM, at
+\ _PDV-ACCESS, and carry over the marks it has in FROM: the origin and the
+\ documents place always, the home when it is FROM's home itself.
+: _PDV-GRANT  ( -- ior )
+    _PDV-PLACE @ DUP _PG.DECL @ _PGR-DECL !
+    DUP _PG.FOLDER-A @ _PGR-FA !  _PG.FOLDER-U @ _PGR-FU !
+    _PDV-ACCESS @ _PGR-ACCESS !  _PDV-TO @ _PGR-SET !
+    _PL-GRANT ?DUP IF NIP EXIT THEN             ( place )
+    _PDV-ORIGIN? IF DUP _PDV-TO @ PLSET-ORIGIN! THEN
+    _PDV-DOCUMENTS? IF DUP _PDV-TO @ PLSET-DOCUMENTS! THEN
+    _PDV-SHARED-HOME? IF DUP _PDV-TO @ PLSET-HOME! THEN
+    DROP 0 ;
+
+\ Make the home's own folder, each folder of its path in turn, where FROM's
+\ home can be changed.  A folder already there stays; one that cannot be
+\ made leaves the new home reporting its folder missing.
+: _PDV-MAKE-FOLDER  ( -- )
+    _PDV-PLACE @ PLACE-WRITABLE? 0= IF EXIT THEN
+    _PDV-FU @ 0 ?DO
+        _PDV-FA @ I + C@ [CHAR] / = IF
+            _PDV-FA @ I _PDV-PLACE @ PLACE-MKDIR DROP
+        THEN
+    LOOP
+    _PDV-FA @ _PDV-FU @ _PDV-PLACE @ PLACE-MKDIR DROP ;
+
+\ The home as a folder of its own inside FROM's home, at the home's access.
+: _PDV-OWN-HOME  ( -- ior )
+    _PDV-MAKE-FOLDER
+    _PDV-PLACE @ _PG.ACCESS @ _PDV-FA @ _PDV-FU @ _PDV-PLACE @ _PDV-TO @
+    PLSET-GRANT-IN ?DUP IF NIP EXIT THEN
+    _PDV-TO @ PLSET-HOME!  0 ;
+
+\ PLSET-DERIVE ( needs folder-a folder-u set -- set' ior )
+\   A new set for one holder, made from SET by what NEEDS asks: the home
+\   at the access SET grants it for PLACES-NEED-HOME, the documents place
+\   likewise for PLACES-NEED-DOCUMENTS, every place read-only for
+\   PLACES-NEED-LIST, and the origin read-only always.  Each place is over
+\   the folder it is over in SET.  With a FOLDER, the home is instead a
+\   folder of its own of that name inside SET's home, which the holder
+\   alone is given, made when it is missing and SET's home is writable;
+\   SET's home itself is granted only as another need asks.  Places keep
+\   SET's order, the home's own folder after the place it lies in; a
+\   place no need names is left out.  The caller frees the new set with
+\   PLSET-FREE.
+: PLSET-DERIVE  ( needs folder-a folder-u set -- set' ior )
+    _PDV-FROM ! _PDV-FU ! _PDV-FA ! _PDV-NEEDS !
+    _PDV-FROM @ _PLSET? 0= IF 0 VFS-E-INVALID EXIT THEN
+    PLSET-NEW ?DUP IF EXIT THEN  _PDV-TO !
+    _PDV-FROM @ _PS.FIRST @
+    BEGIN ?DUP WHILE
+        _PDV-PLACE !
+        _PDV-ACCESS-OF
+        _PDV-ACCESS @ 0< 0= IF
+            _PDV-GRANT ?DUP IF _PDV-TO @ PLSET-FREE 0 SWAP EXIT THEN
+        THEN
+        _PDV-OWN-HOME? IF
+            _PDV-OWN-HOME ?DUP IF _PDV-TO @ PLSET-FREE 0 SWAP EXIT THEN
+        THEN
+        _PDV-PLACE @ _PG.NEXT @
+    REPEAT
+    _PDV-TO @ 0 ;

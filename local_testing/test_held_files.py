@@ -65,12 +65,36 @@ def test_a_held_file_is_found_through_any_set_granting_its_place():
         '     S" /other.md" P-EDITOR @ TABLE HELD-HOLDER NIP .',
         '     S" /doc.md" P-DOCS @ TABLE HELD-HOLDER NIP .',
         # The holder's file, by service: its path and its place's name,
-        # which the editor's set turns into its own place.
-        '     S" svc.doc" TABLE HELD-FILE 2SWAP TYPE SPACE',
-        '     2DUP TYPE SPACE  S-EDITOR @ PLSET-FIND P-EDITOR @ = .',
-        '     S" svc.none" TABLE HELD-FILE + + + . ;',
+        # which the editor's set turns into its own place and path.
+        '     S" svc.doc" TABLE HELD-FILE 2SWAP 2DUP TYPE SPACE',
+        '     2OVER TYPE SPACE  S-EDITOR @ PLSET-FIND-PATH P-EDITOR @ = .',
+        '     TYPE SPACE  S" svc.none" TABLE HELD-FILE + + + . ;',
         'T',
-    ], [0, "svc.doc", 0, 0, "/doc.md", "records", -1, 0])
+    ], [0, "svc.doc", 0, 0, "/doc.md", "records", -1, "/doc.md", 0])
+
+
+def test_a_file_in_a_holders_own_folder_is_kept_from_the_declared_folder():
+    """An owner whose place is a folder of its own inside records holds a
+    file by its path in that folder.  The table keeps the path from the
+    declared folder, so the editor's place over records finds the holder
+    by that longer path, and each set turns the file back into its own
+    place and path: the owner's into its own folder's place, the deepest
+    that holds the file."""
+    expect([
+        'VARIABLE P-OWN',
+        ': T  PLACE-WRITABLE S" own" P-OWNER @ S-OWNER @ PLSET-GRANT-IN',
+        '     SWAP P-OWN ! R.',
+        '     S" /note.md" P-OWN @ S" svc.own" TABLE HELD-HOLD R.',
+        '     S" /own/note.md" P-EDITOR @ TABLE HELD-HOLDER TYPE SPACE',
+        '     S" /note.md" P-OWN @ TABLE HELD-HOLDER TYPE SPACE',
+        # The editor's /note.md is another file, directly in records.
+        '     S" /note.md" P-EDITOR @ TABLE HELD-HOLDER NIP .',
+        '     S" svc.own" TABLE HELD-FILE 2SWAP 2DUP TYPE SPACE',
+        '     2OVER 2OVER S-OWNER @ PLSET-FIND-PATH P-OWN @ = . TYPE SPACE',
+        '     S-EDITOR @ PLSET-FIND-PATH P-EDITOR @ = . TYPE ;',
+        'T',
+    ], [0, 0, "svc.own", "svc.own", 0, "/own/note.md", -1, "/note.md", -1,
+        "/own/note.md"])
 
 
 def test_release_and_clear_forget_files():

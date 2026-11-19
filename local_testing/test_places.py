@@ -16,6 +16,7 @@ PLACES_ROOTS = ("utils/fs/places.f",)
 # VFS reasons the checks name (VFS-R-* in utils/fs/vfs.f).
 INVALID, NOENT, EXISTS, NOTDIR = 1, 2, 3, 4
 READONLY, IO, BUSY, XDEV, NOVOLUME = 7, 9, 14, 19, 21
+NAMETOOLONG = 17
 
 HELPERS = (
     # A RAM binding that also reads symbolic links.  A link's target is
@@ -173,35 +174,137 @@ def test_a_holder_is_given_what_it_needs_of_a_set():
     expect([
         ': T  P-OTHER @ SET @ PLSET-DOCUMENTS!',
         # Nothing asked: the origin alone, read-only, for shipped files.
-        '     0 SET @ PLSET-DERIVE R. >R',
+        '     0 0 0 SET @ PLSET-DERIVE R. >R',
         '     R@ PLSET-FIRST DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
         '     DUP R@ PLSET-ORIGIN = .  PLACE-NEXT .',
         '     R@ PLSET-HOME .  R@ PLSET-DOCUMENTS .  R> PLSET-FREE',
         # Its records: the home at the access the set grants it, then the
         # origin, in the set's order, as places of the new set.
-        '     PLACES-NEED-HOME SET @ PLSET-DERIVE R. >R',
+        '     PLACES-NEED-HOME 0 0 SET @ PLSET-DERIVE R. >R',
         '     R@ PLSET-FIRST DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
         '     DUP R@ PLSET-HOME = .  DUP P-DOCS @ <> .',
         '     PLACE-NEXT DUP PLACE-NAME TYPE SPACE DUP R@ PLSET-ORIGIN = .',
         '     PLACE-NEXT .  R@ PLSET-DOCUMENTS .  R> PLSET-FREE',
         # Documents and the list: every place, writable only where
         # documents go, and no home of its own.
-        '     PLACES-NEED-DOCUMENTS PLACES-NEED-LIST OR SET @ PLSET-DERIVE R. >R',
+        '     PLACES-NEED-DOCUMENTS PLACES-NEED-LIST OR 0 0 SET @ PLSET-DERIVE R. >R',
         '     R@ PLSET-FIRST DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
         '     PLACE-NEXT DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
         '     PLACE-NEXT DUP PLACE-NAME TYPE SPACE DUP PLACE-WRITABLE? .',
         '     R@ PLSET-DOCUMENTS = .  R@ PLSET-HOME .  R> PLSET-FREE',
         # A narrowed set narrows what is derived from it.
-        '     SET @ PLSET-READ-ONLY!  PLACES-NEED-HOME SET @ PLSET-DERIVE R. >R',
+        '     SET @ PLSET-READ-ONLY!  PLACES-NEED-HOME 0 0 SET @ PLSET-DERIVE R. >R',
         '     R@ PLSET-FIRST PLACE-WRITABLE? .  R> PLSET-FREE',
         # Something that is no set.
-        '     0 0 PLSET-DERIVE R. . ;',
+        '     0 0 0 0 PLSET-DERIVE R. . ;',
         'T',
     ], [0, "all", 0, -1, 0, 0, 0,
         0, "docs", -1, -1, -1, "all", -1, 0, 0,
         0, "docs", 0, "all", 0, "other", -1, -1, 0,
         0, 0,
         INVALID, 0])
+
+
+def test_a_holder_is_given_a_home_of_its_own():
+    """With a folder name, PLSET-DERIVE gives the holder a home over a
+    folder of that name inside the set's home, made when it is missing,
+    and grants the set's home itself only as another need asks.  A
+    narrowed set makes no folder, and the home it gives reports the folder
+    missing."""
+    expect([
+        ': T  PLACES-NEED-HOME S" holder" SET @ PLSET-DERIVE R. >R',
+        '     S" /docs/holder" VA @ VFS-RESOLVE 0<> .',
+        '     R@ PLSET-FIRST DUP R@ PLSET-HOME = .  DUP PLACE-NAME TYPE SPACE',
+        '     DUP PLACE-WRITABLE? .',
+        '     S" /" 2 PICK PLACE-RESOLVE R. S" /docs/holder" VA @ VFS-RESOLVE = .',
+        '     PLACE-NEXT DUP R@ PLSET-ORIGIN = .  PLACE-NEXT .  R> PLSET-FREE',
+        # With the list as well: the set's home read-only, the home's own
+        # folder after it, then the rest read-only.
+        '     PLACES-NEED-HOME PLACES-NEED-LIST OR S" holder" SET @ PLSET-DERIVE',
+        '     R. >R  R@ PLSET-FIRST DUP PLACE-WRITABLE? .  DUP R@ PLSET-HOME = .',
+        '     PLACE-NEXT DUP PLACE-WRITABLE? .  DUP R@ PLSET-HOME = .',
+        '     PLACE-NEXT DUP R@ PLSET-ORIGIN = .  PLACE-NEXT PLACE-NAME TYPE SPACE',
+        '     R> PLSET-FREE',
+        '     SET @ PLSET-READ-ONLY!',
+        '     PLACES-NEED-HOME S" later" SET @ PLSET-DERIVE R. >R',
+        '     S" /docs/later" VA @ VFS-RESOLVE .',
+        '     R@ PLSET-HOME DUP PLACE-WRITABLE? .  PLACE-STATUS R.  R> PLSET-FREE ;',
+        'T',
+    ], [0, -1, -1, "docs", -1, 0, -1, -1, 0,
+        0, 0, 0, -1, -1, -1, "other",
+        0, 0, 0, NOENT])
+
+
+def test_a_place_can_be_a_folder_inside_another():
+    """PLSET-GRANT-IN grants a place's declaration over a folder inside the
+    place's own folder.  Its paths start there and `..` does not leave it,
+    it keeps the declaration's name, and its folder need not exist yet."""
+    expect([
+        'VARIABLE P-SUB  VARIABLE P-NEW',
+        ': T  PLACE-WRITABLE S" sub" P-DOCS @ SET @ PLSET-GRANT-IN R. P-SUB !',
+        '     P-SUB @ PLACE-NAME TYPE SPACE  P-SUB @ PLACE-WRITABLE? .',
+        '     S" /" P-SUB @ PLACE-RESOLVE R. S" /docs/sub" VA @ VFS-RESOLVE = .',
+        '     S" ../a.txt" P-SUB @ PLACE-RESOLVE R. .',
+        '     S" x" P-SUB @ PLACE-CREATE R. 0<> .',
+        '     S" /docs/sub/x" VA @ VFS-RESOLVE DUP 0<> .',
+        '     P-SUB @ _PB 256 PLACE-PATH R. _PB SWAP TYPE SPACE',
+        # The same folder twice, an access wider than the declaration's,
+        # folder names that leave or break the path, and no place.
+        '     PLACE-WRITABLE S" sub" P-DOCS @ SET @ PLSET-GRANT-IN R. .',
+        '     PLACE-WRITABLE S" docs" P-ALL @ SET @ PLSET-GRANT-IN R. .',
+        '     PLACE-WRITABLE S" ../secret" P-DOCS @ SET @ PLSET-GRANT-IN R. .',
+        '     PLACE-WRITABLE S" a//b" P-DOCS @ SET @ PLSET-GRANT-IN R. .',
+        '     PLACE-WRITABLE S" " P-DOCS @ SET @ PLSET-GRANT-IN R. .',
+        '     PLACE-WRITABLE S" x" 0 SET @ PLSET-GRANT-IN R. .',
+        # A folder still to come is missing until it is made.
+        '     PLACE-WRITABLE S" new/deeper" P-DOCS @ SET @ PLSET-GRANT-IN',
+        '     R. P-NEW !  P-NEW @ PLACE-STATUS R.',
+        '     S" new" P-DOCS @ PLACE-MKDIR R.  S" new/deeper" P-DOCS @ PLACE-MKDIR R.',
+        '     P-NEW @ PLACE-STATUS R. ;',
+        'T',
+    ], [0, "docs", -1, 0, -1, XDEV, 0, 0, -1, -1, 0, "/x",
+        EXISTS, 0, READONLY, 0, INVALID, 0, INVALID, 0, INVALID, 0,
+        INVALID, 0, 0, NOENT, 0, 0, 0])
+
+
+def test_a_path_reads_from_the_declared_folder():
+    """PLACE-DECLARED-PATH writes a path in a place as it reads from the
+    folder the place's declaration names, which every set granted that
+    declaration shares."""
+    expect([
+        'VARIABLE P-SUB',
+        ': DP.  ( len ior -- )  R. _PB SWAP TYPE SPACE ;',
+        ': T  PLACE-WRITABLE S" sub" P-DOCS @ SET @ PLSET-GRANT-IN THROW P-SUB !',
+        '     S" /x.md" P-SUB @ _PB 256 PLACE-DECLARED-PATH DP.',
+        '     S" x.md" P-SUB @ _PB 256 PLACE-DECLARED-PATH DP.',
+        '     S" /" P-SUB @ _PB 256 PLACE-DECLARED-PATH DP.',
+        '     S" /x.md" P-DOCS @ _PB 256 PLACE-DECLARED-PATH DP.',
+        '     S" " P-DOCS @ _PB 256 PLACE-DECLARED-PATH DP.',
+        '     S" /x.md" P-SUB @ _PB 8 PLACE-DECLARED-PATH R. .',
+        '     S" /x.md" 0 _PB 256 PLACE-DECLARED-PATH R. . ;',
+        'T',
+    ], [0, "/sub/x.md", 0, "/sub/x.md", 0, "/sub", 0, "/x.md", 0, "/",
+        NAMETOOLONG, 0, INVALID, 0])
+
+
+def test_a_set_finds_the_place_over_the_deepest_folder_of_a_path():
+    """PLSET-FIND-PATH takes a path from a declared folder and answers the
+    place of that name over the deepest folder holding it, with the path
+    as it reads there."""
+    expect([
+        'VARIABLE P-SUB',
+        ': T  PLACE-WRITABLE S" sub" P-DOCS @ SET @ PLSET-GRANT-IN THROW P-SUB !',
+        '     S" docs" S" /sub/x.md" SET @ PLSET-FIND-PATH P-SUB @ = . TYPE SPACE',
+        '     S" docs" S" /sub" SET @ PLSET-FIND-PATH P-SUB @ = . TYPE SPACE',
+        '     S" docs" S" sub/x.md" SET @ PLSET-FIND-PATH P-SUB @ = . TYPE SPACE',
+        '     S" docs" S" /a.txt" SET @ PLSET-FIND-PATH P-DOCS @ = . TYPE SPACE',
+        # A name that starts like the folder is not inside it.
+        '     S" docs" S" /subway/x" SET @ PLSET-FIND-PATH P-DOCS @ = . TYPE SPACE',
+        '     S" all" S" /docs/sub" SET @ PLSET-FIND-PATH P-ALL @ = . TYPE SPACE',
+        '     S" none" S" /x" SET @ PLSET-FIND-PATH . . . ;',
+        'T',
+    ], [-1, "/x.md", -1, "/", -1, "/x.md", -1, "/a.txt", -1, "/subway/x",
+        -1, "/docs/sub", 0, 0, 0])
 
 
 def test_paths_start_at_the_folder():

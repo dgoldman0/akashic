@@ -1120,8 +1120,9 @@ VARIABLE _PSHO-NEW
 \   to the document again.
 : _PAD-SHARED-NAME!  ( index -- )
     >R _PAD-SHARED-SERVICE$ _PAD-HELD ?DUP 0= IF 2DROP R> DROP EXIT THEN
-    HELD-FILE                                ( path-a path-u name-a name-u )
-    _PAD-SET @ ?DUP IF PLSET-FIND ELSE 2DROP 0 THEN
+    HELD-FILE 2SWAP                          ( name-a name-u path-a path-u )
+    _PAD-SET @ ?DUP IF PLSET-FIND-PATH ELSE 2SWAP 2DROP 0 THEN
+                                             ( path-a path-u place|0 )
     R@ _PAD-BUF-ENTRY _PBE-PLACE + !
     R> _PAD-FILENAME! ;
 
