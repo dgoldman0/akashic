@@ -509,8 +509,8 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/fexplorer/fexplorer.uidl",
         "menus": ["File", "Edit", "View", "Tools"],
-        "actions": ["collapse-all", "copy", "cut", "delete", "expand-all", "goto", "new-dir", "new-file", "open", "parent-dir", "paste", "props", "quit", "refresh", "rename", "show-details", "show-preview", "sort-name", "sort-size", "sort-type", "toggle-hidden"],
-        "shortcuts": {"copy": "Ctrl+C", "cut": "Ctrl+X", "delete": "Delete", "goto": "Ctrl+G", "new-dir": "Ctrl+Shift+N", "new-file": "Ctrl+N", "open": "Ctrl+O", "parent-dir": "Backspace", "paste": "Ctrl+V", "props": "Ctrl+I", "quit": "Ctrl+Q", "refresh": "F5", "rename": "F2", "show-details": "Alt+1", "show-preview": "Alt+2", "toggle-hidden": "Ctrl+H"},
+        "actions": ["cancel-paste", "collapse-all", "copy", "cut", "delete", "expand-all", "goto", "new-dir", "new-file", "open", "parent-dir", "paste", "props", "quit", "refresh", "rename", "show-details", "show-preview", "sort-name", "sort-size", "sort-type", "toggle-hidden"],
+        "shortcuts": {"cancel-paste": "Escape", "copy": "Ctrl+C", "cut": "Ctrl+X", "delete": "Delete", "goto": "Ctrl+G", "new-dir": "Ctrl+Shift+N", "new-file": "Ctrl+N", "open": "Ctrl+O", "parent-dir": "Backspace", "paste": "Ctrl+V", "props": "Ctrl+I", "quit": "Ctrl+Q", "refresh": "F5", "rename": "F2", "show-details": "Alt+1", "show-preview": "Alt+2", "toggle-hidden": "Ctrl+H"},
         "element_ids": ["detail", "mbar", "preview", "sbar", "sbar-left", "sbar-right", "scroller", "sidebar", "tabs", "view-hidden", "view-sort-name", "view-sort-size", "view-sort-type"]
       },
       "capability_surface": {"path": "akashic/tui/applets/fexplorer/fexplorer.f", "literal_prefix": "fexplorer.", "ids": ["fexplorer.preview.text", "fexplorer.resource.reveal", "fexplorer.resource.selected"]},
