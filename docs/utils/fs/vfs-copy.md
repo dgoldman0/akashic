@@ -12,14 +12,18 @@ REQUIRE utils/fs/vfs-copy.f
 ```
 
 ```forth
-VCOPY-SIZE   ( -- n )
-VCOPY-INIT   ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u copy -- ior )
-VCOPY-STEP   ( copy -- more? ior )
-VCOPY-CANCEL ( copy -- ior )
-VFS-COPY     ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
-VFS-MOVE     ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
-PLACE-COPY   ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
-PLACE-MOVE   ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
+VCOPY-SIZE      ( -- n )
+VCOPY-INIT      ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u copy -- ior )
+VMOVE-INIT      ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u copy -- ior )
+PLACE-COPY-INIT ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u copy -- ior )
+PLACE-MOVE-INIT ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u copy -- ior )
+VCOPY-STEP      ( copy -- more? ior )
+VCOPY-CANCEL    ( copy -- ior )
+VCOPY-PROGRESS  ( copy -- files-done files bytes-done bytes phase )
+VFS-COPY        ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
+VFS-MOVE        ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
+PLACE-COPY      ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
+PLACE-MOVE      ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
 ```
 
 ## The copy
@@ -86,44 +90,73 @@ refused on its way to MP64FS.
 
 ### Stepping a copy
 
-`VFS-COPY` runs a copy to its end. An applet that copies a long file from
-its tick instead keeps a copy record of `VCOPY-SIZE` bytes and the scratch,
-starts the copy with `VCOPY-INIT`, and calls `VCOPY-STEP` once a tick until
-`MORE?` is false. Each step does one piece of work, which for a file of
-`n` bytes and a scratch of `s` bytes makes `⌈n/s⌉` writing steps, one step
-that syncs and reopens the stage, `⌈n/(s/2)⌉` comparing steps and the step
-that renames: ten steps for 10,000 bytes through 4,096 bytes of scratch.
-Between steps the copy keeps the source and the stage open, which holds
-their entries however long it waits, and its record holds the replacement
-descriptor that names the final path and the stage, whose paths it gives
-back when the copy ends either way. The comparison reads the source
-again, so another writer's change to bytes already copied fails it, and a
-change of the source's size fails the check before it. The record and the
-scratch belong to the copy until it ends.
+Every copy and move runs as steps in a copy record of `VCOPY-SIZE` bytes
+that its caller keeps, with the scratch, until it ends. `VCOPY-INIT`
+starts a copy of a file or a folder and `VMOVE-INIT` a move;
+`PLACE-COPY-INIT` and `PLACE-MOVE-INIT` bind their paths in places first,
+as `PLACE-COPY` and `PLACE-MOVE` do. Each refuses at once what it can
+refuse before anything is written: a destination the rules refuse, a
+source of the wrong kind, a final name that exists. The caller then calls
+`VCOPY-STEP` until `MORE?` is false, and the step that ends the copy
+answers its `IOR`; an applet does so from its loop, a step a pass, and
+Desk keeps answering in between. `VFS-COPY`, `VFS-MOVE`, `PLACE-COPY` and
+`PLACE-MOVE` run the same steps to the end in a record of the library's
+own.
 
-`VCOPY-INIT` refuses a record whose copy is still running with
-`VFS-E-BUSY`. A step after a copy has ended, by success or failure,
-answers `0 0`. `VCOPY-CANCEL` ends a running copy before its rename: it
-closes the files, removes the stage, syncs, and answers the first of those
-steps that failed; on a record with no running copy it answers 0. A
-record that was never started answers `VFS-E-INVALID` to both. A stepped
-copy takes a file only; `VCOPY-INIT` answers `VFS-E-ISDIR` for a folder.
+Each step does one piece of work: a listing, a folder made, a file
+opened or closed, a chunk written or compared, a barrier, a rename, or
+an entry removed. A file of `n` bytes through a scratch of `s` bytes
+takes `⌈n/s⌉` writing steps, one step that syncs and reopens the stage,
+`⌈n/(s/2)⌉` comparing steps and the step that renames: ten steps for
+10,000 bytes through 4,096 bytes of scratch. The scratch holds bytes only
+inside a step, so its owner may use it between steps. Each copy keeps its
+state in its own record, its walk, its copy of the source's path and its
+replacement descriptors, so two copies may step in turn. Between steps a
+file's copy keeps the source and the stage open, which holds their
+entries however long it waits; a folder's walk holds no entry at all.
+The comparison reads the source again, so another writer's change to
+bytes already copied fails it, and a change of the source's size fails
+the check before it.
+
+`VCOPY-PROGRESS` answers the files and bytes done, the files and bytes in
+all, and what the copy is doing: `VCOPY-P-COUNTING` while a folder's
+files are counted, `VCOPY-P-COPYING` while they are written,
+`VCOPY-P-CHECKING` while they are read back and the stage renamed,
+`VCOPY-P-FINISHING` once the copy stands and a move removes its source,
+`VCOPY-P-GIVING-UP` while a failed or cancelled copy removes what it
+wrote, and `VCOPY-P-IDLE`. The figures done count again from zero when
+the reading back begins; a file copy counts one file and its bytes.
+
+`VCOPY-INIT` and `VMOVE-INIT` refuse a record whose copy is still running
+with `VFS-E-BUSY`. A step after a copy has ended, by success or failure,
+answers `0 0`. `VCOPY-CANCEL` gives up a copy before its commit: a file's
+at once, closing its files, removing the stage and syncing, and answering
+the first of those that failed; a folder's by closing its files and
+leaving its walk at once, after which the following steps remove the
+stage tree and the last of them answers 0, or the failure that kept part
+of the stage. A move whose copy stands removes its source to the end:
+`VCOPY-CANCEL` then answers `VFS-E-BUSY` and changes nothing. On a record
+with no running copy it answers 0, and a record that was never started
+answers `VFS-E-INVALID` to it and to `VCOPY-STEP`.
 
 ## Folders
 
-`VFS-COPY` and `PLACE-COPY` copy a folder with all it holds, at any depth,
-by the file's protocol at the scale of the tree:
+A copy of a folder takes it with all it holds, at any depth, by the
+file's protocol at the scale of the tree:
 
 1. the source is a folder, the final name is free, and the destination's
    folder exists and is neither the source nor inside it;
-2. a stage an earlier copy to the same name left, a folder or a file, is
+2. a walk of the source counts its files and bytes, and refuses a link, a
+   device, a name or a path the destination does not take, before
+   anything is written;
+3. a stage an earlier copy to the same name left, a folder or a file, is
    removed with everything in it, and the stage folder is made;
-3. a walk of the source makes each folder in the stage and copies each
+4. a walk of the source makes each folder in the stage and copies each
    file into it, a scratch at a time;
-4. one barrier on the destination instance;
-5. a second walk reads every file of the stage back against its source,
+5. one barrier on the destination instance;
+6. a third walk reads every file of the stage back against its source,
    half of the scratch from each, and checks that each folder is there;
-6. the stage folder is renamed to the final name with `VFS-RN-NOREPLACE`,
+7. the stage folder is renamed to the final name with `VFS-RN-NOREPLACE`,
    and a barrier taken.
 
 The rename is the commit, as for a file: a failure before it removes the
@@ -159,9 +192,16 @@ Across two instances a move checks the source and copies it as `VFS-COPY`
 does. A file is then removed and a barrier taken on the source's instance.
 A folder is first renamed to its own stage name, the one
 `VREPL-DERIVE-PATHS!` derives from its path, so it leaves its folder at once,
-and that hidden tree is then removed and a barrier taken; a hidden tree an
-earlier move left under that name is removed first. A move whose copy fails
-leaves the source as it was.
+and that hidden tree is then removed, an entry a step, and a barrier taken;
+a hidden tree an earlier move left under that name is removed first. A move
+whose copy fails leaves the source as it was.
+
+Between the steps of a move across instances other applets run. A file of
+the source that another writer changes after the copy read it back is
+removed with the rest once the copy stands, so the copy keeps the bytes it
+read. A caller that steps such a move while other writers may change the
+source accepts that; a move inside one instance is one rename and is not
+exposed to it.
 
 ## Answers
 
@@ -185,11 +225,10 @@ failure it reported. The answers a caller sees most:
 | `VFS-E-EXISTS` | The destination name holds an entry, or took one while the copy ran |
 | `VFS-E-NOENT` | The source, or the destination's folder, does not exist |
 | `VFS-E-NOTDIR` | A folder on the destination path is a file |
-| `VFS-E-ISDIR` | `VCOPY-INIT` was given a folder |
 | `VFS-E-INVALID` | The destination path breaks the replacement library's rule for its volume, the scratch is under two bytes, an instance or the record is 0, a stage is the source, or a folder would go inside itself |
 | `VFS-E-NAMETOOLONG` | A name in a folder is longer than the destination volume takes, or a path in it would pass `VFS-PATH-MAX` |
 | `VFS-E-UNSUPPORTED` | A folder holds a symbolic link or a device |
-| `VFS-E-BUSY` | `VCOPY-INIT` was given a record whose copy is still running |
+| `VFS-E-BUSY` | `VCOPY-INIT` or `VMOVE-INIT` was given a record whose copy is still running, or `VCOPY-CANCEL` a move whose copy stands |
 | `VFS-E-NOSPC` | The destination ran out of space |
 | `VFS-E-CORRUPT` | The stage did not read back as the source, or the source changed size, or a folder's source changed, while the copy ran |
 | `VFS-E-IO` | A binding failed, or a binding operation threw |
@@ -242,7 +281,13 @@ folder a crash left; move a folder inside one volume by one rename and
 across volumes, where a failed removal leaves the source hidden and the
 next move clears it; copy and move folders between places; and copy a folder
 onto the boot volume, move it between its folders, and refuse one that holds
-a name of 24 bytes. `local_testing/test_vfs_copy_ext4.py` runs copies and
+a name of 24 bytes. Its stepping tests step a folder copy and read
+`VCOPY-PROGRESS` through it, three files of 40,700 bytes counted, written
+and read back in more than forty steps with the final name appearing only
+at the last; cancel a folder copy midway, after which the steps remove the
+stage and leave no file open; step two folder copies in turn; and refuse
+to cancel a move across volumes once its copy stands, and move a folder
+inside one volume in one step. `local_testing/test_vfs_copy_ext4.py` runs copies and
 moves of files and of a folder to, from and within the 64 MiB ext4 fixture
 volume, including a file copy that runs out of space on a volume with 39
 free blocks, and checks the medium with the pinned `e2fsck` and `debugfs`.

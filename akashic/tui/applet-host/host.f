@@ -1271,26 +1271,61 @@ VARIABLE _AHTI-PAINT
 
 \ AHOST-SERVICE ( host -- worked? )
 \   Give each live applet's UIDL document its pending media work, one
-\   bounded slice a pass, and mark a slot whose document changed for
-\   repaint.  True when any slice ran.  Returns at once when no picture
-\   anywhere is decoding and no document view has work.
+\   bounded slice a pass, and run the service (APP.SERVICE-XT) of each
+\   applet whose instance asks for it (CINST-F-SERVICE), as one stepping
+\   a long copy does.  A slot whose document or revision changed is
+\   marked for repaint.  True when any slice or service worked.  Returns
+\   at once when no picture anywhere is decoding, no document view has
+\   work and no instance asks for service.
 VARIABLE _AHSV-HOST
 VARIABLE _AHSV-WORKED
 VARIABLE _AHSV-PAINT
+VARIABLE _AHSV-MEDIA
+VARIABLE _AHSV-REV
+
+\ Whether a slot's applet asks for service and has one.
+: _AHSV-WANTS?  ( slot -- flag )
+    DUP AHS.INST @ CINST-SERVICE?
+    SWAP AHS.DESC @ APP.SERVICE-XT @ 0<> AND ;
+
+: _AHSV-ANY?  ( host -- flag )
+    AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-ALIVE? OVER AHS-CALLABLE? AND IF
+            DUP _AHSV-WANTS? IF DROP TRUE EXIT THEN
+        THEN
+        AHS.NEXT @
+    REPEAT FALSE ;
+
+\ Whether the pass has work for a live SLOT: media for its document, or
+\ the service its applet asks for.
+: _AHSV-DUE?  ( slot -- flag )
+    DUP AHS.HAS-UIDL @ _AHSV-MEDIA @ AND SWAP _AHSV-WANTS? OR ;
+
+: _AHSV-SLOT  ( slot -- slot )
+    0 _UTUI-NEEDS-PAINT !
+    DUP AHS.INST @ CINST.REVISION @ _AHSV-REV !
+    DUP AHS.HAS-UIDL @ IF DUP AHS-CTX-SWITCH ELSE DUP AHS-ACTIVATE THEN
+    DUP AHS.HAS-UIDL @ _AHSV-MEDIA @ AND IF
+        UTUI-SERVICE IF -1 _AHSV-WORKED ! THEN
+    THEN
+    DUP _AHSV-WANTS? IF
+        DUP AHS.INST @ OVER AHS.DESC @ APP.SERVICE-XT @ EXECUTE
+        IF -1 _AHSV-WORKED ! THEN
+    THEN
+    _UTUI-NEEDS-PAINT @ OVER AHS.INST @ CINST.REVISION @ _AHSV-REV @ <> OR IF
+        -1 OVER AHS.DIRTY !  -1 _AHSV-PAINT !
+    THEN ;
 
 : AHOST-SERVICE  ( host -- worked? )
-    PICT-WORK? DOCV-WORK? OR 0= IF DROP 0 EXIT THEN
+    PICT-WORK? DOCV-WORK? OR DUP _AHSV-MEDIA !
+    0= IF DUP _AHSV-ANY? 0= IF DROP 0 EXIT THEN THEN
     _AHSV-HOST !  0 _AHSV-WORKED !
     _UTUI-NEEDS-PAINT @ _AHSV-PAINT !
     _AHSV-HOST @ AHOST.HEAD @
     BEGIN ?DUP WHILE
-        DUP AHS-ALIVE? OVER AHS-CALLABLE? AND OVER AHS.HAS-UIDL @ AND IF
-            0 _UTUI-NEEDS-PAINT !
-            DUP AHS-CTX-SWITCH
-            UTUI-SERVICE IF -1 _AHSV-WORKED ! THEN
-            _UTUI-NEEDS-PAINT @ IF
-                -1 OVER AHS.DIRTY !  -1 _AHSV-PAINT !
-            THEN
+        DUP AHS-ALIVE? OVER AHS-CALLABLE? AND IF
+            DUP _AHSV-DUE? IF _AHSV-SLOT THEN
         THEN
         AHS.NEXT @
     REPEAT

@@ -621,6 +621,99 @@ def test_places_copy_and_move_folders():
 
 
 # =====================================================================
+#  Stepping folders and moves
+# =====================================================================
+
+# The phase VCOPY-PROGRESS reports, and stepping a record to its end.
+STEPPING = [
+    ': PHASE  ( copy -- p )  VCOPY-PROGRESS NIP NIP NIP NIP ;',
+    ': FINISH  ( copy -- ior )  BEGIN DUP VCOPY-STEP SWAP WHILE DROP REPEAT NIP ;',
+]
+
+
+def test_a_folder_copy_steps_and_says_how_far_it_has_come():
+    """VCOPY-INIT takes a folder.  Its steps count the tree, write it into
+    the stage, read it back and rename the stage, a listing, a file's
+    opening or closing, or a chunk each, more than forty in all, and the
+    final name appears only with the last.  VCOPY-PROGRESS reports the
+    three files of 40,700 bytes written and then read back."""
+    expect([
+        *STEPPING,
+        'VARIABLE N  VARIABLE EARLY',
+        'VARIABLE CF  VARIABLE CB  VARIABLE WF  VARIABLE WB  VARIABLE KF  VARIABLE KB',
+        ': NOTE  ( -- )  REC VCOPY-PROGRESS',
+        '    DUP VCOPY-P-COPYING = IF DROP CB ! WB ! CF ! WF ! EXIT THEN',
+        '    VCOPY-P-CHECKING = IF CB ! KB ! CF ! KF ! EXIT THEN',
+        '    2DROP 2DROP ;',
+        ': T  VA @ TREE  NOTE-STATE  0 N !  0 EARLY !',
+        '     S" /tree" VA @ S" /st" VB @ SCR 4096 REC VCOPY-INIT R.',
+        '     REC PHASE .',
+        '     BEGIN  S" /st" VB @ HAS? IF -1 EARLY ! THEN',
+        '         REC VCOPY-STEP  1 N +!  NOTE  SWAP WHILE DROP REPEAT R.',
+        '     N @ 40 > .  EARLY @ .  CF @ . CB @ . WF @ . WB @ . KF @ . KB @ .',
+        '     S" /st" VB @ TREE? .  S" /st" VB @ STAGE$ VB @ HAS? .',
+        '     REC VCOPY-STEP R. .  REC PHASE .  STATE-KEPT? . ;',
+        'T',
+    ], [0, 5, 0, TRUE, FALSE, 3, 40700, 3, 40700, 3, 40700,
+        TRUE, FALSE, 0, 0, 0, TRUE], max_steps=800_000_000)
+
+
+def test_a_folder_copy_cancelled_midway_removes_what_it_wrote():
+    """A cancel before the commit gives the copy up: it answers at once,
+    the steps that follow remove the stage tree, and the last of them
+    answers 0.  Nothing of the copy is left, and no file stays open."""
+    expect([
+        *STEPPING,
+        ': T  VA @ TREE  NOTE-STATE',
+        '     S" /tree" VA @ S" /c1" VB @ SCR 4096 REC VCOPY-INIT R.',
+        '     12 0 DO REC VCOPY-STEP 2DROP LOOP',
+        '     REC PHASE .  S" /c1" VB @ STAGE$ VB @ HAS? .',
+        '     REC VCOPY-CANCEL R.  REC PHASE .  REC FINISH R.',
+        '     S" /c1" VB @ HAS? .  S" /c1" VB @ STAGE$ VB @ HAS? .',
+        '     REC VCOPY-STEP R. .  REC VCOPY-CANCEL R.  S" /tree" VA @ TREE? .',
+        '     STATE-KEPT? . ;',
+        'T',
+    ], [0, 1, TRUE, 0, 4, 0, FALSE, FALSE, 0, 0, 0, TRUE, TRUE],
+        max_steps=800_000_000)
+
+
+def test_two_copies_step_side_by_side():
+    """Each copy keeps its state in its own record, so two folder copies
+    stepped in turn both arrive whole."""
+    expect([
+        'CREATE REC2 VCOPY-SIZE ALLOT  CREATE SCR2 4096 ALLOT',
+        ': T  VA @ TREE  NOTE-STATE',
+        '     S" /tree" VA @ S" /i1" VB @ SCR 4096 REC VCOPY-INIT R.',
+        '     S" /tree" VA @ S" /i2" VA @ SCR2 4096 REC2 VCOPY-INIT R.',
+        '     BEGIN REC VCOPY-STEP DROP  REC2 VCOPY-STEP DROP  OR 0= UNTIL',
+        '     S" /i1" VB @ TREE? .  S" /i2" VA @ TREE? .  STATE-KEPT? . ;',
+        'T',
+    ], [0, 0, TRUE, TRUE, TRUE], max_steps=1_200_000_000)
+
+
+def test_a_move_cannot_be_cancelled_once_its_copy_stands():
+    """Across volumes a move's copy stands at its commit, and the steps
+    after it remove the source; VCOPY-CANCEL then answers VFS-E-BUSY and
+    the move runs to its end.  Inside one volume VMOVE-INIT's one step
+    is the rename."""
+    expect([
+        *STEPPING,
+        ': T  VA @ TREE  NOTE-STATE',
+        '     S" /tree" VA @ S" /mv" VB @ SCR 4096 REC VMOVE-INIT R.',
+        '     BEGIN REC PHASE DUP VCOPY-P-FINISHING <> SWAP VCOPY-P-IDLE <> AND',
+        '     WHILE REC VCOPY-STEP 2DROP REPEAT',
+        '     REC PHASE .  S" /mv" VB @ TREE? .  REC VCOPY-CANCEL R.',
+        '     REC FINISH R.  S" /tree" VA @ HAS? .  S" /tree" VA @ STAGE$ VA @ HAS? .',
+        '     S" /mv" VB @ TREE? .',
+        '     S" /mv" VB @ S" /d/mv" VB @ SCR 4096 REC VMOVE-INIT R.',
+        '     REC VCOPY-STEP R. .  S" /d/mv" VB @ TREE? .  S" /mv" VB @ HAS? .',
+        '     STATE-KEPT? . ;',
+        'T',
+    ], [0, 3, TRUE, BUSY, 0, FALSE, FALSE, TRUE, 0, 0, 0, TRUE, FALSE, TRUE],
+        max_steps=1_200_000_000)
+
+
+# =====================================================================
 #  Places
 # =====================================================================
 

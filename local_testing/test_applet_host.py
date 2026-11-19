@@ -47,6 +47,8 @@ CREATE _ah-endpoint 8 ALLOT
 VARIABLE _ah-reg
 VARIABLE _ah-vfs
 VARIABLE _ah-service-passes
+VARIABLE _ah-svc-calls
+VARIABLE _ah-svc-inst
 \ PICTURE-BYTES
 VARIABLE _ah-screen
 VARIABLE _ah-temp-screen
@@ -274,6 +276,11 @@ VARIABLE _ah-tick-touch
     ['] _ah-paint _ah-app APP.PAINT-XT !
     ['] _ah-request-close _ah-app APP.REQUEST-CLOSE-XT !
     ['] _ah-shutdown _ah-app APP.SHUTDOWN-XT ! ;
+
+\ A service a child asks the host to run each pass, as one stepping a long
+\ copy does: it counts its calls and touches its instance.
+: _ah-svc  ( instance -- worked? )
+    DUP _ah-svc-inst !  CINST-TOUCH  1 _ah-svc-calls +!  TRUE ;
 
 \ A dialog child A asks, answered through ordinary host dispatch.
 VARIABLE _ah-dialog-answer
@@ -693,6 +700,30 @@ VARIABLE _ah-ew
     _ah-slot-a @ AHS.DIRTY @ 0= _ah-assert
     _ah-stack
     ." AH-M7C-SERVICE" CR
+
+    \ A child that asks for service (CINST-F-SERVICE) has its descriptor's
+    \ service run each pass while it asks, in its own UIDL context, and
+    \ the revision the service touches marks its slot alone.  Without the
+    \ ask the service never runs.
+    0 _ah-svc-calls !  0 _ah-slot-a @ AHS.DIRTY !  0 _ah-slot-b @ AHS.DIRTY !
+    ['] _ah-svc _ah-app APP.SERVICE-XT !
+    _ah-host AHOST-SERVICE 0= _ah-assert
+    _ah-svc-calls @ 0= _ah-assert
+    TRUE _ah-inst-a @ CINST-SERVICE!
+    _ah-inst-a @ CINST-SERVICE? _ah-assert
+    _ah-host AHOST-SERVICE _ah-assert
+    _ah-svc-calls @ 1 = _ah-assert
+    _ah-svc-inst @ _ah-inst-a @ = _ah-assert
+    ASHELL-ACTIVE-CTX _ah-slot-a @ AHS.UCTX @ = _ah-assert
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ 0= _ah-assert
+    FALSE _ah-inst-a @ CINST-SERVICE!
+    _ah-host AHOST-SERVICE 0= _ah-assert
+    _ah-svc-calls @ 1 = _ah-assert
+    0 _ah-app APP.SERVICE-XT !
+    0 _ah-slot-a @ AHS.DIRTY !
+    _ah-stack
+    ." AH-M7E-ASKED-SERVICE" CR
 
     \ A capability handler the request bus runs for a child runs as the
     \ child's own callbacks do: in its UIDL context, where its elements are,

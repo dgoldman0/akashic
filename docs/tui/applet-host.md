@@ -100,7 +100,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-DISPATCH-KEY-ID` | `( event id host -- handled? )` | Route a key to one child, such as an overlay |
 | `AHOST-DISPATCH-MOUSE` | `( event host -- handled? )` | Hit-test and route a child mouse event; focused child wins overlapping regions |
 | `AHOST-TICK` | `( host -- )` | Tick eligible live children |
-| `AHOST-SERVICE` | `( host -- worked? )` | Give each live child's UIDL document its pending media work (`UTUI-SERVICE`) and mark a child whose document changed for repaint; at once false when no picture is decoding and no document view has work |
+| `AHOST-SERVICE` | `( host -- worked? )` | Give each live child's UIDL document its pending media work (`UTUI-SERVICE`), run the descriptor's service (`APP.SERVICE-XT`) of each child whose instance asks for it (`CINST-F-SERVICE`, set with `CINST-SERVICE!`), in the child's context, and mark a child whose document or revision changed for repaint; at once false when no picture is decoding, no document view has work and no instance asks for service |
 | `AHOST-PAINT` | `( paint-all fullframe host -- )` | Paint eligible visible children |
 | `AHOST-FIND-INSTANCE` | `( instance host -- slot \| 0 )` | The live slot holding an instance |
 | `AHOST-CALL-SCOPED` | `( xt instance host -- )` | Run xt as the instance's own callbacks run: activated, in its slot's UIDL context, a repaint it asks for marking the slot |

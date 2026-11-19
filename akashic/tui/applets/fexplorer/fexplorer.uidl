@@ -16,6 +16,7 @@
 <item text=Copy do=copy key=Ctrl+C/>
 <item text=Cut do=cut key=Ctrl+X/>
 <item text=Paste do=paste key=Ctrl+V/>
+<item text=Cancel_Paste do=cancel-paste key=Escape/>
 </menu>
 <menu label=View>
 <item id=view-hidden text=Show_Hidden do=toggle-hidden key=Ctrl+H/>
@@ -56,6 +57,7 @@
 <action do=copy key=Ctrl+C/>
 <action do=cut key=Ctrl+X/>
 <action do=paste key=Ctrl+V/>
+<action do=cancel-paste key=Escape/>
 <action do=toggle-hidden key=Ctrl+H/>
 <action do=parent-dir key=Backspace/>
 <action do=show-details key=Alt+1/>

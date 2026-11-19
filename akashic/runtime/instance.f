@@ -90,6 +90,22 @@ PROVIDED akashic-runtime-instance
 : CINST-DESC   ( inst -- desc )  CINST.DESC @ ;
 : CINST-TOUCH  ( inst -- )       1 SWAP CINST.REVISION +! ;
 
+\ Instance flags.  CINST-F-SERVICE: the component has work due between
+\ its ticks, such as a long copy it steps, so a host that runs several
+\ components runs its view's service on every pass while the flag is set.
+1 CONSTANT CINST-F-SERVICE
+
+\ CINST-SERVICE! ( flag inst -- )   Ask for service on every pass, or stop.
+: CINST-SERVICE!  ( flag inst -- )
+    CINST.FLAGS SWAP IF
+        DUP @ CINST-F-SERVICE OR
+    ELSE
+        DUP @ CINST-F-SERVICE INVERT AND
+    THEN SWAP ! ;
+
+\ CINST-SERVICE? ( inst -- flag )
+: CINST-SERVICE?  ( inst -- flag )  CINST.FLAGS @ CINST-F-SERVICE AND 0<> ;
+
 VARIABLE _CINST-NEXT-ID
 1 _CINST-NEXT-ID !
 

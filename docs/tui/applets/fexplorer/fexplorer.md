@@ -61,7 +61,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 |------|-------|-------------|
 | `FEXP-CLIP-COPY` | `( -- )` | Put the selected file or folder on the clipboard to copy. |
 | `FEXP-CLIP-CUT` | `( -- )` | Put the selected file or folder on the clipboard to move. |
-| `FEXP-CLIP-PASTE` | `( -- )` | Copy the clipboard's file or folder, or move it after a cut, into the selected directory, the selected file's directory, or the listed directory, in any place of the set. |
+| `FEXP-CLIP-PASTE` | `( -- )` | Copy the clipboard's file or folder, or move it after a cut, into the selected directory, the selected file's directory, or the listed directory, in any place of the set. The copy then runs a step a pass from File Explorer's service. |
 
 ### Constants
 
@@ -102,7 +102,7 @@ entry no longer exists.
 | **F2** | Rename the selected item |
 | **F5** | Refresh both panes |
 | **Delete** | Confirm and delete the selected item |
-| **Esc** | Close menu / cancel goto overlay |
+| **Esc** | Close menu, cancel the command bar, or cancel a running paste |
 
 ### Tree Sidebar (inherited from explorer.f)
 
@@ -121,7 +121,7 @@ entry no longer exists.
 ## Menu Structure
 
 - **File**: New File, New Folder, Delete, Rename, Refresh, Quit
-- **Edit**: Copy, Cut, Paste
+- **Edit**: Copy, Cut, Paste, Cancel Paste
 - **View**: Show Hidden, Sort by Name/Size/Type, Expand All, Collapse All
 - **Tools**: Go to Path, Properties
 
@@ -223,7 +223,8 @@ while retaining the Explorer guard.
   facts and the reason.
 - One 32 KiB scratch buffer serves a paste's copy, which writes 32 KiB at
   a time and compares the copy with its source 16 KiB at a time, the
-  properties text, and the agent's text preview.
+  properties text, and the agent's text preview. A copy uses it only
+  inside each of its steps, so the others may use it while a paste runs.
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments
 - Copy and cut keep the selected file or folder in the clipboard as its
   place and its path there, as the selection is kept. They refuse a place's
@@ -243,8 +244,21 @@ while retaining the Explorer guard.
   the source cannot be removed, the toast says so, as it does when a
   pasted copy stands but its volume did not confirm the last sync. The
   clipboard is cleared once a cut's paste stands.
-- A paste runs to its end before File Explorer answers again, so a folder
-  of many files keeps Desk waiting while it copies.
+- A paste runs a step a pass (`PLACE-COPY-INIT` or `PLACE-MOVE-INIT`, then
+  `VCOPY-STEP`) from File Explorer's service, which the descriptor names and
+  Desk's host runs while the instance asks for it (`CINST-F-SERVICE`), so
+  Desk keeps answering while a folder of many files copies. Whatever can be
+  refused before anything is written is refused at once. While it runs,
+  the status bar's left label shows what it does and how far it has come:
+  counting the files, copying or moving them as files done of files, or
+  for one file as a percentage of its bytes, checking them, removing a
+  moved source, or cancelling; the label changes only when a figure does.
+  Esc or Edit > Cancel Paste gives the paste up before its commit, and the
+  steps after it remove what it wrote; once a move's copy stands it runs
+  to its end. Copy, cut and another paste wait for the running paste, so
+  the clipboard names its source until it ends. Closing File Explorer
+  during a paste gives it up, or lets a move whose copy stands finish,
+  before File Explorer closes.
 - Create, rename, and post-confirmation delete mutations are bounded
   `VFS-TRANSACTION` operations. Modal confirmation never holds the VFS guard
   across its input/yield loop.

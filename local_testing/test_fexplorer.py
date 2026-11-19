@@ -151,6 +151,10 @@ PASTE_HELPERS = (
     '    S-FD @ VFS-CLOSE? DROP  BACK R@ 2R> COMPARE 0= ;',
     ': HAS?  ( path-a path-u vfs -- flag )',
     '    >R VFS-RP-NOFOLLOW-FINAL R> VFS-RESOLVE-POLICY? NIP 0= ;',
+    # A paste runs from the service a step at a time; PASTE runs it to its
+    # end, as Desk's passes would.
+    ': DRAIN  ( -- )  BEGIN _FEXP-PASTE-SERVICE 0= UNTIL ;',
+    ': PASTE  ( -- )  FEXP-CLIP-PASTE DRAIN ;',
 )
 
 PASTE = NativeForth(
@@ -173,18 +177,18 @@ def pasted(lines):
 
 def test_paste_copies_a_file_between_places_on_two_volumes():
     assert pasted([
-        ': T  FEXP-CLIP-PASTE',
+        ': T  PASTE',
         '     S" alpha bytes" S" /a.txt" VA @ PUT',
         '     S" /d" P-ONE @ SEL  FEXP-CLIP-COPY',
         '     S" /a.txt" P-ONE @ SEL  FEXP-CLIP-COPY',
-        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /" P-TWO @ SEL  PASTE',
         '     S" /a.txt" VB @ S" alpha bytes" SAME? .  S" /a.txt" VA @ HAS? .',
-        '     FEXP-CLIP-PASTE',
-        '     S" /" P-RO @ SEL  FEXP-CLIP-PASTE  S" /ro/a.txt" VB @ HAS? .',
+        '     PASTE',
+        '     S" /" P-RO @ SEL  PASTE  S" /ro/a.txt" VB @ HAS? .',
         # A selected folder, or a selected file's folder, takes the paste.
-        '     S" /sub" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /sub" P-TWO @ SEL  PASTE',
         '     S" /sub/a.txt" VB @ S" alpha bytes" SAME? .',
-        '     S" z" S" /d/z.txt" VA @ PUT  S" /d/z.txt" P-ONE @ SEL  FEXP-CLIP-PASTE',
+        '     S" z" S" /d/z.txt" VA @ PUT  S" /d/z.txt" P-ONE @ SEL  PASTE',
         '     S" /d/a.txt" VA @ HAS? . ;',
         'T',
     ]) == " ".join([
@@ -203,24 +207,24 @@ def test_cut_moves_a_file_between_places_and_says_what_stands():
     assert pasted([
         ': T  S" beta" S" /b.txt" VA @ PUT',
         '     S" /b.txt" P-ONE @ SEL  FEXP-CLIP-CUT',
-        '     S" /sub" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /sub" P-TWO @ SEL  PASTE',
         '     S" /b.txt" VA @ HAS? .  S" /sub/b.txt" VB @ S" beta" SAME? .',
         '     _FEXP-CLIP-OP @ .',
         # A read-only place gives no file to a cut.
         '     S" gamma" S" /ro/c.txt" VB @ PUT',
         '     S" /c.txt" P-RO @ SEL  FEXP-CLIP-CUT',
-        '     S" /" P-ONE @ SEL  FEXP-CLIP-PASTE',
+        '     S" /" P-ONE @ SEL  PASTE',
         '     S" /ro/c.txt" VB @ HAS? .  S" /c.txt" VA @ HAS? .',
         # The copy stands when the source cannot be removed.
         '     S" delta" S" /e.txt" VA @ PUT  -1 F-UNLINK !',
         '     S" /e.txt" P-ONE @ SEL  FEXP-CLIP-CUT',
-        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE  0 F-UNLINK !',
+        '     S" /" P-TWO @ SEL  PASTE  0 F-UNLINK !',
         '     S" /e.txt" VA @ HAS? .  S" /e.txt" VB @ S" delta" SAME? .',
         '     _FEXP-CLIP-OP @ .',
         # Inside one volume a cut is a rename.
         '     S" eps" S" /m.txt" VA @ PUT',
         '     S" /m.txt" P-ONE @ SEL  FEXP-CLIP-CUT',
-        '     S" /d" P-ONE @ SEL  FEXP-CLIP-PASTE',
+        '     S" /d" P-ONE @ SEL  PASTE',
         '     S" /m.txt" VA @ HAS? .  S" /d/m.txt" VA @ S" eps" SAME? . ;',
         'T',
     ]) == " ".join([
@@ -246,7 +250,7 @@ def test_a_path_longer_than_512_bytes_selects_and_pastes():
         ': T  0 LPU !  DEEPER DEEPER DEEPER  S" /" VA @ VFS-CD? THROW',
         '     S" f" LP+  S" deep" LP LPU @ VA @ PUT  LPU @ .',
         '     LP LPU @ P-ONE @ SEL  _FEXP-SEL-LEN @ .',
-        '     FEXP-CLIP-COPY  S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     FEXP-CLIP-COPY  S" /" P-TWO @ SEL  PASTE',
         '     S" /f" VB @ S" deep" SAME? . ;',
         'T',
     ]) == "605 605 [toast Copied to clipboard ] [toast Pasted! ] -1"
@@ -282,7 +286,7 @@ def test_a_paste_shows_the_new_item_count():
         '     S" /" _FEXP-DIR-PATH! DROP  P-TWO @ _FEXP-DIR-PLACE !',
         '     S" /" P-TWO @ SEL  _FEXP-REFRESH-DETAIL  ITEMS.',
         '     S" /a.txt" P-ONE @ SEL  FEXP-CLIP-COPY',
-        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE  ITEMS. ;',
+        '     S" /" P-TWO @ SEL  PASTE  ITEMS. ;',
         'T',
     ]) == "2 items [toast Copied to clipboard ] [toast Pasted! ] 3 items"
 
@@ -296,17 +300,17 @@ def test_paste_copies_and_moves_folders_between_places():
         '     S" /" P-ONE @ SEL  FEXP-CLIP-COPY',
         # A folder copies to another volume with all it holds.
         '     S" /tree" P-ONE @ SEL  FEXP-CLIP-COPY',
-        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /" P-TWO @ SEL  PASTE',
         '     S" /tree/a.txt" VB @ S" alpha" SAME? .',
         '     S" /tree/in/b.txt" VB @ S" beta" SAME? .',
         # It cannot go inside itself.
-        '     S" /tree/in" P-ONE @ SEL  FEXP-CLIP-PASTE  S" /tree/in/tree" VA @ HAS? .',
+        '     S" /tree/in" P-ONE @ SEL  PASTE  S" /tree/in/tree" VA @ HAS? .',
         # A cut moves it by a rename inside one volume, and across volumes.
         '     S" /tree" P-TWO @ SEL  FEXP-CLIP-CUT',
-        '     S" /sub" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /sub" P-TWO @ SEL  PASTE',
         '     S" /tree" VB @ HAS? .  S" /sub/tree/in/b.txt" VB @ S" beta" SAME? .',
         '     S" /tree" P-ONE @ SEL  FEXP-CLIP-CUT',
-        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE',
+        '     S" /" P-TWO @ SEL  PASTE',
         '     S" /tree" VA @ HAS? .  S" /tree/in/b.txt" VB @ S" beta" SAME? . ;',
         'T',
     ]) == " ".join([
@@ -315,4 +319,41 @@ def test_paste_copies_and_moves_folders_between_places():
         "[notice Paste refused: a folder cannot go inside itself ]", "0",
         "[toast Cut to clipboard ]", "[toast Pasted! ]", "0 -1",
         "[toast Cut to clipboard ]", "[toast Pasted! ]", "0 -1",
+    ])
+
+
+def test_a_paste_runs_by_steps_shows_its_progress_and_cancels():
+    """A paste starts at once and runs from the service: the status bar's
+    left label counts the files, then says how many are copied; copy, cut
+    and a second paste wait for it; a cancel gives it up, the steps after
+    it remove the stage, and the label shows the item count again.  The
+    same paste then runs to its end."""
+    assert pasted([
+        ': LABEL.  _FEXP-SLEFT _FEXP-SLEFT-L @ TYPE ."  | " ;',
+        ': STEP-TO-COPIED  BEGIN _FEXP-PASTE-SERVICE DROP',
+        '    _FEXP-SLEFT 9 S" Copying 1" COMPARE 0= UNTIL ;',
+        ': T  S" tree" VA @ VFS-MKDIR THROW  S" /tree" VA @ VFS-CD? THROW',
+        '     S" in" VA @ VFS-MKDIR THROW  S" /" VA @ VFS-CD? THROW',
+        '     S" alpha" S" /tree/a.txt" VA @ PUT  S" beta" S" /tree/in/b.txt" VA @ PUT',
+        '     S" gamma" S" /tree/c.txt" VA @ PUT',
+        '     S" /" _FEXP-DIR-PATH! DROP  P-TWO @ _FEXP-DIR-PLACE !  _FEXP-REFRESH-DETAIL',
+        '     S" /tree" P-ONE @ SEL  FEXP-CLIP-COPY',
+        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE  _FEXP-PASTING @ .  LABEL.',
+        '     STEP-TO-COPIED LABEL.',
+        '     FEXP-CLIP-COPY  FEXP-CLIP-CUT  FEXP-CLIP-PASTE',
+        '     _FEXP-PASTE-CANCEL LABEL.  DRAIN  _FEXP-PASTING @ .  LABEL.',
+        '     S" /tree" VB @ HAS? .  S" /tree" VB @ VFS-RESOLVE 0= .',
+        '     PASTE  S" /tree/in/b.txt" VB @ S" beta" SAME? .  LABEL. ;',
+        'T',
+    ]) == " ".join([
+        "[toast Copied to clipboard ]", "-1",
+        "Counting files, Esc cancels |",
+        "Copying 1 of 3 files, Esc cancels |",
+        "[toast A paste is running; Esc cancels it ]",
+        "[toast A paste is running; Esc cancels it ]",
+        "[toast A paste is running; Esc cancels it ]",
+        "Cancelling the paste |",
+        "[toast Paste cancelled ]", "0", "2 items |",
+        "0", "-1",
+        "[toast Pasted! ]", "-1", "3 items |",
     ])

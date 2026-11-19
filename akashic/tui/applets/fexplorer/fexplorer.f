@@ -15,6 +15,7 @@
 \    EVENT-XT     — intercept Backspace (parent dir); return 0 for rest
 \    SHUTDOWN-XT  — free explorer + list widgets
 \    PAINT-XT     — draw the command prompt over the status bar
+\    SERVICE-XT   — step a running paste, one step a pass
 \
 \  Features:
 \   - Tree sidebar (EXPL-* widget mounted on <region id="sidebar">):
@@ -27,7 +28,8 @@
 \     link in a document selects the file it names and previews it
 \   - Menu bar via <menubar>/<menu>/<item> + do= actions
 \   - Status bar via <status>/<label> elements
-\   - Clipboard (copy / cut / paste across the set's places)
+\   - Clipboard (copy / cut / paste across the set's places); a paste
+\     runs a step a pass, shows its progress and Esc cancels it
 \   - Go-to-path dialog (Ctrl+G)
 \   - Sort modes (name / size / type)
 \   - Properties dialog (Ctrl+I)
@@ -289,9 +291,23 @@ _FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-KEY    \ key of the listed directory
 _FEXP-CURRENT-STATE LST-COLUMN-SIZE 3 * CMP-FIELD: _FEXP-COLUMNS
 
 \ Scratch for copying files, the properties text and the agent's preview.
+\ A copy uses it only inside each of its steps, so the others may use it
+\ while a paste runs.
 _FEXP-CURRENT-STATE _FEXP-SCRATCH-CAP CMP-FIELD: _FEXP-SCRATCH
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-PATH-BUF
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-PATH-LEN
+
+\ A paste in progress: the copy record its steps work in (vfs-copy.f),
+\ whether it runs, whether it moves, and whether it was cancelled.  The
+\ service steps it while it runs, and the status bar's left label shows
+\ how far it has come.
+_FEXP-CURRENT-STATE VCOPY-SIZE CMP-FIELD: _FEXP-PASTE-JOB
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PASTING
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PASTE-CUT
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PASTE-CANCELLED
+64 CONSTANT _FEXP-PROGRESS-CAP
+_FEXP-CURRENT-STATE _FEXP-PROGRESS-CAP CMP-FIELD: _FEXP-PROGRESS
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-PROGRESS-L
 
 \ Status bar text scratch: the item count, and the selection's place
 \ label and path.
@@ -632,8 +648,58 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
     _FEXP-SEL-PATH OVER _FEXP-SRIGHT + _FEXP-SEL-LEN @ CMOVE
     _FEXP-SEL-LEN @ + _FEXP-SRIGHT SWAP ;
 
-: _FEXP-UPDATE-STATUS  ( -- )
-    \ Left: "N items"
+\ While a paste runs, the left label says how far it has come: what it is
+\ doing, its files done of its files, or for one file a percentage of its
+\ bytes, and that Esc cancels it while it still can.
+: _FPG+  ( a u -- )
+    _FEXP-PROGRESS-CAP _FEXP-PROGRESS-L @ - MIN
+    DUP >R _FEXP-PROGRESS _FEXP-PROGRESS-L @ + SWAP CMOVE R> _FEXP-PROGRESS-L +! ;
+: _FPGN  ( n -- )  NUM>STR _FPG+ ;
+
+VARIABLE _FPG-FD  VARIABLE _FPG-F  VARIABLE _FPG-BD  VARIABLE _FPG-B
+
+\ Its figures: nothing before anything is counted, as for a move by one
+\ rename.
+: _FEXP-PROGRESS-COUNT  ( -- )
+    _FPG-F @ 0= IF EXIT THEN
+    _FPG-F @ 1 > IF
+        S"  " _FPG+ _FPG-FD @ _FPGN S"  of " _FPG+ _FPG-F @ _FPGN S"  files" _FPG+
+        EXIT
+    THEN
+    S"  " _FPG+
+    _FPG-B @ 0= IF 100 ELSE _FPG-BD @ 100 * _FPG-B @ / THEN _FPGN S" %" _FPG+ ;
+
+: _FEXP-PROGRESS-TEXT  ( -- )
+    0 _FEXP-PROGRESS-L !
+    _FEXP-PASTE-JOB VCOPY-PROGRESS >R _FPG-B ! _FPG-BD ! _FPG-F ! _FPG-FD ! R>
+    CASE
+        VCOPY-P-COUNTING OF S" Counting files, Esc cancels" _FPG+ ENDOF
+        VCOPY-P-COPYING OF
+            _FEXP-PASTE-CUT @ IF S" Moving" ELSE S" Copying" THEN _FPG+
+            _FEXP-PROGRESS-COUNT  S" , Esc cancels" _FPG+
+        ENDOF
+        VCOPY-P-CHECKING OF
+            S" Checking" _FPG+ _FEXP-PROGRESS-COUNT  S" , Esc cancels" _FPG+
+        ENDOF
+        VCOPY-P-FINISHING OF S" Removing the source" _FPG+ ENDOF
+        VCOPY-P-GIVING-UP OF S" Cancelling the paste" _FPG+ ENDOF
+    ENDCASE ;
+
+\ _FEXP-SHOW-PROGRESS ( -- )
+\   Put the paste's progress on the left label when it differs from what
+\   the label shows, so a step that moves no figure changes nothing drawn.
+: _FEXP-SHOW-PROGRESS  ( -- )
+    _FEXP-PROGRESS-TEXT
+    _FEXP-PROGRESS _FEXP-PROGRESS-L @ _FEXP-SLEFT _FEXP-SLEFT-L @ COMPARE
+    0= IF EXIT THEN
+    _FEXP-PROGRESS _FEXP-SLEFT _FEXP-PROGRESS-L @ CMOVE
+    _FEXP-PROGRESS-L @ _FEXP-SLEFT-L !
+    _FEXP-E-SBAR-L @ ?DUP IF
+        S" text" _FEXP-SLEFT _FEXP-SLEFT-L @ UTUI-SET-ATTR
+    THEN ;
+
+\ _FEXP-SHOW-COUNT ( -- )   The left label: "N items".
+: _FEXP-SHOW-COUNT  ( -- )
     _FEXP-CNT @ NUM>STR
     _FEXP-SLEFT SWAP CMOVE
     _FEXP-CNT @ NUM>STR NIP
@@ -644,7 +710,11 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
     \ Update UIDL label element text= attribute
     _FEXP-E-SBAR-L @ ?DUP IF
         S" text" _FEXP-SLEFT _FEXP-SLEFT-L @ UTUI-SET-ATTR
-    THEN
+    THEN ;
+
+: _FEXP-UPDATE-STATUS  ( -- )
+    \ Left: "N items", or the progress of a paste that runs
+    _FEXP-PASTING @ IF _FEXP-SHOW-PROGRESS ELSE _FEXP-SHOW-COUNT THEN
     \ Right: the selection
     _FEXP-E-SBAR-R @ ?DUP IF
         S" text" _FEXP-STATUS-PATH UTUI-SET-ATTR
@@ -655,11 +725,19 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
 \ =====================================================================
 
 \ The clipboard keeps the file or folder a copy or cut chose, and a paste
-\ hands it to PLACE-COPY or PLACE-MOVE (utils/fs/vfs-copy.f) with the
+\ starts PLACE-COPY-INIT or PLACE-MOVE-INIT (utils/fs/vfs-copy.f) with the
 \ destination, which may be a place on another volume.  The copy writes a
 \ stage, a file or a whole folder, reads it back and only then renames it,
 \ so a failed paste leaves nothing, and a cut removes its source only once
-\ the copy stands.
+\ the copy stands.  The paste runs a step at a time from File Explorer's
+\ service, so Desk keeps answering while it copies; Esc or Edit > Cancel
+\ Paste gives it up before its commit, and the clipboard keeps the
+\ paste's source until it ends, so copy, cut and paste wait for it.
+
+: _FEXP-PASTE-BUSY?  ( -- flag )
+    _FEXP-PASTING @ DUP IF
+        S" A paste is running; Esc cancels it" 2000 ASHELL-TOAST-WARNING
+    THEN ;
 
 : _FEXP-CLIP-CLEAR  ( -- )
     0 _FEXP-CLIP-PATH-LEN !
@@ -690,11 +768,13 @@ VARIABLE _FCS-OP
     ['] _FEXP-CLIP-SET-BODY VFS-TRANSACTION ;
 
 : FEXP-CLIP-COPY  ( -- )
+    _FEXP-PASTE-BUSY? IF EXIT THEN
     _FEXP-CLIP-COPY _FEXP-CLIP-SET IF
         S" Copied to clipboard" 2000 ASHELL-TOAST
     THEN ;
 
 : FEXP-CLIP-CUT  ( -- )
+    _FEXP-PASTE-BUSY? IF EXIT THEN
     _FEXP-CLIP-CUT _FEXP-CLIP-SET IF
         S" Cut to clipboard" 2000 ASHELL-TOAST
     THEN ;
@@ -803,11 +883,61 @@ VARIABLE _FPA-PLACE
     _FEXP-REFRESH-AFTER-MUTATION
     3500 ASHELL-TOAST-WARNING ;
 
+\ _FEXP-SERVICE! ( flag -- )   Ask the host to run the service on every
+\   pass, or stop asking.
+: _FEXP-SERVICE!  ( flag -- )
+    _FEXP-CURRENT-INSTANCE @ ?DUP IF CINST-SERVICE! ELSE DROP THEN ;
+
+\ _FEXP-PASTE-ENDED ( ior -- )
+\   The paste's copy has ended with IOR: say so, and show the item count
+\   again.  A cancelled paste whose answer is not 0 left part of its copy
+\   hidden under the stage name.
+: _FEXP-PASTE-ENDED  ( ior -- )
+    0 _FEXP-PASTING !  FALSE _FEXP-SERVICE!
+    _FEXP-UPDATE-STATUS
+    _FEXP-PASTE-CANCELLED @ IF
+        0 _FEXP-PASTE-CANCELLED !
+        IF
+            S" Paste cancelled, but part of its copy stays hidden"
+            3500 ASHELL-TOAST-WARNING
+        ELSE
+            S" Paste cancelled" 1500 ASHELL-TOAST
+        THEN EXIT
+    THEN
+    _FEXP-PASTED ;
+
+\ _FEXP-PASTE-SERVICE ( -- worked? )
+\   One step of the running paste, and the progress it shows.  The step
+\   that ends the paste reports what it did.
+: _FEXP-PASTE-SERVICE  ( -- worked? )
+    _FEXP-PASTING @ 0= IF FALSE _FEXP-SERVICE! FALSE EXIT THEN
+    _FEXP-PASTE-JOB VCOPY-STEP SWAP IF DROP _FEXP-SHOW-PROGRESS TRUE EXIT THEN
+    _FEXP-PASTE-ENDED TRUE ;
+
+\ _FEXP-PASTE-CANCEL ( -- )
+\   Give the running paste up before its commit.  A file's copy goes at
+\   once; a folder's stage goes by the steps that follow.  A move whose
+\   copy stands goes on removing its source.
+: _FEXP-PASTE-CANCEL  ( -- )
+    _FEXP-PASTING @ 0= _FEXP-PASTE-CANCELLED @ OR IF EXIT THEN
+    _FEXP-PASTE-JOB VCOPY-CANCEL
+    DUP VFS-IOR-REASON VFS-R-BUSY = IF
+        DROP S" Too late to cancel: the copy stands" 2000 ASHELL-TOAST-WARNING EXIT
+    THEN
+    -1 _FEXP-PASTE-CANCELLED !
+    _FEXP-PASTE-JOB VCOPY-PROGRESS NIP NIP NIP NIP VCOPY-P-IDLE = IF
+        _FEXP-PASTE-ENDED EXIT
+    THEN
+    DROP _FEXP-SHOW-PROGRESS ;
+
 \ FEXP-CLIP-PASTE ( -- )
 \   Copy the clipboard's file or folder, or move it after a cut, into the
 \   selected directory, the selected file's directory, or the listed
-\   directory, in whichever of the set's places that is.
+\   directory, in whichever of the set's places that is.  What can be
+\   refused before anything is written is refused at once; the copy then
+\   runs from the service.
 : FEXP-CLIP-PASTE  ( -- )
+    _FEXP-PASTE-BUSY? IF EXIT THEN
     _FEXP-CLIP-OP @ _FEXP-CLIP-NONE = IF
         S" Clipboard empty" 1500 ASHELL-TOAST EXIT
     THEN
@@ -820,9 +950,24 @@ VARIABLE _FPA-PLACE
     _FEXP-PATH-LEN !
     _FEXP-CLIP-PATH _FEXP-CLIP-PATH-LEN @ _FEXP-CLIP-PLACE @
     _FEXP-PATH-BUF _FEXP-PATH-LEN @ _FPA-PLACE @
-    _FEXP-SCRATCH _FEXP-SCRATCH-CAP
-    _FEXP-CUT? IF PLACE-MOVE ELSE PLACE-COPY THEN
-    _FEXP-PASTED ;
+    _FEXP-SCRATCH _FEXP-SCRATCH-CAP _FEXP-PASTE-JOB
+    _FEXP-CUT? IF PLACE-MOVE-INIT ELSE PLACE-COPY-INIT THEN
+    ?DUP IF _FEXP-PASTE-REFUSED EXIT THEN
+    -1 _FEXP-PASTING !  0 _FEXP-PASTE-CANCELLED !  _FEXP-CUT? _FEXP-PASTE-CUT !
+    TRUE _FEXP-SERVICE!
+    _FEXP-SHOW-PROGRESS ;
+
+\ FEXP-SERVICE-CB ( instance -- worked? )
+\   The descriptor's service: a step of a running paste each pass.
+: FEXP-SERVICE-CB  ( instance -- worked? )  _FEXP-ACTIVATE _FEXP-PASTE-SERVICE ;
+
+\ Closing File Explorer while a paste runs gives the paste up, or lets a
+\ move whose copy stands remove its source, before the record goes.
+: _FEXP-PASTE-SHUTDOWN  ( -- )
+    _FEXP-PASTING @ 0= IF EXIT THEN
+    _FEXP-PASTE-JOB VCOPY-CANCEL DROP
+    BEGIN _FEXP-PASTE-JOB VCOPY-STEP DROP 0= UNTIL
+    0 _FEXP-PASTING !  FALSE _FEXP-SERVICE! ;
 
 \ =====================================================================
 \  §11 — Refresh detail list helper
@@ -1124,6 +1269,7 @@ VARIABLE _FDEL-LISTED
 : _FEXP-DO-COPY       ( elem -- ) DROP FEXP-CLIP-COPY ;
 : _FEXP-DO-CUT        ( elem -- ) DROP FEXP-CLIP-CUT ;
 : _FEXP-DO-PASTE      ( elem -- ) DROP FEXP-CLIP-PASTE ;
+: _FEXP-DO-CANCEL-PASTE ( elem -- ) DROP _FEXP-PASTE-CANCEL ;
 
 \ The View menu checks Show Hidden while hidden files show, and the sort in
 \ use.
@@ -1281,6 +1427,8 @@ VARIABLE _FPR-LEN
     FEXP-SORT-NAME _FEXP-SORT !
     0 _FEXP-CNT ! 0 _FEXP-ROWS !
     _FEXP-CLIP-CLEAR
+    0 _FEXP-PASTING !  0 _FEXP-PASTE-CUT !  0 _FEXP-PASTE-CANCELLED !
+    0 _FEXP-PROGRESS-L !
     0 _FEXP-DEL-LEN ! 0 _FEXP-DEL-PLACE !
     0 _FEXP-PROMPT !
     0 _FEXP-PROMPT-RGN !
@@ -1358,6 +1506,7 @@ VARIABLE _FPR-LEN
     S" copy"           ['] _FEXP-DO-COPY            UTUI-DO!
     S" cut"            ['] _FEXP-DO-CUT             UTUI-DO!
     S" paste"          ['] _FEXP-DO-PASTE           UTUI-DO!
+    S" cancel-paste"   ['] _FEXP-DO-CANCEL-PASTE    UTUI-DO!
     S" toggle-hidden"  ['] _FEXP-DO-TOGGLE-HIDDEN   UTUI-DO!
     S" sort-name"      ['] _FEXP-DO-SORT-NAME       UTUI-DO!
     S" sort-size"      ['] _FEXP-DO-SORT-SIZE       UTUI-DO!
@@ -1411,6 +1560,7 @@ VARIABLE _FPR-LEN
 
 : FEXP-SHUTDOWN-CB  ( instance -- )
     _FEXP-ACTIVATE
+    _FEXP-PASTE-SHUTDOWN
     \ Detach widgets from UIDL elements before freeing
     _FEXP-E-SIDEBAR @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
     _FEXP-E-DETAIL @  ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
@@ -1708,6 +1858,7 @@ CREATE FEXP-COMP-DESC COMP-DESC ALLOT
     ['] FEXP-PAINT-CB    OVER APP.PAINT-XT !
     ['] FEXP-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     ['] _FEXP-ACTIVATE   OVER APP.ACTIVATE-XT !
+    ['] FEXP-SERVICE-CB  OVER APP.SERVICE-XT !
     \ S" pushes two values — switch to R-stack for desc
     S" tui/applets/fexplorer/fexplorer.uidl"
                          ROT DUP >R

@@ -52,7 +52,7 @@ zero-fill with `APP-DESC-INIT`.
 | +144 | `_AD-ACTIVATE` | `APP.ACTIVATE-XT` | `( instance -- )` | Bind instance-relative state |
 | +152 | `_AD-REQUEST-CLOSE` | `APP.REQUEST-CLOSE-XT` | `( reason instance -- decision )` | Negotiate normal close |
 | +160 | `_AD-QUIESCE` | `APP.QUIESCE-XT` | `( instance -- ior )` | Bounded pre-terminal-close source barrier |
-| +168 | `_AD-SERVICE` | `APP.SERVICE-XT` | `( instance -- worked? )` | Optional work due on every loop pass |
+| +168 | `_AD-SERVICE` | `APP.SERVICE-XT` | `( instance -- worked? )` | Optional work due on every loop pass; a host of several applets runs it only while the instance asks (`CINST-F-SERVICE`) |
 
 Each accessor takes `( desc -- addr )` and returns the field address,
 suitable for `@` or `!`.

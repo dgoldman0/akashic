@@ -269,28 +269,32 @@ components that exchange files keep.
 In `utils/fs/vfs-copy.f`:
 
 ```forth
-VCOPY-INIT   ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u copy -- ior )
-VCOPY-STEP   ( copy -- more? ior )
-VCOPY-CANCEL ( copy -- ior )
+VCOPY-INIT  VMOVE-INIT  ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u copy -- ior )
+PLACE-COPY-INIT  PLACE-MOVE-INIT
+                        ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u copy -- ior )
+VCOPY-STEP     ( copy -- more? ior )
+VCOPY-CANCEL   ( copy -- ior )
+VCOPY-PROGRESS ( copy -- files-done files bytes-done bytes phase )
 VFS-COPY  VFS-MOVE      ( src-a src-u src-vfs dst-a dst-u dst-vfs scratch-a scratch-u -- ior )
 PLACE-COPY  PLACE-MOVE  ( src-a src-u src-place dst-a dst-u dst-place scratch-a scratch-u -- ior )
 ```
 
-`VFS-COPY` is the loop over `VCOPY-STEP`, which moves one chunk, so an
-applet can also step a long copy from its tick. The copy refuses an
-existing destination name. It writes a stage file in the destination
+A copy or a move runs as steps in a record its caller keeps, so an
+applet steps a long one from its loop, as File Explorer's paste does,
+and `VFS-COPY` and the other words without `-INIT` run the same steps to
+the end. The copy refuses an existing destination name. It writes a
+stage, a file or a folder holding the whole tree, in the destination
 folder under the reserved `.s-` name that `VREPL-DERIVE-PATHS!` derives,
 syncs, compares the stage with the source in halves of the caller's
 scratch, renames the stage to the final name and syncs. The rename is the
-commit: before it the final name does not exist, and a failure removes
-the stage. The file never needs to fit in memory. `VFS-MOVE` inside one
-instance is `VFS-RENAME-AT`. Across instances it is the copy, then
-`VFS-RM` of the source and a sync; a failed delete reports that the copy
-stands and the source was kept. An answer that carries `VFS-IOR-F-PARTIAL`
-says so: the destination file stands though a later step failed. The word
-copies files, and a folder copy is a walk that calls it.
-A stage left by a crash is removed when the same copy is retried and is
-otherwise a hidden file. [vfs-copy.md](vfs-copy.md) describes the words
+commit: before it the final name does not exist, and a failure or a
+cancel removes the stage. Nothing needs to fit in memory. `VFS-MOVE`
+inside one instance is `VFS-RENAME-AT`. Across instances it is the copy,
+then the source's removal and a sync; a failed removal reports that the
+copy stands and the source was kept. An answer that carries
+`VFS-IOR-F-PARTIAL` says so: the destination stands though a later step
+failed. A stage left by a crash is removed when the same copy is retried
+and is otherwise hidden. [vfs-copy.md](vfs-copy.md) describes the words
 and their answers.
 
 ### The explorer widget
