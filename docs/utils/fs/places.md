@@ -620,7 +620,11 @@ shipping form's places.
   component's records in that component's folder through
   `PACT-STORE-PLACES`, which the `practice-contracts` profile checks
   writable, shared where the home is the documents place, and read-only
-  in recovery. The user volume's transaction size comes next.
+  in recovery. While a run streams, the Agent saves its conversation again
+  no sooner than nine times as long as its last save took, and never within
+  500 ms, so saving takes at most a tenth of the run on any volume
+  (Decided, 2026-11-19; [persistence.md](../../tui/applets/agent/persistence.md)).
+  The user volume's transaction size comes next.
 
 What slice 4 leaves:
 
@@ -633,11 +637,7 @@ What slice 4 leaves:
   of its own before slice 9, and the Agent and the sandbox stay off in it,
   as they are now (Decided, 2026-11-18).
 - With records as the home, the other writers meet ext4 in a build with
-  the user volume (slice 7). The Agent's conversation store saves its
-  first, absent slot with a truncate that changes nothing, which ext4's
-  writer refuses, so Desk shows `history error`; the Practice head no
-  longer truncates an empty slot. The Agent saves every 500 ms while a
-  256 KiB save takes 2 to 5 s.
+  the user volume (slice 7).
 - Power cuts during a save, a copy's stage write and its rename are
   qualified in slice 8.
 

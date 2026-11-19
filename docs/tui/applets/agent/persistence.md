@@ -38,9 +38,14 @@ stored message.
 
 The runtime persists immediately when a prompt starts, after approval
 decisions and explicit clearing, and during shutdown. Event-driven changes are
-persisted from `ARUNTIME-PUMP`; active streaming is throttled to one snapshot
-per 500 milliseconds. `ARUNTIME.STORE-STATUS` exposes the latest storage
-result. If existing files are invalid, the runtime keeps its in-memory
+persisted from `ARUNTIME-PUMP`. While a run streams, a save blocks the pump,
+and a whole snapshot costs half a second or more on the user volume, so the
+runtime saves again no sooner than 500 milliseconds after its last save and no
+sooner than nine times as long as that save took
+(`ARUNTIME.NEXT-PERSIST-MS`). Saving then takes at most a tenth of a streaming
+run's time on any volume, and a crash loses at most that interval's streamed
+text; the saves above still happen at once. `ARUNTIME.STORE-STATUS` exposes
+the latest storage result. If existing files are invalid, the runtime keeps its in-memory
 conversation but refuses to overwrite the damaged evidence automatically.
 
 ## Snapshot Format
