@@ -117,14 +117,22 @@ memory and an arbitrary fixed mutation row limit.
 
 ## Durable owner
 
-`repository.f` is the sole owner of Library's private topology:
+`repository.f` is the sole owner of Library's private topology, a folder
+named `library` inside the folder it is given, which is the Library
+instance's home folder:
 
 ```text
-/library/root-0             /library/root-1
-/library/pages-0            /library/pages-1
-/library/segments-0         /library/segments-1
-/library/compact-root-0     /library/compact-root-1
+library/root-0             library/root-1
+library/pages-0            library/pages-1
+library/segments-0         library/segments-1
+library/compact-root-0     library/compact-root-1
 ```
+
+`LIBRARY-REPOSITORY-INIT` takes that folder's volume path first, as the
+controller binds it once with `PFOLDER-BIND`, and composes each path of the
+layout once and keeps it in its record; provisioning makes the `library`
+folder inside it. In the linked build and the test sets the home is the
+volume's root, so the files are `/library/root-0` and the rest.
 
 The validated A/B root selects one data bank. The application-root page names
 Library's logical generation, mutation sequence, aggregate counts, bootstrap

@@ -1085,10 +1085,12 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         "collection-values.f",
     }
     assert direct_requires["query.f"] == {"persistence-adapter.f"}
+    # The repository lays its files out under the folder its holder binds.
     assert direct_requires["repository.f"] == {
         "persistence-adapter.f",
         "../../../persistence/compaction.f",
         "../../../math/sha3.f",
+        "../../../utils/fs/place-folder.f",
     }
     assert direct_requires["persistence-adapter.f"] == {
         "../../../persistence/store.f",

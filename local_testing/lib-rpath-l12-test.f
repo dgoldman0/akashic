@@ -136,7 +136,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-stack ;
 
 : _LRP12-repository-init  ( -- )
-    _LRP12-vfs @
+    S" /" _LRP12-vfs @
     _LRP12-cache-0 _LRP12-cache-1
     _LRP12-builder-cache-0 _LRP12-builder-cache-1
     _LRP12-guard _LRP12-builder-guard
@@ -219,7 +219,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     ENDCASE ;
 
 : _LRP12-role-names!  ( role -- flag )
-    DUP _LIBREPO-EVIDENCE-PATH$ 0= IF
+    DUP _LRP12-repository _LIBREPO-EVIDENCE-PATH$ 0= IF
         2DROP DROP 0 EXIT
     THEN
     _LRP12-path-u ! _LRP12-path-a !
@@ -252,7 +252,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-role-names! 0= IF 0 EXIT THEN
     _LRP12-target-a @ _LRP12-link-target-a !
     _LRP12-target-u @ _LRP12-link-target-u !
-    _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
+    _LRP12-repository _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
     DUP 0= IF DROP 0 EXIT THEN _LRP12-library-in !
     _LRP12-leaf-a @ _LRP12-leaf-u @
     VFS-T-SYMLINK 900 1
@@ -267,7 +267,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
 
 : _LRP12-make-role-directory  ( role -- flag )
     _LRP12-role-names! 0= IF 0 EXIT THEN
-    _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
+    _LRP12-repository _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
     DUP 0= IF DROP 0 EXIT THEN
     _LRP12-vfs @ V.CWD !
     _LRP12-leaf-a @ _LRP12-leaf-u @
@@ -336,7 +336,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
 
     _LRP12-repository _LIBREPO-ENSURE-DIRECTORY
         LIBRARY-REPOSITORY-S-OK _LRP12-status
-    _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
+    _LRP12-repository _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
     DUP 0<> _LRP12-assert _LRP12-library-in !
     S" /library/pages-0-target" _LRP12-vfs @ VFS-CREATE
         DUP 0<> _LRP12-assert _LRP12-target-in !
@@ -351,10 +351,10 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-readlink-calls @ 0= _LRP12-assert
     _LRP12-target-in @ IN.SIZE-LO @ 0= _LRP12-assert
     _LRP12-target-in @ IN.SIZE-HI @ 0= _LRP12-assert
-    _LIBREPO-SEGMENTS-0$ _LRP12-resolve-nofollow
+    _LRP12-repository _LIBREPO-SEGMENTS-0$ _LRP12-resolve-nofollow
         0= _LRP12-assert
     _LRP12-clean? _LRP12-assert
-    _LIBREPO-PAGES-0$ _LRP12-vfs @ VFS-RM 0= _LRP12-assert
+    _LRP12-repository _LIBREPO-PAGES-0$ _LRP12-vfs @ VFS-RM 0= _LRP12-assert
     S" /library/pages-0-target" _LRP12-vfs @ VFS-RM
         0= _LRP12-assert
     _LRP12-stack ;
@@ -368,8 +368,8 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-repository LIBRARY-REPOSITORY-ACTIVE-BANK@
         PERSIST-DATA-BANK-0 = _LRP12-assert
 
-    _LIBREPO-PAGES-1$ _LRP12-vfs @ VFS-RM 0= _LRP12-assert
-    _LIBREPO-SEGMENTS-1$ _LRP12-vfs @ VFS-RM 0= _LRP12-assert
+    _LRP12-repository _LIBREPO-PAGES-1$ _LRP12-vfs @ VFS-RM 0= _LRP12-assert
+    _LRP12-repository _LIBREPO-SEGMENTS-1$ _LRP12-vfs @ VFS-RM 0= _LRP12-assert
     _LRP12-owner-reset
     _LRP12-repository _LRP12-work LIBRARY-REPOSITORY-LOAD
         LIBRARY-REPOSITORY-S-OK _LRP12-status
@@ -377,9 +377,9 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
         PERSIST-DATA-BANK-0 = _LRP12-assert
     _LRP12-clean? _LRP12-assert
 
-    _LIBREPO-PAGES-1$ _LRP12-vfs @ VFS-CREATE
+    _LRP12-repository _LIBREPO-PAGES-1$ _LRP12-vfs @ VFS-CREATE
         0<> _LRP12-assert
-    _LIBREPO-SEGMENTS-1$ _LRP12-vfs @ VFS-CREATE
+    _LRP12-repository _LIBREPO-SEGMENTS-1$ _LRP12-vfs @ VFS-CREATE
         0<> _LRP12-assert
 
     _LRP12-report _LRP12-repository _LRP12-work
@@ -392,23 +392,23 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
         LIBRARY-REPOSITORY-ROOT-MIRROR-REPAIR
         LIBRARY-REPOSITORY-S-OK _LRP12-status
 
-    _LIBREPO-COMPACT-ROOT-0$ _LRP12-vfs @ VFS-CREATE
+    _LRP12-repository _LIBREPO-COMPACT-ROOT-0$ _LRP12-vfs @ VFS-CREATE
         0<> _LRP12-assert
-    _LIBREPO-COMPACT-ROOT-1$ _LRP12-vfs @ VFS-CREATE
+    _LRP12-repository _LIBREPO-COMPACT-ROOT-1$ _LRP12-vfs @ VFS-CREATE
         0<> _LRP12-assert
     _LRP12-repository _LIBREPO-TOPOLOGY-ALLOW-ABSENT
         LIBRARY-REPOSITORY-S-OK _LRP12-status
     _LRP12-stack ;
 
 : _LRP12-rename-library-away  ( -- flag )
-    _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
+    _LRP12-repository _LIBREPO-DIRECTORY$ _LRP12-resolve-nofollow
     DUP 0= IF DROP 0 EXIT THEN
     DUP IN.TYPE @ VFS-T-DIR <> IF DROP 0 EXIT THEN
     DUP _LRP12-library-in !
     S" library-target" ROT _LRP12-vfs @ VFS-RENAME 0= ;
 
 : _LRP12-restore-library  ( -- flag )
-    _LIBREPO-DIRECTORY$ _LRP12-vfs @ VFS-RM
+    _LRP12-repository _LIBREPO-DIRECTORY$ _LRP12-vfs @ VFS-RM
     DUP IF DROP 0 EXIT THEN DROP
     S" library" _LRP12-library-in @
         _LRP12-vfs @ VFS-RENAME 0= ;
@@ -416,7 +416,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
 : _LRP12-directory-contracts  ( -- )
     _LRP12-rename-library-away _LRP12-assert
     _LRP12-cache-library-link _LRP12-assert
-    _LIBREPO-ROOT-0$ _LRP12-vfs @ VFS-RESOLVE?
+    _LRP12-repository _LIBREPO-ROOT-0$ _LRP12-vfs @ VFS-RESOLVE?
     DUP 0= _LRP12-assert DROP 0<> _LRP12-assert
     0 _LRP12-readlink-calls !
     _LRP12-cold-corrupt
@@ -424,7 +424,7 @@ CREATE _LRP12-repaired-seal SHA3-256-LEN ALLOT
     _LRP12-restore-library _LRP12-assert
 
     _LRP12-rename-library-away _LRP12-assert
-    _LIBREPO-DIRECTORY$ _LRP12-vfs @ VFS-CREATE
+    _LRP12-repository _LIBREPO-DIRECTORY$ _LRP12-vfs @ VFS-CREATE
         0<> _LRP12-assert
     _LRP12-cold-corrupt
     _LRP12-restore-library _LRP12-assert

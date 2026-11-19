@@ -267,7 +267,7 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
         ELSE
             1 _LM12-absent-n +!
         THEN
-        I _LIBREPO-EVIDENCE-PATH$ IF
+        I _LM12-repository _LIBREPO-EVIDENCE-PATH$ IF
             _LM12-file-present?
         ELSE
             2DROP 0
@@ -328,7 +328,7 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     _LM12-stack ;
 
 : _LM12-repository-init  ( -- )
-    _LM12-vfs @
+    S" /" _LM12-vfs @
     _LM12-cache-0 _LM12-cache-1
     _LM12-builder-cache-0 _LM12-builder-cache-1
     _LM12-guard _LM12-builder-guard
@@ -579,15 +579,15 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
 
 : _LM12-save-roots  ( -- )
     _LM12-root-0-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _LM12-read-file _LM12-assert
+        _LM12-repository _LIBREPO-ROOT-0$ _LM12-read-file _LM12-assert
     _LM12-root-1-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _LM12-read-file _LM12-assert ;
+        _LM12-repository _LIBREPO-ROOT-1$ _LM12-read-file _LM12-assert ;
 
 : _LM12-restore-roots  ( -- )
     _LM12-root-0-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _LM12-put-file
+        _LM12-repository _LIBREPO-ROOT-0$ _LM12-put-file
     _LM12-root-1-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _LM12-put-file ;
+        _LM12-repository _LIBREPO-ROOT-1$ _LM12-put-file ;
 
 : _LM12-raw-current-report  ( report -- )
     DUP LRI.RAW-REQUIRED @ DUP _LM12-prime-raw
@@ -610,7 +610,7 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     \ A future peer beside a valid current root must not be mistaken for an
     \ ordinary fallback and overwritten by mirror repair.
     _LM12-root-1-work PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _LM12-put-file
+        _LM12-repository _LIBREPO-ROOT-1$ _LM12-put-file
     _LM12-report-d _LM12-repository _LM12-work
         LIBRARY-REPOSITORY-INSPECT
         LIBRARY-REPOSITORY-S-OK _LM12-status
@@ -626,9 +626,9 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     _LM12-root-0-original _LM12-root-0-work _LM12-copy-corrupt
     _LM12-root-1-original _LM12-root-1-work _LM12-copy-corrupt
     _LM12-root-0-work PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _LM12-put-file
+        _LM12-repository _LIBREPO-ROOT-0$ _LM12-put-file
     _LM12-root-1-work PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _LM12-put-file
+        _LM12-repository _LIBREPO-ROOT-1$ _LM12-put-file
     _LM12-report-c _LM12-repository _LM12-work
         LIBRARY-REPOSITORY-INSPECT
         LIBRARY-REPOSITORY-S-OK _LM12-status
@@ -650,7 +650,7 @@ _LM12-RAW-CAPACITY XBUF _LM12-raw
     _LM12-stack ;
 
 : _LM12-faulted-repair-cleanup  ( -- )
-    _LIBREPO-ROOT-1$ _LM12-remove-file
+    _LM12-repository _LIBREPO-ROOT-1$ _LM12-remove-file
     _LM12-report-a _LM12-repository _LM12-work
         LIBRARY-REPOSITORY-INSPECT
         LIBRARY-REPOSITORY-S-OK _LM12-status

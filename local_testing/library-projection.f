@@ -490,7 +490,7 @@ VARIABLE _lpo-exact-locator
         _lpo-builder-cache-0 _lpo-cache-init
     _lpo-builder-cache-1-memory
         _lpo-builder-cache-1 _lpo-cache-init
-    _lpo-vfs @
+    S" /" _lpo-vfs @
     _lpo-cache-0 _lpo-cache-1
     _lpo-builder-cache-0 _lpo-builder-cache-1
     _lpo-repository-guard _lpo-builder-guard

@@ -50,6 +50,12 @@ CREATE _laf-root-1-future PROOT-RECORD-SIZE ALLOT
 CREATE _laf-inspection-before LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
 CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
 
+\ The repository's layout in the home's folder, made once by the
+\ repository's own path words in a record of the check's own: the checks
+\ rewrite the root files between runs, while no repository is open.
+LIBRARY-REPOSITORY-SIZE XBUF _laf-layout
+CREATE _laf-folder PERSIST-PATH-MAX 1+ ALLOT
+
 : _laf-assert  ( flag -- )
     1 _laf-checks +!
     0= IF
@@ -69,6 +75,14 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
 \ The Library keeps its repository on the volume under its home: here the
 \ build's one place, over the boot volume's root.
 : _laf-vfs  ( -- vfs )  PLACES-DEFAULT PLSET-HOME PLACE-VFS ;
+
+\ Bind the home's folder as the controller does and lay the repository's
+\ paths out under it.
+: _laf-layout!  ( -- )
+    PLACES-DEFAULT PLSET-HOME _laf-folder PERSIST-PATH-MAX PFOLDER-BIND
+    0= _laf-assert NIP
+    _laf-folder SWAP _laf-layout _LIBREPO-PATHS!
+        LIBRARY-REPOSITORY-S-OK = _laf-assert ;
 
 : _laf-zero?  ( address length -- flag )
     0 ?DO
@@ -126,15 +140,15 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
 
 : _laf-corrupt-roots  ( -- )
     _laf-root-0-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _laf-read-file _laf-assert
+        _laf-layout _LIBREPO-ROOT-0$ _laf-read-file _laf-assert
     _laf-root-1-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _laf-read-file _laf-assert
+        _laf-layout _LIBREPO-ROOT-1$ _laf-read-file _laf-assert
     _laf-root-0-original _laf-root-0-corrupt _laf-copy-corrupt
     _laf-root-1-original _laf-root-1-corrupt _laf-copy-corrupt
     _laf-root-0-corrupt PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _laf-put-file
+        _laf-layout _LIBREPO-ROOT-0$ _laf-put-file
     _laf-root-1-corrupt PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _laf-put-file ;
+        _laf-layout _LIBREPO-ROOT-1$ _laf-put-file ;
 
 : _laf-future-roots  ( -- )
     _laf-root-0-original _laf-root-0-future _laf-copy-future
@@ -144,15 +158,15 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
     _laf-root-1-future PROOT-RECORD-SIZE
         _LIBREPO-FUTURE-ROOT-RECORD? _laf-assert
     _laf-root-0-future PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _laf-put-file
+        _laf-layout _LIBREPO-ROOT-0$ _laf-put-file
     _laf-root-1-future PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _laf-put-file ;
+        _laf-layout _LIBREPO-ROOT-1$ _laf-put-file ;
 
 : _laf-restore-roots  ( -- )
     _laf-root-0-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-0$ _laf-put-file
+        _laf-layout _LIBREPO-ROOT-0$ _laf-put-file
     _laf-root-1-original PROOT-RECORD-SIZE
-        _LIBREPO-ROOT-1$ _laf-put-file ;
+        _laf-layout _LIBREPO-ROOT-1$ _laf-put-file ;
 
 : _laf-inspect-health  ( inspection expected-health -- )
     _laf-expected-health !
@@ -662,6 +676,7 @@ CREATE _laf-evs 31 ALLOT
 : _laf-run  ( -- )
     0 _laf-fails ! 0 _laf-checks ! 0 _laf-ran !
     DEPTH _laf-outer-depth !
+    _laf-layout!
     _laf-desc LIBRARY-APPLET-ENTRY
     ['] _laf-shell-init _laf-desc APP.INIT-XT !
     _laf-desc ASHELL-RUN

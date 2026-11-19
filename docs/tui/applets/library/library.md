@@ -2,8 +2,10 @@
 
 Library is a single-instance Desk lens over the applet-owned semantic service.
 It owns activation-local view and working state, not a second catalog or
-storage implementation. The controller never discovers `/library/*` paths or
-uses a selected row as ambient mutation authority.
+storage implementation. The controller binds its home's folder once and hands
+it to the repository, which lays out its own files there; the controller
+names none of them and never uses a selected row as ambient mutation
+authority.
 
 ## Implemented lens
 

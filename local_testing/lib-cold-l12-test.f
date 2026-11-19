@@ -126,7 +126,7 @@ CREATE _LC12-read-bytes 64 ALLOT
     _LC12-builder-cache-1-memory
         _LC12-builder-cache-1 _LC12-cache-init
 
-    _LC12-vfs @
+    S" /" _LC12-vfs @
     _LC12-cache-0 _LC12-cache-1
     _LC12-builder-cache-0 _LC12-builder-cache-1
     _LC12-source-guard _LC12-builder-guard

@@ -260,6 +260,23 @@ their places and enforce read-only among components that share one
 address space; the sandbox, which requires a context with no place set,
 stays the boundary against code that would reach around them.
 
+A store that keeps a layout of several files, as Library's repository
+does, takes its folder from `utils/fs/place-folder.f`:
+
+```forth
+PFOLDER-BIND  ( place buf cap -- vfs len ior )
+PFOLDER-PATH  ( name-a name-u folder-a folder-u buf cap -- len ior )
+```
+
+`PFOLDER-BIND` gives the instance and the volume path of the place's own
+folder, bound for writing when the place is writable and for reading when
+it is read-only; an unavailable place answers its status. `PFOLDER-PATH`
+writes the volume path of a name inside such a folder: the folder, one
+slash and the name, which may itself be names joined by slashes. The
+holder binds its home's folder once when it opens and composes each
+file's path under it, so the persistence and replacement libraries below
+keep taking an instance and a path.
+
 ### The resource form
 
 A file handed from one applet to another is `vfs://<place>/<path>`. The
@@ -477,8 +494,9 @@ shipping form's places.
   conversation store work through `PLACE-OPEN`, `PLACE-CREATE` and
   `PLACE-SYNC` in the home. The builder publishes in its catalog's place
   and the loader reads in the place it is given.
-- Daybook, Grid and Sound Lab keep their file in their home. Streams and
-  Library open their repositories on the volume under their home.
+- Daybook, Grid and Sound Lab keep their file in their home. Library
+  keeps its repository in its home's folder, as the slice 7 entry below
+  describes, and Streams opens its stores on the volume under its home.
 - The shell and the applet host read an applet's UIDL file from its
   origin, and a document's media read their file from the place the
   document came from (`UTUI-FILES!`).
@@ -573,8 +591,15 @@ shipping form's places.
   (`PLACE-DECLARED-PATH`, `PLSET-FIND-PATH`). Each applet's home is a folder
   named by its id where the activation's home is a records place, as the
   `practice-contracts` profile checks; `local_testing/test_practice_contracts.py`
-  runs that profile as a test. Desk's own stores, the layouts of
-  Streams and Library, and the user volume's transaction size come next.
+  runs that profile as a test. Library keeps its repository in its home's
+  folder (Decided, 2026-11-17): its controller binds that folder once when
+  it opens (`PFOLDER-BIND`), and the repository composes every path of its
+  layout under it (`PFOLDER-PATH`), in a `library` folder there. In the
+  linked build and the test sets the home is the volume's root, so the
+  files keep the paths they had. `local_testing/test_place_folder.py`
+  tests the helper, and `test_library_home_folder.py` provisions the
+  repository in a folder under records. Desk's own stores, the layout of
+  Streams, and the user volume's transaction size come next.
 
 What slice 4 leaves:
 
@@ -591,13 +616,12 @@ What slice 4 leaves:
   first, absent slot with a truncate that changes nothing, which ext4's
   writer refuses, so Desk shows `history error`; the Practice head no
   longer truncates an empty slot. The Agent saves every 500 ms while a
-  256 KiB save takes 2 to 5 s. Streams and Library keep repositories with
-  fixed layouts from the volume's root (`/streams/...`, `/library/...`,
-  `/streams-*.bin`) whose paths their persistence layer and their own
-  checks compare literally; before they move to the user volume, each
-  binds its folder in its home once when it opens and composes its paths
-  under that folder, through one helper both share, and the persistence
-  layer keeps taking an instance and a path (Decided, 2026-11-17).
+  256 KiB save takes 2 to 5 s. Streams keeps its stores with fixed
+  layouts from the volume's root (`/streams/...`, `/streams-*.bin`);
+  before they move to the user volume, it binds its folder in its home
+  once when it opens and composes their paths under that folder through
+  the helper Library's repository uses, and the persistence layer keeps
+  taking an instance and a path (Decided, 2026-11-17).
 - Power cuts during a save, a copy's stage write and its rename are
   qualified in slice 8.
 

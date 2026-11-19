@@ -12,8 +12,9 @@ All Library semantics now live under `akashic/tui/applets/library/`:
 
 - `model.f`, `record-codec.f`, and `store-format.f` own the bounded current
   records and deterministic fixed-store formats;
-- `repository.f` alone owns `/library/*`, durable authority, fixed-bank
-  transactions, recovery, and activation-local index storage;
+- `repository.f` alone owns the `library` folder of its layout, durable
+  authority, fixed-bank transactions, recovery, and activation-local index
+  storage;
 - `query.f` owns current corpus and collection query policy;
 - `service.f` exposes the existing document, capture, history, collection,
   inspection, repair, and raw-evidence operations;

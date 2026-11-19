@@ -123,7 +123,7 @@ CREATE _LR12-raw 64 ALLOT
     _LR12-stack ;
 
 : _LR12-repository-a-init  ( -- )
-    _LR12-vfs @
+    S" /" _LR12-vfs @
     _LR12-cache-a0 _LR12-cache-a1
     _LR12-cache-ac0 _LR12-cache-ac1
     _LR12-guard-a _LR12-guard-ac
@@ -157,7 +157,7 @@ CREATE _LR12-raw 64 ALLOT
     \ Invalid builder caches are rejected before the output repository or
     \ either inline source/builder descriptor can be touched.
     _LR12-repository-a LIBRARY-REPOSITORY-SIZE 0xA5 FILL
-    _LR12-vfs @
+    S" /" _LR12-vfs @
     _LR12-cache-a0 _LR12-cache-a1
     0 _LR12-cache-ac1
     _LR12-guard-a _LR12-guard-ac
@@ -167,7 +167,7 @@ CREATE _LR12-raw 64 ALLOT
     _LR12-repository-a LIBRARY-REPOSITORY-SIZE 0xA5
         _LR12-filled? _LR12-assert
 
-    _LR12-vfs @
+    S" /" _LR12-vfs @
     _LR12-cache-a0 _LR12-cache-a1
     _LR12-cache-ac0 0
     _LR12-guard-a _LR12-guard-ac
