@@ -126,8 +126,10 @@ def test_desk_gives_the_capability_module_storage_in_its_home() -> None:
     modules = init.index("SBOX-CAPABILITY-MODULES")
     publish = init.index("_DSBI-INST @ _DESK-SANDBOX !")
     assert register < modules < publish
+    # The module store lives in the sandbox's own home, the set Desk makes
+    # for the sandbox component's records.
     assert re.search(
-        r"_DESK-REGISTRY\s+@\s+_DESK-HOME\s+"
+        r"_DESK-REGISTRY\s+@\s+_DESK-SBOX-PLACES\s+_DESK-HOME-IN\s+"
         r"_DESK-SBOX-CATALOG\$\s+_DESK-SBOX-PACK\$\s+"
         r"_DSBI-INST\s+@\s+SBOX-CAPABILITY-MODULES\s+"
         r"_DESK-SBOX-MODULES-STATUS\s+!",

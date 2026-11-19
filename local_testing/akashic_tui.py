@@ -10322,6 +10322,7 @@ VARIABLE _pc-inst-home
 VARIABLE _pc-inst-list
 VARIABLE _pc-inst-own
 VARIABLE _pc-hset
+VARIABLE _pc-sset
 
 : _pc-semantic-validator  ( head data -- status )
     @ DUP -1 = IF 2DROP 91 EXIT THEN
@@ -10406,11 +10407,26 @@ VARIABLE _pc-hset
     S" /" ROT PLACE-RESOLVE 0= _pc-assert
     S" /pc.own" _pc-avfs @ VFS-RESOLVE DUP 0<> _pc-assert = _pc-assert
     _pc-inst-own @ _pc-pact PACT-PLACES-RELEASE
+    \ A store that keeps a component's records on its behalf, as Desk's
+    \ own stores do, is given the same home and nothing else to write.
+    S" pc.own" _pc-pact PACT-STORE-PLACES DUP 0<> _pc-assert _pc-sset !
+    _pc-sset @ PLSET-HOME DUP PLACE-WRITABLE? _pc-assert
+    S" /" ROT PLACE-RESOLVE 0= _pc-assert
+    S" /pc.own" _pc-avfs @ VFS-RESOLVE = _pc-assert
+    0 _pc-sset @ PLSET-FIRST BEGIN ?DUP WHILE
+        DUP PLACE-WRITABLE? IF SWAP 1+ SWAP THEN PLACE-NEXT
+    REPEAT 1 = _pc-assert
+    _pc-sset @ PLSET-FREE
+    0 0 _pc-pact PACT-STORE-PLACES 0= _pc-assert
     _pc-aset @ PLSET-HOME _pc-aset @ PLSET-DOCUMENTS!
     _pc-inst-own @ _pc-pact PACT-PLACES PLSET-HOME
     S" /" ROT PLACE-RESOLVE 0= _pc-assert
     _pc-avfs @ V.ROOT @ = _pc-assert
     _pc-inst-own @ _pc-pact PACT-PLACES-RELEASE
+    S" pc.own" _pc-pact PACT-STORE-PLACES DUP 0<> _pc-assert _pc-sset !
+    _pc-sset @ PLSET-HOME S" /" ROT PLACE-RESOLVE 0= _pc-assert
+    _pc-avfs @ V.ROOT @ = _pc-assert
+    _pc-sset @ PLSET-FREE
     0 _pc-aset @ PLSET-DOCUMENTS!
     _pc-pact PACT-ACTIVE? _pc-assert
     _pc-pact PACT-FALLBACK? _pc-assert
@@ -10426,6 +10442,7 @@ VARIABLE _pc-hset
     _pc-pact PACT.EPOCH @ DUP 0> _pc-assert _pc-first-epoch !
     _pc-pact PACT-DEACTIVATE
     0 _pc-pact PACT-PLACES 0= _pc-assert
+    S" pc.own" _pc-pact PACT-STORE-PLACES 0= _pc-assert
     _pc-aset @ _pc-pact PACT-ACTIVATE PACT-S-OK = _pc-assert
     _pc-pact PACT.EPOCH @ DUP 0> _pc-assert
     _pc-first-epoch @ <> _pc-assert
@@ -10449,6 +10466,9 @@ VARIABLE _pc-hset
     _pc-pact PACT.FLAGS @ PACT-F-PLACES-READONLY = _pc-assert
     _pc-inst-home @ _pc-pact PACT-PLACES PLSET-HOME
         PLACE-WRITABLE? 0= _pc-assert
+    S" pc.own" _pc-pact PACT-STORE-PLACES DUP 0<> _pc-assert _pc-sset !
+    _pc-sset @ PLSET-HOME PLACE-WRITABLE? 0= _pc-assert
+    _pc-sset @ PLSET-FREE
     _pc-avfs @ V.FLAGS @ VFS-F-RO AND 0= _pc-assert
     \ A store that keeps its file through a replacement is bound for
     \ reading and refuses to replace; asking to write is refused binding.

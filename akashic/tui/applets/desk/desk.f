@@ -495,13 +495,21 @@ VARIABLE _DXIO-RESET-STATUS
 : DESK-RECOVERY?  ( -- flag )
     _DESK-PRACTICE-ACTIVATION PACT-RECOVERY? ;
 
-\ The home of the Practice's places, where Desk's stores keep their
-\ records; 0 when the set has none.  A store whose home is unavailable
+\ Desk's own stores keep each component's records in that component's
+\ home (PACT-STORE-PLACES), the folder its own instances are given: the
+\ applet catalog and the schedule permissions are Desk's, the module
+\ store is the sandbox's, the conversation and the dispatch queue are the
+\ Agent's, and the shared document and its automations are Daybook's.
+\ Each set is made when Desk composes its stores and freed when it closes
+\ them.  A store whose set has no home, or a home that is unavailable,
 \ opens as a service that says why.
-: _DESK-HOME  ( -- place | 0 )
-    DESK-CONTEXT ?DUP 0= IF 0 EXIT THEN
-    CTX.PLACES @ ?DUP 0= IF 0 EXIT THEN
-    PLSET-HOME ;
+VARIABLE _DESK-OWN-PLACES
+VARIABLE _DESK-SBOX-PLACES
+VARIABLE _DESK-AGENT-PLACES
+VARIABLE _DESK-DAYBOOK-PLACES
+
+: _DESK-HOME-IN  ( set-variable -- place | 0 )
+    @ ?DUP IF PLSET-HOME ELSE 0 THEN ;
 
 : DESK-CATALOG  ( -- catalog | 0 )
     _DESK-CATALOG @ ;
@@ -1428,15 +1436,14 @@ VARIABLE _DSBI-STATUS
     0 _DESK-SBOX-ALLOWANCE !
     0 _DESK-SBOX-WORKERS ! ;
 
-\ The module store's two files, beside Desk's catalog and Practice.
+\ The module store's two files, in the sandbox's home.
 : _DESK-SBOX-CATALOG$  ( -- a u ) S" /sandbox-catalog.bin" ;
 : _DESK-SBOX-PACK$  ( -- a u ) S" /sandbox-pack.bin" ;
 
 \ Desk hosts the shared sandbox capability when its caller configured one,
 \ registered beside the applets so the request bus reaches it like any
-\ other component.  Its installed modules live in the home of the
-\ Practice's places; when the store cannot open, the sandbox still runs
-\ without them.
+\ other component.  Its installed modules live in the sandbox's home;
+\ when the store cannot open, the sandbox still runs without them.
 : _DESK-SBOX-INIT  ( -- status )
     0 _DESK-SANDBOX !
     SBOX-CAPABILITY-S-STATE _DESK-SBOX-MODULES-STATUS !
@@ -1471,7 +1478,8 @@ VARIABLE _DSBI-STATUS
         _DSBI-INST @ CINST-FREE 0 _DSBI-INST !
         SBOX-CAPABILITY-S-INVALID EXIT
     THEN
-    _DESK-REGISTRY @ _DESK-HOME _DESK-SBOX-CATALOG$ _DESK-SBOX-PACK$
+    _DESK-REGISTRY @ _DESK-SBOX-PLACES _DESK-HOME-IN
+        _DESK-SBOX-CATALOG$ _DESK-SBOX-PACK$
         _DSBI-INST @ SBOX-CAPABILITY-MODULES _DESK-SBOX-MODULES-STATUS !
     _DSBI-INST @ _DESK-SANDBOX !
     0 _DSBI-INST !
@@ -1486,7 +1494,7 @@ VARIABLE _DSBI-STATUS
     0 _DESK-SANDBOX ! ;
 
 : _DESK-CATALOG-INIT  ( -- )
-    _DESK-HOME ACAT-NEW _DCI-STATUS ! _DCI-CAT !
+    _DESK-OWN-PLACES _DESK-HOME-IN ACAT-NEW _DCI-STATUS ! _DCI-CAT !
     _DCI-STATUS @ ACAT-S-OK <> ABORT" desk: catalog allocation failed"
     _DCI-CAT @ _DESK-CATALOG !
     _DCI-CAT @ ACAT-ACTIVATE DUP
@@ -1509,7 +1517,7 @@ VARIABLE _DSBI-STATUS
     _DESK-CATALOG @ ABUILD-CATALOG! ;
 
 : _DESK-BIND-AGENT-STORE  ( -- )
-    _DESK-HOME ?DUP 0= IF EXIT THEN
+    _DESK-AGENT-PLACES _DESK-HOME-IN ?DUP 0= IF EXIT THEN
     AVFSSTORE-NEW DUP IF
         NIP _DESK-AGENT-RUNTIME @ ARUNTIME.STORE-STATUS ! EXIT
     THEN
@@ -1589,33 +1597,36 @@ VARIABLE _DMF-EFFECTS
         _DESK-DAYBOOK-STATUS ! DROP EXIT
     THEN
     DROP _DESK-RREG !
-    _DESK-HOME _DESK-DAYBOOK-RID DESK-CONTEXT
+    _DESK-DAYBOOK-PLACES _DESK-HOME-IN _DESK-DAYBOOK-RID DESK-CONTEXT
         _DESK-RREG @ _DESK-REGISTRY @ SDOC-ACTIVATE
     DUP _DESK-DAYBOOK-STATUS ! IF
         DROP EXIT
     THEN
     _DESK-DAYBOOK-OWNER !
-    \ The owner keeps the document in its file of the home.  Without the
-    \ record an applet could write that file directly, so the document
+    \ The owner keeps the document in its file of Daybook's home.  Without
+    \ the record an applet could write that file directly, so the document
     \ is not lent until Desk holds it.
-    SDOC-PATH$ _DESK-HOME _DESK-DAYBOOK-SERVICE$ _DESK-HELD HELD-HOLD
+    SDOC-PATH$ _DESK-DAYBOOK-PLACES _DESK-HOME-IN
+        _DESK-DAYBOOK-SERVICE$ _DESK-HELD HELD-HOLD
     ?DUP IF _DESK-DAYBOOK-STATUS ! THEN ;
 
-\ Opens Daybook's reminders in the home of the Practice's places.  A
-\ store Desk cannot use still opens a service, which says why.
+\ Opens Daybook's reminders in Daybook's home.  A store Desk cannot use
+\ still opens a service, which says why.
 : _DESK-REMINDERS-INIT  ( -- )
-    _DESK-HOME _DESK-REMINDERS DBSVC-OPEN DROP ;
+    _DESK-DAYBOOK-PLACES _DESK-HOME-IN _DESK-REMINDERS DBSVC-OPEN DROP ;
 
-\ Opens scheduled runs in the home of the Practice's places: the Agent's
-\ dispatcher over its runtime, the broker over the Practice's
-\ permissions with the dispatcher as its handler, and the broker's client
-\ for Daybook's service.  A store either cannot use still opens, and says
+\ Opens scheduled runs: the Agent's dispatcher over its runtime in the
+\ Agent's home, the broker over the Practice's permissions in Desk's home
+\ with the dispatcher as its handler, and the broker's client for
+\ Daybook's service.  A store either cannot use still opens, and says
 \ why; in recovery there is no Practice, so no broker, and Daybook's
 \ service has no client: scheduled runs are unavailable.
 : _DESK-SCHEDULES-INIT  ( -- )
-    _DESK-AGENT-RUNTIME @ _DESK-HOME _DESK-AGENT-DISPATCH ADISP-INIT DROP
+    _DESK-AGENT-RUNTIME @ _DESK-AGENT-PLACES _DESK-HOME-IN
+        _DESK-AGENT-DISPATCH ADISP-INIT DROP
     _DESK-AGENT-DISPATCH _DESK-SCHEDULE-HANDLER DSAG-HANDLER-INIT
-    _DESK-HOME DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
+    _DESK-OWN-PLACES _DESK-HOME-IN DESK-PRACTICE DESK-CONTEXT
+        _DESK-BROKER SBRK-INIT DROP
     _DESK-BROKER SBRK-VALID? 0= IF EXIT THEN
     _DESK-SCHEDULE-HANDLER _DESK-BROKER SBRK-HANDLER!
     _DESK-BROKER SBRK-CLIENT _DESK-REMINDERS DBSVC-CLIENT! ;
@@ -1784,6 +1795,29 @@ VARIABLE _DMC-CANDIDATE
         0 _DMF-STATUS @
     THEN ;
 
+\ Makes the set for the stores that keep the records of the component
+\ with id ID, or 0 when the activation cannot give one.
+: _DESK-STORE-PLACES!  ( id-a id-u set-variable -- )
+    >R _DESK-PRACTICE-ACTIVATION PACT-STORE-PLACES R> ! ;
+
+: _DESK-STORE-PLACES-INIT  ( -- )
+    DESK-COMP-DESC DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _DESK-OWN-PLACES _DESK-STORE-PLACES!
+    SBOX-CAPABILITY-COMPONENT DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _DESK-SBOX-PLACES _DESK-STORE-PLACES!
+    _DESK-AGENT$ _DESK-AGENT-PLACES _DESK-STORE-PLACES!
+    _DESK-DAYBOOK$ _DESK-DAYBOOK-PLACES _DESK-STORE-PLACES! ;
+
+: _DESK-STORE-PLACES-FREE1  ( set-variable -- )
+    DUP @ ?DUP IF PLSET-FREE THEN 0 SWAP ! ;
+
+\ Frees the stores' sets once every store in them is closed.
+: _DESK-STORE-PLACES-FREE  ( -- )
+    _DESK-OWN-PLACES _DESK-STORE-PLACES-FREE1
+    _DESK-SBOX-PLACES _DESK-STORE-PLACES-FREE1
+    _DESK-AGENT-PLACES _DESK-STORE-PLACES-FREE1
+    _DESK-DAYBOOK-PLACES _DESK-STORE-PLACES-FREE1 ;
+
 : _DESK-INTEROP-INIT  ( desk-instance -- )
     DUP _DINI-INST ! _DESK-USE-STATE
     DESK-CONTEXT DUP 0= ABORT" desk: no active Practice Context"
@@ -1810,6 +1844,7 @@ VARIABLE _DMC-CANDIDATE
     _DESK-AUTHORITY @ _DINI-CONTEXT @ CTX.AUTHORITY !
     _DESK-BUS @ _DINI-CONTEXT @ CTX.QUEUE !
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
+    _DESK-STORE-PLACES-INIT
     _DESK-DAYBOOK-INIT
     _DESK-REMINDERS-INIT
     _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
@@ -1939,6 +1974,7 @@ VARIABLE _DIFI-XIO-STATUS
     _DESK-REGISTRY @ ?DUP IF CREG-FREE THEN
     0 ABUILD-CATALOG!
     _DESK-CATALOG @ ?DUP IF ACAT-FREE THEN
+    _DESK-STORE-PLACES-FREE
     DESK-CONTEXT ?DUP IF
         0 OVER CTX.AUTHORITY !
         0 OVER CTX.QUEUE !

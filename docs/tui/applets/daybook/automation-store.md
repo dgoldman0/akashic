@@ -7,7 +7,8 @@ decides what the records mean and when they change.
 
 ## The file
 
-Everything lives in one file, `/daybook-automations.bin` in Desk, replaced
+Everything lives in one file, `/daybook-automations.bin`, which Desk keeps in
+Daybook's home, replaced
 whole and atomically through [vfs-replace](../../../utils/fs/vfs-replace.md).
 The file is a checked record ([checked-record](../../../utils/checked-record.md))
 with magic `AKDBAUTO`, format 2, and its generation as the tag. Its payload

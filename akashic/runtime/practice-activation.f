@@ -15,7 +15,9 @@
 \  made once for the instance and freed by PACT-PLACES-RELEASE or when
 \  the activation ends.  A component's home in it is a folder of its own
 \  inside the activation's home, named by the component's id, where that
-\  home stands apart from the documents place.  Ownership of a file
+\  home stands apart from the documents place.  PACT-STORE-PLACES answers
+\  a set with that same home for stores that keep a component's records
+\  on its behalf, as Desk's own stores do.  Ownership of a file
 \  follows from these grants
 \  (docs/utils/fs/places.md, "Who may write a file"), and a Practice's
 \  own choice of places per component belongs in the same word.
@@ -321,18 +323,22 @@ VARIABLE _PPL-PACT
 : _PACT-NEEDS  ( instance -- needs )
     CINST-DESC DUP COMP-DESC-VALID? IF COMP.PLACE-NEEDS @ ELSE DROP 0 THEN ;
 
-\ The folder of the instance's own home in the activation's home: the
-\ component's id, so each component keeps its records in a folder of its
-\ own that no other component is given.  A home that is the documents
+\ The folder of a component's own home in the activation's home: the
+\ component's id ID, so each component keeps its records in a folder of
+\ its own that no other component is given.  A home that is the documents
 \ place too, as the linked build's one place is, stays shared, since a
 \ folder per component there would sit among a person's documents.
-: _PACT-HOME-FOLDER  ( instance pact -- a u )
+: _PACT-ID-FOLDER  ( id-a id-u pact -- a u )
     PACT.PLACES @ DUP PLSET-HOME SWAP PLSET-DOCUMENTS = IF
-        DROP 0 0 EXIT
-    THEN
-    CINST-DESC DUP COMP-DESC-VALID? IF
+        2DROP 0 0
+    THEN ;
+
+\ The folder of the instance's own home: its component's id.
+: _PACT-HOME-FOLDER  ( instance pact -- a u )
+    >R CINST-DESC DUP COMP-DESC-VALID? IF
         DUP COMP.ID-A @ SWAP COMP.ID-U @
-    ELSE DROP 0 0 THEN ;
+    ELSE DROP 0 0 THEN
+    R> _PACT-ID-FOLDER ;
 
 \ PACT-PLACES ( instance pact -- set | 0 )
 \   The place set the runtime instance INSTANCE works in under this
@@ -356,6 +362,22 @@ VARIABLE _PPL-PACT
     _PPL-PACT @ _PACT.GRANTS @ OVER _PAG.NEXT !
     DUP _PPL-PACT @ _PACT.GRANTS !
     _PAG.SET @ ;
+
+\ PACT-STORE-PLACES ( id-a id-u pact -- set | 0 )
+\   A set for stores that keep the records of the component with id ID
+\   on its behalf, as Desk's own stores do.  Its home is the home
+\   PACT-PLACES gives the component's instances, so a component's records
+\   lie together whichever code writes them, and nothing else of the
+\   activation's set is in it but the origin, read-only.  The set is the
+\   caller's, freed with PLSET-FREE once its stores are closed.  0 when
+\   the activation is not active, for an empty ID, or when the set cannot
+\   be made.
+: PACT-STORE-PLACES  ( id-a id-u pact -- set | 0 )
+    DUP PACT-ACTIVE? 0= IF DROP 2DROP 0 EXIT THEN
+    OVER 0= IF DROP 2DROP 0 EXIT THEN
+    >R R@ _PACT-ID-FOLDER
+    PLACES-NEED-HOME ROT ROT R> PACT.PLACES @ PLSET-DERIVE
+    IF DROP 0 THEN ;
 
 VARIABLE _PPR-ID
 

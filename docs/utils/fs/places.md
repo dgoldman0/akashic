@@ -66,7 +66,15 @@ releases the instance (`PACT-PLACES-RELEASE`) or the activation ends, and
 it is narrowed with the activation's set. A Practice's own choice of
 places for each applet (Part 5b of the release plan) belongs in the same
 word. Desk names no applet. The context field `CTX.PLACES` holds the
-activation's set, which Desk's own stores use. An applet that runs with
+activation's set. Desk's own stores keep each component's records in that
+component's home: `PACT-STORE-PLACES` gives Desk a set of its own for each
+component whose records it keeps, with the home that component's
+instances are given and nothing else to write, so Desk's applet catalog
+and schedule permissions lie in Desk's folder, the sandbox's module store
+in the sandbox's, the Agent's conversation and dispatch queue in the
+Agent's, and Daybook's shared document and automations in Daybook's. These
+sets stay out of the activation's set, so File Explorer lists records once.
+An applet that runs with
 no endpoint at all, as a standalone shell run does, takes the registry's
 default set; an applet whose endpoint answers nothing has no places.
 
@@ -492,13 +500,15 @@ shipping form's places.
   place and points a replacement descriptor at the instance the binding
   answers. Pad binds each document through it, and so do the stores that
   keep one file through a replacement.
-- Desk hands each store it opens its activation's home (`_DESK-HOME`):
-  the sandbox store and its catalog, the Agent's run store, Daybook's
-  automation store and owner, the dispatch store, the schedule
-  permissions and the broker. The Practice head and the Agent's
-  conversation store work through `PLACE-OPEN`, `PLACE-CREATE` and
-  `PLACE-SYNC` in the home. The builder publishes in its catalog's place
-  and the loader reads in the place it is given.
+- Desk hands each store it opens the home of the component whose records
+  it keeps (`PACT-STORE-PLACES`, `_DESK-HOME-IN`): its applet catalog and
+  the schedule permissions with the broker get Desk's, the sandbox store
+  and its catalog the sandbox's, the Agent's conversation and dispatch
+  stores the Agent's, and Daybook's shared-document owner and automation
+  store Daybook's. The Practice head and the Agent's conversation store
+  work through `PLACE-OPEN`, `PLACE-CREATE` and `PLACE-SYNC` in their
+  home. The builder publishes in its catalog's place and the loader reads
+  in the place it is given.
 - Daybook, Grid and Sound Lab keep their file in their home. Streams and
   Library keep their stores in their home's folder, as the slice 7 entry
   below describes.
@@ -606,8 +616,11 @@ shipping form's places.
   sets the home is the volume's root, so the files keep the paths they
   had. `local_testing/test_place_folder.py` tests the helper, and
   `test_library_home_folder.py` and `test_streams_home_folder.py` open
-  each store in a folder under records. Desk's own stores and the user
-  volume's transaction size come next.
+  each store in a folder under records. Desk's own stores keep each
+  component's records in that component's folder through
+  `PACT-STORE-PLACES`, which the `practice-contracts` profile checks
+  writable, shared where the home is the documents place, and read-only
+  in recovery. The user volume's transaction size comes next.
 
 What slice 4 leaves:
 

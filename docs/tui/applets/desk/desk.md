@@ -187,7 +187,8 @@ Colour values are parsed by `TUI-PARSE-COLOR`: CSS named colours,
 
 ## Durable Catalog, Hotbar, and Launcher
 
-Desk owns one bounded catalog at `/app-catalog.bin`.  The catalog copies applet
+Desk owns one bounded catalog at `/app-catalog.bin` in Desk's own home
+(`PACT-STORE-PLACES`, [places](../../../utils/fs/places.md)).  The catalog copies applet
 identity, title, version, and installed-manifest path and durably records the
 enabled, pinned, autostart, and quarantine flags.  The hotbar is the first
 twelve pinned catalog rows: `<Label>` is available, `[Label]` is running,
@@ -282,9 +283,9 @@ before its children. The product Desktop names every full core but Desk's,
 which is none on a one-core machine. With worker cores, jobs run on them while
 Desk's core sleeps; Desk's per-pass service (`APP.SERVICE-XT`) polls the
 capability, so when a worker's IPI wakes Desk the next pass takes the job back
-and completes its run without waiting for the tick. Desk gives it module storage in the home of the
-Practice's places, in `/sandbox-catalog.bin` and `/sandbox-pack.bin` beside its app catalog and
-Practice; when that store cannot open, the sandbox still runs without
+and completes its run without waiting for the tick. Desk gives it module storage in the sandbox's
+home, in `/sandbox-catalog.bin` and `/sandbox-pack.bin`; when that store cannot open, the sandbox
+still runs without
 installed modules. Callers reach it only through ordinary capability
 requests: Desk registers its intents, so an applet posts `sandbox.invoke`,
 `sandbox.authorize` and the others as it reaches any component, and Desk's
@@ -439,7 +440,7 @@ and routes that owner but does not acquire its data or semantic authority.
 Daybook owns reminders; Desk only runs them. On activation, after the
 Daybook document owner, Desk opens one
 [reminder service](../daybook/automations.md) in its component state, in
-the home of the Practice's places, at `/daybook-automations.bin`. A store Desk cannot
+Daybook's home, at `/daybook-automations.bin`. A store Desk cannot
 use still yields a service, which tells Daybook why.
 
 Each Desk tick calls `DBSVC-TICK` before the applet host ticks. An idle
@@ -456,12 +457,11 @@ dispatch-quiesced teardown, after the Daybook document owner.
 ## Desk-hosted scheduled runs
 
 A Daybook schedule may run the Agent. Desk hosts the two pieces that do
-it, in its component state and the home of the Practice's places, once the
-Agent runtime exists:
+it, in its component state, once the Agent runtime exists:
 - the Agent's [dispatcher](../agent/dispatch.md), over that runtime, with
-  its run store at `/agent-dispatch.bin`;
+  its run store at `/agent-dispatch.bin` in the Agent's home;
 - the [schedule broker](schedule-broker.md), over the Practice's
-  permissions at `/schedule-perms.bin`, with the dispatcher as its
+  permissions at `/schedule-perms.bin` in Desk's home, with the dispatcher as its
   [handler](schedule-broker.md#the-agent-as-the-handler).
 
 Desk gives the broker's client to Daybook's automation service, through

@@ -100,7 +100,7 @@ the file holds.
 
 ## The file
 
-Desk keeps the store at `/schedule-perms.bin` in the home of the Practice's places,
+Desk keeps the store at `/schedule-perms.bin` in its own home,
 replaced whole and atomically through
 [vfs-replace](../utils/fs/vfs-replace.md). The file is a checked record
 ([checked-record](../utils/checked-record.md)) with magic `AKSCHPRM`,
