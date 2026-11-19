@@ -549,17 +549,28 @@ CREATE _FEXP-ROW-TMP _FEXP-ROW-SIZE ALLOT
 VARIABLE _FST-A
 VARIABLE _FST-U
 
-\ _FEXP-SYNC-TABLE ( -- )   Put the table's selection on the selected
-\   entry when it is in the listed directory.
+\ _FEXP-ROW-IS-SEL? ( index -- flag )   Is row INDEX the selected entry?
+: _FEXP-ROW-IS-SEL?  ( index -- flag )
+    _FEXP-SEL-IN-DIR? 0= IF DROP FALSE EXIT THEN
+    _FEXP-ROW _FEXP-ROW-NAME
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-BASENAME COMPARE 0= ;
+
+\ _FEXP-SYNC-TABLE ( -- )
+\   Put the table's selection on the selected entry when it is a row of
+\   the listed directory, and on no row otherwise, as when the selection
+\   is the listed directory itself.  The table then never shows a row
+\   selected that File Explorer has not, so a press on any row chooses it.
 : _FEXP-SYNC-TABLE  ( -- )
     _FEXP-LIST @ 0= IF EXIT THEN
-    _FEXP-SEL-IN-DIR? 0= IF EXIT THEN
-    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-BASENAME _FST-U ! _FST-A !
-    _FEXP-CNT @ 0 ?DO
-        I _FEXP-ROW _FEXP-ROW-NAME _FST-A @ _FST-U @ COMPARE 0= IF
-            I _FEXP-LIST @ LST-SELECT UNLOOP EXIT
-        THEN
-    LOOP ;
+    _FEXP-SEL-IN-DIR? IF
+        _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-BASENAME _FST-U ! _FST-A !
+        _FEXP-CNT @ 0 ?DO
+            I _FEXP-ROW _FEXP-ROW-NAME _FST-A @ _FST-U @ COMPARE 0= IF
+                I _FEXP-LIST @ LST-SELECT UNLOOP EXIT
+            THEN
+        LOOP
+    THEN
+    _FEXP-LIST @ LST-DESELECT ;
 
 \ _FEXP-SHOW-DIR ( -- )   List the directory at _FEXP-DIR-PATH in the
 \   table, or its place's folder when that directory is gone.  A place
@@ -603,7 +614,44 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
     DROP ;
 
 \ =====================================================================
-\  §9 — Clipboard (copy / cut / paste)
+\  §9 — Status bar update (via UIDL label attributes)
+\ =====================================================================
+
+\ _FEXP-STATUS-PATH ( -- a u )
+\   The selection as a person reads it: its path, after its place's label
+\   when the set has several places and the path alone would not say
+\   which.
+: _FEXP-STATUS-PATH  ( -- a u )
+    _FEXP-SEL-LEN @ 0= IF S" /" EXIT THEN
+    _FEXP-SET @ PLSET-FIRST ?DUP IF PLACE-NEXT 0= ELSE -1 THEN
+    _FEXP-SEL-PLACE @ 0= OR IF
+        _FEXP-SEL-PATH _FEXP-SEL-LEN @ EXIT
+    THEN
+    _FEXP-SEL-PLACE @ PLACE-LABEL _FEXP-SRIGHT-LABEL-CAP MIN
+    TUCK _FEXP-SRIGHT SWAP CMOVE                          ( label-u )
+    _FEXP-SEL-PATH OVER _FEXP-SRIGHT + _FEXP-SEL-LEN @ CMOVE
+    _FEXP-SEL-LEN @ + _FEXP-SRIGHT SWAP ;
+
+: _FEXP-UPDATE-STATUS  ( -- )
+    \ Left: "N items"
+    _FEXP-CNT @ NUM>STR
+    _FEXP-SLEFT SWAP CMOVE
+    _FEXP-CNT @ NUM>STR NIP
+    S"  items" DUP >R
+    ROT _FEXP-SLEFT + SWAP CMOVE
+    _FEXP-CNT @ NUM>STR NIP R> +
+    _FEXP-SLEFT-L !
+    \ Update UIDL label element text= attribute
+    _FEXP-E-SBAR-L @ ?DUP IF
+        S" text" _FEXP-SLEFT _FEXP-SLEFT-L @ UTUI-SET-ATTR
+    THEN
+    \ Right: the selection
+    _FEXP-E-SBAR-R @ ?DUP IF
+        S" text" _FEXP-STATUS-PATH UTUI-SET-ATTR
+    THEN ;
+
+\ =====================================================================
+\  §10 — Clipboard (copy / cut / paste)
 \ =====================================================================
 
 \ The clipboard keeps the file or folder a copy or cut chose, and a paste
@@ -651,9 +699,11 @@ VARIABLE _FCS-OP
         S" Cut to clipboard" 2000 ASHELL-TOAST
     THEN ;
 
+\ The listing, the item count and the selection's path follow a change.
 : _FEXP-REFRESH-AFTER-MUTATION  ( -- )
     _FEXP-TREE-REFRESH
-    _FEXP-SHOW-DIR ;
+    _FEXP-SHOW-DIR
+    _FEXP-UPDATE-STATUS ;
 
 : _FEXP-CUT?  ( -- flag )  _FEXP-CLIP-OP @ _FEXP-CLIP-CUT = ;
 
@@ -775,43 +825,6 @@ VARIABLE _FPA-PLACE
     _FEXP-PASTED ;
 
 \ =====================================================================
-\  §10 — Status bar update (via UIDL label attributes)
-\ =====================================================================
-
-\ _FEXP-STATUS-PATH ( -- a u )
-\   The selection as a person reads it: its path, after its place's label
-\   when the set has several places and the path alone would not say
-\   which.
-: _FEXP-STATUS-PATH  ( -- a u )
-    _FEXP-SEL-LEN @ 0= IF S" /" EXIT THEN
-    _FEXP-SET @ PLSET-FIRST ?DUP IF PLACE-NEXT 0= ELSE -1 THEN
-    _FEXP-SEL-PLACE @ 0= OR IF
-        _FEXP-SEL-PATH _FEXP-SEL-LEN @ EXIT
-    THEN
-    _FEXP-SEL-PLACE @ PLACE-LABEL _FEXP-SRIGHT-LABEL-CAP MIN
-    TUCK _FEXP-SRIGHT SWAP CMOVE                          ( label-u )
-    _FEXP-SEL-PATH OVER _FEXP-SRIGHT + _FEXP-SEL-LEN @ CMOVE
-    _FEXP-SEL-LEN @ + _FEXP-SRIGHT SWAP ;
-
-: _FEXP-UPDATE-STATUS  ( -- )
-    \ Left: "N items"
-    _FEXP-CNT @ NUM>STR
-    _FEXP-SLEFT SWAP CMOVE
-    _FEXP-CNT @ NUM>STR NIP
-    S"  items" DUP >R
-    ROT _FEXP-SLEFT + SWAP CMOVE
-    _FEXP-CNT @ NUM>STR NIP R> +
-    _FEXP-SLEFT-L !
-    \ Update UIDL label element text= attribute
-    _FEXP-E-SBAR-L @ ?DUP IF
-        S" text" _FEXP-SLEFT _FEXP-SLEFT-L @ UTUI-SET-ATTR
-    THEN
-    \ Right: the selection
-    _FEXP-E-SBAR-R @ ?DUP IF
-        S" text" _FEXP-STATUS-PATH UTUI-SET-ATTR
-    THEN ;
-
-\ =====================================================================
 \  §11 — Refresh detail list helper
 \ =====================================================================
 
@@ -825,6 +838,8 @@ VARIABLE _FPA-PLACE
 
 \ The tree hands over a live entry and its place; it is kept only as its
 \ path there.  A place's own row selects and lists the place's folder.
+\ An entry of the listed directory is selected in the table as well, and
+\ any other selection leaves the table with no row selected.
 VARIABLE _FOS-IN
 VARIABLE _FOS-PL
 
@@ -842,6 +857,8 @@ VARIABLE _FOS-PL
         _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP
         _FOS-PL @ _FEXP-DIR-PLACE !
         _FEXP-SHOW-DIR
+    ELSE
+        _FEXP-SYNC-TABLE
     THEN
     _FEXP-UPDATE-STATUS ;
 
@@ -910,6 +927,7 @@ VARIABLE _FOP-REQ
     OVER 0= IF 2DROP EXIT THEN
     OVER IN.TYPE @ VFS-T-FILE <> IF 2DROP EXIT THEN
     _FEXP-SELECT-INODE IF
+        _FEXP-SYNC-TABLE
         _FEXP-LOAD-PREVIEW
         _FEXP-POST-OPEN
         _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
@@ -929,10 +947,12 @@ VARIABLE _FOP-REQ
 : _FEXP-ROW-INDEX?  ( index -- flag )  DUP 0< 0= SWAP _FEXP-CNT @ < AND ;
 
 \ Selecting a row loads a file's preview, ready in the Preview tab, and
-\ keeps the table in view so the row can be opened.
+\ keeps the table in view so the row can be opened.  The table following
+\ a selection made elsewhere (_FEXP-SYNC-TABLE) changes nothing more.
 : _FEXP-ON-LIST-SEL  ( index widget -- )
     DROP
     DUP _FEXP-ROW-INDEX? 0= IF DROP EXIT THEN
+    DUP _FEXP-ROW-IS-SEL? IF DROP EXIT THEN
     _FEXP-SELECT-ROW IF
         _FEXP-R.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
     ELSE
@@ -996,6 +1016,7 @@ VARIABLE _FMU-OK
         _FMU-PLACE @ PLACE-SYNC IF 0 _FMU-OK ! THEN
         _FEXP-TREE-REFRESH
         _FEXP-REFRESH-DETAIL
+        _FMU-TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
     THEN
     _FMU-OK @ ;
 
@@ -1031,6 +1052,7 @@ VARIABLE _FMR-LISTED
     _FEXP-SEL-PLACE @ PLACE-SYNC IF FALSE EXIT THEN
     _FEXP-TREE-REFRESH
     _FEXP-REFRESH-DETAIL
+    _FEXP-SELECTED ?DUP IF IN.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN THEN
     TRUE ;
 
 : _FEXP-RENAME-NAMED  ( name-a name-u -- flag )
@@ -1159,6 +1181,7 @@ VARIABLE _FGP-TYPE
         R@ _FEXP-DIR-PLACE !
         _FEXP-SHOW-DIR
     ELSE
+        _FEXP-SYNC-TABLE
         _FEXP-LOAD-PREVIEW
         _FEXP-E-TABS @ ?DUP IF
             1 SWAP UTUI-TAB-SELECT

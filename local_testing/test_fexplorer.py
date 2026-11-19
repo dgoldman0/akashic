@@ -252,6 +252,41 @@ def test_a_path_longer_than_512_bytes_selects_and_pastes():
     ]) == "605 605 [toast Copied to clipboard ] [toast Pasted! ] -1"
 
 
+def test_the_table_selects_only_what_file_explorer_selects():
+    """The table never shows a row selected that File Explorer has not.
+    A listed folder that is itself the selection leaves no row selected,
+    so a press on the first row chooses it; a file the tree selects in the
+    listed folder is selected in the table too, and one elsewhere leaves
+    the table with no row selected."""
+    assert pasted([
+        "0 0 10 40 RGN-NEW ' _FEXP-LIST-KEY ' _FEXP-LIST-FIELD LST-NEW _FEXP-LIST !",
+        "' _FEXP-ON-LIST-SEL _FEXP-LIST @ LST-ON-SELECT",
+        ': T  S" a" S" /d/a.txt" VA @ PUT  S" b" S" /d/b.txt" VA @ PUT',
+        '     S" c" S" /c.txt" VA @ PUT',
+        '     S" /d" _FEXP-DIR-PATH! DROP  S" /d" P-ONE @ SEL  _FEXP-SHOW-DIR',
+        '     _FEXP-LIST @ LST-SELECTED .',
+        '     0 _FEXP-LIST @ LST-SELECT  _FEXP-LIST @ LST-SELECTED .',
+        '     _FEXP-SEL-PATH _FEXP-SEL-LEN @ TYPE SPACE',
+        '     S" /d/b.txt" VA @ VFS-RESOLVE P-ONE @ 0 _FEXP-ON-SELECT',
+        '     _FEXP-LIST @ LST-SELECTED .',
+        '     S" /c.txt" VA @ VFS-RESOLVE P-ONE @ 0 _FEXP-ON-SELECT',
+        '     _FEXP-LIST @ LST-SELECTED .  _FEXP-SEL-PATH _FEXP-SEL-LEN @ TYPE ;',
+        'T',
+    ]) == "-1 0 /d/a.txt 1 -1 /c.txt"
+
+
+def test_a_paste_shows_the_new_item_count():
+    assert pasted([
+        ': ITEMS.  _FEXP-SLEFT _FEXP-SLEFT-L @ TYPE SPACE ;',
+        ': T  S" a" S" /a.txt" VA @ PUT',
+        '     S" /" _FEXP-DIR-PATH! DROP  P-TWO @ _FEXP-DIR-PLACE !',
+        '     S" /" P-TWO @ SEL  _FEXP-REFRESH-DETAIL  ITEMS.',
+        '     S" /a.txt" P-ONE @ SEL  FEXP-CLIP-COPY',
+        '     S" /" P-TWO @ SEL  FEXP-CLIP-PASTE  ITEMS. ;',
+        'T',
+    ]) == "2 items [toast Copied to clipboard ] [toast Pasted! ] 3 items"
+
+
 def test_paste_copies_and_moves_folders_between_places():
     assert pasted([
         ': T  S" tree" VA @ VFS-MKDIR THROW  S" /tree" VA @ VFS-CD? THROW',

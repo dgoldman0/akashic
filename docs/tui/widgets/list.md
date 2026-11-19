@@ -1,7 +1,7 @@
 # akashic/tui/widgets/list.f — Scrollable List Widget
 
 **Layer:** 4B  
-**Lines:** 1532  
+**Lines:** 1577  
 **Prefix:** `LST-` (public), `_LST-` (internal)  
 **Provider:** `akashic-tui-list`  
 **Dependencies:** `widget.f`, `draw.f`, `keys.f`, `semantic-collections.f`,
@@ -10,7 +10,7 @@
 ## Overview
 
 A vertically scrollable list of rows, one or more columns wide, with one
-selected row.  The widget does not own its rows.  The caller gives a row
+selected row, or none after `LST-DESELECT`.  The widget does not own its rows.  The caller gives a row
 count and two callbacks:
 
 | Callback | Stack | Meaning |
@@ -76,13 +76,13 @@ as a renderer-neutral item view (see `semantic-collections.md`).  A rich
 renderer draws that view itself and sends item events back by key; CELL
 output draws the same rows through `WDG-DRAW`.
 
-## Descriptor Layout (192 bytes)
+## Descriptor Layout (200 bytes)
 
 | Offset | Field | Description |
 |--------|-------|-------------|
 | +0..+39 | header | Standard widget header, type=`WDG-T-LIST` |
 | +40 | count | Number of rows |
-| +48 | selected | Selected row, or -1 when there are no rows |
+| +48 | selected | Selected row, or -1 when there are no rows or none is selected |
 | +56 | scroll-top | First shown row |
 | +64 | select-xt | `( index widget -- )` when the selection moves, or 0 |
 | +72 | open-xt | `( index widget -- )` when a row is opened, or 0 |
@@ -100,6 +100,7 @@ output draws the same rows through `WDG-DRAW`.
 | +168 | follow | A log's view follows its end |
 | +176 | counts-a | Kept line counts of wrapping fields, or 0 |
 | +184 | counts-n | Entries in the kept counts |
+| +192 | none | No row is selected until one is chosen (`LST-DESELECT`) |
 
 ## Column Records (40 bytes each)
 
@@ -146,6 +147,7 @@ the widths and take the card field widths above.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `LST-SELECT` | `( index widget -- )` | Select a row, or the next row that is not a heading, and show it; the selection callback runs if it moved.  A log only shows the row |
+| `LST-DESELECT` | `( widget -- )` | Select no row until one is chosen by a press, a key, an item event or `LST-SELECT`, which runs the selection callback whatever row it chooses; `LST-ROWS!` selects its first row again.  A caller whose own selection is not one of the rows shows that this way |
 | `LST-SELECTED` | `( widget -- index )` | The selected row, or -1 |
 | `LST-ON-SELECT` | `( xt widget -- )` | Callback `( index widget -- )` when the selection moves |
 | `LST-ON-OPEN` | `( xt widget -- )` | Callback `( index widget -- )` when the selected row is opened |

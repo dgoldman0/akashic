@@ -253,7 +253,11 @@ while retaining the Explorer guard.
 - Selection is unified across the sidebar and Details list. Preview,
   properties, rename, delete, copy, cut, and paste all act on the entry at
   the selection's path. Renaming or deleting the listed directory moves the
-  listing with it.
+  listing with it. The table shows a row selected only when the selection
+  is that row; when the selection is the listed directory itself, or an
+  entry the tree chose elsewhere, no row is selected (`LST-DESELECT`), so a
+  press on any row chooses it. A paste, like every other change, lists the
+  directory again and updates the item count.
 - Names are validated before mutation: not empty, no slash, and no longer
   than the place's volume takes (`PLACE-NAME-LIMIT`: 23 bytes on MP64FS,
   255 on ext4). The VFS layer rejects duplicate sibling names.

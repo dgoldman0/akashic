@@ -3,7 +3,8 @@
 \ =====================================================================
 \
 \  A vertically scrollable list of rows, one or more columns wide, with
-\  one selected row.  The widget does not own its rows: the caller gives
+\  one selected row, or none after LST-DESELECT until a row is chosen.
+\  The widget does not own its rows: the caller gives
 \  a row count and two callbacks,
 \
 \    key-xt    ( index widget -- key )
@@ -67,7 +68,7 @@
 \  CELL shows it: control characters and bytes that are not UTF-8 as
 \  U+FFFD, but a wrapping field's line feeds as they are.
 \
-\  Descriptor (header + 19 cells = 192 bytes):
+\  Descriptor (header + 20 cells = 200 bytes):
 \    +0..+32  widget header   type=WDG-T-LIST
 \    +40      count           Number of rows
 \    +48      selected        Selected row, or -1
@@ -88,6 +89,7 @@
 \    +168     follow          A log's view follows its end
 \    +176     rc-a            Kept line counts of wrapping fields, or 0
 \    +184     rc-n            Entries they have room for
+\    +192     none            No row is selected until one is chosen
 \
 \  Prefix: LST- (public), _LST- (internal)
 \  Provider: akashic-tui-list
@@ -133,7 +135,8 @@ VARIABLE _LST-OWNED-LIMIT
 168 CONSTANT _LST-O-FOLLOW
 176 CONSTANT _LST-O-RC-A
 184 CONSTANT _LST-O-RC-N
-192 CONSTANT _LST-DESC-SIZE
+192 CONSTANT _LST-O-NONE
+200 CONSTANT _LST-DESC-SIZE
 
 \ Column record.
  0 CONSTANT LST-COLUMN-KIND
@@ -603,10 +606,11 @@ VARIABLE _LST-S-SEL
 
 \ _LST-SCAN-SEL ( widget -- )
 \   Work out the selection the rows leave, as _LST-S-SEL, without moving
-\   it: none in a log or with no rows, else the selected row within the
-\   rows and off a heading.
+\   it: none in a log, with no rows or after LST-DESELECT, else the
+\   selected row within the rows and off a heading.
 : _LST-SCAN-SEL  ( widget -- )
-    DUP _LST-O-COUNT + @ 0 MAX 0= OVER _LST-LOG? OR IF
+    DUP _LST-O-COUNT + @ 0 MAX 0= OVER _LST-LOG? OR
+    OVER _LST-O-NONE + @ OR IF
         DROP -1 _LST-S-SEL ! EXIT
     THEN
     DUP _LST-O-SEL + @ OVER _LST-O-COUNT + @ 1- MIN 0 MAX   ( w sel )
@@ -627,6 +631,7 @@ VARIABLE _LST-S-SEL
 : _LST-SELECT-ROW!  ( index widget -- )
     2DUP _LST-SHOW
     DUP _LST-LOG? IF NIP DUP _LST-TRACK-END WDG-DIRTY EXIT THEN
+    0 OVER _LST-O-NONE + !
     2DUP _LST-O-SEL + @ <> IF
         2DUP _LST-O-SEL + !
         DUP _LST-O-SEL-XT + @ ?DUP IF >R 2DUP R> EXECUTE THEN
@@ -1382,7 +1387,7 @@ VARIABLE _LST-CF-KEEP
     >R
     R@ _LST-RC-FREE
     0 MAX R@ _LST-O-COUNT + !
-    -1 R@ _LST-O-SEL + !
+    -1 R@ _LST-O-SEL + !  0 R@ _LST-O-NONE + !
     R@ _LST-O-COUNT + @ R@ _LST-LOG? 0= AND IF
         0 1 R@ _LST-SEEK R@ _LST-O-SEL + !
     THEN
@@ -1424,6 +1429,14 @@ VARIABLE _LST-CF-KEEP
 \   selection callback runs if it moved.
 : LST-SELECT  ( index widget -- )
     _LST-SELECT! ;
+
+\ LST-DESELECT ( widget -- )
+\   Select no row until one is chosen: by a press, a key, an item event
+\   or LST-SELECT, which then runs the selection callback, whatever row
+\   it chooses.  LST-ROWS! selects its first row again.
+: LST-DESELECT  ( widget -- )
+    DUP _LST-O-NONE + @ IF DROP EXIT THEN
+    -1 OVER _LST-O-NONE + !  -1 OVER _LST-O-SEL + !  WDG-DIRTY ;
 
 \ LST-SELECTED ( widget -- index )   The selected row, or -1.
 : LST-SELECTED  ( widget -- index )  _LST-SCAN-SEL _LST-S-SEL @ ;
@@ -1515,6 +1528,7 @@ GUARD _lst-guard
 ' LST-COUNT       CONSTANT _lst-count-xt
 ' LST-COLUMNS!    CONSTANT _lst-columns-xt
 ' LST-SELECT      CONSTANT _lst-select-xt
+' LST-DESELECT    CONSTANT _lst-deselect-xt
 ' LST-SELECTED    CONSTANT _lst-selected-xt
 ' LST-ON-SELECT   CONSTANT _lst-onsel-xt
 ' LST-ON-OPEN     CONSTANT _lst-onopen-xt
@@ -1539,6 +1553,7 @@ GUARD _lst-guard
 : LST-COUNT       _lst-count-xt     _lst-guard WITH-GUARD ;
 : LST-COLUMNS!    _lst-columns-xt   _lst-guard WITH-GUARD ;
 : LST-SELECT      _lst-select-xt    _lst-guard WITH-GUARD ;
+: LST-DESELECT    _lst-deselect-xt  _lst-guard WITH-GUARD ;
 : LST-SELECTED    _lst-selected-xt  _lst-guard WITH-GUARD ;
 : LST-ON-SELECT   _lst-onsel-xt     _lst-guard WITH-GUARD ;
 : LST-ON-OPEN     _lst-onopen-xt    _lst-guard WITH-GUARD ;

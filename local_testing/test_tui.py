@@ -1817,6 +1817,22 @@ def test_lst_home_end():
          'DUP LST-SELECTED . 8888 .',
          'LST-FREE SCR-FREE'], "0 8888")
 
+def test_lst_deselect():
+    """LST-DESELECT leaves no row selected through draws until a row is
+    chosen, and the choice runs the callback even for the first row."""
+    check("deselected list chooses a row and reports it",
+        _list_lines(5, 3) + [
+         'VARIABLE _LSN  0 _LSN !',
+         ': _LSEL  ( index widget -- )  DROP 1+ _LSN ! ;',
+         "' _LSEL OVER LST-ON-SELECT",
+         'DUP LST-DESELECT  DUP WDG-DRAW  DUP LST-SELECTED .',
+         '0 OVER LST-SELECT  DUP LST-SELECTED . _LSN @ .',
+         'DUP LST-DESELECT',
+         'KEY-T-SPECIAL _EV ! KEY-DOWN _EV 8 + ! 0 _EV 16 + !',
+         '_EV OVER WDG-HANDLE DROP  DUP LST-SELECTED .',
+         'DUP LST-DESELECT  3 OVER LST-ROWS!  DUP LST-SELECTED . 8888 .',
+         'LST-FREE SCR-FREE'], "-1 0 1 0 0 8888")
+
 def test_lst_empty():
     """An empty list draws and handles keys without a selection."""
     check("draw empty list",
