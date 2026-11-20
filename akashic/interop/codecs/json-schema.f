@@ -24,7 +24,7 @@ VARIABLE _CSJ-COUNT
         CV-T-LIST OF S" array" ENDOF
         CV-T-MAP OF S" object" ENDOF
         CV-T-RESOURCE OF S" string" ENDOF
-        DROP S" object"
+        >R S" object" R>
     ENDCASE ;
 
 : _CSJ-TYPE-COUNT  ( mask -- count )
