@@ -315,8 +315,18 @@ may change at any time. The count follows the words each analysis ran, so
 storing a token, or naming a word in code no path reaches, leaves a
 definition's qualification to its own code. The strict run also reports the
 larger count that admits declared token effects, since the checker compares
-every token it sees stored into a typed slot with the slot's declaration;
-which of the two counts decides placement is open.
+every token it sees stored into a typed slot with the slot's declaration.
+
+The smaller count decides placement for plain Forth (decided 2026-11-20).
+A KDOS execution token is the address of MegaPad code, so a word that runs
+one from a slot can only run where that code is, and plain Forth can write a
+slot through an address no checker follows. Such a word qualifies once its
+module is compiled as Uroko: its slots then hold words as values, which
+carry each engine's compiled entry, and every store into them is compiled by
+Uroko or passes through a setter that checks the stored word's effect.
+Existing Forth therefore reaches LM1 module by module as it is brought into
+Uroko, which for most modules means writing the declarations this note
+describes.
 
 ## What the measurements found
 
