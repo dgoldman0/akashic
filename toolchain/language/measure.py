@@ -243,6 +243,7 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
                     "word": finding.word, "detail": finding.detail,
                 })
     relying = sum(1 for r in inferred if r.relies_on_declared)
+    grounded = sum(1 for r in inferred if _grounded(r.word, {}))
     self_named = [r for r in records if r.hides_older]
     commented = sum(1 for r in records if r.word.declared is not None)
     preceding = sum(1 for r in records
@@ -257,6 +258,7 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
         "mismatches by comment form": dict(mismatch_kinds.most_common()),
         "comments of failed definitions": dict(declared_only.most_common()),
         "inferred relying on a comment-only callee": relying,
+        "inferred with no comment-only word anywhere below": grounded,
         "failure categories": dict(direct.most_common()),
         "failure examples": category_examples,
         "propagated failures by root cause": dict(roots.most_common()),
@@ -308,6 +310,34 @@ def sample(checker: Checker, root: Path, group: str, category: str, count: int,
         for number in range(word.line, (word.end_line or word.line) + 1):
             out.append(f"{number:6} {lines[number - 1]}")
     return "\n".join(out)
+
+
+def _grounded(word, memo: dict) -> bool:
+    """Whether a word's effect rests on inference all the way down.
+
+    Base words count as grounded, since their effects are given; a source
+    word counts when it was inferred and every source word it calls is
+    grounded in turn.
+    """
+    key = id(word)
+    if key in memo:
+        return memo[key]
+    if word.origin != "source":
+        return True
+    if word.kind == "defer":
+        return word.signature_source == "inferred"  # bound by IS to an inferred word
+    if word.kind != "colon":
+        return True  # variables, constants and created words have exact effects
+    memo[key] = True  # a word that calls itself does not undo its own grounding
+    # A word that runs an xt it is given is inferred at each call site.
+    result = word.inferred is not None or word.higher_order
+    if result and word.items:
+        for op, arg, _ in word.items:
+            if op in ("call", "xt") and arg is not word and not _grounded(arg, memo):
+                result = False
+                break
+    memo[key] = result
+    return result
 
 
 def _where(record: Record, line: int | None, detail: str) -> dict:
