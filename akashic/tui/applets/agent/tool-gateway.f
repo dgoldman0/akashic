@@ -753,7 +753,7 @@ VARIABLE _ATGC-CALL-U
 
 : _ATOOLG-POST-ROLLBACK-BODY  ( gateway mandate-run status -- status )
     >R _ATGC-MRUN ! DUP _ATGC-G !
-    DUP ATOOLG.REQUEST @ _ATGC-REQ !
+    ATOOLG.REQUEST @ _ATGC-REQ !
     _ATGC-MRUN @ 0<> _ATGC-RESERVED !
     R> _ATOOLG-CALL-CLEANUP ;
 
