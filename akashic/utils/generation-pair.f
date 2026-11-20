@@ -316,11 +316,12 @@ REQUIRE memory-span.f
 : _GPAIR-CANDIDATE-B-VALID?  ( pair -- flag )
     _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-CLASS@ GPAIR-C-VALID = ;
 
-: _GPAIR-BOTH-ABSENT?  ( pair -- flag )
-    DUP _GPAIR.CANDIDATE-A @ GPAIR-CANDIDATE-CLASS@
-        GPAIR-C-ABSENT =
-    SWAP _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-CLASS@
-        GPAIR-C-ABSENT = AND ;
+\ Saves go to A first and reach B only after a save into A has become
+\ durable.  With neither slot valid, a B never written means no save ever
+\ completed: an unreadable A is a first save that a power cut interrupted.
+\ An unreadable B always followed a durable A, so it means damage.
+: _GPAIR-B-ABSENT?  ( pair -- flag )
+    _GPAIR.CANDIDATE-B @ GPAIR-CANDIDATE-CLASS@ GPAIR-C-ABSENT = ;
 
 : _GPAIR-ADOPT  ( candidate slot result pair -- pair )
     >R
@@ -388,7 +389,7 @@ REQUIRE memory-span.f
     DUP _GPAIR-CANDIDATE-B-VALID? IF
         GPAIR-R-FALLBACK SWAP _GPAIR-ADOPT-B GPAIR-S-OK EXIT
     THEN
-    DUP _GPAIR-BOTH-ABSENT? IF
+    DUP _GPAIR-B-ABSENT? IF
         GPAIR-R-ABSENT OVER _GPAIR.RESULT !
     ELSE
         GPAIR-R-CORRUPT OVER _GPAIR.RESULT !

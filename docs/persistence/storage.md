@@ -168,7 +168,12 @@ root before the next mutation.
 caller-named files. `PROOT-LOAD` independently classifies both slots, verifies
 their physical page and segment bounds, rejects divergent equal generations,
 and selects the newest valid candidate. One corrupt candidate and one valid
-candidate is an explicit fallback, not silent repair.
+candidate is an explicit fallback, not silent repair. A corrupt first slot
+beside an absent second one loads as absent: the first publication goes to
+the first slot and a publication reaches the second only after one in the
+first is durable, so that pair is a first publication a power cut
+interrupted (`docs/utils/generation-pair.md`). Provisioning then publishes
+again into the first slot.
 
 `PROOT-PUBLISH` writes the inactive slot, checks its exact size, syncs the VFS,
 reads the bytes back, validates their tag and payload, and only then marks the

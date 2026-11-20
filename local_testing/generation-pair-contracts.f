@@ -257,7 +257,28 @@ CREATE _gpt-overlap GPAIR-SIZE GPAIR-CANDIDATE-SIZE + ALLOT
     _gpt-candidate-a GPAIR-CANDIDATE-DETAIL@ 11 = _gpt-assert
     _gpt-candidate-b GPAIR-CANDIDATE-DETAIL@ 12 = _gpt-assert
 
+    \ An unreadable A beside a B never written is a first save that did
+    \ not finish: nothing was published, and the next save targets A.
     21 _gpt-candidate-a GPAIR-CANDIDATE-CORRUPT! DROP
+    _gpt-candidate-a _gpt-candidate-b _gpt-pair-a GPAIR-SELECT
+    GPAIR-S-OK = _gpt-assert GPAIR-R-ABSENT = _gpt-assert
+    _gpt-pair-a GPAIR-SELECTED@ 0= _gpt-assert
+    _gpt-pair-a GPAIR-GENERATION@ 0= _gpt-assert
+    _gpt-pair-a GPAIR-ACTIVE-SLOT@ -1 = _gpt-assert
+    _gpt-pair-a GPAIR-INACTIVE-SLOT?
+    GPAIR-S-OK = _gpt-assert GPAIR-SLOT-A = _gpt-assert
+
+    \ B is written only after A held a durable save, so an unreadable B
+    \ is damage whatever A holds.
+    22 _gpt-candidate-a GPAIR-CANDIDATE-ABSENT! DROP
+    23 _gpt-candidate-b GPAIR-CANDIDATE-CORRUPT! DROP
+    _gpt-candidate-a _gpt-candidate-b _gpt-pair-a GPAIR-SELECT
+    GPAIR-S-OK = _gpt-assert GPAIR-R-CORRUPT = _gpt-assert
+    _gpt-pair-a GPAIR-SELECTED@ 0= _gpt-assert
+    _gpt-pair-a GPAIR-GENERATION@ 0= _gpt-assert
+    _gpt-pair-a GPAIR-ACTIVE-SLOT@ -1 = _gpt-assert
+
+    24 _gpt-candidate-a GPAIR-CANDIDATE-CORRUPT! DROP
     _gpt-candidate-a _gpt-candidate-b _gpt-pair-a GPAIR-SELECT
     GPAIR-S-OK = _gpt-assert GPAIR-R-CORRUPT = _gpt-assert
     _gpt-pair-a GPAIR-GENERATION@ 0= _gpt-assert

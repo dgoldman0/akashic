@@ -63,13 +63,27 @@ pair as follows:
 | Candidate A | Candidate B | Result | Authority |
 |---|---|---|---|
 | absent | absent | `GPAIR-R-ABSENT` | none |
-| corrupt/absent | corrupt/absent, with at least one corrupt | `GPAIR-R-CORRUPT` | none |
+| corrupt | absent | `GPAIR-R-ABSENT` | none |
+| absent/corrupt | corrupt | `GPAIR-R-CORRUPT` | none |
 | valid | absent/corrupt | `GPAIR-R-FALLBACK` | A |
 | absent/corrupt | valid | `GPAIR-R-FALLBACK` | B |
 | valid, newer | valid, older | `GPAIR-R-NEWEST` | A |
 | valid, older | valid, newer | `GPAIR-R-NEWEST` | B |
 | valid, equal generation and equal value | valid, equal generation and equal value | `GPAIR-R-EQUAL` | A |
 | valid, equal generation and divergent value | valid, equal generation and divergent value | `GPAIR-R-AMBIGUOUS` | none |
+
+A corrupt A beside an absent B reads as absent because of the order in
+which saves fill the slots: the first save targets A, and a save reaches B
+only after one into A has become durable (see "Publishing to the inactive
+slot"). With neither slot valid and B never written, no save ever
+completed, and an unreadable A is a first save that a power cut
+interrupted. A writer that creates a slot's file and fills it in separate
+steps leaves exactly that state, as the user volume's ext4 writer does.
+An unreadable B always followed a durable A, so a pair whose B cannot be
+read and whose A is not valid is damage, and it stays corrupt. The rule
+gives up one refusal: a pair that completed exactly one save and later
+lost that copy to damage reads as absent, and its next save starts over.
+That copy held at most one save, unreadable either way.
 
 Equal generations are resolved by the caller callback:
 

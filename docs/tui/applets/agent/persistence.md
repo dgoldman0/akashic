@@ -82,8 +82,12 @@ Equal-generation slots are accepted only when their complete verified bytes
 are identical. Divergent equal-generation snapshots are split-brain evidence
 and loading fails closed rather than choosing an arbitrary conversation. Two
 absent slots report `ACSTORE-S-NOT-FOUND`, which is the first-use state from
-which the runtime creates its initial snapshot. Present but invalid evidence,
-including two corrupt candidates, fails closed.
+which the runtime creates its initial snapshot. So does an unreadable
+`/agent-thread-a.bin` beside an absent `/agent-thread-b.bin`: the first save
+goes to A and a save reaches B only after A's is durable, so that pair is a
+first save a power cut interrupted, and the next save writes A again
+(`docs/utils/generation-pair.md`). Other invalid evidence, including two
+corrupt candidates or an unreadable B, fails closed.
 
 The slot-independent selection and inactive-publication state now comes from
 the neutral `utils/generation-pair.f` primitive. Agent storage still owns both
