@@ -281,3 +281,6 @@ local_testing/fixtures/atproto/*
 
 # Generated system images and captures stay local.
 local_testing/out/
+
+# Python bytecode caches, wherever host tooling runs
+__pycache__/
