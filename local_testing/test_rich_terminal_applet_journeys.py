@@ -2726,6 +2726,30 @@ def _fake_tools(responses):
     return run, toolchain
 
 
+def test_the_driver_builds_the_shipping_form_unless_asked_for_the_linked_one(tmp_path) -> None:
+    """Every profile the driver runs builds the shipping form by default, and
+    --linked builds the linked form, to which each of the shipping form's
+    options still adds its part."""
+
+    common = ["--akashic-root", str(tmp_path), "--megapad-root", str(tmp_path),
+              "--font", str(tmp_path / "font.ttf"), "--output-parent", str(tmp_path)]
+
+    def form(*argv: str) -> tuple[bool, bool, bool, bool]:
+        args = physical_desktop_acceptance.parse_arguments([*common, *argv])
+        return args.linked, args.system_volume, args.token_modules, args.user_volume
+
+    assert form() == form("--applet", "fexp") == (False, True, True, True)
+    assert form("--user-volume") == (False, True, True, True)
+    assert form("--linked") == form("--linked", "--applet", "pad") == (
+        True, False, False, False)
+    assert form("--linked", "--user-volume") == (True, False, False, True)
+    assert form("--linked", "--system-volume", "--token-modules") == (
+        True, True, True, False)
+    assert {"desktop-apt1"} | {
+        f"desktop-apt1-{applet}" for applet in physical_desktop_acceptance.APPLETS
+    } == akashic_tui.SHIPPING_FORM_PROFILES
+
+
 def test_the_driver_checks_what_a_journey_leaves_on_the_user_volume(tmp_path, monkeypatch) -> None:
     tui = akashic_tui
     expected = physical_desktop_acceptance.user_volume_expected("fexp", tui)

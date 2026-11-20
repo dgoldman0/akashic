@@ -2544,6 +2544,62 @@ def test_a_paced_terminal_link_reaches_only_a_rich_terminal_server() -> None:
         _parser().parse_args(["smoke", "--terminal-link-pace", "100000:1000"])
 
 
+def test_the_desktops_build_the_shipping_form_unless_asked_for_the_linked_one() -> None:
+    """The rich Desktop and Desk with one applet build the shipping form by
+    default: token modules on the system volume, and the user volume.
+    --linked builds the linked form, to which each of the three options
+    still adds its part.  Every other profile builds what its options ask
+    for, as it did."""
+
+    shipping = akashic_tui.SHIPPING_FORM_PROFILES
+    build_form = akashic_tui.build_form
+    assert shipping == {"desktop-apt1", *akashic_tui.DESKTOP_APT1_APPLET_PROFILES}
+    for name in shipping:
+        # The user volume needs Desk's app shell.
+        assert akashic_tui.APP_SHELL_MODULE in dependency_order(PROFILES[name].roots)
+        assert build_form(name) == (True, True, True)
+        assert build_form(name, linked=True) == (False, False, False)
+        assert build_form(name, linked=True, user_volume=True) == (False, False, True)
+        assert build_form(
+            name, linked=True, system_volume=True, token_modules=True
+        ) == (True, True, False)
+    for name in ("desktop", "pad", "fexplorer", "agent-widgets"):
+        assert build_form(name) == build_form(name, linked=True) == (False, False, False)
+        assert build_form(name, user_volume=True) == (False, False, True)
+        assert build_form(name, system_volume=True, token_modules=True) == (
+            True, True, False)
+
+    # The command line builds the form build_form gives.
+    for command in ("build", "smoke", "serve", "accept"):
+        assert _parser().parse_args([command]).linked is False
+        assert _parser().parse_args([command, "--linked"]).linked is True
+    built = []
+
+    def build(profile, _output, _checkpoint, **options):
+        built.append((profile, options["system_volume"], options["token_modules"],
+                      options["user_volume"]))
+        return Path("unused.img")
+
+    for argv in (
+        ["build", "--profile", "desktop-apt1"],
+        ["build", "--profile", "desktop-apt1-pad", "--linked"],
+        ["build", "--profile", "desktop-apt1", "--linked", "--user-volume"],
+        ["build", "--profile", "pad"],
+        ["build", "--profile", "pad", "--user-volume"],
+    ):
+        with patch("akashic_tui.build_image", side_effect=build), patch.object(
+            sys, "argv", ["akashic_tui.py", *argv]
+        ):
+            assert akashic_tui.main() == 0
+    assert built == [
+        ("desktop-apt1", True, True, True),
+        ("desktop-apt1-pad", False, False, False),
+        ("desktop-apt1", False, False, True),
+        ("pad", False, False, False),
+        ("pad", False, False, True),
+    ]
+
+
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     tmp_path: Path,
 ) -> None:

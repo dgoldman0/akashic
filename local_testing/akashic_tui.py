@@ -15029,6 +15029,34 @@ DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damage
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
+# The rich Desktop and Desk with one applet, the profiles the physical
+# journeys run, build the shipping form unless --linked asks for the linked
+# one (build_form): their modules as token forms on the system volume, and
+# the user volume with the shipping form's places.  Each composes Desk's app
+# shell, which the user volume needs.
+SHIPPING_FORM_PROFILES = frozenset(("desktop-apt1", *DESKTOP_APT1_APPLET_PROFILES))
+
+
+def build_form(
+    profile_name: str,
+    *,
+    linked: bool = False,
+    system_volume: bool = False,
+    token_modules: bool = False,
+    user_volume: bool = False,
+) -> tuple[bool, bool, bool]:
+    """The form a build of PROFILE_NAME takes from the command line, as
+    whether it has the system volume, token modules and the user volume.  A
+    profile of SHIPPING_FORM_PROFILES builds the shipping form, all three,
+    unless LINKED asks for the linked form.  Any other profile, and one asked
+    for the linked form, builds what SYSTEM_VOLUME, TOKEN_MODULES and
+    USER_VOLUME ask for."""
+
+    if profile_name in SHIPPING_FORM_PROFILES and not linked:
+        return True, True, True
+    return system_volume, token_modules, user_volume
+
+
 # On the Desktop, Sound Lab is a built-in without a tile; alone it takes
 # the tile, where its frequency landmarks have room below its analysis.
 # Observatory is checked beside Worlds, which hands it a run's telemetry
@@ -29261,6 +29289,10 @@ def build_image(
     resources and initial files move onto the system volume, the origin's
     volume.  Every sample, the large one included, moves into the user
     volume's documents, and the boot volume keeps none.
+
+    These options default to off here.  The command line builds the
+    shipping form for the profiles of SHIPPING_FORM_PROFILES unless it is
+    given --linked (:func:`build_form`).
     """
     if keep_module_source and not (token_modules and system_volume):
         raise ValueError(
@@ -38512,6 +38544,17 @@ def _parser() -> argparse.ArgumentParser:
             ),
         )
         command.add_argument(
+            "--linked",
+            action="store_true",
+            help=(
+                "build the linked form: the profile's modules in linked "
+                "chunks on the boot volume, with one place over it.  The rich "
+                "Desktop and Desk with one applet otherwise build the shipping "
+                "form, --system-volume --token-modules --user-volume; with "
+                "--linked those options add their parts to the linked form"
+            ),
+        )
+        command.add_argument(
             "--system-volume",
             action="store_true",
             help=(
@@ -38708,6 +38751,13 @@ def main() -> int:
             f"{args.backend} does not use the cycle-budget smoke loop; "
             "use serve or accept"
         )
+    system_volume, token_modules, user_volume = build_form(
+        args.profile,
+        linked=args.linked,
+        system_volume=args.system_volume,
+        token_modules=args.token_modules,
+        user_volume=args.user_volume,
+    )
     image_path = build_image(
         args.profile,
         args.output,
@@ -38717,10 +38767,10 @@ def main() -> int:
         every_frame_checks=args.every_frame_checks,
         safe_mode=args.safe_mode,
         settings_safe_mode=args.settings_safe_mode,
-        system_volume=args.system_volume,
-        token_modules=args.token_modules,
+        system_volume=system_volume,
+        token_modules=token_modules,
         keep_module_source=args.keep_module_source,
-        user_volume=args.user_volume,
+        user_volume=user_volume,
         user_volume_mib=args.user_volume_mib,
     )
     if args.command == "build":
@@ -38771,7 +38821,7 @@ def main() -> int:
                 else "config" if args.settings_safe_mode
                 else None
             ),
-            user_volume=args.user_volume,
+            user_volume=user_volume,
         ) else 1
     serve(
         args.profile,

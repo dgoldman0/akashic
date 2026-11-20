@@ -72,23 +72,33 @@ that reads nothing.
 written beside the boot image, `<name>-system.img`: each module a plain file
 at its module path, with the repository's text and its comments. The boot
 image keeps KDOS, its system modules, the profile's resources and its
-samples. In the place of the profile's modules it holds the closure of this
-module, deployed as the profile deploys source: checked cold-source chunks
-for the Desktop, plain files for a profile that is not linked. `autoexec.f`
-loads that closure, runs the sequence above, and then runs the profile's own
-`REQUIRE` lines, which KDOS resolves as paths on the volume. `smoke`, `serve`
-and `accept` attach the volume as the third storage unit, and
-`physical_desktop_acceptance.py --system-volume` runs the canonical journey
-on a Desktop built this way. The option is off unless it is given.
+samples; with the user volume as well, the resources and the files the
+profile ships for its own code move onto the system volume, the origin, and
+the samples into the user volume's documents ([user-volume.md](user-volume.md)).
+In the place of the profile's modules the boot image holds the closure of
+this module, deployed as the profile deploys source: checked cold-source
+chunks for the Desktop, plain files for a profile that is not linked.
+`autoexec.f` loads that closure, runs the sequence above, and then runs the
+profile's own `REQUIRE` lines, which KDOS resolves as paths on the volume.
+`smoke`, `serve` and `accept` attach the volume as the third storage unit.
+
+The rich Desktop and Desk with one applet build this way by default, as part
+of the shipping form, with their modules in token form and the user volume;
+`--linked` builds them from linked chunks instead, and with
+`--linked --system-volume` this option alone. Any other profile builds this
+way only when it is given the option. `physical_desktop_acceptance.py` runs
+the canonical journey on the shipping form unless it is given `--linked`,
+and it takes the same options.
 
 The canonical journey passes on such a Desktop. File Explorer's wheel step
-needs a root listing at least three rows longer than its table shows, and a
-linked Desktop's source chunks supply those rows. A Desktop built this way
-has few chunks in its root, so its boot image also carries the sample
-documents (`local_testing/sample_documents.py`). They ship where the modules
-live on the system volume, since there nothing else makes the root long, and
-they stand for what a user volume will hold. A linked Desktop's image is
-unchanged.
+needs the list it opens on to hold at least three rows more than its table
+shows, and a linked Desktop's source chunks supply those rows in its root. A
+Desktop built this way has few chunks in its root, so it also carries the
+sample documents (`local_testing/sample_documents.py`), in the list File
+Explorer opens on: the boot volume's root, or with the user volume its
+documents place, which holds every sample. Nothing else makes that list
+long, and the documents stand for what a person keeps there. A linked
+Desktop without the user volume is unchanged.
 
 The volume is made by the pinned e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR`
 names, with the ext4 fixtures' profile
