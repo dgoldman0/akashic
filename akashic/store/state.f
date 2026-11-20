@@ -628,6 +628,7 @@ VARIABLE _st-snap-ptr
 
 : ST-RESTORE  ( src -- )
     _st-snap-ptr !
+    -1 _ST-DIRTY !                    \ the tree no longer describes the state
     \ Restore count + pgcnt
     _st-snap-ptr @ @ _ST-COUNT !
     _st-snap-ptr @ 8 + @ _ST-PGCNT !
