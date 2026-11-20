@@ -10,6 +10,13 @@ Four standard words that the dictionary document does not tabulate get their
 ANS effects here, since Akashic calls them often: ``2!``, ``2@``, ``ON`` and
 ``CMOVE>``.  Every other undocumented BIOS word has no effect, and a
 definition that calls one is reported as calling a word of unknown effect.
+
+The document and KDOS's comments name cells informally, and the checker
+reads no kind from a name, so the kinds of the base words that take or
+return addresses, spans, characters and flags are declared here in Uroko's
+form (``BASE_DECLARATIONS``).  Each keeps the shape of its given effect;
+the checker refuses one that does not.  The primitives with exact rules,
+such as ``@``, ``!`` and the comparisons, carry their kinds in the checker.
 """
 
 from __future__ import annotations
@@ -27,6 +34,31 @@ ANS_SUPPLEMENT = {
     "2@": "( addr -- x1 x2 )",
     "ON": "( addr -- )",
     "CMOVE>": "( src dst u -- )",
+}
+
+BASE_DECLARATIONS = {
+    # BIOS
+    "FILL": "( a: addr u: u c: char -- )",
+    "MOVE": "( src: addr dst: addr u: u -- )",
+    "CMOVE": "( src: addr dst: addr u: u -- )",
+    "CMOVE>": "( src: addr dst: addr u: u -- )",
+    "COMPARE": "( s1: span s2: span -- n: n )",
+    "TYPE": "( s: span -- )",
+    "ACCEPT": "( buf: span -- n: u )",
+    "COUNT": "( a: addr -- s: span )",
+    "SOURCE": "( -- s: span )",
+    "HERE": "( -- a: addr )",
+    "ALLOT": "( n: n -- )",
+    "OFF": "( a: addr -- )",
+    "ON": "( a: addr -- )",
+    "2@": "( a: addr -- x1 x2 )",
+    "EMIT": "( c: char -- )",
+    "KEY": "( -- c: char )",
+    "WITHIN": "( n: n lo: n hi: n -- f: flag )",
+    # KDOS
+    "ALLOCATE": "( u: u -- a: addr ior: n )",
+    "FREE": "( a: addr -- )",
+    "RESIZE": "( a1: addr u: u -- a2: addr ior: n )",
 }
 
 

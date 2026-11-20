@@ -29,9 +29,10 @@ from pathlib import Path
 from typing import Callable
 
 from . import effects as E
-from .effects import Effect, Slot, parse_effect
+from .effects import (Effect, Slot, effect_shape, parse_effect, parse_holds,
+                      parse_kind_declaration)
 from .source import LineCursor, lines, parse_number, wrap
-from .vocabulary import bios_words
+from .vocabulary import BASE_DECLARATIONS, bios_words
 
 _ident_counter = itertools.count(1)
 _span_counter = itertools.count(1)
@@ -62,12 +63,15 @@ class Value:
     """An abstract cell."""
 
     __slots__ = ("kind", "const", "xt", "fact", "span", "role", "origin", "ident", "source",
-                 "disc")
+                 "disc", "effect", "holds", "array", "bounds", "rel_true", "rel_false")
 
     def __init__(self, kind: str = E.X, *, const: int | None = None, xt=None,
                  fact: int | None = None, span=None, role: str | None = None,
                  origin: str = "", ident=None, source: str = "computed",
-                 disc: bool = False) -> None:
+                 disc: bool = False, effect: Effect | None = None,
+                 holds: Slot | None = None, array: bool = False,
+                 bounds: frozenset = frozenset(), rel_true: frozenset = frozenset(),
+                 rel_false: frozenset = frozenset()) -> None:
         self.kind = kind
         self.const = const
         self.xt = xt
@@ -83,13 +87,30 @@ class Value:
         # True for a cell whose zero or nonzero value tells alternatives apart,
         # such as CATCH's code or the copies ?DUP leaves.
         self.disc = disc
+        # A declared execution token's effect, as read from a typed slot.
+        self.effect = effect
+        # An address: what the cell it points at holds, and whether every
+        # cell from here on holds the same (a CREATE table).  A field offset
+        # declared with holds carries what its field holds.
+        self.holds = holds
+        self.array = array
+        # Spans this value is known to be no longer than, beyond its own
+        # span: a length checked against a span's length, or a MIN of two.
+        self.bounds = bounds
+        # A flag from comparing two lengths: (value ident, span) pairs whose
+        # value is no longer than the span when the flag is true or false.
+        self.rel_true = rel_true
+        self.rel_false = rel_false
+
+    def copy_with(self, **changes) -> "Value":
+        """A copy with the same identity, as a branch learns more about it."""
+        fields = {name: getattr(self, name) for name in self.__slots__}
+        fields.update(changes)
+        kind = fields.pop("kind")
+        return Value(kind, **fields)
 
     def with_fact(self, fact: int | None, disc: bool | None = None) -> "Value":
-        copy = Value(self.kind, const=self.const, xt=self.xt, fact=fact,
-                     span=self.span, role=self.role, origin=self.origin,
-                     ident=self.ident, source=self.source,
-                     disc=self.disc if disc is None else disc)
-        return copy
+        return self.copy_with(fact=fact, disc=self.disc if disc is None else disc)
 
     def __repr__(self) -> str:
         return f"<{self.kind} {self.origin}>"
@@ -103,15 +124,16 @@ class LoopFrame:
     """The two cells DO parks on the return stack: limit and index.
 
     The index has the kind of the start value, so a loop that walks
-    addresses, as ``end start DO I C@ ... LOOP`` does, yields addresses.
+    addresses, as ``end start DO I C@ ... LOOP`` does, yields addresses.  A
+    start written as a number serves as any kind, so its index has none.
     """
 
     __slots__ = ("index", "ident")
 
     def __init__(self, start: Value | None = None) -> None:
         kind = E.NUMBER
-        if start is not None and start.kind in (E.ADDR, E.X):
-            kind = start.kind
+        if start is not None and start.kind in (E.ADDR, E.X, E.LIT):
+            kind = E.X if start.kind == E.LIT else start.kind
         self.index = Value(kind, origin="loop index", source="computed")
         self.ident = next(_ident_counter)
 
@@ -166,6 +188,13 @@ class Word:
     record: "Record | None" = field(default=None, repr=False)
     hides: "Word | None" = field(default=None, repr=False)
     end_line: int = field(default=0, repr=False)
+    # A data word's declared content: what its cell, value or field holds.
+    holds: Slot | None = field(default=None, repr=False)
+    # A kind declared with ( kind: NAME BASE ), kept in the dictionary under
+    # a key no Forth token can spell, so REQUIRE closures carry it.
+    kind_parent: str | None = field(default=None, repr=False)
+    problems: list = field(default_factory=list, repr=False)
+    declared_count: int = field(default=0, repr=False)
 
 
 @dataclass
@@ -175,6 +204,7 @@ class Finding:
     module: str
     line: int
     word: str
+    group: str = ""
 
 
 @dataclass
@@ -190,6 +220,18 @@ class Record:
     findings: list = field(default_factory=list)
     self_named: bool = False
     hides_older: bool = False
+    # Calls whose effect came from a declaration rather than from code: a
+    # token read from a typed slot, a typed token input, or a deferred word.
+    declared_tokens: int = 0
+    declared_token_sources: dict = field(default_factory=dict)
+    # Declared items in the stack comment, and whether recursion assumed it.
+    declared_items: int = 0
+    recursion_assumed: bool = False
+    # Tokens stored into slots that declare an effect: how many the checker
+    # compared with the declaration, and how many it could not, because the
+    # token came from a cell of unknown origin.
+    typed_stores_checked: int = 0
+    typed_stores_unchecked: int = 0
 
 
 @dataclass
@@ -209,13 +251,25 @@ class Pending:
     header_done: bool = False
 
 
-class Checker:
-    """Loads Forth source and checks each colon definition as it is defined."""
+KIND_KEY = "KIND "  # dictionary keys of declared kinds; no token holds a space
 
-    def __init__(self, managed_names: dict[str, str] | None = None) -> None:
-        self.managed = managed_names if managed_names is not None else {
-            "ref": E.REF, "handle": E.HANDLE,
-        }
+
+class Checker:
+    """Loads Forth source and checks each colon definition as it is defined.
+
+    In strict mode no stack comment stands in for code: a definition whose
+    effect cannot be inferred gives its callers nothing, recursion must
+    confirm the effect it assumed, and a comment lends no zero or nonzero
+    facts.  The words strict mode infers are the ones release plan decision
+    32 allows on LM1, less those that rest on a declared token effect, which
+    each record counts.
+    """
+
+    def __init__(self, strict: bool = False) -> None:
+        self.strict = strict
+        # Every kind declared anywhere, for comparing kinds that flow between
+        # modules; resolving a name in a declaration uses the dictionary.
+        self.all_kinds: dict[str, str] = {}
         self.words: dict[str, Word] = {}
         self.records: list[Record] = []
         self.findings: list[Finding] = []
@@ -235,6 +289,10 @@ class Checker:
         # "\ NAME ( effect )" lines, which KDOS writes above a definition.
         self.preceding: dict[str, str] = {}
         self.inlining: list[Word] = []
+        # Data words declared with ( holds: KIND ), as (group, word).
+        self.typed_slots: list[tuple[str, Word]] = []
+        # Kinds declared with ( kind: NAME BASE ), as (group, name).
+        self.declared_kinds: list[tuple[str, str]] = []
         # When a list, each analyzed step appends (line, op, word, depths).
         self.trace: list | None = None
         self.defined_here: dict[str, Word] | None = None
@@ -247,8 +305,7 @@ class Checker:
             word = Word(name, "bios.asm", 0, "bios", entry.immediate, "prim")
             if entry.effect_text:
                 inner = entry.effect_text.strip()[1:-1]
-                parsed = parse_effect(inner, self.managed)
-                effect = _generic_letters(parsed.effect, name in _STORES_ANY_CELL)
+                effect = parse_effect(inner).effect
                 word.declared = effect
                 word.declared_text = entry.effect_text
                 word.parses = effect.parses if effect else 0
@@ -258,6 +315,7 @@ class Checker:
             if name in PRIMS:
                 word.prim = name
             self.words[name] = word
+        self._declare_base_kinds("bios")
 
     def load_base(self, megapad_root: Path, modules: tuple[str, ...]) -> None:
         """Load KDOS and system modules; their words take their comments' effects."""
@@ -265,7 +323,90 @@ class Checker:
         for module in modules:
             path = megapad_root / module
             self.load_text(path.read_text(encoding="utf-8", errors="replace"), module)
+        self._declare_base_kinds("base")
         self.group = "library"
+
+    def _declare_base_kinds(self, origin: str) -> None:
+        """Give base words the kinds the toolchain declares for them.
+
+        The base vocabulary's comments and tables name cells informally, so
+        the kinds of its words are declared in the toolchain
+        (``vocabulary.BASE_DECLARATIONS``), each with the shape its given
+        effect already has.
+        """
+        for name, text in BASE_DECLARATIONS.items():
+            word = self.words.get(name)
+            if word is None or word.origin != origin:
+                continue
+            parsed = parse_effect(text[1:-1].strip(), self.resolve_kind)
+            given = word.signature or word.declared
+            effect = parsed.effect
+            if effect is None or parsed.problems:
+                raise ValueError(f"base declaration of {name} is malformed: {parsed.problems}")
+            if given is not None and not given.variable and effect_shape(given) != effect_shape(effect):
+                raise ValueError(f"base declaration of {name} changes its effect {given.shape()}")
+            word.declared = effect
+            word.declared_text = text[1:-1].strip()
+            if word.prim is None or word.prim not in PRIM_HANDLERS:
+                word.signature = effect
+                word.signature_source = "given"
+
+    # Kinds
+
+    def resolve_kind(self, name: str) -> str | None:
+        """The kind a declaration's name stands for, if this module sees it."""
+        lowered = name.lower()
+        builtin = E.BUILTIN_KINDS.get(lowered)
+        if builtin is not None:
+            return builtin
+        entry = self.words.get(KIND_KEY + lowered.upper())
+        return entry.name if entry is not None else None
+
+    def kind_parent(self, kind: str) -> str | None:
+        if kind in E.BUILTIN_PARENTS:
+            return E.BUILTIN_PARENTS[kind]
+        return self.all_kinds.get(kind)
+
+    def compatible(self, value_kind: str, param_kind: str) -> str | None:
+        return E.compatible(value_kind, param_kind, self.kind_parent)
+
+    def refines(self, kind: str, ancestor: str) -> bool:
+        """Whether ``kind`` is ``ancestor`` or a kind declared to refine it."""
+        seen = set()
+        while kind is not None and kind not in seen:
+            if kind == ancestor:
+                return True
+            seen.add(kind)
+            kind = self.kind_parent(kind)
+        return False
+
+    def declare_kind(self, name: str, parent: str) -> str | None:
+        """Add a kind; a problem when the name already means another kind."""
+        key = KIND_KEY + name.upper()
+        existing = self.words.get(key)
+        if existing is not None and existing.kind_parent != parent:
+            return f"kind: {name} already refines {existing.kind_parent}"
+        known = self.all_kinds.get(name)
+        if known is not None and known != parent:
+            return f"kind: {name} refines {known} elsewhere"
+        entry = Word(name, self.module, self.line, self._origin(), kind="kind")
+        entry.kind_parent = parent
+        self.define_entry(key, entry)
+        self.all_kinds[name] = parent
+        return None
+
+    def define_entry(self, key: str, word: Word) -> None:
+        self.words[key] = word
+        if self.defined_here is not None:
+            self.defined_here[key] = word
+
+    def declaration_problem(self, detail: str, name: str, record: "Record | None" = None,
+                            line: int | None = None) -> None:
+        self.findings.append(Finding("declaration", detail, self.module,
+                                     line or self.line, name,
+                                     record.group if record is not None else self.group))
+        if record is not None:
+            record.findings.append(self.findings[-1])
 
     def load_text(self, text: str, module: str) -> None:
         saved = (self.module, self.line, self.base)
@@ -442,6 +583,43 @@ class Checker:
             child.signature_source = "child"
             child.declared = word.child
             self.define(child)
+            # A field such as CMP-CELL: _X-HOOK ( holds: xt( -- ) ) declares
+            # what the cell its child word pushes holds.
+            held = self.read_holds(cursor, child)
+            if held is not None:
+                child.holds = held
+                outs = word.child.alts
+                if len(outs) == 1 and len(outs[0]) == 1:
+                    slot = outs[0][0]
+                    typed = Slot(slot.name, E.ADDR, holds=held)
+                    child.signature = Effect(word.child.inputs, ((typed,),), word.child.parses,
+                                             False, word.child.text)
+                else:
+                    self.declaration_problem(
+                        f"holds: {child.name} pushes {word.child.shape()} cells, not one address",
+                        child.name)
+
+    def read_holds(self, cursor: LineCursor, word: Word) -> Slot | None:
+        """A ``( holds: KIND )`` comment right after a data word's name.
+
+        Any other comment is left for the interpreter, which skips it.
+        """
+        saved = cursor.pos
+        if cursor.token() != "(":
+            cursor.pos = saved
+            return None
+        text, closed = cursor.paren_closed()
+        held, problems, declaration = parse_holds(text, self.resolve_kind)
+        if not declaration:
+            cursor.pos = saved
+            return None
+        if not closed:
+            problems = problems + ["the declaration's ( has no ) on its line"]
+        for problem in problems:
+            self.declaration_problem(problem, word.name)
+        if held is not None:
+            self.typed_slots.append((self.group, word))
+        return held
 
     def _origin(self) -> str:
         return "base" if self.group == "base" else "source"
@@ -504,10 +682,12 @@ class Checker:
         pending.items.append(("call", word, line))
 
     def _set_declared(self, word: Word, text: str) -> None:
-        parsed = parse_effect(text, self.managed)
+        parsed = parse_effect(text, self.resolve_kind)
         word.declared_text = text.strip()
         word.declared = parsed.effect
         word.declared_reason = parsed.reason
+        word.problems = list(parsed.problems)
+        word.declared_count = parsed.declared
         if parsed.effect is None:
             word.declared_text = None if parsed.reason == "no --" else word.declared_text
             if parsed.reason == "no --":
@@ -529,6 +709,9 @@ class Checker:
             word.prim = word.name.upper()  # KDOS defines CATCH and THROW
         record = Record(word, self.group)
         word.record = record
+        for problem in word.problems:
+            self.declaration_problem(problem, word.name, record, word.line)
+        record.declared_items = word.declared_count
         record.self_named = any(
             op == "call" and arg is word for op, arg, _ in pending.items
         )
@@ -551,7 +734,12 @@ class Checker:
         declared = word.declared if word.declared and not word.declared.variable else None
         analysis = Analysis(self, word, record, declared)
         try:
-            inferred = analysis.infer(main)
+            try:
+                inferred = analysis.infer(main)
+            except RecursionError:
+                # Tokens that lead back to one another would inline forever;
+                # the host's own stack ends the expansion.
+                raise Fail("inlining does not end", word.name, word.line)
             word.inferred = inferred
             record.status = "inferred"
         except Fail as failure:
@@ -564,13 +752,24 @@ class Checker:
         record.relies_on_declared = analysis.relies_on_declared
         record.comparison = compare(inferred, word.declared, word.declared_reason,
                                     word.declared_text)
+        if (inferred is not None and record.recursion_assumed and self.strict
+                and record.comparison not in ("match", "match with pass-through")):
+            # Recursion ran on the comment's effect; only an inferred effect
+            # that agrees with it confirms the assumption.
+            failure = Fail("recursion the body does not confirm",
+                           f"{word.name} infers {inferred.shape()}", word.line)
+            inferred = None
+            word.inferred = None
+            word.failure = failure
+            record.status = "failed"
+            record.failure = failure
         if inferred is not None:
-            word.signature = merge_declared(inferred, word.declared)
+            word.signature = merge_declared(inferred, word.declared, self, facts=not self.strict)
             word.signature_source = "inferred"
             if record.comparison in ("match", "match with pass-through") and word.declared:
                 analysis.check_output_kinds(inferred, word.declared)
         elif (word.declared is not None and not word.declared.variable and not word.higher_order
-              and not _runs_what_it_is_given(word)):
+              and not _runs_what_it_is_given(word) and not self.strict):
             word.signature = word.declared
             word.signature_source = "declared"
         # Defining words: what the words they make do when run.
@@ -601,18 +800,20 @@ class Checker:
             # address it receives on top.
             declared = None
             if does_comment is not None:
-                parsed = parse_effect(does_comment, self.managed).effect
+                parsed = parse_effect(does_comment, self.resolve_kind).effect
                 if parsed is not None and not parsed.variable and parsed.inputs:
                     declared = Effect(parsed.inputs[:-1], parsed.alts, parsed.parses,
                                       False, parsed.text)
             child_word = Word(f"{word.name} (DOES>)", word.module, word.line, word.origin)
             analysis = Analysis(self, child_word, record, declared)
             try:
-                return merge_declared(analysis.infer(does, body=True), declared)
+                return merge_declared(analysis.infer(does, body=True), declared, self,
+                                      facts=not self.strict)
             except Fail as failure:
                 record.findings.append(Finding("DOES> part", failure.category, word.module,
-                                               failure.line or word.line, word.name))
-                return declared
+                                               failure.line or word.line, word.name,
+                                               record.group))
+                return None if self.strict else declared
         if creating.child is not None:
             return creating.child
         name = creating.name.upper()
@@ -624,14 +825,44 @@ class Checker:
 
     def finding(self, record: Record | None, category: str, detail: str, line: int,
                 word: Word) -> None:
-        item = Finding(category, detail, word.module, line, word.name)
+        item = Finding(category, detail, word.module, line, word.name,
+                       record.group if record is not None else self.group)
         if record is not None:
             record.findings.append(item)
         self.findings.append(item)
 
 
-# BIOS words that keep whatever cell they are given.
-_STORES_ANY_CELL = {"CONSTANT", "VALUE", ",", "LITERAL", "TO"}
+def _reaches_itself(word: Word) -> bool:
+    """Whether a word's body calls it again through the words it calls.
+
+    A word that runs a token it is given may be inlined again inside its
+    own inlining, as WITH-GUARD is when the token it runs uses WITH-GUARD
+    too; that is nesting, and only a call cycle in the source is recursion.
+    """
+    seen: set[int] = set()
+    stack = [arg for op, arg, _ in (word.items or []) if op == "call"]
+    while stack:
+        callee = stack.pop()
+        if callee is word:
+            return True
+        if id(callee) in seen or callee.origin != "source":
+            continue
+        seen.add(id(callee))
+        stack.extend(arg for op, arg, _ in (callee.items or []) if op == "call")
+    return False
+
+
+def _learn_bounds(state: State, relations: frozenset) -> None:
+    """After a branch, a length compared with a span's length bounds it.
+
+    Each pair names a value, by identity, and a span the branch shows it to
+    be no longer than; every copy of that value on either stack learns it.
+    """
+    for ident, span in relations:
+        for stack in (state.items, state.r):
+            for index, value in enumerate(stack):
+                if isinstance(value, Value) and value.ident == ident and span not in value.bounds:
+                    stack[index] = value.copy_with(bounds=value.bounds | {span})
 
 
 def _runs_what_it_is_given(word: Word) -> bool:
@@ -645,22 +876,6 @@ def _runs_what_it_is_given(word: Word) -> bool:
                                                    "CATCH of an unknown xt"):
         return False
     return any(slot.kind == E.XT for slot in word.declared.inputs)
-
-
-def _generic_letters(effect: Effect | None, any_cell: bool = False) -> Effect | None:
-    """The dictionary document writes generic cells as a, b, c and d."""
-    if effect is None or effect.variable:
-        return effect
-
-    def plain(slots):
-        return tuple(
-            Slot(s.name, E.X, s.fact, s.const, s.span, s.role, s.passthrough, s.xt)
-            if any_cell or s.name.lower() in ("a", "b", "c", "d") else s
-            for s in slots
-        )
-
-    return Effect(plain(effect.inputs), tuple(plain(alt) for alt in effect.alts),
-                  effect.parses, effect.variable, effect.text, effect.returns_r)
 
 
 # ----------------------------------------------------------------------
@@ -690,14 +905,33 @@ def compare(inferred: Effect | None, declared: Effect | None, reason: str | None
     return "mismatch"
 
 
-def merge_declared(inferred: Effect, declared: Effect | None) -> Effect:
-    """The inferred effect, with the comment's names and kinds where they line up."""
+def merge_declared(inferred: Effect, declared: Effect | None, checker: "Checker | None" = None,
+                   facts: bool = True) -> Effect:
+    """The inferred effect, with the comment's names and kinds where they line up.
+
+    A declared kind replaces an inferred one that it refines, as a record
+    kind refines the address a field accessor computes; an inferred kind
+    that the declaration contradicts stays, and ``check_output_kinds``
+    reports it.  The comment lends zero and nonzero facts only outside
+    strict mode, where nothing a comment says may change what code infers.
+    """
     if declared is None or declared.variable:
         return inferred
     if len(declared.inputs) != len(inferred.inputs) or declared.depths != inferred.depths:
         return inferred
+
+    def pick(found: Slot, said: Slot) -> str:
+        if said.kind == E.LIT or said.kind == E.X:
+            return found.kind
+        if found.kind in (E.X, E.LIT):
+            return said.kind
+        if checker is not None and checker.refines(said.kind, found.kind):
+            return said.kind
+        return found.kind
+
     inputs = tuple(
-        Slot(d.name, d.kind if i.kind in (E.X, E.LIT) else i.kind, None, None, d.span, d.role)
+        Slot(d.name, pick(i, d), None, None, d.span, d.role, effect=d.effect or i.effect,
+             holds=d.holds or i.holds, array=d.array or i.array)
         for i, d in zip(inferred.inputs, declared.inputs)
     )
     by_depth: dict[int, list] = {}
@@ -716,11 +950,14 @@ def merge_declared(inferred: Effect, declared: Effect | None) -> Effect:
         merged = []
         for index, (i, d) in enumerate(zip(alt, dalt)):
             kinds = {c[index].kind for c in candidates}
-            kind = d.kind if (i.kind in (E.X, E.LIT) and d.kind != E.LIT
-                              and len(kinds) == 1) else i.kind
-            fact = i.fact if i.fact is not None or not lone else d.fact
+            kind = pick(i, d) if len(kinds) == 1 else i.kind
+            fact = i.fact if (i.fact is not None or not lone or not facts) else d.fact
             merged.append(Slot(d.name, kind, fact, i.const, d.span if lone else None,
-                               d.role if lone else None, i.passthrough, i.xt))
+                               d.role if lone else None, i.passthrough, i.xt,
+                               effect=i.effect or (d.effect if lone else None),
+                               holds=i.holds or (d.holds if lone else None),
+                               part_of=d.part_of if lone else None,
+                               array=i.array or (d.array if lone else False)))
         alts.append(tuple(merged))
     return Effect(inputs, tuple(alts), inferred.parses, False, declared.text)
 
@@ -757,7 +994,9 @@ class Analysis:
             span = role = None
             name = f"input {number}"
             declared = self.declared
-            if declared is not None and number <= len(declared.inputs):
+            slot = None
+            declared_slot = declared is not None and number <= len(declared.inputs)
+            if declared_slot:
                 slot = declared.inputs[-number]
                 kind = slot.kind if slot.kind != E.LIT else E.X
                 name = slot.name
@@ -765,7 +1004,10 @@ class Analysis:
                     span = self.spans.setdefault(slot.span, next(_span_counter))
                     role = slot.role
             value = Value(kind, origin=name, ident=("in", id(self), number), span=span,
-                          role=role, source="input")
+                          role=role, source="input",
+                          effect=slot.effect if declared_slot else None,
+                          holds=slot.holds if declared_slot else None,
+                          array=slot.array if declared_slot else False)
             self.inputs[number] = value
         return value
 
@@ -848,6 +1090,8 @@ class Analysis:
                     value = self.pop(state)
                     if value.kind == E.REF:
                         self.note("managed rule", "ref kept in a VALUE by TO")
+                    if arg is not None and arg.holds is not None:
+                        self.check_held(value, arg.holds, f"TO {arg.name}")
             elif op == "undefined":
                 raise self.fail("undefined word", arg)
             elif op == "immediate":
@@ -876,6 +1120,13 @@ class Analysis:
             analysis = analysis.parent
         return analysis.word
 
+    def declared_token(self, source: str) -> None:
+        """Note a call whose effect came from a declaration, not from code."""
+        if self.record is not None:
+            self.record.declared_tokens += 1
+            sources = self.record.declared_token_sources
+            sources[source] = sources.get(source, 0) + 1
+
     def check_return_stack(self, state: State, where: str) -> None:
         if not state.r:
             return
@@ -896,8 +1147,11 @@ class Analysis:
             elif flag.fact == E.NONZERO:
                 true_states.append(state)
             else:
+                other = state.copy()
+                _learn_bounds(state, flag.rel_true)
+                _learn_bounds(other, flag.rel_false)
                 true_states.append(state)
-                false_states.append(state.copy())
+                false_states.append(other)
         return true_states, false_states
 
     def back_edge(self, states: list[State], head: list[State], what: str) -> None:
@@ -1095,7 +1349,10 @@ class Analysis:
         if one.ident == two.ident:
             fact = one.fact if one.fact == two.fact else None
             disc = one.disc and two.disc
-            return one if one.fact == fact and one.disc == disc else one.with_fact(fact, disc)
+            bounds = one.bounds & two.bounds
+            if one.fact == fact and one.disc == disc and one.bounds == bounds:
+                return one
+            return one.copy_with(fact=fact, disc=disc, bounds=bounds)
         kind = E.join_kinds(one.kind, two.kind)
         xt = one.xt if one.xt is two.xt else None
         span = one.span if one.span == two.span and one.role == two.role else None
@@ -1103,9 +1360,26 @@ class Analysis:
         fact = one.fact if one.fact == two.fact else None
         if kind == E.LIT and const is None:
             kind = E.NUMBER
+        effect = one.effect if one.effect == two.effect else None
+        if effect is None and xt is None:
+            # A known token joined with one read from a typed slot keeps the
+            # slot's effect when the token's own effect agrees with it.
+            for token, typed in ((one, two), (two, one)):
+                if (token.xt is not None and typed.effect is not None
+                        and token.xt.signature is not None
+                        and effect_shape(token.xt.signature) == effect_shape(typed.effect)):
+                    effect = typed.effect
+            for typed, absent in ((one, two), (two, one)):
+                if typed.effect is not None and absent.const == 0:
+                    effect = typed.effect  # 0 is the absent token
+        holds = one.holds if one.holds == two.holds else None
+        if effect is not None or (xt is None and one.kind == two.kind == E.XT):
+            kind = E.XT
         return Value(kind, const=const, xt=xt, fact=fact, span=span,
                      role=one.role if span else None, origin=f"{one.origin} or {two.origin}",
-                     source=one.source if one.source == two.source else "computed")
+                     source=one.source if one.source == two.source else "computed",
+                     effect=effect, holds=holds, array=one.array and two.array and bool(holds),
+                     bounds=one.bounds & two.bounds)
 
     def _join_r(self, one, two):
         if one is two:
@@ -1129,11 +1403,24 @@ class Analysis:
             handler = PRIM_HANDLERS.get(word.prim)
             if handler is not None:
                 return handler(self, state, word)
-        if word.compiling or word in self.checker.inlining:
-            # The definition names itself: recursion uses its comment's effect.
+        recursive = word.compiling or (word in self.checker.inlining
+                                       and _reaches_itself(word))
+        if recursive:
+            # The definition names itself: recursion uses its comment's
+            # effect, which strict mode accepts only when the inferred effect
+            # of the definition being analyzed confirms it.
             if word.declared is None or word.declared.variable:
                 raise self.fail("recursion without a declared effect", word.name)
+            if word is self.root_word():
+                if self.record is not None:
+                    self.record.recursion_assumed = True
+            elif self.checker.strict:
+                raise self.fail("recursion through a word still being analyzed", word.name)
             return self.apply(state, word.declared, word)
+        if word.kind == "defer" and word.signature is not None:
+            # A deferred word runs whatever token IS last stored in it.
+            self.declared_token("deferred word")
+            return self.apply(state, word.signature, word)
         if word.signature is not None:
             if word.signature_source == "declared" and word.origin == "source":
                 self.relies_on_declared.add(word.name)
@@ -1184,12 +1471,18 @@ class Analysis:
             target = state if index == len(effect.alts) - 1 else state.copy()
             spans: dict[int, int] = {}
             # "( a u -- a u' )" keeps the address and shortens the length: the
-            # new length belongs to the span the address came from.
+            # new length belongs to the span the address came from.  An output
+            # declared as part of an input span, as "s'" is of "s", belongs to
+            # the span the caller passed.
             for slot in alt:
                 if slot.span is not None and slot.passthrough is not None:
                     kept = args[-slot.passthrough]
                     if kept.span is not None:
                         spans.setdefault(slot.span, kept.span)
+                if slot.span is not None and slot.part_of is not None:
+                    source = args[slot.part_of] if slot.part_of < len(args) else None
+                    if source is not None and source.span is not None:
+                        spans.setdefault(slot.span, source.span)
             for position, slot in enumerate(alt):
                 if slot.passthrough is not None:
                     target.items.append(args[-slot.passthrough])
@@ -1201,7 +1494,8 @@ class Analysis:
                 target.items.append(Value(slot.kind, const=slot.const, xt=slot.xt, fact=slot.fact,
                                           span=span, role=slot.role,
                                           origin=f"{word.name} output", source="computed",
-                                          disc=disc))
+                                          disc=disc, effect=slot.effect, holds=slot.holds,
+                                          array=slot.array))
             results.append(target)
         return results
 
@@ -1209,25 +1503,85 @@ class Analysis:
         if value.kind == E.X and self.is_input(value) and slot.kind not in (E.X, E.LIT):
             value.kind = slot.kind  # the input is used as this kind
             return
-        problem = E.compatible(value.kind, slot.kind)
+        problem = self.checker.compatible(value.kind, slot.kind)
         if problem is not None:
             self.note("kind", f"{problem}: {value.kind} ({value.origin}) "
                               f"passed to {word.name} as {slot.name or slot.kind}")
+            return
+        if slot.kind == E.XT and slot.effect is not None:
+            self.check_token(value, slot.effect, f"passed to {word.name} as {slot.name}")
+
+    def check_token(self, value: Value, declared: Effect, where: str) -> bool | None:
+        """Compare a token's effect with the one a slot or input declares.
+
+        True when they agree, False when they differ (a finding), and None
+        when the token is not known, as for a cell of unknown origin.
+        """
+        if value.xt is not None:
+            actual = value.xt.signature
+            name = value.xt.name
+        elif value.effect is not None:
+            actual = value.effect
+            name = value.origin
+        else:
+            return None if value.const != 0 else True  # 0 is the absent token
+        if actual is None or actual.variable or declared.variable:
+            return None
+        if effect_shape(actual) != effect_shape(declared):
+            self.note("token effect", f"{name} ( {actual.shape()} ) {where}, "
+                                      f"which declares ( {declared.shape()} )")
+            return False
+        for got, want in zip(actual.inputs, declared.inputs):
+            problem = self.checker.compatible(want.kind, got.kind)
+            if problem is not None:
+                self.note("token effect", f"{name} takes {got.kind} where {where} "
+                                          f"declares {want.kind}: {problem}")
+                return False
+        return True
+
+    def check_held(self, value: Value, held: Slot, where: str) -> None:
+        """A value stored where a declaration says what the cell holds."""
+        if value.kind == E.X and self.is_input(value) and held.kind not in (E.X, E.LIT):
+            value.kind = held.kind
+            if held.effect is not None and value.effect is None:
+                value.effect = held.effect
+            return
+        problem = self.checker.compatible(value.kind, held.kind)
+        if problem is not None:
+            self.note("kind", f"{problem}: {value.kind} ({value.origin}) stored by {where}, "
+                              f"which holds {held.kind}")
+            return
+        if held.kind == E.XT and held.effect is not None:
+            agreed = self.check_token(value, held.effect, f"stored by {where}")
+            if self.record is not None:
+                if agreed:
+                    self.record.typed_stores_checked += 1
+                elif agreed is None:
+                    self.record.typed_stores_unchecked += 1
 
     def check_spans(self, args: list[Value], slots: tuple[Slot, ...], word: Word) -> None:
+        """A declared span must receive an address and a length of one span.
+
+        A length checked against a longer span's length, or the MIN of two
+        lengths, is also a length of that span: it selects a part of it, as
+        a prefix compared with another string's length does.
+        """
         for index in range(len(slots) - 1):
             first, second = slots[index], slots[index + 1]
             if first.role != "a" or second.role != "u" or first.span != second.span:
                 continue
             addr, length = args[index], args[index + 1]
-            if addr.span is None or length.span is None:
+            if addr.span is None or (length.span is None and not length.bounds):
                 continue
-            if addr.span != length.span:
-                self.note("span", f"{word.name} takes the address of one span "
-                                  f"({addr.origin}) with the length of another "
-                                  f"({length.origin})")
-            elif addr.role == "u" and length.role == "a":
-                self.note("span", f"{word.name} takes a span with its cells swapped")
+            if addr.span == length.span:
+                if addr.role == "u" and length.role == "a":
+                    self.note("span", f"{word.name} takes a span with its cells swapped")
+                continue
+            if addr.span in length.bounds:
+                continue
+            self.note("span", f"{word.name} takes the address of one span "
+                              f"({addr.origin}) with the length of another "
+                              f"({length.origin})")
 
     def check_output_kinds(self, inferred: Effect, declared: Effect) -> None:
         by_depth = {len(alt): alt for alt in declared.alts}
@@ -1240,10 +1594,20 @@ class Analysis:
                     got_kind = inferred.inputs[-got.passthrough].kind
                 else:
                     got_kind = got.kind
-                problem = E.compatible(got_kind, want.kind)
+                problem = self.checker.compatible(got_kind, want.kind)
                 if problem is not None:
                     self.note("kind", f"{problem}: returns {got_kind} where the comment "
-                                      f"says {want.name}")
+                                      f"says {want.name}: {want.kind}")
+                    continue
+                if want.kind == E.XT and want.effect is not None and got.xt is not None:
+                    token = Value(E.XT, xt=got.xt, origin=got.name)
+                    self.check_token(token, want.effect, f"returned as {want.name}")
+                if want.holds is not None and got.holds is not None:
+                    problem = self.checker.compatible(got.holds.kind, want.holds.kind)
+                    if problem is not None:
+                        self.note("kind", f"{problem}: returns the address of a cell holding "
+                                          f"{got.holds.kind} where the comment says "
+                                          f"{want.name}: {want.holds.kind}")
 
     # Summary
 
@@ -1253,7 +1617,9 @@ class Analysis:
             self._lower(state, floor)
         exits = self.merge(exits, by_fact=False)
         inputs = tuple(
-            Slot(self.input(k).origin, self.input(k).kind) for k in range(floor, 0, -1)
+            Slot(self.input(k).origin, self.input(k).kind, effect=self.input(k).effect,
+                 holds=self.input(k).holds, array=self.input(k).array)
+            for k in range(floor, 0, -1)
         )
         if not exits:
             return Effect(inputs, ())
@@ -1274,7 +1640,8 @@ class Analysis:
                 if self.is_input(value) and value.ident[1] == id(self):
                     passthrough = value.ident[2]
                 slots.append(Slot(value.origin, value.kind, value.fact, value.const,
-                                  None, None, passthrough, value.xt))
+                                  None, None, passthrough, value.xt, effect=value.effect,
+                                  holds=value.holds, array=value.array))
             alts.append(tuple(slots))
         return Effect(inputs, tuple(alts))
 
@@ -1415,9 +1782,25 @@ def _execute(analysis: Analysis, state: State, word: Word) -> list[State]:
     xt = analysis.pop(state)
     if xt.xt is not None:
         return analysis.call(state, xt.xt)
-    if xt.source == "input" and analysis.parent is None:
+    if xt.effect is not None and not xt.effect.variable:
+        analysis.declared_token(_token_source(xt))
+        return analysis.apply(state, xt.effect, _token_word(xt))
+    if xt.source == "input":
+        # A token the definition was given, run here or inside a word it
+        # inlines: the definition runs what its callers pass.
         raise analysis.fail("EXECUTE of an input xt", xt.origin)
     raise analysis.fail("EXECUTE of an unknown xt", _xt_origin(xt))
+
+
+def _token_source(value: Value) -> str:
+    return "typed token input" if value.source == "input" else "typed slot"
+
+
+def _token_word(value: Value) -> Word:
+    """A stand-in dictionary entry for a token known only by its declared effect."""
+    word = Word(f"token ({value.origin})", "", 0, "source")
+    word.signature = value.effect
+    return word
 
 
 def _xt_origin(value: Value) -> str:
@@ -1430,18 +1813,22 @@ def _xt_origin(value: Value) -> str:
 
 def _catch(analysis: Analysis, state: State, word: Word) -> list[State]:
     xt = analysis.pop(state)
-    if xt.xt is None:
-        if xt.source == "input" and analysis.parent is None:
+    if xt.xt is None and (xt.effect is None or xt.effect.variable):
+        if xt.source == "input":
             raise analysis.fail("CATCH of an input xt", xt.origin)
         raise analysis.fail("CATCH of an unknown xt", _xt_origin(xt))
     thrown = state.copy()
-    target = xt.xt
+    target = xt.xt if xt.xt is not None else _token_word(xt)
     consumed = len(target.signature.inputs) if target.signature is not None else 0
     analysis.need(thrown, consumed)
     for index in range(1, consumed + 1):
         thrown.items[-index] = Value(E.X, origin="cell restored by THROW")
-    thrown.items.append(Value(E.STATUS, fact=E.NONZERO, origin="CATCH exception", disc=True))
-    normal = analysis.call(state, target)
+    thrown.items.append(Value(E.NUMBER, fact=E.NONZERO, origin="CATCH exception", disc=True))
+    if xt.xt is not None:
+        normal = analysis.call(state, target)
+    else:
+        analysis.declared_token(_token_source(xt))
+        normal = analysis.apply(state, xt.effect, target)
     for done in normal:
         done.items.append(Value(E.LIT, const=0, origin="CATCH success", source="literal",
                                 disc=True))
@@ -1480,7 +1867,8 @@ def _constant(number: int):
 
 
 def _binary(result: Callable[[Value, Value], str], fold: Callable[[int, int], int] | None,
-            want: tuple[str, str] = (E.X, E.X)):
+            want: tuple[str, str] = (E.X, E.X),
+            post: Callable[[Value, Value, Value], Value] | None = None):
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         second = analysis.pop(state)
         first = analysis.pop(state)
@@ -1495,13 +1883,15 @@ def _binary(result: Callable[[Value, Value], str], fold: Callable[[int, int], in
         kind = result(first, second)
         if const is not None and kind in (E.NUMBER, E.COUNT):
             kind = E.LIT
-        state.items.append(Value(kind, const=const, origin=f"{word.name} result"))
+        value = Value(kind, const=const, origin=f"{word.name} result")
+        state.items.append(post(first, second, value) if post is not None else value)
         return [state]
     return handler
 
 
 def _unary(result: Callable[[Value], str], fold: Callable[[int], int] | None,
-           want: str = E.X, fact: Callable[[Value], int | None] | None = None):
+           want: str = E.X, fact: Callable[[Value], int | None] | None = None,
+           post: Callable[[Value, Value], Value] | None = None):
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         value = analysis.pop(state)
         analysis.check_kind(value, Slot(word.name, want), word)
@@ -1510,7 +1900,8 @@ def _unary(result: Callable[[Value], str], fold: Callable[[int], int] | None,
         if const is not None and kind in (E.NUMBER, E.COUNT):
             kind = E.LIT
         known = fact(value) if fact is not None else None
-        state.items.append(Value(kind, const=const, fact=known, origin=f"{word.name} result"))
+        out = Value(kind, const=const, fact=known, origin=f"{word.name} result")
+        state.items.append(post(value, out) if post is not None else out)
         return [state]
     return handler
 
@@ -1519,11 +1910,19 @@ _NUMERIC = E.PLAIN_NUMBERS | {E.LIT}
 
 
 def _sum_kind(first: Value, second: Value) -> str:
-    """Address plus offset is an address; a cell of unknown kind stays unknown."""
+    """Address plus offset is an address; a cell of unknown kind stays unknown.
+
+    A number written in the source serves as any kind, an address among
+    them, so a number plus such a constant has no kind.
+    """
     kinds = (first.kind, second.kind)
     if kinds.count(E.ADDR) == 1:
         other = second.kind if first.kind == E.ADDR else first.kind
         return E.ADDR if other in _NUMERIC | {E.X} else E.X
+    if kinds == (E.LIT, E.LIT):
+        return E.LIT
+    if E.LIT in kinds:
+        return E.X
     if first.kind in _NUMERIC and second.kind in _NUMERIC:
         return E.NUMBER
     return E.X
@@ -1534,6 +1933,9 @@ def _difference_kind(first: Value, second: Value) -> str:
         return E.NUMBER
     if first.kind == E.ADDR and second.kind in _NUMERIC:
         return E.ADDR
+    if first.kind == E.LIT:
+        # A constant may be an address, and an address less a number is one.
+        return E.LIT if second.kind == E.LIT else E.X
     if first.kind in _NUMERIC and second.kind in _NUMERIC:
         return E.NUMBER
     return E.X
@@ -1542,6 +1944,8 @@ def _difference_kind(first: Value, second: Value) -> str:
 def _and_kind(first: Value, second: Value) -> str:
     if first.kind == E.ADDR and second.kind == E.LIT:
         return E.ADDR  # alignment, as in 7 + -8 AND
+    if first.kind == E.LIT and second.kind == E.LIT:
+        return E.LIT
     if first.kind == E.FLAG and second.kind == E.FLAG:
         return E.FLAG
     return _number(first, second)
@@ -1578,19 +1982,26 @@ def _u(x: int) -> int:
     return x & ((1 << 64) - 1)
 
 
-def _fetch(kind: str):
+def _fetch(kind: str, cell: bool = False):
+    """A read; ``@`` of a typed slot gives what the slot's declaration holds."""
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         address = analysis.pop(state)
         if address.kind == E.HANDLE:
             analysis.note("managed rule", f"{word.name} reads through a handle")
         else:
             analysis.check_kind(address, Slot("addr", E.ADDR), word)
-        state.items.append(Value(kind, origin=f"@ output", source="memory"))
+        held = address.holds if cell else None
+        if held is not None:
+            state.items.append(Value(held.kind, origin=f"{address.origin} @", source="memory",
+                                     effect=held.effect, holds=held.holds, array=held.array))
+        else:
+            state.items.append(Value(kind, origin=f"@ output", source="memory"))
         return [state]
     return handler
 
 
-def _store(cells: int):
+def _store(cells: int, cell: bool = False):
+    """A write; ``!`` into a typed slot must store what it declares."""
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         address = analysis.pop(state)
         values = [analysis.pop(state) for _ in range(cells)]
@@ -1603,8 +2014,102 @@ def _store(cells: int):
         for value in values:
             if value.kind == E.REF:
                 analysis.note("managed rule", f"{word.name} keeps a ref in plain memory")
+        if cell and address.holds is not None:
+            analysis.check_held(values[0], address.holds, f"! into {address.origin}")
         return [state]
     return handler
+
+
+def _plus(analysis: Analysis, state: State, word: Word) -> list[State]:
+    """``+``: a field offset declared with holds, added to a record's address,
+    gives the address of a cell that holds the field's kind; an offset into a
+    table declared with holds stays in the table."""
+    second = analysis.pop(state)
+    first = analysis.pop(state)
+    const = None
+    if first.const is not None and second.const is not None:
+        const = wrap(first.const + second.const)
+    kind = _sum_kind(first, second)
+    if const is not None and kind in (E.NUMBER, E.COUNT):
+        kind = E.LIT
+    holds = None
+    array = False
+    for base, offset in ((first, second), (second, first)):
+        if offset.holds is not None and offset.kind in _NUMERIC and base.holds is None:
+            holds, kind, const = offset.holds, E.ADDR, None
+        elif base.holds is not None and base.array and offset.kind in _NUMERIC | {E.X}:
+            holds, array, kind, const = base.holds, True, E.ADDR, None
+    state.items.append(Value(kind, const=const, origin=f"{word.name} result", holds=holds,
+                             array=array))
+    return [state]
+
+
+def _cell_plus(analysis: Analysis, state: State, word: Word) -> list[State]:
+    value = analysis.pop(state)
+    analysis.check_kind(value, Slot(word.name, E.X), word)
+    const = wrap(value.const + 8) if value.const is not None else None
+    kind = _same_or_number(value)
+    if const is not None and kind in (E.NUMBER, E.COUNT):
+        kind = E.LIT
+    keep = value.holds is not None and value.array
+    state.items.append(Value(kind, const=const, origin=f"{word.name} result",
+                             holds=value.holds if keep else None, array=keep))
+    return [state]
+
+
+def _compare(fold: Callable[[int, int], int], smaller_when_true: int):
+    """A comparison; between lengths it also tells which bounds which.
+
+    ``smaller_when_true`` is 0 when a true result shows the first operand
+    is no longer than the second (``<``, ``<=``), 1 when it shows the
+    second is no longer than the first (``>``, ``>=``).
+    """
+    def post(first: Value, second: Value, flag: Value) -> Value:
+        pair = (first, second)
+        when_true = _bound_pair(pair[smaller_when_true], pair[1 - smaller_when_true])
+        when_false = _bound_pair(pair[1 - smaller_when_true], pair[smaller_when_true])
+        if when_true or when_false:
+            return flag.copy_with(rel_true=when_true, rel_false=when_false)
+        return flag
+
+    return _binary(_flag, fold, post=post)
+
+
+def _bound_pair(smaller: Value, larger: Value) -> frozenset:
+    """When ``smaller`` is no longer than ``larger``, a length of a span."""
+    if larger.role == "u" and larger.span is not None and smaller.const is None:
+        return frozenset({(smaller.ident, larger.span)})
+    return frozenset()
+
+
+def _min_post(first: Value, second: Value, result: Value) -> Value:
+    """MIN of two lengths is no longer than the spans either belongs to."""
+    bounds = set(first.bounds | second.bounds)
+    for value in (first, second):
+        if value.role == "u" and value.span is not None:
+            bounds.add(value.span)
+    return result.copy_with(bounds=frozenset(bounds)) if bounds else result
+
+
+def _logic(fold: Callable[[int, int], int], keeps: str):
+    """AND keeps what a true result shows of both flags; OR, of a false one."""
+    def post(first: Value, second: Value, result: Value) -> Value:
+        if keeps == "true" and (first.rel_true or second.rel_true):
+            return result.copy_with(rel_true=first.rel_true | second.rel_true)
+        if keeps == "false" and (first.rel_false or second.rel_false):
+            return result.copy_with(rel_false=first.rel_false | second.rel_false)
+        return result
+
+    kind = _and_kind if keeps == "true" else (
+        lambda a, b: E.FLAG if a.kind == b.kind == E.FLAG else _number(a, b))
+    return _binary(kind, fold, post=post)
+
+
+def _swap_relations(value: Value, result: Value) -> Value:
+    """``0=`` and INVERT of a flag swap what its true and false results show."""
+    if value.rel_true or value.rel_false:
+        return result.copy_with(rel_true=value.rel_false, rel_false=value.rel_true)
+    return result
 
 
 def _comma(analysis: Analysis, state: State, word: Word) -> list[State]:
@@ -1654,46 +2159,46 @@ PRIM_HANDLERS: dict[str, Callable] = {
     "TRUE": _constant(-1),
     "FALSE": _constant(0),
     "BL": _constant(32),
-    "+": _binary(_sum_kind, lambda a, b: a + b),
+    "+": _plus,
     "-": _binary(_difference_kind, lambda a, b: a - b),
     "*": _binary(_number, lambda a, b: a * b),
     "/": _binary(_number, lambda a, b: int(a / b)),
     "MOD": _binary(_number, lambda a, b: a - b * int(a / b)),
-    "AND": _binary(_and_kind, lambda a, b: a & b),
-    "OR": _binary(lambda a, b: E.FLAG if a.kind == b.kind == E.FLAG else _number(a, b),
-                  lambda a, b: a | b),
+    "AND": _logic(lambda a, b: a & b, "true"),
+    "OR": _logic(lambda a, b: a | b, "false"),
     "XOR": _binary(_number, lambda a, b: a ^ b),
     "LSHIFT": _binary(_number, lambda a, b: a << b if 0 <= b < 64 else 0),
     "RSHIFT": _binary(_number, lambda a, b: _u(a) >> b if 0 <= b < 64 else 0),
-    "MIN": _binary(_number, min),
+    "MIN": _binary(_number, min, post=_min_post),
     "MAX": _binary(_number, max),
     "=": _binary(_flag, lambda a, b: _bool(a == b)),
     "<>": _binary(_flag, lambda a, b: _bool(a != b)),
-    "<": _binary(_flag, lambda a, b: _bool(a < b)),
-    ">": _binary(_flag, lambda a, b: _bool(a > b)),
-    "<=": _binary(_flag, lambda a, b: _bool(a <= b)),
-    ">=": _binary(_flag, lambda a, b: _bool(a >= b)),
-    "U<": _binary(_flag, lambda a, b: _bool(_u(a) < _u(b))),
-    "U>": _binary(_flag, lambda a, b: _bool(_u(a) > _u(b))),
+    "<": _compare(lambda a, b: _bool(a < b), 0),
+    ">": _compare(lambda a, b: _bool(a > b), 1),
+    "<=": _compare(lambda a, b: _bool(a <= b), 0),
+    ">=": _compare(lambda a, b: _bool(a >= b), 1),
+    "U<": _compare(lambda a, b: _bool(_u(a) < _u(b)), 0),
+    "U>": _compare(lambda a, b: _bool(_u(a) > _u(b)), 1),
     "1+": _unary(_same_or_number, lambda a: a + 1),
     "1-": _unary(_same_or_number, lambda a: a - 1),
-    "CELL+": _unary(_same_or_number, lambda a: a + 8),
+    "CELL+": _cell_plus,
     "CELLS": _unary(_number, lambda a: a * 8),
     "2*": _unary(_number, lambda a: a * 2),
     "2/": _unary(_number, lambda a: a >> 1),
     "NEGATE": _unary(_number, lambda a: -a),
     "ABS": _unary(_number, abs),
     "INVERT": _unary(lambda v: E.FLAG if v.kind == E.FLAG else _number(v), lambda a: ~a,
-                     fact=lambda v: _not_fact(v) if v.kind == E.FLAG else None),
-    "0=": _unary(_flag, lambda a: _bool(a == 0), fact=_not_fact),
+                     fact=lambda v: _not_fact(v) if v.kind == E.FLAG else None,
+                     post=_swap_relations),
+    "0=": _unary(_flag, lambda a: _bool(a == 0), fact=_not_fact, post=_swap_relations),
     "0<>": _unary(_flag, lambda a: _bool(a != 0), fact=lambda v: v.fact),
     "0<": _unary(_flag, lambda a: _bool(a < 0)),
     "0>": _unary(_flag, lambda a: _bool(a > 0)),
-    "@": _fetch(E.X),
+    "@": _fetch(E.X, cell=True),
     "C@": _fetch(E.CHAR),
     "W@": _fetch(E.COUNT),
     "L@": _fetch(E.COUNT),
-    "!": _store(1),
+    "!": _store(1, cell=True),
     "C!": _store(1),
     "W!": _store(1),
     "L!": _store(1),
@@ -1727,16 +2232,30 @@ def _top_create(kind: str, takes_value: bool):
         if name is None:
             return
         new = Word(name, checker.module, checker.line, checker._origin(), kind=kind)
+        held = None
+        if kind in ("variable", "create", "constant", "value"):
+            held = checker.read_holds(cursor, new)
+            new.holds = held
         if kind in ("variable", "create"):
-            new.signature = Effect((), ((Slot("addr", E.ADDR),),))
+            # VARIABLE X ( holds: K ): X's cell holds K.  CREATE T ( holds: K ):
+            # every cell of T's area holds K, as a table of tokens does.
+            new.signature = Effect((), ((Slot("addr", E.ADDR, holds=held,
+                                              array=kind == "create" and held is not None),),))
         elif kind == "constant":
             new.const = value.const if value is not None else None
             new.xt = value.xt if value is not None else None
             out_kind = E.XT if new.xt is not None else (
                 value.kind if value is not None and value.kind not in (E.X,) else E.LIT)
-            new.signature = Effect((), ((Slot(name, out_kind, None, new.const, xt=new.xt),),))
+            # N CONSTANT FIELD ( holds: K ) declares a field offset: added to
+            # a record's address it gives the address of a cell holding K.
+            new.signature = Effect((), ((Slot(name, out_kind, None, new.const, xt=new.xt,
+                                              holds=held),),))
         elif kind == "value":
-            new.signature = Effect((), ((Slot(name, value.kind if value else E.X),),))
+            # V VALUE X ( holds: K ): X pushes a K, and TO X must store one.
+            out = Slot(name, held.kind if held is not None else (value.kind if value else E.X),
+                       effect=held.effect if held is not None else None,
+                       holds=held.holds if held is not None else None)
+            new.signature = Effect((), ((out,),))
         elif kind == "marker":
             new.signature = Effect((), ((),))
         new.signature_source = "given"
@@ -1747,6 +2266,8 @@ def _top_create(kind: str, takes_value: bool):
             saved = cursor.pos
             if cursor.token() == "(":
                 checker._set_declared(new, cursor.paren())
+                for problem in new.problems:
+                    checker.declaration_problem(problem, new.name)
                 if new.declared is not None and not new.declared.variable:
                     new.signature = new.declared
             else:
@@ -1782,7 +2303,21 @@ def _top_abortquote(checker: Checker, cursor: LineCursor, word: Word) -> None:
 
 
 def _top_paren(checker: Checker, cursor: LineCursor, word: Word) -> None:
-    cursor.paren()
+    text, closed = cursor.paren_closed()
+    declared, problems, declaration = parse_kind_declaration(text, checker.resolve_kind)
+    if not declaration:
+        return
+    if not closed:
+        problems = problems + ["the declaration's ( has no ) on its line"]
+    for problem in problems:
+        checker.declaration_problem(problem, "(kind)")
+    if declared is not None:
+        name, parent = declared
+        problem = checker.declare_kind(name, parent)
+        if problem is not None:
+            checker.declaration_problem(problem, "(kind)")
+        else:
+            checker.declared_kinds.append((checker.group, name))
 
 
 def _top_require(checker: Checker, cursor: LineCursor, word: Word) -> None:
@@ -1845,14 +2380,29 @@ def _top_is(checker: Checker, cursor: LineCursor, word: Word) -> None:
     name = cursor.token()
     target = checker.lookup(name) if name else None
     if target is not None and target.kind == "defer" and value.xt is not None:
-        if target.declared is None and value.xt.signature is not None:
-            target.signature = value.xt.signature
+        bound = value.xt.signature
+        if target.declared is None and bound is not None:
+            target.signature = bound
             target.signature_source = "inferred"
+        elif (target.declared is not None and not target.declared.variable and bound is not None
+              and not bound.variable and effect_shape(bound) != effect_shape(target.declared)):
+            checker.findings.append(Finding(
+                "token effect", f"IS {target.name} binds {value.xt.name} ( {bound.shape()} ) "
+                                f"to a deferred word declared ( {target.declared.shape()} )",
+                checker.module, checker.line, target.name, checker.group))
 
 
 def _top_to(checker: Checker, cursor: LineCursor, word: Word) -> None:
-    cursor.token()
-    checker._pop_top()
+    name = cursor.token()
+    value = checker._pop_top()
+    target = checker.lookup(name) if name else None
+    if target is not None and target.holds is not None:
+        problem = checker.compatible(value.kind, target.holds.kind)
+        if problem is not None:
+            checker.findings.append(Finding(
+                "kind", f"{problem}: {value.kind} stored by TO {target.name}, which holds "
+                        f"{target.holds.kind}", checker.module, checker.line, target.name,
+                checker.group))
 
 
 def _top_semicolon(checker: Checker, cursor: LineCursor, word: Word) -> None:
@@ -1983,8 +2533,9 @@ def _compile_tick(checker: Checker, cursor: LineCursor, pending: Pending, line: 
 
 
 def _compile_to(checker: Checker, cursor: LineCursor, pending: Pending, line: int) -> None:
-    cursor.token()
-    pending.items.append(("to", None, line))
+    name = cursor.token()
+    target = checker.lookup(name) if name else None
+    pending.items.append(("to", target, line))
 
 
 def _compile_postpone(checker: Checker, cursor: LineCursor, pending: Pending, line: int) -> None:

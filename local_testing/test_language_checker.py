@@ -1,4 +1,4 @@
-"""The checker core of Leviathan's language, on small Forth programs.
+"""The checker core of Uroko, on small Forth programs.
 
 The checker lives in ``toolchain/language``; ``docs/language/checker.md``
 describes it.  Each test loads MegaPad's BIOS dictionary and KDOS as the
@@ -18,12 +18,11 @@ sys.path.insert(0, str(AKASHIC_ROOT))
 
 from toolchain.language import effects as E  # noqa: E402
 from toolchain.language.checker import Checker  # noqa: E402
-from toolchain.language.effects import parse_effect  # noqa: E402
-from toolchain.language.measure import effect_text  # noqa: E402
+from toolchain.language.effects import parse_effect, parse_holds  # noqa: E402
+from toolchain.language.measure import effect_text, placement  # noqa: E402
 from toolchain.language.source import LineCursor, parse_number  # noqa: E402
 
 MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT") or AKASHIC_ROOT.parent / "megapad")
-MANAGED = {"ref": E.REF, "handle": E.HANDLE}
 
 
 @pytest.fixture(scope="module")
@@ -33,8 +32,8 @@ def base_checker_state():
     return MEGAPAD_ROOT
 
 
-def check(megapad: Path, source: str) -> Checker:
-    checker = Checker()
+def check(megapad: Path, source: str, strict: bool = False) -> Checker:
+    checker = Checker(strict=strict)
     checker.load_bios(megapad)
     checker.load_base(megapad, ("kdos.f",))
     checker.group = "library"
@@ -51,6 +50,10 @@ def record(checker: Checker, name: str):
 
 def findings(checker: Checker, name: str) -> list[str]:
     return [f"{f.category}: {f.detail}" for f in record(checker, name).findings]
+
+
+def all_findings(checker: Checker) -> list[str]:
+    return [f"{f.category}: {f.detail}" for f in checker.findings if f.group == "library"]
 
 
 # Reading source the way KDOS does
@@ -83,33 +86,55 @@ def test_numbers_follow_the_bios_parser():
 # Stack comments
 
 
-def test_comment_names_give_kinds_and_spans():
-    effect = parse_effect(" key-a key-u flag -- addr len ", MANAGED).effect
-    assert [s.kind for s in effect.inputs] == [E.ADDR, E.COUNT, E.FLAG]
-    assert [s.role for s in effect.inputs] == ["a", "u", None]
-    assert [s.role for s in effect.alts[0]] == ["a", "u"]
+def test_no_kind_is_read_from_a_name():
+    effect = parse_effect(" key-a key-u flag xt -- addr len ").effect
+    assert {s.kind for s in effect.inputs + effect.alts[0]} == {E.X}
+    assert {s.role for s in effect.inputs + effect.alts[0]} == {None}
 
 
-def test_math_letters_are_plain_cells_and_record_letters_are_addresses():
-    math = parse_effect(" a b -- a/b ", MANAGED).effect
-    assert [s.kind for s in math.inputs] == [E.X, E.X]
-    accessor = parse_effect(" record -- a ", MANAGED).effect
-    assert accessor.alts[0][0].kind == E.ADDR
+def test_declared_kinds_follow_their_names_after_a_colon():
+    parsed = parse_effect(" buf: span  c: char  n -- count: u ok: flag ")
+    effect = parsed.effect
+    assert [s.kind for s in effect.inputs] == [E.ADDR, E.COUNT, E.CHAR, E.X]
+    assert [s.role for s in effect.inputs] == ["a", "u", None, None]
+    assert [s.kind for s in effect.alts[0]] == [E.COUNT, E.FLAG]
+    assert parsed.declared == 4 and parsed.problems == []
+
+
+def test_token_effects_nest_and_holds_names_what_a_cell_holds():
+    effect = parse_effect(" each: xt( item: addr -- keep: flag ) list -- ").effect
+    token = effect.inputs[0]
+    assert token.kind == E.XT and token.effect.shape() == "1 -- 1"
+    assert token.effect.inputs[0].kind == E.ADDR
+    held, problems, declaration = parse_holds(" holds: xt( text: span -- ) ")
+    assert declaration and problems == []
+    assert held.kind == E.XT and held.effect.shape() == "2 -- 0"
+    # Inside a nested effect, i*x marks the token's effect variable, not the word's.
+    outer = parse_effect(" run: xt( i*x -- j*x ) -- ").effect
+    assert not outer.variable and outer.inputs[0].effect.variable
+
+
+def test_malformed_declarations_are_reported():
+    assert parse_effect(" a: blob -- ").problems == ["a: names an unknown kind 'blob'"]
+    assert parse_effect(" a: -- ").problems == ["a: has no kind"]
+    assert parse_effect(" run: xt( a -- b ").problems == ["xt( has no closing )"]
+    assert parse_holds(" holds: u and more ")[1] == ["text after the declared kind: and more"]
+    assert parse_holds(" the count ")[2] is False  # prose, not a declaration
 
 
 def test_a_bar_alone_separates_alternatives_and_a_bar_inside_names_one_cell():
-    whole = parse_effect(" -- addr len true | false ", MANAGED).effect
+    whole = parse_effect(" -- s: span true | false ").effect
     assert [len(alt) for alt in whole.alts] == [3, 1]
     assert whole.alts[0][-1].fact == E.NONZERO and whole.alts[1][-1].fact == E.ZERO
-    one_cell = parse_effect(" c-addr u -- dentry|0 ior ", MANAGED).effect
+    one_cell = parse_effect(" c-addr u -- dentry|0 ior ").effect
     assert [len(alt) for alt in one_cell.alts] == [2]
-    found = parse_effect(" c-addr -- c-addr 0 |xt 1 |xt -1 ", MANAGED).effect
+    found = parse_effect(" c-addr -- c-addr 0 |xt 1 |xt -1 ").effect
     assert [len(alt) for alt in found.alts] == [2, 2, 2]
 
 
 def test_variable_effects_are_recognized():
-    assert parse_effect(" i*x xt -- j*x ", MANAGED).effect.variable
-    assert parse_effect(" n -- n*8 ", MANAGED).effect.variable is False
+    assert parse_effect(" i*x xt -- j*x ").effect.variable
+    assert parse_effect(" n -- n*8 ").effect.variable is False
 
 
 # Inference
@@ -198,7 +223,8 @@ def test_catch_and_words_that_execute_what_they_are_given(base_checker_state):
 def test_defining_words_give_their_children_an_effect(base_checker_state):
     checker = check(base_checker_state, (
         "VARIABLE CURRENT\n"
-        ": FIELD:  ( offset \"name\" -- )  CREATE ,  DOES>  ( body -- addr )  @ CURRENT @ + ;\n"
+        ": FIELD:  ( offset \"name\" -- )  CREATE ,  DOES>  ( body: addr -- a: addr )"
+        "  @ CURRENT @ + ;\n"
         "8 FIELD: .NEXT\n"
         ": WALK  ( -- addr )  .NEXT ;\n"
     ))
@@ -228,15 +254,222 @@ def test_tick_inside_a_definition_parses_when_the_word_runs(base_checker_state):
 def test_kind_span_and_managed_findings(base_checker_state):
     checker = check(base_checker_state, (
         ": FLAG-AS-ADDRESS  ( n -- x )  0= @ ;\n"
-        ": MIXED  ( a1 u1 a2 u2 -- )  NIP NIP TYPE ;\n"
+        ": MIXED  ( one: span two: span -- )  NIP NIP TYPE ;\n"
         "VARIABLE SLOT\n"
-        ": KEEP  ( ref -- )  SLOT ! ;\n"
+        ": KEEP  ( r: ref -- )  SLOT ! ;\n"
+        ": UNDECLARED  ( a1 u1 a2 u2 -- )  NIP NIP TYPE ;\n"
     ))
     assert any(f.startswith("kind: flag used as an address") for f in findings(checker, "FLAG-AS-ADDRESS"))
     assert record(checker, "MIXED").comparison == "match"
     assert any(f.startswith("span: TYPE takes the address of one span")
                for f in findings(checker, "MIXED"))
     assert any("keeps a ref in plain memory" in f for f in findings(checker, "KEEP"))
+    # Without declarations the cells are plain, and nothing is guessed.
+    assert findings(checker, "UNDECLARED") == []
+
+
+def test_kind_declarations_add_records_and_kinds_of_number(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: port record )\n"
+        "( kind: widget record )\n"
+        "( kind: port-status n )\n"
+        ": PORT-USE  ( p: port -- s: port-status )  @ ;\n"
+        ": FROM-ADDRESS  ( a: addr -- s: port-status )  PORT-USE ;\n"
+        ": FROM-WIDGET  ( w: widget -- s: port-status )  PORT-USE ;\n"
+        ": FROM-NUMBER  ( n: n -- s: port-status )  PORT-USE ;\n"
+        ": STATUS-AS-COUNT  ( p: port -- n: u )  PORT-USE ;\n"
+        "( kind: blob gadget )\n"
+    ))
+    assert findings(checker, "FROM-ADDRESS") == []  # an address may stand for a record
+    assert any(f.startswith("kind: named kinds differ: widget") for f in findings(checker, "FROM-WIDGET"))
+    assert any(f.startswith("kind: number used as an address") for f in findings(checker, "FROM-NUMBER"))
+    assert findings(checker, "STATUS-AS-COUNT") == []  # a kind of n mixes with numbers
+    assert "declaration: kind: blob refines an unknown kind 'gadget'" in all_findings(checker)
+
+
+def test_malformed_declarations_in_source_are_findings(base_checker_state):
+    checker = check(base_checker_state, (
+        ": ODD  ( a: blob -- )  DROP ;\n"
+        "VARIABLE BROKEN ( holds: xt( a -- )\n"
+        "VARIABLE PROSE ( the count of things )\n"
+    ))
+    assert findings(checker, "ODD") == ["declaration: a: names an unknown kind 'blob'"]
+    # KDOS's ( counts the xt( inside, so this comment runs to the line's end.
+    assert "declaration: the declaration's ( has no ) on its line" in all_findings(checker)
+    assert len(all_findings(checker)) == 2
+
+
+# Typed slots
+
+
+def test_a_typed_variable_gives_the_token_it_holds_an_effect(base_checker_state):
+    checker = check(base_checker_state, (
+        "VARIABLE HOOK ( holds: xt( c: char -- ) )\n"
+        ": SHOW  ( c -- )  EMIT ;\n"
+        ": TWO  ( a b -- )  2DROP ;\n"
+        ": RUN-HOOK  ( c -- )  HOOK @ EXECUTE ;\n"
+        ": TRY-HOOK  ( c -- ior )  HOOK @ CATCH DUP IF NIP THEN ;\n"
+        ": INSTALL  ( -- )  ['] SHOW HOOK ! ;\n"
+        ": BAD-INSTALL  ( -- )  ['] TWO HOOK ! ;\n"
+        ": UNTYPED  ( c -- )  HOOK CELL+ @ EXECUTE ;\n"
+    ))
+    assert record(checker, "RUN-HOOK").comparison == "match"
+    assert record(checker, "RUN-HOOK").declared_tokens == 1
+    assert record(checker, "TRY-HOOK").comparison == "match"
+    assert findings(checker, "INSTALL") == [] and record(checker, "INSTALL").typed_stores_checked == 1
+    assert any(f.startswith("token effect: TWO ( 2 -- 0 ) stored by ! into HOOK")
+               for f in findings(checker, "BAD-INSTALL"))
+    # The cell after a variable is outside it, so it holds nothing declared.
+    assert record(checker, "UNTYPED").failure.category == "EXECUTE of an unknown xt"
+
+
+def test_record_fields_and_tables_declare_what_they_hold(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: port record )\n"
+        " 0 CONSTANT _P-CONTEXT\n"
+        " 8 CONSTANT _P-SEND ( holds: xt( buf: span context -- count: u ) )\n"
+        ": P.SEND  ( p: port -- a )  _P-SEND + ;\n"
+        ": PORT-SEND  ( buf: span p: port -- count: u )\n"
+        "    DUP _P-CONTEXT + @ SWAP P.SEND @ EXECUTE ;\n"
+        ": PORT-SEND-INLINE  ( buf: span p: port -- count: u )\n"
+        "    DUP @ SWAP _P-SEND + @ EXECUTE ;\n"
+        "CREATE OPS ( holds: xt( n -- n ) )\n"
+        ": OP  ( n i -- n )  CELLS OPS + @ EXECUTE ;\n"
+    ))
+    assert record(checker, "PORT-SEND").comparison == "match"
+    assert record(checker, "PORT-SEND-INLINE").comparison == "match"
+    assert record(checker, "OP").comparison == "match"
+    accessor = checker.lookup("P.SEND").signature.alts[0][0]
+    assert accessor.holds is not None and accessor.holds.effect.shape() == "3 -- 1"
+
+
+def test_children_of_defining_words_take_holds_declarations(base_checker_state):
+    checker = check(base_checker_state, (
+        "VARIABLE _LAYOUT-OFF\n"
+        ": CMP-FIELD:  ( current-state-cell bytes \"name\" -- )\n"
+        "    CREATE SWAP , _LAYOUT-OFF @ , _LAYOUT-OFF +!\n"
+        "    DOES>  ( body -- field-addr )  DUP @ @ SWAP 8 + @ + ;\n"
+        ": CMP-CELL:  ( current-state-cell \"name\" -- )  8 CMP-FIELD: ;\n"
+        "VARIABLE _STATE\n"
+        "_STATE CMP-CELL: _ON-CLOSE ( holds: xt( context -- ior: n ) )\n"
+        ": CLOSE  ( context -- ior )  _ON-CLOSE @ EXECUTE ;\n"
+        "_STATE CMP-CELL: _COUNT ( holds: u )\n"
+        ": BUMP  ( -- )  _COUNT @ 1+ _COUNT ! ;\n"
+    ))
+    assert record(checker, "CLOSE").comparison == "match"
+    assert findings(checker, "BUMP") == []
+
+
+def test_a_typed_token_input_is_checked_at_each_call(base_checker_state):
+    checker = check(base_checker_state, (
+        ": APPLY  ( n f: xt( n -- n ) -- n )  EXECUTE ;\n"
+        ": DOUBLE  ( n -- n )  2* ;\n"
+        ": PAIR  ( n -- n n )  DUP ;\n"
+        ": USE  ( n -- n )  ['] DOUBLE APPLY ;\n"
+        ": MISUSE  ( n -- n )  ['] PAIR APPLY ;\n"
+        "0 VALUE CB ( holds: xt( -- ) )\n"
+        ": RUN-CB  ( -- )  CB EXECUTE ;\n"
+    ))
+    assert not record(checker, "APPLY").word.higher_order
+    assert record(checker, "APPLY").comparison == "match"
+    assert record(checker, "USE").comparison == "match" and findings(checker, "USE") == []
+    assert any(f.startswith("token effect: PAIR ( 1 -- 2 ) passed to APPLY")
+               for f in findings(checker, "MISUSE"))
+    assert record(checker, "RUN-CB").comparison == "match"
+
+
+def test_a_setter_learns_the_effect_of_the_slot_it_fills(base_checker_state):
+    checker = check(base_checker_state, (
+        "VARIABLE HOOK ( holds: xt( n -- ) )\n"
+        ": HOOK!  ( xt -- )  HOOK ! ;\n"
+        ": SINK  ( n -- )  DROP ;\n"
+        ": PAIR  ( n -- n n )  DUP ;\n"
+        ": GOOD  ( -- )  ['] SINK HOOK! ;\n"
+        ": BAD  ( -- )  ['] PAIR HOOK! ;\n"
+    ))
+    assert checker.lookup("HOOK!").signature.inputs[0].effect.shape() == "1 -- 0"
+    assert findings(checker, "GOOD") == []
+    assert any(f.startswith("token effect: PAIR") for f in findings(checker, "BAD"))
+
+
+def test_a_token_given_to_an_inlined_word_makes_the_caller_run_what_it_is_given(base_checker_state):
+    checker = check(base_checker_state, (
+        ": RISKY  ( a b -- c )  + ;\n"
+        ": WITH  ( xt n -- )  >R CATCH R> DROP THROW ;\n"
+        ": OUTER  ( xt -- )  7 WITH ;\n"
+        ": USE-OUTER  ( a b -- c )  ['] RISKY OUTER ;\n"
+        ": INNER  ( i*x xt -- j*x )  3 WITH ;\n"
+        ": NESTED  ( i*x xt n -- j*x )  DROP ['] INNER 5 WITH ;\n"
+        ": USE-NESTED  ( a b -- c )  ['] RISKY 9 NESTED ;\n"
+    ))
+    assert record(checker, "OUTER").word.higher_order
+    assert record(checker, "USE-OUTER").comparison == "match"
+    # WITH inlined again inside its own inlining is nesting, not recursion.
+    assert record(checker, "NESTED").word.higher_order
+    assert record(checker, "USE-NESTED").comparison == "match"
+
+
+# Spans and sub-spans
+
+
+def test_a_prefix_checked_against_a_longer_span_is_part_of_it(base_checker_state):
+    checker = check(base_checker_state, (
+        ": PREFIX?  ( line: span prefix: span -- f: flag )\n"
+        "    ROT OVER < IF 2DROP DROP 0 EXIT THEN  TUCK COMPARE 0= ;\n"
+        ": PREFIX-UNCHECKED?  ( line: span prefix: span -- f: flag )\n"
+        "    ROT DROP TUCK COMPARE 0= ;\n"
+        ": COMMON  ( one: span two: span -- n: n )  ROT MIN TUCK COMPARE ;\n"
+    ))
+    assert findings(checker, "PREFIX?") == []
+    assert any(f.startswith("span: COMPARE takes the address of one span (line)")
+               for f in findings(checker, "PREFIX-UNCHECKED?"))
+    assert findings(checker, "COMMON") == []
+
+
+def test_a_primed_output_span_is_part_of_the_input_span(base_checker_state):
+    checker = check(base_checker_state, (
+        ": SKIP1  ( s: span -- s': span )  1- SWAP 1+ SWAP ;\n"
+        ": REST  ( s: span -- )  SKIP1 TYPE ;\n"
+        ": CROSSED  ( one: span two: span -- )  SKIP1 ROT DROP NIP TYPE ;\n"
+    ))
+    assert findings(checker, "REST") == []
+    assert any(f.startswith("span: TYPE takes the address of one span")
+               for f in findings(checker, "CROSSED"))
+
+
+# Strict placement
+
+
+def test_strict_mode_trusts_no_comment(base_checker_state):
+    source = (
+        "VARIABLE VTABLE\n"
+        ": OPAQUE  ( a -- b )  VTABLE @ EXECUTE ;\n"
+        ": CALLER  ( a -- b )  OPAQUE 1+ ;\n"
+        ": COUNTDOWN  ( n -- )  DUP IF 1- COUNTDOWN ELSE DROP THEN ;\n"
+        ": WRONG-REC  ( n -- n )  DUP IF 1- WRONG-REC THEN DROP ;\n"
+    )
+    plain = check(base_checker_state, source)
+    strict = check(base_checker_state, source, strict=True)
+    assert record(plain, "CALLER").status == "inferred"
+    assert record(strict, "CALLER").failure.category == "calls a word whose effect is unknown"
+    assert record(strict, "COUNTDOWN").status == "inferred"
+    assert record(plain, "WRONG-REC").status == "inferred"
+    assert record(strict, "WRONG-REC").failure.category == "recursion the body does not confirm"
+
+
+def test_placement_excludes_words_resting_on_declared_token_effects(base_checker_state):
+    strict = check(base_checker_state, (
+        "VARIABLE HOOK ( holds: xt( n -- n ) )\n"
+        ": RUN-HOOK  ( n -- n )  HOOK @ EXECUTE ;\n"
+        ": ABOVE  ( n -- n )  RUN-HOOK 1+ ;\n"
+        ": PLAIN  ( n -- n )  1+ ;\n"
+        ": ALSO-PLAIN  ( n -- n )  PLAIN PLAIN ;\n"
+    ), strict=True)
+    summary, qualifying = placement(strict, "library", 3)
+    names = {r.word.name for r in qualifying}
+    assert {"PLAIN", "ALSO-PLAIN"} <= names
+    assert not names & {"RUN-HOOK", "ABOVE"}
+    assert summary["inferred in the strict run"] == 4
 
 
 def test_kdos_catch_and_throw_keep_their_exact_meaning(base_checker_state):
