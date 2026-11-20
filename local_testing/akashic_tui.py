@@ -468,7 +468,15 @@ class Profile:
     megapad_networking: bool = False
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
+    # Files the profile ships for its own code: on the boot volume, or on
+    # the system volume when that volume is the origin of a build with the
+    # user volume, at their paths.
     initial_files: tuple[tuple[str, bytes], ...] = ()
+    # Samples of the profile's own, files a person works with, such as a
+    # picture a check previews.  They go where the build puts the image's
+    # samples (_sample_files): the boot volume's root, or with the user
+    # volume its documents.
+    sample_files: tuple[tuple[str, bytes], ...] = ()
     # Raw Forth sources deployed as checked AKSRC001 data containers.  Each
     # tuple names the on-image container, not the host source.  This keeps
     # qualification leaves on the same checked cold-compile path as linked
@@ -15120,7 +15128,7 @@ SAMPLE_PHOTO_SIZE = (2160, 1620)
 SAMPLE_PHOTO = (AKASHIC_ROOT / "assets/pictures" / SAMPLE_PHOTO_NAME).read_bytes()
 PROFILES["desktop-apt1-photo"] = replace(
     PROFILES["desktop-apt1-fexp"],
-    initial_files=PROFILES["desktop-apt1-fexp"].initial_files
+    sample_files=PROFILES["desktop-apt1-fexp"].sample_files
     + ((SAMPLE_PHOTO_NAME, SAMPLE_PHOTO),),
 )
 
@@ -15145,7 +15153,7 @@ SAMPLE_DAMAGED_NAME = "damaged.png"
 SAMPLE_DAMAGED_SIZE = (64, 48)
 PROFILES["desktop-apt1-damaged"] = replace(
     PROFILES["desktop-apt1-fexp"],
-    initial_files=PROFILES["desktop-apt1-fexp"].initial_files
+    sample_files=PROFILES["desktop-apt1-fexp"].sample_files
     + ((SAMPLE_DAMAGED_NAME, damaged_png(*SAMPLE_DAMAGED_SIZE)),),
 )
 
@@ -27320,20 +27328,28 @@ PAD_MODULE = "tui/applets/pad/pad.f"
 FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
 
 
-def _sample_files(modules, *, system_volume: bool = False) -> dict[str, bytes]:
-    """The sample files an image carries.  Every image has the text samples.
+def _sample_files(
+    modules,
+    *,
+    own: tuple[tuple[str, bytes], ...] = (),
+    documents: bool = False,
+) -> dict[str, bytes]:
+    """The sample files an image carries: the text samples, which every
+    image has, and OWN, the samples its profile adds (Profile.sample_files).
     One with File Explorer, the viewer that shows them, has the sample
     picture, document and PDFs as well (sample_pdf.py).
 
-    A Desktop built with SYSTEM_VOLUME also has the notes and lists a person
-    keeps (sample_documents.py).  The Desktop is Desk with Pad to write in
-    and File Explorer to list what is written.  The documents ship where the
-    modules live on the system volume: there nothing else makes the root
-    folder a list long enough to scroll, and they stand for what a user
-    volume will hold.  A linked Desktop has its source chunks in that root
-    and little room left in its boot volume's directory, so its image stays
-    as it was.  Desk with one applet never has them: that applet's checks
-    find their rows in the first view of a short root."""
+    A Desktop, Desk with Pad to write in and File Explorer to list what is
+    written, also has the notes and lists a person keeps
+    (sample_documents.py) when DOCUMENTS says its build has room for them:
+    a build with the system volume, whose boot volume then holds few
+    chunks, or one with the user volume, whose documents place holds every
+    sample.  Nothing else makes the folder File Explorer opens on a list
+    long enough to scroll, and the documents stand for what a person keeps
+    there.  A linked Desktop without the user volume has its source chunks
+    in its root and little room left in its boot volume's directory, so its
+    image stays as it was.  Desk with one applet never has them: that
+    applet's checks find their rows in the first view of a short list."""
 
     samples = dict(SAMPLE_FILES)
     if FEXPLORER_MODULE in modules:
@@ -27344,8 +27360,14 @@ def _sample_files(modules, *, system_volume: bool = False) -> dict[str, bytes]:
                 **sample_pdf.SAMPLES,
             }
         )
-        if system_volume and DESK_MODULE in modules and PAD_MODULE in modules:
+        if documents and DESK_MODULE in modules and PAD_MODULE in modules:
             samples.update(sample_documents.SAMPLES)
+    for name, content in own:
+        if name in samples:
+            raise RuntimeError(
+                f"A profile's own sample takes an image sample's name: {name}"
+            )
+        samples[name] = content
     return samples
 
 def _row_shows(
@@ -28747,12 +28769,14 @@ def _build_system_image(
     keep_source: bool = False,
     loaded_before: frozenset[str] = frozenset(),
     extra_sources: tuple[str, ...] = (),
+    extra_files: dict[str, bytes] | None = None,
 ) -> dict[str, object]:
     """Write the system volume to TARGET: an ext4 image that holds each of
     MODULES as a plain file at its module path, the repository's text
     unchanged.  EXTRA_SOURCES are other files of the source root it holds
     at their paths, such as a profile's resources when the volume is its
-    origin.
+    origin, and EXTRA_FILES files it holds by path with their bytes, such
+    as the profile's initial files then.
 
     With TOKEN_FILES the volume holds each module's token form instead, at
     the module's path with a t added, built for the system whose BOOT-ID is
@@ -28802,14 +28826,22 @@ def _build_system_image(
             else:
                 absent.append(module)
     source_modules = modules if not token_files or keep_source else ()
+    extra_files = dict(extra_files or {})
     held = {
         **{module: texts[module] for module in source_modules},
         **{path: (SOURCE_ROOT / path).read_bytes() for path in extra_sources},
+        **extra_files,
         **{
             module + TOKEN_FORM_SUFFIX: form
             for module, form in (token_forms | name_files).items()
         },
     }
+    taken = set(extra_files) & {*source_modules, *extra_sources}
+    if taken:
+        raise RuntimeError(
+            "Initial files take paths of the system volume's modules or "
+            "resources: " + ", ".join(sorted(taken))
+        )
     sizes = tuple(map(len, held.values()))
     directories = _directories(set(held))
     identity = hashlib.sha256(f"{block_bytes}\n".encode())
@@ -28843,8 +28875,11 @@ def _build_system_image(
         directories=directories,
         source_paths=(*source_modules, *extra_sources),
         staged={
-            module + TOKEN_FORM_SUFFIX: form
-            for module, form in (token_forms | name_files).items()
+            **extra_files,
+            **{
+                module + TOKEN_FORM_SUFFIX: form
+                for module, form in (token_forms | name_files).items()
+            },
         },
         what="the system volume",
     )
@@ -29223,8 +29258,9 @@ def build_image(
     the origin, read-only over the root of the volume that holds the
     profile's shipped files, and documents and records on the user volume,
     records being the home.  With a system volume as well, the profile's
-    resources move onto the system volume, the origin's volume.  The sample
-    files move into the user volume's documents.
+    resources and initial files move onto the system volume, the origin's
+    volume.  Every sample, the large one included, moves into the user
+    volume's documents, and the boot volume keeps none.
     """
     if keep_module_source and not (token_modules and system_volume):
         raise ValueError(
@@ -29338,12 +29374,18 @@ def build_image(
         autoexec = _with_every_frame_checks(autoexec, modules)
     if safe_mode:
         autoexec = _with_safe_mode(autoexec, modules)
-    samples = _sample_files(modules, system_volume=system_volume)
+    samples = _sample_files(
+        modules,
+        own=profile.sample_files,
+        documents=system_volume or user_volume,
+    )
     # With the user volume the samples are documents there, and the boot
-    # volume holds none of them.
+    # volume holds none of them: not the large sample either, whose growth
+    # check is one of the boot volume's own (Profile.include_large_sample).
     user_documents = samples if user_volume else {}
     if user_volume:
         samples = {}
+    large_sample = profile.include_large_sample and not user_volume
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
     )
@@ -29355,11 +29397,15 @@ def build_image(
         )
     resources = set(profile.resources)
     # With both volumes the origin is the system volume, which then holds
-    # the profile's resources in the boot volume's place.
+    # the profile's resources and initial files in the boot volume's place.
     origin_resources: tuple[str, ...] = ()
+    origin_files: dict[str, bytes] = {}
+    initial_files = profile.initial_files
     if user_volume and system_volume:
         origin_resources = tuple(sorted(resources))
         resources = set()
+        origin_files = dict(initial_files)
+        initial_files = ()
     linked_chunks = (
         _linked_chunks(
             deployed_modules,
@@ -29489,7 +29535,7 @@ def build_image(
         if profile.linked
         else set(deployed_modules) | resources
     )
-    regular_initial_paths = {path for path, _ in profile.initial_files}
+    regular_initial_paths = {path for path, _ in initial_files}
     cold_initial_paths = set(cold_source_initial_files)
     initial_aliases = regular_initial_paths & cold_initial_paths
     if initial_aliases:
@@ -29617,7 +29663,7 @@ def build_image(
                 f"checked guest FREAD: {path}"
             )
 
-    for path, content in profile.initial_files:
+    for path, content in initial_files:
         disk_path = PurePosixPath(path)
         if (
             profile.audited_initial_forth_line_bytes is not None
@@ -29645,7 +29691,7 @@ def build_image(
                 f"{path}"
             )
 
-    if profile.include_large_sample:
+    if large_sample:
         fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
 
         # Leave two isolated one-sector holes in the generated test image.
@@ -29658,17 +29704,20 @@ def build_image(
         autoexec.encode("utf-8"),
         ftype=FTYPE_FORTH,
     )
-    if profile.include_large_sample:
+    if large_sample:
         fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
 
+    # The pictures, the sample one and a profile's own, are data; the other
+    # samples are text.
+    pictures = {SAMPLE_PICTURE_NAME} | {name for name, _ in profile.sample_files}
     for name in sorted(samples.keys() - {"large.txt"}):
         fs.inject_file(
             name,
             samples[name],
-            ftype=FTYPE_DATA if name == SAMPLE_PICTURE_NAME else FTYPE_TEXT,
+            ftype=FTYPE_DATA if name in pictures else FTYPE_TEXT,
         )
 
-    if profile.include_large_sample:
+    if large_sample:
         fs.delete_file(".growth-hole-1")
         fs.delete_file(".growth-hole-2")
     fs.save(target)
@@ -29689,6 +29738,7 @@ def build_image(
             keep_source=keep_module_source,
             loaded_before=frozenset(deployed_modules),
             extra_sources=origin_resources,
+            extra_files=origin_files,
         )
         if system_volume
         else None

@@ -2508,13 +2508,15 @@ def test_only_the_photo_check_carries_the_photograph() -> None:
     assert photo[:4] == b"qoif"
     assert (int.from_bytes(photo[4:8], "big"), int.from_bytes(photo[8:12], "big")) == (
         akashic_tui.SAMPLE_PHOTO_SIZE)
+    # The photograph is a sample of the check's own, so it goes where the
+    # image's samples go.
     def files(name):
-        return dict(PROFILES[name].initial_files)
+        return dict(PROFILES[name].sample_files)
     assert files("desktop-apt1-photo")[akashic_tui.SAMPLE_PHOTO_NAME] == photo
     for name in ("desktop-apt1", "desktop-apt1-fexp"):
         assert akashic_tui.SAMPLE_PHOTO_NAME not in files(name)
     assert replace(PROFILES["desktop-apt1-photo"],
-                   initial_files=PROFILES["desktop-apt1-fexp"].initial_files) == (
+                   sample_files=PROFILES["desktop-apt1-fexp"].sample_files) == (
         PROFILES["desktop-apt1-fexp"])
 
 
@@ -2982,17 +2984,36 @@ def test_desktop_apt1_system_volume_build_moves_the_modules_to_ext4(
     )
 
 
-def test_a_system_volume_desktops_root_scrolls_by_its_own_documents(
+def _user_documents(image: Path, tool_dir: Path) -> list[str]:
+    """The names the user volume's documents folder holds, as debugfs
+    lists them."""
+    environment = {"LC_ALL": "C", "TZ": "UTC", "PATH": f"{tool_dir}:/usr/bin:/bin"}
+    folder = akashic_tui.USER_VOLUME_DOCUMENTS[1]
+    listed = subprocess.run(
+        [str(tool_dir / "debugfs"), "-R", f"ls -p {folder}", str(image)],
+        env=environment, text=True, capture_output=True, check=False,
+    )
+    assert listed.returncode == 0, listed.stderr
+    # Each line is /inode/mode/uid/gid/name/size/.
+    names = [line.split("/")[5] for line in listed.stdout.splitlines()
+             if line.startswith("/")]
+    assert names, listed.stderr
+    return [name for name in names if name not in (".", "..")]
+
+
+def test_the_list_file_explorer_opens_on_scrolls_by_its_own_documents(
     tmp_path: Path,
 ) -> None:
     """The physical journey turns the wheel one detent over File Explorer's
-    detail table.  The root must then list a detent more than the table
-    shows, with the journey's pointer file shown before and after the turn.
-    A linked Desktop's source chunks supply those rows.  A Desktop whose
-    modules are on the system volume has few chunks, so it carries the sample
-    documents, and the files it is built with meet the step by themselves:
-    without its chunks, and with a detent to spare on either side for the
-    files Desk and its applets create as they start.
+    detail table.  The list File Explorer opens on must then hold a detent
+    more than the table shows, with the journey's pointer file shown before
+    and after the turn.  A linked Desktop's source chunks supply those rows
+    in its root.  A Desktop built with the system volume keeps few chunks
+    there, and one built with the user volume opens on its documents place,
+    so both carry the sample documents, and the files each list is built
+    with meet the step by themselves: chunks apart, and with a detent to
+    spare on either side for the files Desk and its applets create as they
+    start.
     """
 
     from rich_terminal_desktop_acceptance import (
@@ -3000,34 +3021,44 @@ def test_a_system_volume_desktops_root_scrolls_by_its_own_documents(
         POINTER_WHEEL_ROWS,
     )
 
-    _pinned_ext4_tools()
+    tool_dir = _pinned_ext4_tools()
     documents = sample_documents.SAMPLES
     rows = sample_documents.DESKTOP_TABLE_ROWS
     spare = POINTER_WHEEL_ROWS
 
-    def entries(profile: str, where: str, *, system_volume: bool) -> list:
-        image = build_image(
-            profile, tmp_path / where / "akashic.img", system_volume=system_volume
-        )
-        return MP64FS(bytearray(image.read_bytes())).list_files()
+    def build(profile: str, where: str, **options) -> tuple[Path, list]:
+        image = build_image(profile, tmp_path / where / "akashic.img", **options)
+        return image, MP64FS(bytearray(image.read_bytes())).list_files()
 
-    # File Explorer lists a folder by name, ignoring case.
-    listing = sorted(
-        (
-            entry.name
-            for entry in entries("desktop-apt1", "volume", system_volume=True)
-            if entry.parent == PARENT_ROOT
-            and not re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
-        ),
-        key=str.lower,
+    def holds_the_step(names) -> None:
+        # File Explorer lists a folder by name, ignoring case.
+        listing = sorted(names, key=str.lower)
+        assert len(listing) >= rows + POINTER_WHEEL_ROWS + spare
+        place = listing.index(POINTER_LIST_FILE)
+        assert POINTER_WHEEL_ROWS + spare <= place <= rows - 1 - spare
+        assert set(documents) <= set(listing)
+
+    # With the system volume, the boot volume's root without its chunks.
+    _image, entries = build("desktop-apt1", "volume", system_volume=True)
+    holds_the_step(
+        entry.name
+        for entry in entries
+        if entry.parent == PARENT_ROOT
+        and not re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
     )
-    assert len(listing) >= rows + POINTER_WHEEL_ROWS + spare
-    place = listing.index(POINTER_LIST_FILE)
-    assert POINTER_WHEEL_ROWS + spare <= place <= rows - 1 - spare
+
+    # With the user volume, the documents place.  It holds every sample, the
+    # large one included, while the boot volume holds none of them.
+    image, entries = build("desktop-apt1", "user", user_volume=True)
+    held = _user_documents(akashic_tui.user_image_path(image), tool_dir)
+    holds_the_step(held)
+    assert set(akashic_tui.SAMPLE_FILES) <= set(held)
+    assert not (set(akashic_tui.SAMPLE_FILES) | set(documents)) & {
+        entry.name for entry in entries
+    }
 
     # The documents are text a person wrote: short, plain, and named as
     # files are.  None repeats a name the journeys give a file of their own.
-    assert set(documents) <= set(listing)
     for name, content in documents.items():
         assert re.fullmatch(r"[a-z]+(-[a-z]+)*\.(md|txt)", name), name
         text = content.decode("ascii")
@@ -3039,22 +3070,57 @@ def test_a_system_volume_desktops_root_scrolls_by_its_own_documents(
 
     # A linked Desktop carries none of them: its chunks make its root long,
     # and its boot volume's directory keeps the room it had.
-    linked = {
-        entry.name
-        for entry in entries("desktop-apt1", "linked", system_volume=False)
-    }
+    _image, entries = build("desktop-apt1", "linked")
+    linked = {entry.name for entry in entries}
     assert POINTER_LIST_FILE in linked and not set(documents) & linked
 
-    # Desk with File Explorer alone carries none either way: its checks find
-    # their rows in the first view of a short root.
-    for where, system_volume in (("alone", False), ("alone-volume", True)):
-        alone = {
-            entry.name
-            for entry in entries(
-                "desktop-apt1-fexp", where, system_volume=system_volume
-            )
-        }
+    # Desk with File Explorer alone carries none in any form: its checks find
+    # their rows in the first view of a short list.
+    for where, options in (("alone", {}), ("alone-volume", {"system_volume": True})):
+        _image, entries = build("desktop-apt1-fexp", where, **options)
+        alone = {entry.name for entry in entries}
         assert POINTER_LIST_FILE in alone and not set(documents) & alone
+    image, _entries = build("desktop-apt1-fexp", "alone-user", user_volume=True)
+    alone = set(_user_documents(akashic_tui.user_image_path(image), tool_dir))
+    assert POINTER_LIST_FILE in alone and not set(documents) & alone
+
+
+def test_a_user_volume_build_puts_samples_in_documents_and_shipped_files_on_the_origin(
+    tmp_path: Path,
+) -> None:
+    """A profile's own samples go where the image's samples go: the picture
+    of the damaged-picture check stands in the boot volume's root of a build
+    without the user volume and in the documents place of one with it.  A
+    profile's initial files are files it ships for its own code to read:
+    with both volumes the system volume is the origin, and they stand there,
+    at their paths, where the Streams check reads its feed through its
+    origin, and nowhere on the boot volume."""
+
+    tool_dir = _pinned_ext4_tools()
+    picture = akashic_tui.SAMPLE_DAMAGED_NAME
+    image = build_image("desktop-apt1-damaged", tmp_path / "boot" / "akashic.img")
+    assert picture in {
+        entry.name for entry in MP64FS(bytearray(image.read_bytes())).list_files()
+    }
+    image = build_image(
+        "desktop-apt1-damaged", tmp_path / "user" / "akashic.img", user_volume=True
+    )
+    assert picture not in {
+        entry.name for entry in MP64FS(bytearray(image.read_bytes())).list_files()
+    }
+    assert picture in _user_documents(akashic_tui.user_image_path(image), tool_dir)
+
+    (fixture, content), = PROFILES["desktop-apt1-streams"].initial_files
+    image = build_image(
+        "desktop-apt1-streams", tmp_path / "both" / "akashic.img",
+        system_volume=True, user_volume=True,
+    )
+    boot = MP64FS(bytearray(image.read_bytes()))
+    assert PurePosixPath(fixture).name not in {entry.name for entry in boot.list_files()}
+    held = _system_volume_files(
+        akashic_tui.system_image_path(image), (fixture,), tool_dir, tmp_path / "dump"
+    )
+    assert held[fixture] == content
 
 
 def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:

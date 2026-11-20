@@ -1,29 +1,35 @@
 """The Desktop's sample documents: the notes and lists a person keeps.
 
-A Desktop image built with --system-volume carries these beside the other
-samples (akashic_tui._sample_files).  The Desktop is Desk with Pad and File
-Explorer.  Each document is a short plain text or Markdown file that Pad
-opens and File Explorer previews, the Markdown ones as documents.  None
-holds a date or a link, so an image's copy is the same on every day and no
-preview leads to a file that is absent.
+A Desktop image built with --system-volume or --user-volume carries these
+beside the other samples (akashic_tui._sample_files).  The Desktop is Desk
+with Pad and File Explorer.  Each document is a short plain text or Markdown
+file that Pad opens and File Explorer previews, the Markdown ones as
+documents.  None holds a date or a link, so an image's copy is the same on
+every day and no preview leads to a file that is absent.
 
-They ship where the modules live on the system volume.  There nothing else
-makes the root folder a list long enough to scroll, and they stand for what
-a user volume will hold.  File Explorer sorts its detail table by name, and
-on the canonical Desktop the table shows DESKTOP_TABLE_ROWS rows.  The
-physical journey's wheel step (rich_terminal_desktop_acceptance.py) turns
-the wheel one detent over that table, so the root must list at least one
-detent more than the table shows, with the journey's pointer file shown
-before and after the turn.  The root's own files meet that with a detent to
-spare on either side: the files the image is built with, without the source
-chunks that hold the volume's driver and without the files Desk and its
-applets create as they start (test_akashic_tui_packaging.py checks it).
+They ship in the list File Explorer opens on.  With the system volume that
+is the boot volume's root, which the modules have left for the system
+volume, and with the user volume it is the documents place, which holds
+every sample.  Nothing else makes either list long enough to scroll, and
+the documents stand for what a person keeps there.  File Explorer sorts its
+detail table by name, and on the canonical Desktop the table shows
+DESKTOP_TABLE_ROWS rows.  The physical journey's wheel step
+(rich_terminal_desktop_acceptance.py) turns the wheel one detent over that
+table, so the list must hold at least one detent more than the table shows,
+with the journey's pointer file shown before and after the turn.  The files
+each list is built with meet that with a detent to spare on either side,
+without the source chunks that hold the system volume's driver and without
+the files Desk and its applets create as they start
+(test_akashic_tui_packaging.py checks both lists).  The documents place
+sets their number: it holds the samples and these documents and none of
+the boot volume's own files.
 
-A linked Desktop carries none of them.  Its source chunks already make its
-root long, and they leave its boot volume's directory little room: the
-documents would take 24 of the 42 entries it has free.  Desk with a single
-applet carries none either.  The checks of File Explorer alone find each
-row and each folder in the first view of its table and of its tree.
+A linked Desktop without the user volume carries none of them.  Its source
+chunks already make its root long, and they leave its boot volume's
+directory little room: the documents would take 30 of the 41 entries it has
+free.  Desk with a single applet carries none either.  The checks of File
+Explorer alone find each row and each folder in the first view of its table
+and of its tree.
 """
 
 from __future__ import annotations
@@ -192,6 +198,15 @@ map and pencil
 torch with spare batteries
 first aid kit
 """,
+    "picnic-plan.md": """\
+# Picnic by the river
+
+- a blanket, and the old tablecloth for the grass
+- bread, cheese, tomatoes and the last of the plums
+- a flask of tea and a bottle of water
+
+Meet at the bridge at noon. Bring a bag for the rubbish.
+""",
     "plant-care.md": """\
 # Plant care
 
@@ -212,6 +227,15 @@ Turn the pots a quarter each week.
 
 - the field guide to mosses
 """,
+    "recycling.txt": """\
+Recycling
+
+paper and card: flattened, in the blue bin
+glass: rinsed, to the bottle bank
+tins: rinsed, in the blue bin
+batteries: to the box at the library
+food scraps: on the compost
+""",
     "repair-log.md": """\
 # Bicycle repairs
 
@@ -231,6 +255,15 @@ butter
 candles
 string
 """,
+    "sketch-ideas.md": """\
+# Things to draw
+
+- the bicycle leaning on the fence
+- hands, again, until they look right
+- the view from the kitchen window at dusk
+
+*Ten minutes a day, and no rubber.*
+""",
     "soup-recipe.md": """\
 # Lentil soup
 
@@ -240,6 +273,16 @@ string
 
 Soften the vegetables, add the lentils and the stock, and simmer for
 twenty minutes. Finish with lemon.
+""",
+    "stargazing.md": """\
+# Stargazing
+
+Best on a clear night with no moon. Let the eyes adjust for twenty
+minutes before looking for anything faint.
+
+- the Plough, then follow it to the Pole Star
+- the belt of Orion in winter
+- the Milky Way from the field behind the farm
 """,
     "study-plan.md": """\
 # Study plan
@@ -253,6 +296,16 @@ twenty minutes. Finish with lemon.
 ## Later
 
 - past papers, timed
+""",
+    "tea-tasting.txt": """\
+Tea tasting
+
+green: grassy, best not too hot
+black: strong, good with milk
+smoked: like a campfire, a little goes far
+mint: for the evening
+
+Buy more of the green.
 """,
     "thoughts.txt": """\
 Thoughts
@@ -279,6 +332,15 @@ Take the inland track if the fog comes down.
 1. **The short loop**: round the pond and back, half an hour.
 2. **The hill**: up past the orchard, an hour and a half.
 3. **The long way**: along the canal to the lock, home by the lane.
+""",
+    "winter-prep.txt": """\
+Before winter
+
+bleed the radiators
+clear the gutters
+check the boiler pressure
+put the garden hose away
+find the gloves and the scarf
 """,
 }
 
