@@ -146,10 +146,11 @@ order as the floats do.
 Features cost the most to move. A row of 64 bytes crosses the scoring
 engine's external memory twice, once written and once read, about 350
 cycles a candidate by the interconnect plan's estimate, while the scores
-of 64 candidates arrive in one store of about 40 cycles. Features should therefore be
-quantized to 8 bits and kept short, and a scorer whose inputs stay fixed
-between requests, such as one vector for each concept of a subject, keeps
-them in a table on the scoring engine and reads candidates by index.
+of 64 candidates arrive in one store of about 40 cycles. Features should
+therefore be quantized to 8 bits and kept short, and a scorer whose inputs
+stay fixed between requests, such as one vector for each concept of a
+subject, keeps them in a table on the scoring engine and reads candidates
+by index.
 
 ## 6. Scorers
 
@@ -196,10 +197,9 @@ Weights can come from three places:
   examples over a hundred passes take about 400,000 tile operations, some
   ten million cycles with the Forth around them. A network of up to about
   ten thousand weights trains in about three times its forward cost per
-  example. The
-  sums follow a fixed order, so training gives the same weights on every
-  run. The examples are the user's own choices, such as accepted and
-  rejected suggestions, and they never leave the machine.
+  example. The sums follow a fixed order, so training gives the same
+  weights on every run. The examples are the user's own choices, such as
+  accepted and rejected suggestions, and they never leave the machine.
 - **Trained elsewhere and shipped.** A network trained on a PC from a
   dataset can rate raw features, such as letters or board positions, that
   no hand-set rule covers. Its training data and recipe ship with it, under
