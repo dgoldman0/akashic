@@ -248,16 +248,23 @@ def child(args) -> int:
 
 def user_volume_expected(applet: str | None, tui) -> dict[str, bytes | None]:
     """What the journey of APPLET leaves on the user volume, as
-    rich_terminal_applet_journeys.USER_VOLUME_FILES names it: each path on
-    the volume, with the bytes of the file the image ships or the sample
-    document the volume is built with that it must hold, or None where
-    nothing may be.  TUI is the image builder's module, akashic_tui."""
+    rich_terminal_applet_journeys.USER_VOLUME_FILES names it, or the
+    canonical journey when APPLET is None, as
+    rich_terminal_desktop_acceptance.DESKTOP_USER_VOLUME_FILES names it:
+    each path on the volume, with the bytes of the file the image ships or
+    the sample document the volume is built with that it must hold, or None
+    where nothing may be.  TUI is the image builder's module, akashic_tui."""
 
     from rich_terminal_applet_journeys import USER_VOLUME_FILES
+    from rich_terminal_desktop_acceptance import DESKTOP_USER_VOLUME_FILES
 
+    files = (
+        DESKTOP_USER_VOLUME_FILES if applet is None
+        else USER_VOLUME_FILES.get(applet, {})
+    )
     folder = tui.USER_VOLUME_DOCUMENTS[1]
     expected: dict[str, bytes | None] = {}
-    for path, source in USER_VOLUME_FILES.get(applet, {}).items():
+    for path, source in files.items():
         content = None
         if source is not None:
             kind, name = source

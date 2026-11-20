@@ -36498,8 +36498,7 @@ def accept_physical_desktop(
     each step runs under, in ARTIFACT_ROOT/screen-profile.  SAFE_MODE says
     why the guest is in safe mode, "boot" or "config", so the journey must
     see the notice that says so.  USER_VOLUME says the image was built with
-    the user volume, so a single applet's journey follows the shipping
-    form's places."""
+    the user volume, so the journey follows the shipping form's places."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -36565,6 +36564,7 @@ def accept_physical_desktop(
             journey=journey,
             soundlab=desktop_composes("soundlab"),
             safe_mode=safe_mode,
+            user_volume=user_volume,
         )
     except PhysicalDesktopAcceptanceError as exc:
         print(f"Physical desktop acceptance: FAIL\n  {exc}")

@@ -3724,6 +3724,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         phase_profile=True,
         phase_profile_max_events=1234,
         safe_mode="boot",
+        user_volume=True,
     )
 
     assert accepted is not runner_fails
@@ -3765,6 +3766,9 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "soundlab": False,
                 # The image boots in safe mode, so the run requires its notice.
                 "safe_mode": "boot",
+                # The image has the user volume, so the canonical journey
+                # works in its places.
+                "user_volume": True,
             },
         )
     ]

@@ -2740,6 +2740,13 @@ def test_the_driver_checks_what_a_journey_leaves_on_the_user_volume(tmp_path, mo
         f"{folder}/{PAD_SAVED_AS}": (tui.SOURCE_ROOT / PAD_SHIPPED).read_bytes(),
     }
     assert physical_desktop_acceptance.user_volume_expected("daybook", tui) == {}
+    # The canonical journey renames the large sample and saves nothing: the
+    # renamed file holds the sample's bytes, and none stands at its old name.
+    assert physical_desktop_acceptance.user_volume_expected(None, tui) == {
+        f"{folder}/{acceptance_runner.RENAMED_FILE}":
+            tui.SAMPLE_FILES[acceptance_runner.POINTER_LIST_FILE],
+        f"{folder}/{acceptance_runner.POINTER_LIST_FILE}": None,
+    }
     image = tmp_path / "desktop-user.img"
     image.write_bytes(bytes(1024))
     check = physical_desktop_acceptance.user_volume_problems

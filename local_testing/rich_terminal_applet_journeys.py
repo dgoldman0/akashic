@@ -41,6 +41,7 @@ from rich_terminal_desktop_acceptance import (
     FEXPLORER_PICTURE,
     FEXPLORER_PICTURE_FACTS,
     PAD_MENU_SIGNATURE,
+    USER_VOLUME_PLACE_LABELS,
     FrameBoundJourney,
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
@@ -111,13 +112,10 @@ FEXP_PHOTO_FACTS = "QOI, 2160 \u00d7 1620"
 # (akashic_tui.PLACES_BOOT_LABEL): the one row of File Explorer's and Pad's
 # folder trees, which opens onto the boot volume's root.
 FEXP_PLACE_LABEL = "Files"
-# With the user volume the build declares the shipping form's places
-# (akashic_tui.USER_VOLUME_DOCUMENTS, USER_VOLUME_RECORDS and
-# USER_VOLUME_ORIGIN).  File Explorer's and Pad's sets hold them in this
-# order, by label: the documents place, the one they write, then the records
-# place and the origin, which they read.  A full locator names a file of the
-# origin by the origin's name.
-USER_VOLUME_PLACE_LABELS = ("Documents", "Records", "System")
+# With the user volume File Explorer's and Pad's sets hold the shipping
+# form's places, by the labels USER_VOLUME_PLACE_LABELS gives in their
+# order (rich_terminal_desktop_acceptance.py).  A full locator names a file
+# of the origin by the origin's name.
 USER_VOLUME_ORIGIN_NAME = "system"
 # On the user volume, File Explorer makes a folder in the documents place
 # through its New folder prompt, and moves a sample document into it.
