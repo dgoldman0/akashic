@@ -32,17 +32,22 @@ the 64 MiB test fixture, with 1 KiB blocks, a journal of 4,096 blocks and a
 writer with an arena of 524,288 bytes.
 
 Each operation ran twice on the same file, and the tables give the second
-run; the first differed by at most 0.02 s. Seconds are system cycles divided
+run; the first differed by at most 0.04 s, but for the first replacement of
+the file, which the replacement's table notes. Seconds are system cycles divided
 by 10^8, the processor time of a 100 MHz device. The emulator completes
 storage transfers and flushes at once, so a device's storage latency comes on
 top of every figure, and every transaction makes 13 to 17 flushes. Writes
 and flushes were counted at the storage device's command hooks, each write
 one 1 KiB block; transactions are the JBD2 commit blocks among the writes.
 After each profile the volume was unmounted and the host's `e2fsck -f -n`
-passed it.
+passed it. The checked replacement's rows come from a second run the same
+evening at Akashic `8ae14ad3`, whose `vfs-replace.f` is the same, by
+`~/.cache/fantasy-engine/notes/user-volume-writer-meas-c-20261119.py`.
 
-The operations are the shapes of the writers' saves, not the stores
-themselves. A whole-file save opens or creates the file, rewinds it,
+The operations are the shapes of the writers' saves; only the checked
+replacement is the save itself. That replacement, `VREPL-REPLACE` on the
+fixture's `/doc.txt`, is how Pad saves a document and how every store bound
+through `PLACE-VREPL!` saves its file. A whole-file save opens or creates the file, rewinds it,
 truncates it to nothing, writes the bytes, closes it and syncs the volume, as
 the Agent's conversation store and the Practice head do; 416 bytes is the
 head's size and 256 KiB the largest conversation snapshot. A store commit
@@ -65,6 +70,20 @@ The 256 KiB save took 17 transactions with 16 data blocks, 9 with 32, 5 with
 35 flushes at every size, and the 64 KiB save took 2 transactions from 64
 blocks up.
 
+| Data blocks per transaction | 2 KiB replacement | 16 KiB replacement | 64 KiB replacement |
+|---|---|---|---|
+| 16 | 1.25 s | 1.33 s | 2.13 s |
+| 32 | 1.25 s | 1.33 s | 1.80 s |
+| 64 | 1.25 s | 1.33 s | 1.61 s |
+| 128 | 1.26 s | 1.34 s | 1.62 s |
+| 256 | 1.27 s | 1.35 s | 1.63 s |
+
+A replacement writes its stage, reads it back and renames it over the file,
+5 transactions and 55 flushes for 2 KiB and 16 KiB at every size; the
+64 KiB one took 8 transactions with 16 data blocks and 5 from 64 up. The
+first replacement of the file, the 2 KiB one, cost 0.4 s more than the
+second; the cause was not established.
+
 ## What the figures show
 
 - **Data blocks matter only to large writes.** A save of 4 KiB or less costs
@@ -81,12 +100,18 @@ blocks up.
   Agent's save budget the same day: a streaming run saves again no sooner
   than nine times as long as its last save took, and never within 500 ms
   (`docs/tui/applets/agent/persistence.md`).
+- **Pad's save costs most for its size.** A checked replacement of 2 KiB
+  takes 1.25 s, its five transactions for the stage, its readback and the
+  rename, and like the other saves it gains from more data blocks only at
+  64 KiB.
 
-## Not measured
+## Why the replacement ran twice
 
-The checked replacement, the save of Pad and of the stores bound through
-`PLACE-VREPL!`, answered `VREPL-S-INVALID` at every size in this script,
-while the same save passes in `test_vfs_replace_ext4.py`. The cause was not
-found on this date, and the replacement's cost was not measured. Its writes
-are whole files like the saves above, so its cost is expected to follow the
-same sizes.
+In the first run every replacement answered `VREPL-S-INVALID` without
+writing. The script had typed the target path at the prompt, where KDOS
+keeps it in the BIOS's own transient string buffer. The replacement hashes
+the path to name its stage, and the SHA3 unit refuses a source in that
+buffer as protected (BIOS status 4); `SHA3-256-HASH` throws the status, so
+`VREPL-DERIVE-PATHS!` threw instead of configuring the descriptor, and every
+later replacement found it unconfigured. The second run compiled the path
+into a definition, as Pad and the stores hold theirs in their own memory.
