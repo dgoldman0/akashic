@@ -359,3 +359,14 @@ reminders. It does not authorize corpus-wide backlinks or a daily-note
 document tree inside Daybook. Those features should build on this strict
 calendar, prompt, recovery, VFS, and responsive-layout path rather than
 changing the plain-text source-of-truth principle prematurely.
+
+Bounded planner search is proposed, not built, as the second user of
+Akashic's score-guided search ([../../../search/scored-search.md](../../../search/scored-search.md)).
+Given open tasks with durations and due times, a beam search places them
+into the selected day's free time and proposes a plan, scored by lateness,
+preferred times of day, gaps too short to use and changes of subject. The
+weights start from values Daybook ships and the user can see and adjust,
+and they learn from which proposed plans the user keeps. A proposal changes
+nothing until the user accepts it, and accepting it writes each planned
+time as an ordinary, exactly targeted Daybook mutation. Durations and due
+times come first, since the planner reads them.
