@@ -234,7 +234,7 @@ VARIABLE _RPC-GP-DEPTH
     \ Get leaf index + leaf hash
     _RPC-ATMP _RPC-LEAF LC-STATE-LEAF  _RPC-GP-IDX !
     \ Get current state root
-    ST-ROOT _RPC-ROOT 32 CMOVE
+    ST-ROOT DROP _RPC-ROOT 32 CMOVE
     \ Build response
     _RPC-RESP-BEGIN
     S" result" JSON-KEY:
@@ -286,18 +286,18 @@ VARIABLE _RPC-GP-DEPTH
     S" result" JSON-KEY:
     JSON-{
     \ height
-    S" height" OVER BLK-HEIGHT@ JSON-KV-NUM
+    S" height" 2 PICK BLK-HEIGHT@ JSON-KV-NUM
     \ prevHash
-    OVER BLK-PREV-HASH@ 32 _RPC-HEX FMT->HEX DROP
+    DUP BLK-PREV-HASH@ 32 _RPC-HEX FMT->HEX DROP
     S" prevHash" _RPC-HEX 64 JSON-KV-STR
     \ stateRoot
-    OVER BLK-STATE-ROOT@ 32 _RPC-HEX FMT->HEX DROP
+    DUP BLK-STATE-ROOT@ 32 _RPC-HEX FMT->HEX DROP
     S" stateRoot" _RPC-HEX 64 JSON-KV-STR
     \ txRoot
-    OVER BLK-TX-ROOT@ 32 _RPC-HEX FMT->HEX DROP
+    DUP BLK-TX-ROOT@ 32 _RPC-HEX FMT->HEX DROP
     S" txRoot" _RPC-HEX 64 JSON-KV-STR
     \ timestamp
-    S" timestamp" SWAP BLK-TIME@ JSON-KV-NUM
+    S" timestamp" ROT BLK-TIME@ JSON-KV-NUM
     JSON-}
     JSON-}
     _RPC-SEND ;
@@ -313,10 +313,12 @@ VARIABLE _RPC-GP-DEPTH
     \ Check if params has a height argument
     _RPC-PARAMS _RPC-PARAMS-LEN @
     JSON-ENTER
-    DUP 0= IF
-        \ No params — return current state root
+    \ RPC-DISPATCH gives a request without params "[]", so the cursor
+    \ stands at "]" when no height came.
+    2DUP JSON-NUMBER? 0= IF
+        \ No height — return current state root
         2DROP
-        ST-ROOT _RPC-ROOT 32 CMOVE
+        ST-ROOT DROP _RPC-ROOT 32 CMOVE
     ELSE
         \ Parse height
         JSON-GET-NUMBER                ( height )
@@ -352,24 +354,25 @@ VARIABLE _RPC-VP-DEPTH
 
 : _RPC-M-VERIFY-PROOF  ( -- )
     _RPC-PARAMS _RPC-PARAMS-LEN @
-    JSON-ENTER
+    JSON-ENTER                         ( cur-a cur-u )
+    \ Each value is read from a copy of the cursor, which then steps on.
     \ 1. leaf-hex (64 chars → 32 bytes)
-    JSON-GET-STRING                    ( hex-a hex-u )
+    2DUP JSON-GET-STRING               ( cur-a cur-u hex-a hex-u )
     DUP 64 <> IF
-        2DROP
+        2DROP 2DROP
         _RPC-RESP-BEGIN
         RPC-E-PARAMS S" leaf must be 64 hex chars" _RPC-RESP-ERROR
         _RPC-SEND EXIT
     THEN
-    _RPC-LEAF FMT-HEX-DECODE DROP
+    _RPC-LEAF FMT-HEX-DECODE DROP     ( cur-a cur-u )
     \ 2. index (number)
     JSON-NEXT-VALUE
-    JSON-GET-NUMBER  _RPC-VP-IDX !
+    2DUP JSON-GET-NUMBER  _RPC-VP-IDX !
     \ 3. proof-hex (depth × 64 hex chars → depth × 32 bytes)
     JSON-NEXT-VALUE
-    JSON-GET-STRING                    ( hex-a hex-u )
+    2DUP JSON-GET-STRING               ( cur-a cur-u hex-a hex-u )
     DUP 2 / 10240 > IF                 \ [FIX A01] match raised buffer size
-        2DROP
+        2DROP 2DROP
         _RPC-RESP-BEGIN
         RPC-E-PARAMS S" proof too large" _RPC-RESP-ERROR
         _RPC-SEND EXIT
@@ -377,8 +380,8 @@ VARIABLE _RPC-VP-DEPTH
     _RPC-PROOF FMT-HEX-DECODE DROP
     \ 4. depth (number)
     JSON-NEXT-VALUE
-    JSON-GET-NUMBER  _RPC-VP-DEPTH !
-    \ 5. root-hex (64 chars → 32 bytes)
+    2DUP JSON-GET-NUMBER  _RPC-VP-DEPTH !
+    \ 5. root-hex (64 chars → 32 bytes), the last value
     JSON-NEXT-VALUE
     JSON-GET-STRING                    ( hex-a hex-u )
     DUP 64 <> IF
