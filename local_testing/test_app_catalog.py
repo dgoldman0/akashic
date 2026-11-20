@@ -59,9 +59,10 @@ def main() -> int:
         [
             "VARIABLE _CTV VARIABLE _CTP VARIABLE _CC1 VARIABLE _CC2 VARIABLE _CC3",
             "VARIABLE _CS VARIABLE _CU",
-            "VARIABLE _CREL-N",
+            "VARIABLE _CREL-N VARIABLE _CTR VARIABLE _CC4",
             "CREATE _CTCOMP COMP-DESC ALLOT CREATE _CTAPP APP-DESC ALLOT",
             "CREATE _CPCOMP COMP-DESC ALLOT CREATE _CPAPP APP-DESC ALLOT",
+            "CREATE _CNCOMP COMP-DESC ALLOT CREATE _CNAPP APP-DESC ALLOT",
             "CREATE _CBUF ACAT-FILE-MAX 1+ ALLOT",
             "CREATE _CT-OPS VFS-OPS-SIZE ALLOT",
             "CREATE _CT-BINDING VFS-BINDING-DESC-SIZE ALLOT",
@@ -75,6 +76,16 @@ def main() -> int:
             'S" ct" PLACES-VOLUME THROW TUCK PVOL-ATTACH THROW '
             '>R S" ct" S" /" PLACE-WRITABLE R> PLACES-DECLARE THROW '
             "PLSET-NEW THROW >R PLACE-WRITABLE SWAP R> PLSET-GRANT THROW ;",
+            # The same volume's root again, declared read-only, as a
+            # Practice's recovery narrows a place.
+            ": CT-RO-PLACE ( -- place ) "
+            'S" ct" PLACES-VOLUME THROW '
+            '>R S" ctro" S" /" PLACE-READ-ONLY R> PLACES-DECLARE THROW '
+            "PLSET-NEW THROW >R PLACE-READ-ONLY SWAP R> PLSET-GRANT THROW ;",
+            ": CT-NEW-DESC "
+            "_CNCOMP COMP-DESC-INIT "
+            'S" org.test.new" _CNCOMP COMP.ID-U ! _CNCOMP COMP.ID-A ! '
+            "_CNAPP APP-DESC-INIT _CNCOMP _CNAPP APP.COMP-DESC ! ;",
             ": CT-DESCS "
             "_CTCOMP COMP-DESC-INIT "
             'S" org.test.builtin" _CTCOMP COMP.ID-U ! _CTCOMP COMP.ID-A ! '
@@ -150,6 +161,13 @@ def main() -> int:
             "_CBUF _CU @ 1+ _CC3 @ ACAT-DECODE . _CC3 @ ACAT-COUNT . "
             "_CBUF 80 + DUP C@ 1 XOR SWAP C! "
             "_CBUF _CU @ _CC3 @ ACAT-DECODE . _CC3 @ ACAT-COUNT . "
+            # Over a read-only place the catalog activates read-only, holds
+            # the rows already saved and refuses a new built-in.
+            "CT-RO-PLACE _CTR ! CT-NEW-DESC "
+            "_CTR @ ACAT-NEW _CS ! _CC4 ! _CS @ . "
+            "_CC4 @ ACAT-ACTIVATE . _CC4 @ ACAT-READONLY? . _CC4 @ ACAT-COUNT . "
+            "_CNAPP _DESK-BUILTIN-DEFAULT-FLAGS _CC4 @ "
+            "ACAT-BIND-BUILTIN . _CC4 @ ACAT-COUNT . "
             'S" CATEND" TYPE',
         ]
     )
@@ -187,7 +205,8 @@ def main() -> int:
         "0 2 0 Package two 35 "
         "14 Package two 3 Package two -1 0 3 0 -1 0 0 1 2 "
         "0 0 2 0 0 0 1 "
-        "0 992 0 0 2 2 2 2 2"
+        "0 992 0 0 2 2 2 2 2 "
+        "0 0 -1 2 7 2"
     )
     if actual != expected:
         print("FAIL: catalog result mismatch")
@@ -202,6 +221,11 @@ def main() -> int:
         return 1
     print("PASS: app catalog codec, persistence, upsert, and resolver")
     return 0
+
+
+def test_app_catalog() -> None:
+    """main() as a test, so the test selection tool runs this file."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

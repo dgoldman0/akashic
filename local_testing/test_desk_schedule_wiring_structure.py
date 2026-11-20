@@ -48,9 +48,12 @@ def test_desk_opens_scheduled_runs_once_the_runtime_exists() -> None:
     init = _definition(source, "_DESK-SCHEDULES-INIT")
     _in_order(init, "ADISP-INIT", "DSAG-HANDLER-INIT", "SBRK-INIT",
               "SBRK-VALID? 0= IF EXIT THEN", "SBRK-HANDLER!", "DBSVC-CLIENT!")
+    # The runtime exists once _DESK-AGENT-INIT has run, outside recovery;
+    # in recovery the dispatcher finds no runtime and stays closed.
     interop = _definition(source, "_DESK-INTEROP-INIT")
-    _in_order(interop, "ARUNTIME-NEW", "_DESK-SCHEDULES-INIT",
-              "_DESK-SERVICE-TABLE-SETUP")
+    _in_order(interop, "DESK-RECOVERY? 0= IF _DESK-AGENT-INIT THEN",
+              "_DESK-SCHEDULES-INIT", "_DESK-SERVICE-TABLE-SETUP")
+    assert "ARUNTIME-NEW" in _definition(source, "_DESK-AGENT-INIT")
 
 
 def test_scheduled_runs_follow_the_runtime_each_tick() -> None:

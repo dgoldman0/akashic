@@ -581,7 +581,14 @@ VARIABLE _ACA-CLEAN-FAILED
     ['] _ACAT-ACTIVATE-OP CATCH IF ACAT-S-IO _ACA-STATUS ! THEN
     _ACAT-ACTIVATE-CLEANUP IF ACAT-S-IO _ACA-STATUS ! THEN
     _ACA-STATUS @ DUP ACAT-S-OK = SWAP ACAT-S-MISSING = OR IF
-        _ACAT-D-F-ACTIVE _ACA-CAT @ ACAT.FLAGS !
+        \ A catalog over a place it cannot write, as in a Practice's
+        \ recovery, serves what it holds and its built-ins and keeps
+        \ nothing new.
+        _ACAT-D-F-ACTIVE
+        _ACA-CAT @ ACAT.PLACE @ PLACE-WRITABLE? 0= IF
+            _ACAT-D-F-READONLY OR
+        THEN
+        _ACA-CAT @ ACAT.FLAGS !
     ELSE
         _ACAT-D-F-ACTIVE _ACAT-D-F-READONLY OR _ACAT-D-F-RECOVERY OR
         _ACA-CAT @ ACAT.FLAGS !

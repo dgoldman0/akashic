@@ -9,7 +9,10 @@ IDs.  Decode rejects trailing data and publishes no partial candidate.
 Catalog mutations copy the live table into a candidate, encode it, and publish
 it through `VREPL-REPLACE`.  Live memory changes only after the replacement's
 commit point.  An uncertain replacement or invalid on-disk catalog enters
-read-only recovery rather than guessing which state won.
+read-only recovery rather than guessing which state won.  A catalog over a
+place it cannot write, as in a Practice's recovery, activates read-only: it
+serves the rows it holds and its built-ins, and every mutation answers
+`ACAT-S-READONLY` without touching the file.
 
 Each 496-byte runtime row contains a 464-byte persistent prefix (flags,
 quarantine reason, lengths, and fixed copied buffers for ID, title, version,
@@ -24,7 +27,7 @@ and Desk slot fields.  Callers should use `ACE-ID$`, `ACE-TITLE$`,
 |---|---|---|
 | `ACAT-NEW` | `( place -- catalog status )` | Allocate a catalog that keeps `/app-catalog.bin` in the place. A file the place cannot bind leaves the catalog to activate in recovery. |
 | `ACAT-PLACE` | `( catalog -- place )` | The catalog's place, where installed packages' manifests and images are too. |
-| `ACAT-ACTIVATE` | `( catalog -- status )` | Recover VREPL state and strictly load the target.  Missing is an empty usable catalog. |
+| `ACAT-ACTIVATE` | `( catalog -- status )` | Recover VREPL state and strictly load the target.  Missing is an empty usable catalog.  Over a place it cannot write, the catalog is read-only. |
 | `ACAT-BIND-BUILTIN` | `( desc default-flags catalog -- status )` | Bind by exact descriptor component ID; a missing row is committed first. |
 | `ACAT-UPSERT-PACKAGE` | `( ia iu ta tu va vu ma mu flags catalog -- status )` | Insert or transactionally update copied package metadata. |
 | `ACAT-INSTALL-PACKAGE` | same | Alias of package upsert. |

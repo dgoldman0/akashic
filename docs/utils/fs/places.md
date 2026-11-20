@@ -414,18 +414,17 @@ every file under `akashic/` to it.
    source rule holds `akashic/` to it.
 3. Done: copy and move, `vfs-copy.f` with `PLACE-COPY` and
    `PLACE-MOVE`, and File Explorer's paste across its set's places.
-4. The user volume attaches: the builder's user image on the machine's
-   fourth storage unit, `user-volume.f`, the shipping form's places, and
-   a boot without the user image. Stores refuse changes on a read-only
-   place themselves, and narrowing a set no longer marks its volumes. The
-   slice begins in the replacement and copy libraries: names follow each
-   volume's limit and paths the VFS's, and a copy syncs only where a
-   replacement does. Done but for what "What slice 4 leaves" lists. Before
-   slice 6, the persistence store that Streams and Library share gains a
-   read-only mode, so the mark goes, and the place set gains a role for
-   the place where a person's documents go; both are done and the mark is
-   gone. The recovery in which applets run over read-only places is a step
-   of its own before slice 9 (Decided, 2026-11-18).
+4. Done: the user volume attaches: the builder's user image on the
+   machine's fourth storage unit, `user-volume.f`, the shipping form's
+   places, and a boot without the user image. Stores refuse changes on a
+   read-only place themselves, and narrowing a set no longer marks its
+   volumes. The slice begins in the replacement and copy libraries: names
+   follow each volume's limit and paths the VFS's, and a copy syncs only
+   where a replacement does. Before slice 6, the persistence store that
+   Streams and Library share gains a read-only mode, so the mark goes, and
+   the place set gains a role for the place where a person's documents go.
+   Done as a step of its own before slice 9: the recovery in which applets
+   run over read-only places (Decided, 2026-11-18).
 5. Done: the ext4 driver makes an inode group ready on first use.
 6. File Explorer across volumes. It begins with the grants of "Who may
    write a file": a set per applet from what each applet's descriptor
@@ -468,8 +467,8 @@ emulator or the simulator").
 
 ## Status
 
-Slices 1, 2, 3, 5, 6 and 7 are in the tree, and slice 4 is but for what
-"What slice 4 leaves" lists. The linked build declares one place and
+Slices 1 to 8 are in the tree, and so is the recovery that comes before
+slice 9. The linked build declares one place and
 everything below runs on it; a build with `--user-volume` declares the
 shipping form's places.
 
@@ -650,17 +649,20 @@ shipping form's places.
   generation pair now reads an unreadable first slot beside a second one
   never written as a store with nothing saved (Decided, 2026-11-20;
   [generation-pair.md](../generation-pair.md)).
-
-What slice 4 leaves:
-
-- Desk's recovery fails closed: with no usable home it starts no applet and
-  opens none of the stores it gives its home, and shows that the Practice
-  is in recovery. The decided recovery, in which applets run over read-only
-  places and each store opens as a service that says why, needs Desk to
-  compose its applets and stores in recovery as well; the stores' read-only
-  answers are tested on read-only places meanwhile. That recovery is a step
-  of its own before slice 9, and the Agent and the sandbox stay off in it,
-  as they are now (Decided, 2026-11-18).
+- Recovery, the step before slice 9. When the activation finds no usable
+  home or no valid Practice head, Desk composes its stores and applets over
+  the places the activation narrowed to read-only, and each store that
+  cannot write says why; the Agent and the sandbox stay off (Decided,
+  2026-11-18). Desk builds no Agent runtime and refuses to start the Agent
+  (`DESK-LAUNCH-E-RECOVERY`), and binds no sandbox. Its applet catalog
+  activates read-only over a place it cannot write, so the applets Desk is
+  asked to start run from its queue without a row
+  ([desk.md](../../tui/applets/desk/desk.md#recovery),
+  [app-catalog.md](../../tui/app-catalog.md)).
+  `local_testing/test_desk_recovery.py` checks the composition on a volume
+  whose home holds no Practice head, and `local_testing/test_app_catalog.py`,
+  which no test ran before it gained a pytest entry, checks the catalog over
+  a read-only place.
 
 ## Open
 

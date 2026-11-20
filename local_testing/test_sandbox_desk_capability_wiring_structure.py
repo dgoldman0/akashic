@@ -80,10 +80,15 @@ def test_desk_hosts_one_capability_bound_to_its_callers_policy() -> None:
     desk_init = _definition(source, "DESK-INIT-CB")
     assert "_DESK-PENDING-SBOX-POLICY @ _DESK-SBOX-POLICY !" in desk_init
     assert "_DESK-PENDING-SBOX-CLEAR" in desk_init
-    recovery = desk_init.split("DESK-RECOVERY? IF", 1)[1].split(
+    # In recovery the sandbox stays off: Desk's interoperability setup
+    # drops its staged inputs instead of binding the capability.
+    interop = _definition(source, "_DESK-INTEROP-INIT")
+    recovery = interop.split("DESK-RECOVERY? IF", 1)[1].split(
         "THEN", 1
     )[0]
-    assert "_DESK-SBOX-STAGING-CLEAR" in recovery
+    staging, binding = recovery.split("ELSE", 1)
+    assert "_DESK-SBOX-STAGING-CLEAR" in staging
+    assert "_DESK-SBOX-INIT" in binding
 
     init = _definition(source, "_DESK-SBOX-INIT")
     ensure = init.index("SBOX-CAPABILITY-COMPONENT _DESK-REGISTRY @ CREG-TYPE-ENSURE")

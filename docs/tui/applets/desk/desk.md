@@ -365,6 +365,26 @@ The source remains host-retained; the Agent must not free it. A preset change
 is rejected while a run or review is active, and the runtime freezes the
 compiled facet for the duration of each accepted run.
 
+## Recovery
+
+When the Practice activation finds no usable home or no valid head, it
+enters recovery and narrows every place of its set to read-only
+([places](../../../utils/fs/places.md)). Desk then composes as it does
+otherwise: it opens its stores over the read-only places and starts the
+applets it was asked to start, and each store that cannot write says why.
+Two parts stay off. Desk builds no Agent runtime, provider or tool gateway,
+and `DESK-TRY-LAUNCH` refuses an applet whose component is the Agent with
+`DESK-LAUNCH-E-RECOVERY` (-1420); and it binds no sandbox capability. Its
+applet catalog activates read-only, serving the rows it holds and its
+built-ins and keeping nothing new, so an applet Desk was queued to start
+runs from its queue without a row, and the launcher reads "catalog
+read-only". With no Practice there is no schedule broker, so scheduled runs
+are unavailable, and no Daybook document either, since the document is named
+from the Practice's ID: Desk hosts none, and Daybook finds no document
+service. The status field reads `[Practice: recovery]`.
+`local_testing/test_desk_recovery.py` checks the composition on a volume
+whose home holds no Practice head.
+
 ## Desk-hosted activation-local Daybook owner
 
 On a healthy Practice activation, Desk creates one resource registry and hosts

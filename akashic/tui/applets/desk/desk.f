@@ -40,7 +40,7 @@
 \    DESK-AGENT-ACCESS ( -- profile|0 ) Current Desk-owned Agent scope
 \    DESK-PRACTICE     ( -- head | 0 )  Active validated Practice head
 \    DESK-CONTEXT      ( -- ctx | 0 )   Active root Context
-\    DESK-RECOVERY?    ( -- flag )      Fail-closed recovery mode
+\    DESK-RECOVERY?    ( -- flag )      Practice in recovery: places read-only, no Agent or sandbox
 \    DESK-CATALOG      ( -- catalog|0 ) Installed app catalog
 \    DESK-TRY-LAUNCH   ( desc -- id ior ) Transactional sub-app launch
 \    DESK-QUEUE-BUILTIN ( desc flags -- ) Bind built-in before run
@@ -896,6 +896,10 @@ AHOST-LAUNCH-E-REGISTRY CONSTANT DESK-LAUNCH-E-REGISTRY
 AHOST-LAUNCH-E-SLOT     CONSTANT DESK-LAUNCH-E-SLOT
 AHOST-LAUNCH-E-CONTEXT  CONSTANT DESK-LAUNCH-E-CONTEXT
 AHOST-LAUNCH-E-UIDL     CONSTANT DESK-LAUNCH-E-UIDL
+\ Desk's own refusal: the Agent does not start while the Practice is in
+\ recovery.  The applet host's launch and close codes run from -1400 to
+\ -1411.
+-1420 CONSTANT DESK-LAUNCH-E-RECOVERY
 
 \ The generic host owns child mechanics. Desk injects only the product
 \ projections and resources which remain Desk-specific.
@@ -948,9 +952,19 @@ VARIABLE _DHR-FIRST
 
 VARIABLE _DTL-DESC
 
+: _DESK-AGENT$    ( -- a u ) S" org.akashic.agent" ;
+
+\ Whether DESC starts the Agent, by its component's id.
+: _DESK-AGENT-DESC?  ( desc -- flag )
+    APP.COMP-DESC @ ?DUP 0= IF 0 EXIT THEN
+    DUP COMP.ID-A @ SWAP COMP.ID-U @ _DESK-AGENT$ STR-STR= ;
+
 : _DTL-PREFLIGHT  ( -- )
     _DTL-DESC @ APP-DESC-VALID? 0= IF
         DESK-LAUNCH-E-DESC THROW
+    THEN
+    DESK-RECOVERY? _DTL-DESC @ _DESK-AGENT-DESC? AND IF
+        DESK-LAUNCH-E-RECOVERY THROW
     THEN
     _DTL-DESC @ DESK-INSTALL ?DUP IF
         THROW
@@ -1053,7 +1067,7 @@ VARIABLE _DCA-CAT
             DROP
         THEN
     LOOP
-    _DCA-CAT @ ACAT-RECOVERY? IF
+    _DCA-CAT @ ACAT-READONLY? IF
         \ A corrupt/read-only catalog cannot accept a newly queued built-in.
         \ Keep existing profiles bootable, but only for descriptors which
         \ have no persisted row whose flags should remain authoritative.
@@ -1305,7 +1319,6 @@ CREATE _DESK-HELD HELD-SIZE ALLOT  _DESK-HELD HELD-INIT
     2 PICK QLOC-OWNER$ _DESK-OWNER DROP
     >R >R DESK-CONTEXT _DESK-RREG @ R> R> _DESK-OWNERS ROWN-ATTACH ;
 
-: _DESK-AGENT$    ( -- a u ) S" org.akashic.agent" ;
 : _DESK-DAYBOOK$  ( -- a u ) S" org.akashic.daybook" ;
 
 \ The Agent's services go only to the Agent, and Daybook's automations
@@ -1510,7 +1523,10 @@ VARIABLE _DSBI-STATUS
     _DESK-BUILTIN-N @ 0 ?DO
         I _DESK-BUILTIN-ENTRY DUP @ SWAP 8 + @ _DCI-CAT @
         ACAT-BIND-BUILTIN DUP ACAT-S-OK <> IF
-            _DCI-CAT @ ACAT-RECOVERY? 0=
+            \ A read-only catalog, in recovery or over a read-only place,
+            \ cannot keep a new built-in's row; the built-in still runs
+            \ from Desk's queue.
+            _DCI-CAT @ ACAT-READONLY? 0=
             ABORT" desk: built-in catalog binding failed"
         THEN DROP
     LOOP
@@ -1591,12 +1607,15 @@ VARIABLE _DMF-EFFECTS
     0 _DESK-RREG !
     0 _DESK-DAYBOOK-OWNER !
     SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
-    _DESK-DAYBOOK-RID!
     _DESK-REGISTRY @ DESK-CONTEXT RREG-NEW
     DUP IF
         _DESK-DAYBOOK-STATUS ! DROP EXIT
     THEN
     DROP _DESK-RREG !
+    \ The document is named from the Practice's ID, so in recovery, with
+    \ no Practice, Desk hosts none and Daybook finds no document service.
+    DESK-PRACTICE 0= IF EXIT THEN
+    _DESK-DAYBOOK-RID!
     _DESK-DAYBOOK-PLACES _DESK-HOME-IN _DESK-DAYBOOK-RID DESK-CONTEXT
         _DESK-RREG @ _DESK-REGISTRY @ SDOC-ACTIVATE
     DUP _DESK-DAYBOOK-STATUS ! IF
@@ -1818,6 +1837,36 @@ VARIABLE _DMC-CANDIDATE
     _DESK-AGENT-PLACES _DESK-STORE-PLACES-FREE1
     _DESK-DAYBOOK-PLACES _DESK-STORE-PLACES-FREE1 ;
 
+\ The Agent's runtime with its provider, its conversation store and its
+\ tool gateway.  The Agent stays off while the Practice is in recovery, so
+\ Desk builds none of them then.
+: _DESK-AGENT-INIT  ( -- )
+    _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
+        OFFLINE-SOURCE-NEW
+        0<> ABORT" desk: offline source allocation failed"
+    THEN
+    0 _DESK-PENDING-AGENT-SOURCE !
+    DUP _DESK-AGENT-SOURCE !
+    APSOURCE-PROVIDER-NEW
+    0<> ABORT" desk: agent provider allocation failed" _DESK-AGENT-PROVIDER !
+    _DESK-AGENT-PROVIDER @ ARUNTIME-NEW
+    0<> ABORT" desk: agent runtime allocation failed" _DESK-AGENT-RUNTIME !
+    _DESK-BIND-AGENT-STORE
+    _DESK-REGISTRY @ _DESK-BUS @ _DINI-INST @ ATOOLG-NEW
+    0<> ABORT" desk: agent tool gateway allocation failed"
+    DUP _DESK-TOOL-GATEWAY !
+    _DESK-AGENT-RUNTIME @ ARUNTIME-TOOL-GATEWAY!
+    ['] _DESK-MANDATE-FACTORY _DINI-INST @
+        _DESK-AGENT-RUNTIME @ ARUNTIME-MANDATE-FACTORY!
+    ['] DAP-RUNTIME-POLICY ['] DAP-RUNTIME-VALID? 0
+        _DESK-AGENT-RUNTIME @ ARUNTIME-ACCESS-POLICY!
+    ABORT" desk: agent access policy binding failed"
+    _DESK-TOOL-GATEWAY @ _DESK-AGENT-PROVIDER @ APROV-BIND-TOOLS
+    ABORT" desk: provider tool binding failed"
+    _DESK-PENDING-AGENT-ACCESS @ _DESK-AGENT-RUNTIME @
+        ARUNTIME-ACCESS-PRESET!
+    ABORT" desk: unavailable or invalid agent access preset" ;
+
 : _DESK-INTEROP-INIT  ( desk-instance -- )
     DUP _DINI-INST ! _DESK-USE-STATE
     DESK-CONTEXT DUP 0= ABORT" desk: no active Practice Context"
@@ -1847,31 +1896,10 @@ VARIABLE _DMC-CANDIDATE
     _DESK-STORE-PLACES-INIT
     _DESK-DAYBOOK-INIT
     _DESK-REMINDERS-INIT
-    _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
-        OFFLINE-SOURCE-NEW
-        0<> ABORT" desk: offline source allocation failed"
-    THEN
-    0 _DESK-PENDING-AGENT-SOURCE !
-    DUP _DESK-AGENT-SOURCE !
-    APSOURCE-PROVIDER-NEW
-    0<> ABORT" desk: agent provider allocation failed" _DESK-AGENT-PROVIDER !
-    _DESK-AGENT-PROVIDER @ ARUNTIME-NEW
-    0<> ABORT" desk: agent runtime allocation failed" _DESK-AGENT-RUNTIME !
-    _DESK-BIND-AGENT-STORE
-    _DESK-REGISTRY @ _DESK-BUS @ _DINI-INST @ ATOOLG-NEW
-    0<> ABORT" desk: agent tool gateway allocation failed"
-    DUP _DESK-TOOL-GATEWAY !
-    _DESK-AGENT-RUNTIME @ ARUNTIME-TOOL-GATEWAY!
-    ['] _DESK-MANDATE-FACTORY _DINI-INST @
-        _DESK-AGENT-RUNTIME @ ARUNTIME-MANDATE-FACTORY!
-    ['] DAP-RUNTIME-POLICY ['] DAP-RUNTIME-VALID? 0
-        _DESK-AGENT-RUNTIME @ ARUNTIME-ACCESS-POLICY!
-    ABORT" desk: agent access policy binding failed"
-    _DESK-TOOL-GATEWAY @ _DESK-AGENT-PROVIDER @ APROV-BIND-TOOLS
-    ABORT" desk: provider tool binding failed"
-    _DESK-PENDING-AGENT-ACCESS @ _DESK-AGENT-RUNTIME @
-        ARUNTIME-ACCESS-PRESET!
-    ABORT" desk: unavailable or invalid agent access preset"
+    DESK-RECOVERY? 0= IF _DESK-AGENT-INIT THEN
+    \ In recovery there is no Agent runtime and no Practice: the
+    \ dispatcher and the broker refuse to open, and scheduled runs are
+    \ unavailable.
     _DESK-SCHEDULES-INIT
     _DESK-REGISTRY @ _DESK-OWNERS ROWN-INIT
     ['] _DESK-OWNER-ALLOWED? _DINI-INST @ _DESK-OWNERS ROWN-POLICY!
@@ -1893,8 +1921,14 @@ VARIABLE _DMC-CANDIDATE
     ABORT" desk: could not register Desk type"
     _DINI-INST @ _DESK-REGISTRY @ CREG-INST+
     ABORT" desk: could not register Desk instance"
-    _DESK-SBOX-INIT SBOX-CAPABILITY-S-OK <>
-    ABORT" desk: sandbox capability initialization failed"
+    \ The sandbox stays off in recovery; its constructor inputs go as its
+    \ initialization would take them.
+    DESK-RECOVERY? IF
+        _DESK-SBOX-STAGING-CLEAR
+    ELSE
+        _DESK-SBOX-INIT SBOX-CAPABILITY-S-OK <>
+        ABORT" desk: sandbox capability initialization failed"
+    THEN
 
     SCR-H 1- 0 1 SCR-W RGN-NEW DUP _DESK-AGENT-PROMPT-RGN !
     _DESK-AGENT-PROMPT-BUF _DESK-AGENT-PROMPT-CAP PRM-NEW
@@ -2491,10 +2525,9 @@ VARIABLE _DSG-N
     _DESK-PRACTICE-ACTIVATION PACT-ACTIVATE
     DUP PACT-S-OK <> SWAP PACT-S-RECOVERY <> AND
     ABORT" desk: Practice activation failed"
-    DESK-RECOVERY? IF
-        _DESK-SBOX-STAGING-CLEAR
-        0 _DESK-PEND-N ! EXIT
-    THEN
+    \ In recovery the activation has narrowed every place to read-only.
+    \ Desk composes its stores and applets over them as ever, and each
+    \ store that cannot write says why; the Agent and the sandbox stay off.
     _DINI-INST @ _DESK-INTEROP-INIT
     _DESK-REGISTRY @ _DESK-HOST AHOST-REGISTRY!
     _DESK-ENDPOINT _DESK-HOST AHOST-ENDPOINT!
@@ -2593,10 +2626,12 @@ CREATE _DESK-EV  24 ALLOT
 : _DESK-LAUNCHER-STATUS$  ( -- a u )
     _DESK-LAUNCHER-STATUS @ ?DUP IF _DESK-CATALOG-STATUS$ EXIT THEN
     _DESK-CATALOG @ ?DUP IF ACAT-RECOVERY? ELSE 0 THEN IF
-        S" catalog recovery: read-only"
-    ELSE
-        S" select an applet"
-    THEN ;
+        S" catalog recovery: read-only" EXIT
+    THEN
+    _DESK-CATALOG @ ?DUP IF ACAT-READONLY? ELSE 0 THEN IF
+        S" catalog read-only" EXIT
+    THEN
+    S" select an applet" ;
 
 : _DESK-LAUNCHER-ENTRY  ( index -- entry | 0 )
     _DESK-CATALOG @ ?DUP IF ACAT-NTH ELSE DROP 0 THEN ;
