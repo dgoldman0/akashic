@@ -99,6 +99,9 @@ def test_declared_kinds_follow_their_names_after_a_colon():
     assert [s.role for s in effect.inputs] == ["a", "u", None, None]
     assert [s.kind for s in effect.alts[0]] == [E.COUNT, E.FLAG]
     assert parsed.declared == 4 and parsed.problems == []
+    # A bar inside a name says which values the cell may take.
+    either = parse_effect(" rec -- port|0: addr status: n ").effect
+    assert [(s.name, s.kind) for s in either.alts[0]] == [("port|0", E.ADDR), ("status", E.NUMBER)]
 
 
 def test_token_effects_nest_and_holds_names_what_a_cell_holds():

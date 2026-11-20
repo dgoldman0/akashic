@@ -125,7 +125,9 @@ def builtin_resolver(name: str) -> str | None:
 
 _VARIABLE_RE = re.compile(r"(\b[ijkmn]\*[a-z]|\.\.|…)")
 _PARSE_RE = re.compile(r'\A(".*"|<.*>|\'.*\')\Z')
-_LABEL_RE = re.compile(r"\A[^\s:()|]+:\Z")
+# "name:" labels an item; a bar inside the name, as in "port|0:", names the
+# values the cell may take, while a bar at its edge separates alternatives.
+_LABEL_RE = re.compile(r"\A(?!\|)[^\s:()]+(?<!\|):\Z")
 
 
 def _is_number_literal(text: str) -> bool:
