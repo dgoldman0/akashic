@@ -598,7 +598,7 @@ VARIABLE _XT-SKIP      \ XT of skip-expression parser
         \ float mod: a - floor(a/b)*b
         _LEL-VPOP _LEL-COERCE-FP32
         _LEL-VPOP _LEL-COERCE-FP32
-        SWAP OVER                       \ ( b a b )
+        2DUP SWAP                       \ ( b a a b )
         FP32-DIV FP32>FX FX-FLOOR FX>FP32 \ ( b a floor(a/b) )
         ROT FP32-MUL FP32-SUB            \ ( a-floor(a/b)*b )
         ST-T-FLOAT SWAP 0 _LEL-VPUSH

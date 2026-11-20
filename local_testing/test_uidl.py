@@ -136,6 +136,9 @@ DOC_WHEN = (
     '<label id="visible" text="always" />'
     '<label id="conditional" text="maybe" when="=gt(sensors.pressure, 90)" />'
     '<label id="hidden" text="nope" when="=false" />'
+    '<label id="truthy" text="yes" when="=true" />'
+    '<label id="nothing" text="none" when="=null" />'
+    '<label id="number" text="num" when="=2.5" />'
     '</uidl>'
 )
 
@@ -815,6 +818,34 @@ def test_when_eval():
           setup_high + tstr('hidden') + [
               'TA UIDL-BY-ID UIDL-EVAL-WHEN . CR'],
           '0')
+
+    # LEL gives a boolean or an integer in its first value cell.
+    check("eval-when true literal",
+          setup_high + tstr('truthy') + [
+              'TA UIDL-BY-ID UIDL-EVAL-WHEN ." when=" . CR'],
+          'when=-1')
+
+    check("eval-when condition that holds",
+          setup_high + tstr('conditional') + [
+              'TA UIDL-BY-ID UIDL-EVAL-WHEN ." when=" . CR'],
+          'when=-1')
+
+    setup_low = setup_base + [
+        '50 S" sensors.pressure" ST-SET-PATH-INT',
+    ] + tstr(DOC_WHEN) + ['TA UIDL-PARSE DROP']
+
+    check("eval-when condition that fails",
+          setup_low + tstr('conditional') + [
+              'TA UIDL-BY-ID UIDL-EVAL-WHEN ." when=" . CR'],
+          'when=0')
+
+    # A null or other result is false and leaves the cells below alone.
+    for element in ('nothing', 'number'):
+        check(f"eval-when {element} keeps the caller's cells",
+              setup_high + tstr(element) + [
+                  '7 TA UIDL-BY-ID UIDL-EVAL-WHEN',
+                  '." when=" . ." below=" . CR'],
+              'when=0 below=7')
 
 def test_complete_document():
     """Parse the spec §11 complete example (simplified)."""

@@ -218,7 +218,7 @@ VARIABLE _DFS-UROOT
         _SLO-CUR @ DOM-FIRST-CHILD ?DUP IF
             _SLO-CUR !
         ELSE
-            _SLO-CUR @ _SLO-ROOT @ _DFS-UP  DUP _SLO-CUR !
+            _SLO-CUR @ _SLO-ROOT @ _DFS-UP  _SLO-CUR !
         THEN
         _SLO-CUR @ 0=
     UNTIL ;
@@ -301,7 +301,7 @@ VARIABLE _SNF-ROOT
         _SNF-CUR @ DOM-FIRST-CHILD ?DUP IF
             _SNF-CUR !
         ELSE
-            _SNF-CUR @ _SNF-ROOT @ _DFS-UP  DUP _SNF-CUR !
+            _SNF-CUR @ _SNF-ROOT @ _DFS-UP  _SNF-CUR !
         THEN
         _SNF-CUR @ 0=
     UNTIL
@@ -324,7 +324,7 @@ VARIABLE _SNL-LAST
         _SNL-CUR @ DOM-FIRST-CHILD ?DUP IF
             _SNL-CUR !
         ELSE
-            _SNL-CUR @ _SNL-ROOT @ _DFS-UP  DUP _SNL-CUR !
+            _SNL-CUR @ _SNL-ROOT @ _DFS-UP  _SNL-CUR !
         THEN
         _SNL-CUR @ 0=
     UNTIL
@@ -354,7 +354,7 @@ VARIABLE _SNN-ROOT
         _SNN-CUR @ DOM-FIRST-CHILD ?DUP IF
             _SNN-CUR !
         ELSE
-            _SNN-CUR @ _SNN-ROOT @ _DFS-UP  DUP _SNN-CUR !
+            _SNN-CUR @ _SNN-ROOT @ _DFS-UP  _SNN-CUR !
         THEN
         _SNN-CUR @ 0=
     UNTIL
@@ -383,7 +383,7 @@ VARIABLE _SNP-LAST
         _SNP-CUR @ DOM-FIRST-CHILD ?DUP IF
             _SNP-CUR !
         ELSE
-            _SNP-CUR @ _SNP-ROOT @ _DFS-UP  DUP _SNP-CUR !
+            _SNP-CUR @ _SNP-ROOT @ _DFS-UP  _SNP-CUR !
         THEN
         _SNP-CUR @ 0=
     UNTIL
@@ -526,7 +526,7 @@ VARIABLE _SSI-TARGET
 
 : _SOM-SCOPE-INDEX  ( node scope -- n )
     DOM-FIRST-CHILD  _SSI-CUR !
-    SWAP _SSI-TARGET !
+    _SSI-TARGET !
     0 _SSI-N !
     BEGIN _SSI-CUR @ WHILE
         _SSI-CUR @ _SSI-TARGET @ = IF _SSI-N @ EXIT THEN

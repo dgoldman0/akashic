@@ -500,6 +500,12 @@ def test_arithmetic():
         'S" div(7.0, 2.0)" T-FINT',
     ], '3')
 
+    # Float modulo: a - floor(a/b) * b, with nothing taken from below
+    check("mod-float", [
+        ': T-MOD  7 S" mod(17.5, 5)" LEL-EVAL DROP NIP FP32>INT',
+        '  ." mod=" . ." below=" . ; T-MOD',
+    ], 'mod=2 below=7')
+
     check("float-type-result", [
         'S" add(1, 2.5)" T-TYPE',
     ], '5')

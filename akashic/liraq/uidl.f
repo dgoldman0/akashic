@@ -832,11 +832,11 @@ VARIABLE _UPA-VA  VARIABLE _UPA-VL
     UIDL-WHEN IF
         LEL-EVAL
         ROT
-        DUP ST-T-BOOLEAN = IF DROP NIP EXIT THEN
-        DUP ST-T-INTEGER = IF DROP NIP 0<> EXIT THEN
-        DUP ST-T-NULL    = IF DROP NIP NIP 0 EXIT THEN
+        DUP ST-T-BOOLEAN = IF DROP DROP 0<> EXIT THEN
+        DUP ST-T-INTEGER = IF DROP DROP 0<> EXIT THEN
+        DUP ST-T-NULL    = IF DROP 2DROP 0 EXIT THEN
         DUP ST-T-STRING  = IF DROP NIP 0<> EXIT THEN
-        DROP NIP NIP 0
+        DROP 2DROP 0
     ELSE 2DROP -1 THEN ;
 
 \ =====================================================================
