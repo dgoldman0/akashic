@@ -120,9 +120,16 @@ def fresh_user_volume(tmp_path_factory: pytest.TempPathFactory) -> bytes:
 
 class Machine:
     """KDOS with user-volume.f and the replacement's place binding loaded,
-    a boot disk on unit 0 and USER, when given, on unit 3."""
+    a boot disk on unit 0 and USER, when given, on unit 3.  A suite that
+    needs more names further ROOTS, and its own HELPERS after these."""
 
-    def __init__(self, user: bytes | None) -> None:
+    def __init__(
+        self,
+        user: bytes | None,
+        *,
+        roots: tuple[str, ...] = (),
+        helpers: str = "",
+    ) -> None:
         self.user = None if user is None else HostedStorageService(user)
         self.runtime = MegaForthRuntime(
             memory=create_one_core_address_space(external_size=128 << 20),
@@ -134,7 +141,7 @@ class Machine:
             (MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f"
         )
         self.runtime.evaluate(b"ENTER-USERLAND", source_name="userland")
-        for module in dependency_order(ROOT / "akashic", ROOTS):
+        for module in dependency_order(ROOT / "akashic", ROOTS + roots):
             text = (ROOT / "akashic" / module).read_text()
             text = "\n".join(
                 line
@@ -145,6 +152,8 @@ class Machine:
                 text.encode(), source_name=module, step_budget=STEPS
             )
         self.runtime.evaluate(HELPERS.encode(), source_name="helpers")
+        if helpers:
+            self.runtime.evaluate(helpers.encode(), source_name="suite")
         self.runtime.drain_uart_output()
 
     def run(self, source: str) -> tuple[int, ...]:

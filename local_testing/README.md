@@ -423,6 +423,15 @@ holds the bytes it should as `debugfs` reads them
 Pad in the three outcomes of the boot policy, and saves a document that the
 host's `e2fsck` passes and a second boot reads back.
 
+`test_user_volume_killed.py` is the killed run. Each writer's operation runs
+once on the simulator under a storage observer, and each flush in turn
+becomes a cut: the medium as the first request after that flush finds it.
+A fresh machine mounts each cut and runs the operation's own recovery, and
+the host's `e2fsck` recovers a copy in preen mode; both must find the state
+from before the operation or the one after it, whole, and a forced check
+then passes. `AKASHIC_KILLED_RUN_STRIDE=N` cuts at every Nth flush only, for
+a quicker look; the full run cuts at every flush.
+
 ## Integrated Library Rabbit/Burrow qualification
 
 The integrated executable closure was qualified at Akashic

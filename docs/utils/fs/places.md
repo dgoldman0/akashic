@@ -448,9 +448,14 @@ every file under `akashic/` to it.
    Streams and Library compose their layouts under it. The user volume's writer
    takes its transaction size from measurements of these writers' saves,
    the Agent's above all (Decided, 2026-11-18).
-8. The killed run: the simulator killed at chosen flushes during a save
-   and during a copy's stage write and rename; each image passes the
-   machine's own remount and the host tools' recovery, then `e2fsck`.
+8. Done: the killed run, at the level of the stores (Decided, 2026-11-19):
+   the writers' own operations, Pad's save, File Explorer's copy of a file
+   and of a folder and its move, the Agent's first save and a later one, and
+   Streams provisioning its repository, run on the simulator with the user
+   volume and are cut at each flush; each cut's medium passes the machine's
+   own remount and the host tools' recovery, then `e2fsck`. One killed run
+   of the whole Desk in the shipping form, through its interface, comes
+   before the release (Decided, 2026-11-19) and is still to do.
 9. Both journeys, linked and shipping form, the shipping form with the
    user volume. Once both pass, the shipping form with the user volume
    becomes the builder's default (Decided, 2026-11-18).
@@ -630,6 +635,21 @@ shipping form's places.
   extended memory holds, which on the 64 MiB volume is 128: a 256 KiB save
   then takes 1.7 s where 16 blocks took 4.1 s (Decided, 2026-11-19;
   [user-volume.md](user-volume.md#mounting)).
+- The killed run (slice 8). `local_testing/test_user_volume_killed.py`
+  runs each writer's operation once on the simulator with the user volume,
+  under MegaPad's storage request observer, and cuts it at every flush:
+  Pad's save (68 cuts), File Explorer's copy of a file (46), of a folder
+  (101) and its move (24), the Agent's first save (35) and a later one
+  (35), and Streams provisioning its repository (124), 433 cuts in 15
+  minutes. At every cut a fresh machine's mount with the operation's own
+  recovery, and separately the host's `e2fsck` in preen mode, find the
+  state from before the operation or after it, whole, and a forced
+  `e2fsck` passes. The run found that a cut during a two-slot store's first
+  save, after its first slot's file was created and before the write that
+  fills it, left Streams and the Agent refusing their stores; the
+  generation pair now reads an unreadable first slot beside a second one
+  never written as a store with nothing saved (Decided, 2026-11-20;
+  [generation-pair.md](../generation-pair.md)).
 
 What slice 4 leaves:
 
@@ -641,10 +661,6 @@ What slice 4 leaves:
   answers are tested on read-only places meanwhile. That recovery is a step
   of its own before slice 9, and the Agent and the sandbox stay off in it,
   as they are now (Decided, 2026-11-18).
-- With records as the home, the other writers meet ext4 in a build with
-  the user volume (slice 7).
-- Power cuts during a save, a copy's stage write and its rename are
-  qualified in slice 8.
 
 ## Open
 
