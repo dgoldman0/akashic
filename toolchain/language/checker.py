@@ -224,6 +224,9 @@ class Record:
     # token read from a typed slot, a typed token input, or a deferred word.
     declared_tokens: int = 0
     declared_token_sources: dict = field(default_factory=dict)
+    # The words the analysis ran, by identity: calls, inlined words and
+    # known tokens it executed, but no call in code it never reaches.
+    ran: dict = field(default_factory=dict)
     # Declared items in the stack comment, and whether recursion assumed it.
     declared_items: int = 0
     recursion_assumed: bool = False
@@ -1399,6 +1402,8 @@ class Analysis:
         return self.merge(result)
 
     def call(self, state: State, word: Word) -> list[State]:
+        if self.record is not None:
+            self.record.ran[id(word)] = word
         if word.prim is not None:
             handler = PRIM_HANDLERS.get(word.prim)
             if handler is not None:

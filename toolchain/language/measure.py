@@ -389,9 +389,11 @@ def _code_all_the_way_down(word: Word, memo: dict) -> bool:
 
     Base words count, since their effects are given.  A source word counts
     when the strict run inferred it, it ran no token whose effect only a
-    declaration states, and every word it calls or names with ['] counts in
-    turn; a word that runs a token it is given is inferred again at each
-    call site, so its own body is what counts.
+    declaration states, and every word its analysis ran counts in turn: the
+    words it calls, the known tokens it executes, and the words it inlines.
+    A word that runs a token it is given is inlined at each call site, and
+    what its body runs there is recorded with the caller, so it counts as
+    code.  Naming a token without running it leaves the effect unchanged.
     """
     key = id(word)
     if key in memo:
@@ -400,15 +402,14 @@ def _code_all_the_way_down(word: Word, memo: dict) -> bool:
         return True
     if word.kind == "defer":
         return False  # whatever token IS stored last runs
-    if word.kind != "colon":
-        return True  # variables, constants and created words have exact effects
+    if word.kind != "colon" or word.higher_order:
+        return True  # data words have exact effects; inlined words count at the caller
     memo[key] = True  # a word that calls itself does not undo its own result
     record = word.record
-    result = (word.inferred is not None or word.higher_order) and (
-        record is None or record.declared_tokens == 0)
-    if result and word.items:
-        for op, arg, _ in word.items:
-            if op in ("call", "xt") and arg is not word and not _code_all_the_way_down(arg, memo):
+    result = word.inferred is not None and (record is None or record.declared_tokens == 0)
+    if result and record is not None:
+        for callee in record.ran.values():
+            if callee is not word and not _code_all_the_way_down(callee, memo):
                 result = False
                 break
     memo[key] = result

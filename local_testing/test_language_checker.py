@@ -467,12 +467,17 @@ def test_placement_excludes_words_resting_on_declared_token_effects(base_checker
         ": ABOVE  ( n -- n )  RUN-HOOK 1+ ;\n"
         ": PLAIN  ( n -- n )  1+ ;\n"
         ": ALSO-PLAIN  ( n -- n )  PLAIN PLAIN ;\n"
+        "VARIABLE SLOT\n"
+        ": BROKEN  ( -- )  SLOT @ EXECUTE ;\n"
+        ": NAMES-ONLY  ( -- )  ['] BROKEN SLOT ! ;\n"
+        ": DEAD-CODE  ( n -- n )  EXIT BROKEN ;\n"
     ), strict=True)
     summary, qualifying = placement(strict, "library", 3)
     names = {r.word.name for r in qualifying}
-    assert {"PLAIN", "ALSO-PLAIN"} <= names
-    assert not names & {"RUN-HOOK", "ABOVE"}
-    assert summary["inferred in the strict run"] == 4
+    # Naming a token, or a call no path reaches, leaves the effect to code.
+    assert {"PLAIN", "ALSO-PLAIN", "NAMES-ONLY", "DEAD-CODE"} <= names
+    assert not names & {"RUN-HOOK", "ABOVE", "BROKEN"}
+    assert summary["inferred in the strict run"] == 6
 
 
 def test_kdos_catch_and_throw_keep_their_exact_meaning(base_checker_state):
