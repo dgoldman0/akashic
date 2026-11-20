@@ -1,4 +1,4 @@
-"""The core of the checker for Uroko, Leviathan's language (a prototype).
+"""The core of the checker for Uroko (a prototype).
 
 The checker reads Forth source the way KDOS reads it, infers each
 definition's stack effect from its body, compares the result with the

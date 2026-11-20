@@ -1,10 +1,10 @@
 # The language checker on all of Akashic's Forth — 2026-11-20
 
-This note records the first measurement of the checker core of Leviathan's
-language, the prototype that `docs/language/checker.md` describes. The
-checker read every Forth file in Akashic, inferred each colon definition's
-stack effect, compared it with the definition's stack comment, and reported
-misused kinds, spans and return-stack cells. Samples of each category were
+This note records the first measurement of the checker core of Uroko, the
+prototype that `docs/language/checker.md` describes. The checker read every
+Forth file in Akashic, inferred each colon definition's stack effect,
+compared it with the definition's stack comment, and reported misused
+kinds, spans and return-stack cells. Samples of each category were
 then read to learn which reports are real defects and where the checker's
 own rules mislead. The defects are listed with file and line below; none
 was changed.

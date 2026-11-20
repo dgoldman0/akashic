@@ -3,12 +3,12 @@
 Status: proposed on 2026-11-20; nothing is built. This note designs a
 library through which a program explores a tree of options while a scorer
 rates each candidate, and the scores decide which branch the search follows.
-It is written in Leviathan's language, which the release plan's decisions 30
-to 34 describe (`dev/PLAN.md` and `dev/ideas/language.md` in
-fantasy-engine), so every spelling below is a guess until the language's
-syntax is settled. MegaPad's `docs/chiplet-interconnect-plan.md` §7 designs
-the service that runs scorers for a search on another engine, and LM1's
-`spec/04-soc.md` §8 states the same service from LM1's side.
+It is written in Uroko, which the release plan's decisions 30 to 34
+describe (`dev/PLAN.md` and `dev/ideas/language.md` in fantasy-engine), so
+every spelling below is a guess until the language's syntax is settled.
+MegaPad's `docs/chiplet-interconnect-plan.md` §7 designs the service that
+runs scorers for a search on another engine, and LM1's `spec/04-soc.md` §8
+states the same service from LM1's side.
 
 ## 1. What it does
 

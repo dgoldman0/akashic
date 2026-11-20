@@ -1,24 +1,30 @@
-# The checker core of Leviathan's language
+# The checker core of Uroko
 
 Status: prototype, 2026-11-20. This note describes host tooling that runs
-and is measured, but the language it serves has no syntax yet, and the
-checker's rules are drafts that the measurement is meant to test. Nothing
-here is decided. The release plan's decisions 30 to 34 (fantasy-engine
-`dev/PLAN.md`) set out the language, and fantasy-engine
+and is measured. Uroko is the language of Leviathan, the machine of MegaPad
+and LM1; its only written form so far is the declaration of kinds inside
+stack comments (decided 2026-11-20), and the checker's other rules are
+drafts that the measurements test. The release plan's decisions 30 to 34
+(fantasy-engine `dev/PLAN.md`) set out the language, and fantasy-engine
 `dev/ideas/language.md` holds its open questions.
 
-Leviathan's language gives every word a checked stack effect and describes
-data by kinds: plain data such as cells and spans, objects that a collector
-manages, capabilities and tasks. Decision 32 starts the language with the
-checker's core, which follows kinds through stack shuffles and the return
-stack and needs nothing from LM1, and tries it on Akashic's existing Forth
-before any syntax is written. This prototype is that core. It reads Forth
-source the way KDOS reads it, infers each colon definition's stack effect
-from its body and the effects of the words it calls, compares the result
-with the definition's stack comment, and reports where kinds, spans and the
-return stack are misused. The measurement of all of Akashic's Forth is
-recorded in
-[`local_testing/evidence/language-checker-20261120.md`](../../local_testing/evidence/language-checker-20261120.md).
+Uroko gives every word a checked stack effect and describes data by kinds:
+plain data such as cells and spans, objects that a collector manages,
+capabilities and tasks. Decision 32 starts the language with the checker's
+core, which follows kinds through stack shuffles and the return stack and
+needs nothing from LM1, and tries it on Akashic's existing Forth. This
+prototype is that core. It reads Forth source the way KDOS reads it, infers
+each colon definition's stack effect from its body and the effects of the
+words it calls, reads the kinds the source declares, compares the inferred
+effect with the definition's stack comment, and reports where kinds, spans,
+execution tokens and the return stack are misused. A strict run counts the
+definitions whose effect it works out from code alone, which decision 32
+makes the condition for placing a word on LM1. The measurements of all of
+Akashic's Forth are recorded in
+[`local_testing/evidence/language-checker-20261120.md`](../../local_testing/evidence/language-checker-20261120.md)
+(the first round) and
+[`local_testing/evidence/language-checker-declarations-20261120.md`](../../local_testing/evidence/language-checker-declarations-20261120.md)
+(declarations, typed slots and strict placement).
 
 ## Where it lives
 
@@ -35,22 +41,26 @@ covers the machine models, not the toolchain.
 | File | Holds |
 |------|-------|
 | `toolchain/language/source.py` | KDOS's reading rules: tokens, comments, strings, numbers |
-| `toolchain/language/effects.py` | Kinds, the names stack comments use for them, and the reading of a comment as an effect |
-| `toolchain/language/vocabulary.py` | The BIOS dictionary and its documented effects |
+| `toolchain/language/effects.py` | Kinds, effects, and the reading of declarations in stack comments |
+| `toolchain/language/vocabulary.py` | The BIOS dictionary, its documented effects, and the declared kinds of base words |
 | `toolchain/language/checker.py` | The dictionary, the outer interpreter, and the abstract interpretation of each definition |
-| `toolchain/language/measure.py` | The measurement over Akashic's Forth, and a sampler for reviewing a category by hand |
+| `toolchain/language/measure.py` | The measurement over Akashic's Forth, its strict run, and a sampler for reviewing a category by hand |
 
 `local_testing/test_language_checker.py` runs small programs against the
-real BIOS and KDOS vocabulary in about two seconds. The measurement runs
+real BIOS and KDOS vocabulary in about five seconds. The measurement runs
 from the Akashic checkout, with `MEGAPAD_ROOT` naming the MegaPad checkout
 when it is not beside Akashic:
 
 ```
 python3 -m toolchain.language.measure --json report.json
+python3 -m toolchain.language.measure --groups library --placement lm1.txt
 python3 -m toolchain.language.measure --groups library --sample mismatch --count 20
+python3 -m toolchain.language.measure --groups library --sample "EXECUTE of an unknown xt" --strict
 ```
 
-It takes about 12 seconds for the library and the Forth test drivers.
+The first two run the ordinary and the strict analysis, about 15 seconds
+each for the library; `--placement` writes the definitions that qualify for
+LM1, one per line, and `--no-strict` skips the strict run.
 
 ## Reading source as KDOS does
 
@@ -75,53 +85,127 @@ module loads: the base vocabulary, then the modules its REQUIRE lines load,
 in KDOS's depth-first order, each once. A word that a module uses without
 the REQUIRE that defines it is therefore undefined, as it is to the image
 builder's own closure (`local_testing/forth_dependencies.py`, whose
-REQUIRE rule the measurement uses).
+REQUIRE rule the measurement uses). Declared kinds travel the same way: a
+module sees the kinds its REQUIRE closure declares.
+
+## Declaring kinds
+
+A kind follows its item's name after a colon, inside the ordinary stack
+comment, as Factor writes stack effects:
+
+```forth
+: NIO-RECV  ( buf: span port: nio-port -- count: u status: nio-status )
+```
+
+An item without a kind is a plain cell, and the checker reads no kind from
+a name: `addr` and `flag` written alone are names of plain cells. The
+source stays plain Forth, since KDOS's `(` skips the whole comment.
+
+| Kind | Stands for |
+|------|------------|
+| `cell` | Any cell; the same as an item without a kind |
+| `n`, `u` | A signed number, an unsigned number or count |
+| `flag`, `char` | A truth value, a character |
+| `addr` | An address of plain memory |
+| `span` | Two cells, an address and a length, that bound one piece of memory the caller provides |
+| `xt`, `xt( effect )` | An execution token, with or without the effect it runs |
+| `ref`, `handle` | Managed data, the two kinds of release plan Part 9d |
+| `task` | Work whose result comes later |
+| `record` | The kind every record kind refines; a record is an address of its fields |
+
+A source file adds kinds with a comment of its own:
+`( kind: nio-port record )` declares a record kind, and
+`( kind: nio-status n )` a kind of number. A named kind mixes freely with
+the kinds it refines, so a record serves as an address and an address may
+stand where a record is expected, and the checker reports one named kind
+standing for another when neither refines the other, as two records or two
+kinds of status do.
+
+A token's effect is a nested comment, which KDOS's counting of parentheses
+skips with the rest: `each: xt( item: addr -- keep: flag )`. An item
+labelled `holds:` is the address of a cell that holds the kind after it.
+Data words declare what they hold with that label right after their name:
+
+| Declaration | Meaning |
+|-------------|---------|
+| `VARIABLE HOOK ( holds: xt( c: char -- ) )` | HOOK's cell holds a token of that effect |
+| `CREATE OPS ( holds: xt( n -- n ) )` | Every cell of the table holds one; an address computed from OPS by adding a number stays in the table |
+| `0 VALUE CB ( holds: xt( -- ) )` | CB pushes such a token, and `TO CB` must store one |
+| `8 CONSTANT _P-SEND ( holds: xt( ... ) )` | A field offset: added to a record's address it gives the address of a cell holding the token |
+| `_STATE CMP-CELL: _ON-CLOSE ( holds: xt( ... ) )` | The child of a defining word that pushes one address, such as Akashic's CMP-FIELD: and CMP-CELL:, declares what that address holds |
+| `: P.SEND ( p: port -- holds: xt( ... ) )` | A colon definition returns the address of such a cell |
+
+Because a field offset carries its declaration, an accessor written as
+`: NIO.RECV-XT ( port -- a ) _NIO-RECV-XT + ;` needs none of its own: the
+checker infers that it returns the address of a cell holding the token.
+
+Two conventions of Akashic's comments carry over. A bar inside a name says
+which values one cell may take, as `port|0: nio-port` for a port or zero,
+while a bar at a token's edge separates alternatives. An output span named
+like an input span with a prime, as `/STRING ( s: span n -- s': span )`
+writes, is part of that span.
+
+Malformed declarations are findings: an unknown kind, a label with no kind
+after it, an `xt(` without its `)`, a `holds:` with text after its kind, a
+kind that refines an unknown kind, and a declaration whose `(` finds no `)`
+on its line. The last matters to KDOS as well, since an unclosed comment
+runs to the end of its line and hides any code after it there.
 
 ## The base vocabulary
 
 The BIOS dictionary comes from `bios.asm` itself: every entry's name and
 IMMEDIATE flag. The effects come from the word tables of MegaPad's
-`docs/BIOS-DICTIONARY.md`, where generic cells are written `a`, `b`, `c`
-and `d`. Four standard words the tables omit, `2!`, `2@`, `ON` and `CMOVE>`,
-take their ANS effects. KDOS and MegaPad's other system modules,
-`networking.f`, `rich-terminal.f`, `tools.f` and `graphics.f`, are then read
-as Forth, and each of their words takes the effect its stack comment
+`docs/BIOS-DICTIONARY.md`, in either of their forms: most tables number
+their words in a first column, and the newer ones start with the word.
+Four standard words the tables omit, `2!`, `2@`, `ON` and `CMOVE>`, take
+their ANS effects. KDOS and MegaPad's other system modules,
+`networking.f`, `rich-terminal.f`, `tools.f` and `graphics.f`, are then
+read as Forth, and each of their words takes the effect its stack comment
 declares.
+
+Those tables and comments name cells informally, so the kinds of the base
+words that take or return addresses, spans, characters and flags are
+declared in `vocabulary.py` in Uroko's form, such as
+`COMPARE ( s1: span s2: span -- n: n )` and
+`ALLOCATE ( u: u -- a: addr ior: n )`. Each keeps the shape of its given
+effect, and the checker refuses one whose shape differs.
 
 Some words have meanings that no effect can state, and the checker gives
 them exact rules: the shuffles, `PICK` and `ROLL` with a constant depth,
 the return-stack words, `I` and `J`, `?DUP`, `EXECUTE`, `CATCH` and `THROW`
-(which KDOS defines over `SP@` and `RP@`), `ABORT`, and the arithmetic and
-memory words, whose kinds follow the cells they are given.
+(which KDOS defines over `SP@` and `RP@`), `ABORT`, and the arithmetic,
+comparison and memory words, whose kinds follow the cells they are given.
 
 ## Inferring an effect
 
 A definition is analyzed when its `;` is reached, by running its body on
 stacks of abstract values. Each value has a kind, an identity, and what is
 known about it: a constant, whether it is zero or nonzero, the word an
-execution token names, and the span it belongs to. A value keeps its
+execution token names or the effect a declaration gives it, what the cell
+an address points at holds, and the span it belongs to. A value keeps its
 identity through every shuffle and through the return stack, which is how
 the checker follows kinds, spans and execution tokens, and how it records
 that an output passes an input through unchanged. Inputs appear as the body
 reaches below what it pushed, so the effect's inputs are as deep as the
-body reads.
+body reads, and an input takes the kind its declaration gives it.
 
 Control flow follows the BIOS compiler's own structure. IF, ELSE and THEN
-fork and join states. BEGIN with WHILE, REPEAT, UNTIL or AGAIN must leave
-each pass at the depth it entered with. DO and ?DO park a two-cell frame
-on the return stack: I reads the innermost index only when that frame is
-on top, as BIOS's `I` reads a fixed offset, and J reads the next index only
-when the two frames are adjacent; LEAVE, UNLOOP and EXIT must find the
-frames they remove; and a definition must end with nothing it parked. A
-counted loop with constant bounds, such as `26 0 DO DROP LOOP`, takes its
-body's effect that many times. CASE, OF, ENDOF and ENDCASE follow BIOS,
-where ENDCASE drops the selector.
+fork and join states, and a branch tells every copy of the cell it tested,
+such as the one `DUP IF` leaves, which way it went. BEGIN with WHILE,
+REPEAT, UNTIL or AGAIN must leave each pass at the depth it entered with.
+DO and ?DO park a two-cell frame on the return stack: I reads the innermost
+index only when that frame is on top, as BIOS's `I` reads a fixed offset,
+and J reads the next index only when the two frames are adjacent; LEAVE,
+UNLOOP and EXIT must find the frames they remove; and a definition must end
+with nothing it parked. A counted loop with constant bounds, such as
+`26 0 DO DROP LOOP`, takes its body's effect that many times. CASE, OF,
+ENDOF and ENDCASE follow BIOS, where ENDCASE drops the selector.
 
 States whose depths differ are kept apart rather than reported at once,
 and so are states told apart by a cell known to be zero or nonzero. `?DUP`
 splits a state in two, CATCH returns its success with a zero above the
 word's outputs and its exception with a nonzero code above restored cells,
-and a comment such as `( -- addr len true | false )` gives its callers one
+and a comment such as `( -- s: span true | false )` gives its callers one
 state for each alternative. A later IF routes each state to the branch its
 cell selects, so `?DUP IF`, `CATCH ?DUP IF THROW THEN` and a caller's
 `FETCH? IF` all infer. At the end, states of different depths form an
@@ -130,11 +214,17 @@ the result depth varies and the effect is not fixed.
 
 An execution token compiled by `[']`, made by `[:` and `;]`, or held in a
 CONSTANT names its word, so EXECUTE and CATCH take that word's effect. A
-word that runs a token it was given, such as Akashic's `WITH-GUARD`, has
-no fixed effect of its own; the checker runs its body again at each call
-site with the caller's cells, which infers every guarded wrapper from the
-word it wraps. A token read from memory names no word, and EXECUTE of it
-fails.
+token read from a typed slot, or given as an input declared `xt( ... )`,
+carries its declared effect, which EXECUTE and CATCH apply. A word that
+runs a token it was given without a declared effect, such as Akashic's
+`WITH-GUARD`, has no fixed effect of its own; the checker runs its body
+again at each call site with the caller's cells, which infers every guarded
+wrapper from the word it wraps. A definition that passes a token it was
+given to such a word runs it too, so `JSON-WITH-BUILDER`, which hands its
+token to `WITH-GUARD`, is inlined at its callers in turn, and a word may be
+inlined inside its own inlining when the tokens differ, as `WITH-GUARD`
+around `WITH-GUARD` is. A token read from untyped memory names no word, and
+EXECUTE of it fails.
 
 A word that calls CREATE or another defining word makes words of its own.
 Their effect is the effect of the part after DOES>, which runs with the new
@@ -143,9 +233,11 @@ they push their address. Recursion, through RECURSE or the definition's own
 name, takes the effect the comment declares.
 
 Callers see the inferred effect, with the comment's names and kinds where
-the two line up. When a definition cannot be inferred, callers use its
-comment, unless the definition runs an execution token it cannot follow,
-since a comment such as `( xt -- )` says nothing of what that token takes.
+the two line up; a declared kind replaces an inferred one it refines, as a
+record kind refines the address a field accessor computes. When a
+definition cannot be inferred, callers use its comment, unless the
+definition runs an execution token it cannot follow, since a comment such
+as `( xt: xt -- )` says nothing of what that token takes.
 
 ## Comparing with the comment
 
@@ -167,32 +259,38 @@ separates comments that count cells in words, such as
 
 ## Kinds
 
-Kinds start from the names Akashic's comments already use. `flag`, names
-ending in `?` and `true` are flags; `xt` and names ending in `-xt` are
-execution tokens; `addr`, `c-addr`, `buf`, `src`, `dst` and names ending in
-`-a` or `-addr` are addresses; `u`, `len`, `count`, `size` and names ending
-in `-u` or `-len` are counts; `n`, `index` and `offset` are signed numbers;
-`ior` and `status` are status codes; `ref` and `handle` are the two kinds
-release plan Part 9d is about. A name the table does not know names no
-kind. Two letters depend on their comment: `a` and `p` name an address
-beside a length or as a field accessor's lone output, and a plain cell
-elsewhere, as in `( a b -- a/b )`. A number written in the source serves
-as any plain kind.
-
-Arithmetic keeps kinds where they are clear: an address plus an offset is
-an address, two addresses subtract to a number, and anything with a cell of
-unknown kind stays unknown. A loop index takes the kind of its start value,
-so a loop over addresses yields addresses.
+Values get kinds from declarations, from the base words' declared kinds,
+and from the operations that make them: a comparison gives a flag, `C@` a
+character, `HERE` and `ALLOCATE` addresses, `S"` a span, and a typed slot
+what it holds. A number written in the source serves as any plain kind,
+since `0` is a null address as readily as a false flag, and so does a sum
+of such constants. Arithmetic keeps kinds where they are clear: an address
+plus an offset is an address, two addresses subtract to a number, a
+constant plus a number has no kind, since the constant may be an address,
+and anything with a cell of unknown kind stays unknown. A loop index takes
+the kind of its start value. An input of no declared kind takes the kind
+its first use requires, and an input stored into a typed slot takes the
+slot's kind, so a setter learns the effect of the token it stores.
 
 The checker reports a value whose kind cannot fill the slot it reaches.
 Flags and numbers mix freely, since Forth tests any nonzero cell, and an
-address may serve as a flag. The reports fall into classes of different
-strength: an execution token used as data or data used as one, a flag used
-as an address, an address used as a number or a number used as an address,
-and a managed kind meeting plain data. Two adjacent comment names that read
-as an address and a length mark a span, and a call that takes the address
-of one span with the length of another is reported; a word declared
-`( a u -- a u' )` that keeps its address returns a length of the same span.
+address may serve as a flag. The reports fall into classes: an execution
+token used as data or data used as one, a flag used as an address, an
+address used as a number or a number used as an address, two named kinds
+that differ, a task mixed with other data, and a managed kind meeting plain
+data. A token stored into a typed slot, passed as a typed input, bound to a
+deferred word by IS or returned as a declared token is compared with the
+declared effect, by its inputs and output depths and the kinds of its
+inputs, and a difference is reported.
+
+A declared span must receive the address and the length of one span. A call
+that pairs one span's address with another's length is reported, unless the
+length is known to fit the first span: on the branch where a comparison
+showed it, as `line-u prefix-u <` shows for the prefix on its false side,
+or as the MIN of two lengths, which fits both spans. That is how a prefix
+of one string is compared with another string's length. A word declared
+`( s: span -- s': span )`, or one that keeps its address as
+`( a u -- a u' )` does, returns a part of the span it was given.
 
 For managed data the checker enforces what Part 9d's rules say in terms of
 kinds: a `ref` may be read through directly (rule 1) but not written to
@@ -200,43 +298,59 @@ with `!` (rule 2), and it may not be kept in plain memory, a VALUE or the
 dictionary (rule 4); a `handle` is not an address. The rules about windows
 need words that open and close them, which do not exist yet.
 
-## What the measurement found
+## Strict placement
 
-On 2026-11-20 the checker inferred the effect of 42,842 of Akashic's
-44,468 library colon definitions, 96.3 percent, and 42,150 of those agree
-with their comments. Of the 245 that disagree, 119 have comments that count
-cells in words. The 1,626 it could not infer fail mostly because they
-execute a token the checker cannot name, usually one read from memory
-(607), because their result depth varies (237), because they use a word
-their REQUIRE closure lacks (139), or because they run a token they were
-given (183, which their callers inline). 33,575 definitions, three
-quarters of the library, have effects that rest on inference all the way
-down, with no callee that only a comment describes. Reading samples of the
-mismatches and failures found 46 real defects, from return-stack misuse to
-stack leaks on error paths, 40 of them outside the areas the first release
-leaves out; the evidence note lists them with file and line, and records
-where the checker's own rules mislead.
+Decision 32 places a word on LM1 only when the checker works out its
+effect from the code all the way down, with the base words' effects given
+and no stack comment trusted. The measurement's strict run applies that
+rule: a definition whose effect cannot be inferred gives its callers no
+effect, recursion keeps the effect it assumed only when the body's inferred
+effect confirms it, comments lend no zero or nonzero facts, and a DOES>
+part that fails gives its children none.
+
+A definition qualifies when the strict run infers it and nothing at or
+below it runs a token whose effect only a declaration states: a token read
+from a typed slot, a typed token input, or a deferred word, whose token IS
+may change at any time. The count follows the words each analysis ran, so
+storing a token, or naming a word in code no path reaches, leaves a
+definition's qualification to its own code. The strict run also reports the
+larger count that admits declared token effects, since the checker compares
+every token it sees stored into a typed slot with the slot's declaration;
+which of the two counts decides placement is open.
+
+## What the measurements found
+
+The first round inferred 96.3 percent of Akashic's 44,468 library colon
+definitions and found 46 real defects by reading samples. The second round,
+with declarations, typed slots and corrected readings of the base
+vocabulary, infers 43,149 of 44,470 (97.0 percent), and the strict run
+infers 36,509, of which 36,218 (81.4 percent) qualify for LM1. Reading kinds
+only from declarations removes the 1,370 kind and managed-data reports that
+names produced; the nine findings left come from code, and the four kind
+reports among them are real defects. A pilot declared the token slots of
+the NIO port and the KDOS TLS port, which made all but their four
+token-running helpers infer and let the checker compare all 24 callback
+stores in the library with the declarations. The evidence notes list the
+figures, the defects and where the checker misleads.
 
 ## What is not built
 
-- Syntax. No new spelling exists; the checker reads Forth and its comments.
+- Syntax beyond declarations. Words, records, quotations and tasks are
+  still written as Forth.
 - A compiler, placement on engines, a machine description, tasks, and any
   backend for LM1.
 - Windows and handles. The checker knows the kinds `ref` and `handle` and
   three of Part 9d's rules; inserting windows and handles needs the words
   that open, close, make and release them.
-- Declared kinds. Kinds come from informal names, and the measurement shows
-  that names do not carry them reliably: `cap` names a capability record in
-  one module and a capacity in another.
-- Typed slots for execution tokens. A token kept in a variable or a record
-  field has no effect the checker can see, which is the largest cause of
-  failure.
+- Records as objects. A record kind names an address of a plain-memory
+  record; a collected record, as the sketch's `concept` is, needs the
+  object side of Part 9d.
 - Kinds through loops. Each loop body runs once, plus the repeats of a
   counted loop, so a kind that changes on a later pass is not followed.
-- Records and objects named after records, such as the sketch's `concept`.
-  Names the table does not know carry no kind.
+- Offsets within spans. A length shortened by arithmetic loses its span, so
+  `a n + u n -` is not checked as part of the span `a u`.
 - Top-level evaluation beyond constants and shuffles. An `[IF]` whose
-  condition the checker cannot evaluate has both branches read (112 such
+  condition the checker cannot evaluate has both branches read (104 such
   conditions in the library).
 - POSTPONE, EVALUATE, `SP@`, `RP@` and immediate words of Akashic's own.
   Akashic defines none of the last and uses POSTPONE nowhere; definitions
@@ -247,40 +361,39 @@ where the checker's own rules mislead.
 
 ## What the prototype says about the open questions
 
-**How kinds are written.** Inference from comment names works for flags,
-execution tokens and spans, where the strong classes of report were
-usually right, but address and number names are too ambiguous to check:
-each of twelve sampled reports of an address used as a number, or the
-reverse, came from a name with two meanings, such as `cap` for a capability
-record and for a capacity, or from a field offset computed against address
-zero. Kinds the checker can enforce need declared names, with record kinds
-declared beside the records whose field accessors produce them.
+**How kinds are written.** Declared kinds work as decided: a declaration
+sits where Forth programmers already read effects, KDOS skips it, and the
+checker reports a malformed one. The pilot shows the cost of the one-line
+rule: KDOS's `(` ends with its line, so a field holding a token with a long
+effect makes a long line, up to 104 characters in the pilot. Field offsets
+are the natural place for a record's declarations in Akashic's Forth, since
+every accessor and inline use inherits them.
 
 **Spans are two cells.** Following value identity keeps a span whole
 through any shuffle, and the checker reports a call that pairs one span's
-address with another's length. Code legitimately compares a prefix of one
-span against another span's length, so the language needs a sub-span: a
-span shortened from the front or the back stays the same span.
+address with another's length. Sub-spans now model the prefix idiom; spans
+shortened by arithmetic remain to be modeled.
 
 **The return stack.** Tracking parked cells and loop frames together works
 and finds real defects: `I` read after `>R` inside a loop, `R>` run more
-often than `>R`, and LEAVE outside any DO. The checker would also report
-EXIT inside a loop without UNLOOP, which Akashic does not contain. Code
-that uses the return stack as a variable-length stack across loops, as
-YAML-INT does, has no fixed effect and would have to stay plain Forth.
+often than `>R`, and LEAVE outside any DO. Code that uses the return stack
+as a variable-length stack across loops, as YAML-INT does, has no fixed
+effect and would have to stay plain Forth.
 
-**What a word is as a value.** Execution tokens read from memory are the
-largest single cause of failure: 533 definitions EXECUTE one and 28 CATCH
-one, from vtables, callbacks and output vectors. A token stored with a
-declared effect, in a typed variable or record field, would let those
-calls be checked; words that run a token they are given already infer at
-each call site. The score-guided search design needs the same thing in
-words as values that carry each engine's compiled entry.
+**What a word is as a value.** Execution tokens the checker cannot name
+remain the largest cause of failure: 583 definitions execute one, 526 of
+them read from untyped memory, and in the strict run 4,913 more fail
+through them. Typed slots let those calls be
+checked, at a cost of one declaration per slot, and every store the
+checker sees is compared with the declaration. Words that pick one token
+from several of different effects, such as the VFS driver table, need words
+as values whose kind is a family of effects.
 
 **Errors.** CATCH and THROW check precisely when the caught word is known,
 because the exception's state differs from success by a nonzero code. A
 THROW whose code is not known to be nonzero may return, so a word that
-throws only on a path the checker cannot prove leaves two depths.
+throws only on a path the checker cannot prove leaves two depths; a branch
+on a copy of the code now proves it.
 
 **Names and case.** The no-smudge rule matters to the language: a word
 compiled to Forth cannot call an earlier word of its own name, and a later
