@@ -429,11 +429,12 @@ def test_rstack_overflow():
     """Deep recursion → R-stack overflow fault."""
     print("\n=== R-stack overflow ===")
     # Infinite recursion: : main main ;
-    # R-stack is 1024 bytes = 128 cells, so ~128 calls before overflow
-    check_fn("overflow fault",
-             _ce(": main RECURSE ; : go main ;", "go"),
-             lambda out: "2" in out,  # ITC-FAULT-STACK = 2
-             "expected fault code 2")
+    # R-stack is 1024 bytes = 128 cells, so ~128 calls before overflow.
+    # _ce drops ITC-EXECUTE's fault code; this check prints it.
+    lines = _ce(": main RECURSE ; : go main ;", "go")[:-1] + [
+        '_TRSTK 1024 ITC-EXECUTE ." fault=" .',
+    ]
+    check("overflow fault", lines, "fault=2 ")  # ITC-FAULT-STACK = 2
 
 def test_unknown_word():
     """Unknown word → compile error."""
