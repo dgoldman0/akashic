@@ -37,7 +37,7 @@ VARIABLE CSS-ABORT-ON-ERROR
 
 : CSS-FAIL  ( err-code -- )
     CSS-ERR !
-    CSS-ABORT-ON-ERROR @ IF ABORT" CSS error" THEN ;
+    CSS-ABORT-ON-ERROR @ ABORT" CSS error" ;
 
 : CSS-OK?  ( -- flag )
     CSS-ERR @ 0= ;
@@ -1216,7 +1216,7 @@ VARIABLE _CPR-SK
         THEN EXIT
     THEN
     \ unknown — skip one char
-    DROP 1 /STRING ;
+    1 /STRING ;
 
 \ CSS-NEXT-VALUE ( a u -- a' u' val-a val-u flag )
 \   Get next space-separated value from a value list.
@@ -1257,7 +1257,7 @@ VARIABLE _CET-N
     0 _CET-LA !  0 _CET-LL !
     \ parse first value
     CSS-NEXT-VALUE 0= IF
-        2DROP
+        2DROP 2DROP                  \ the empty value and the cursor
         0 0 0 0 0 0 0 0 0 EXIT
     THEN
     _CET-TL !  _CET-TA !  1 _CET-N !
