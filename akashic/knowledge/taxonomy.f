@@ -546,7 +546,7 @@ VARIABLE _TXN-AR
     \ Allot descriptor
     _TXN-AR @  _TAX-DESCSZ  ARENA-ALLOT
     DUP _TAX-DESCSZ 0 FILL
-    DUP _TAX-T1 !
+    _TAX-T1 !
     _TXN-AR @ _TAX-T1 @ TD.ARENA !
     \ Allot concept pool
     _TXN-AR @  _TAX-DEF-CONCEPTS _TAX-CONCEPT-SZ * ARENA-ALLOT

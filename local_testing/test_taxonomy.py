@@ -185,6 +185,13 @@ def test_tax_create_and_destroy():
           [': _T T-INIT  TAX-COUNT . ; _T'],
           "0 ")
 
+    # TAX-CREATE ( arena -- tx ) gives one cell, the taxonomy itself.
+    check("create takes the arena and gives the taxonomy",
+          [': _T 7 131072 A-XMEM ARENA-NEW ABORT" arena fail"',
+           '  TAX-CREATE DUP TAX-USE TAX-TX = ." same=" .',
+           '  ." below=" . ; _T'],
+          "same=-1 below=7 ")
+
 
 # ── TAX-ADD (top-level concepts) ──
 

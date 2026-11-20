@@ -569,31 +569,31 @@ VARIABLE _CL-HP-LEN
         3 OF
             \ #RGB → expand each nibble: R → RR, G → GG, B → BB
             _CL-HP-ADDR @ C@ _CL-HEXCHAR 0= IF
-                _CL-ZERO _CL-ZERO _CL-ZERO FALSE EXIT THEN
+                DROP _CL-ZERO _CL-ZERO _CL-ZERO FALSE EXIT THEN
             DUP 4 LSHIFT OR _CL-BYTE>FP16       ( r )
             _CL-HP-ADDR @ 1+ C@ _CL-HEXCHAR 0= IF
                 DROP _CL-ZERO _CL-ZERO FALSE EXIT THEN
             DUP 4 LSHIFT OR _CL-BYTE>FP16       ( r g )
             _CL-HP-ADDR @ 2 + C@ _CL-HEXCHAR 0= IF
-                2DROP _CL-ZERO FALSE EXIT THEN
+                DROP _CL-ZERO FALSE EXIT THEN
             DUP 4 LSHIFT OR _CL-BYTE>FP16       ( r g b )
             TRUE
         ENDOF
         6 OF
             \ #RRGGBB
             _CL-HP-ADDR @ _CL-PARSE-BYTE 0= IF
-                _CL-ZERO _CL-ZERO _CL-ZERO FALSE EXIT THEN
+                DROP _CL-ZERO _CL-ZERO _CL-ZERO FALSE EXIT THEN
             _CL-BYTE>FP16                        ( r )
             _CL-HP-ADDR @ 2 + _CL-PARSE-BYTE 0= IF
                 DROP _CL-ZERO _CL-ZERO FALSE EXIT THEN
             _CL-BYTE>FP16                        ( r g )
             _CL-HP-ADDR @ 4 + _CL-PARSE-BYTE 0= IF
-                2DROP _CL-ZERO FALSE EXIT THEN
+                DROP _CL-ZERO FALSE EXIT THEN
             _CL-BYTE>FP16                        ( r g b )
             TRUE
         ENDOF
-        \ Unknown length
-        _CL-ZERO _CL-ZERO _CL-ZERO FALSE
+        \ Unknown length: ENDCASE drops the length kept above the result
+        >R _CL-ZERO _CL-ZERO _CL-ZERO FALSE R>
     ENDCASE
     ;
 
