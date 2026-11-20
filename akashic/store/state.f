@@ -38,7 +38,7 @@
 \   ST-NONCE@        ( addr -- nonce )        read nonce (0 if missing)
 \   ST-APPLY-TX      ( tx -- flag )           validate + apply tx
 \   ST-VERIFY-TX     ( tx -- flag )           validate without applying
-\   ST-ROOT          ( -- addr )              compute SMT root
+\   ST-ROOT          ( -- addr flag )         compute SMT root
 \   ST-PROVE         ( addr proof buf-len -- proof-len flag )
 \   ST-VERIFY-PROOF  ( key leaf proof len root -- flag )  verify proof
 \   ST-ADDR-FROM-KEY ( pubkey addr -- )       SHA3-256 hash pubkey

@@ -303,6 +303,12 @@ def test_init():
           [': _T 8080 NODE-INIT PST-BLOCK-COUNT . ; _T'],
           "0 ")
 
+    # NODE-INIT ( port -- ) drops what its sub-systems' inits report.
+    check("NODE-INIT leaves the cells below it",
+          [': _T DEPTH >R 7 8080 NODE-INIT ." below=" .',
+           '  ." left=" DEPTH R> - . ; _T'],
+          "below=7 left=0 ")
+
 
 def test_tx_ptrs_buffer():
     """#66 P32: _NODE-TX-PTRS buffer exists and is non-zero address."""

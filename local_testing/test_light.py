@@ -280,7 +280,7 @@ def test_lc_state_leaf():
         '_ADDR1 1000 ST-CREATE DROP',
         'CREATE _LEAF 32 ALLOT',
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
-        ': _RUN-LOOP _LEAF 32 0 DO DUP I + C@ OR LOOP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _LEAF 0 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("leaf hash is non-zero", lines3, "NONZERO")
@@ -297,10 +297,14 @@ def test_lc_state_leaf_miss():
     check("unknown address returns 0", lines, "MISS")
 
 def test_lc_state_proof():
-    """LC-STATE-PROOF generates an SMT proof with variable length."""
+    """LC-STATE-PROOF generates an SMT proof with variable length.
+
+    A lone account's leaf is the root, so its proof holds no entries; the
+    second account gives the first a sibling to prove against."""
     print("\n=== LC-STATE-PROOF ===")
     lines = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
+        '_ADDR2 2000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
         '_ADDR1 _PROOF LC-STATE-PROOF .',
     ]
@@ -311,9 +315,10 @@ def test_lc_state_proof():
     # Proof buffer is non-zero (at least some siblings are populated)
     lines2 = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
+        '_ADDR2 2000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
         '_ADDR1 _PROOF LC-STATE-PROOF DROP',
-        ': _RUN-LOOP _PROOF 256 0 DO DUP I + C@ OR LOOP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _PROOF 0 256 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("proof buffer non-zero", lines2, "NONZERO")
@@ -324,9 +329,26 @@ def test_lc_state_proof_miss():
     lines = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
-        '_ADDR2 _PROOF LC-STATE-PROOF .',
+        '." len=" _ADDR2 _PROOF LC-STATE-PROOF .',
     ]
-    check("missing account returns 0", lines, " 0")
+    check("missing account returns 0", lines, "len=0 ")
+
+def test_lc_state_proof_cells():
+    """LC-STATE-PROOF ( addr proof -- len | 0 ) gives one cell either way.
+
+    Two accounts make a tree of one branch, so each account's proof holds
+    one entry, its sibling."""
+    print("\n=== LC-STATE-PROOF cells ===")
+    lines = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '_ADDR2 2000 ST-CREATE DROP',
+        'CREATE _PROOF 10240 ALLOT',
+        ': _T 7 _ADDR1 _PROOF LC-STATE-PROOF ." found=" .',
+        '  _ADDR3 _PROOF LC-STATE-PROOF ." missing=" .',
+        '  ." below=" . ; _T',
+    ]
+    check("one cell for a hit and for a miss", lines,
+          "found=1 missing=0 below=7")
 
 def test_lc_verify_state():
     """LC-VERIFY-STATE wraps SMT-VERIFY."""
@@ -342,11 +364,11 @@ def test_lc_verify_state():
         # Get leaf hash
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
         # Get current root
-        'ST-ROOT _ROOT 32 CMOVE',
+        'ST-ROOT DROP _ROOT 32 CMOVE',
         # Verify: ( key leaf proof len root -- flag )
         '_ADDR1 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE IF ." VALID" ELSE ." INVALID" THEN',
     ]
-    check("proof verifies", lines, "VALID")
+    check("proof verifies", lines, "VALID", not_expected="INVALID")
 
 def test_round_trip():
     """Full round-trip: create account, prove, verify."""
@@ -360,7 +382,7 @@ def test_round_trip():
         # Prove account 1
         '_ADDR1 _PROOF LC-STATE-PROOF _PL !',
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
-        'ST-ROOT _ROOT 32 CMOVE',
+        'ST-ROOT DROP _ROOT 32 CMOVE',
         '_ADDR1 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE IF ." RT1-OK" ELSE ." RT1-FAIL" THEN',
     ]
     check("account 1 round-trip", lines, "RT1-OK")
@@ -375,7 +397,7 @@ def test_round_trip():
         # Prove account 2
         '_ADDR2 _PROOF LC-STATE-PROOF _PL !',
         '_ADDR2 _LEAF LC-STATE-LEAF DROP',
-        'ST-ROOT _ROOT 32 CMOVE',
+        'ST-ROOT DROP _ROOT 32 CMOVE',
         '_ADDR2 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE IF ." RT2-OK" ELSE ." RT2-FAIL" THEN',
     ]
     check("account 2 round-trip", lines2, "RT2-OK")
@@ -387,13 +409,13 @@ def test_proof_changes_on_mutation():
         '_ADDR1 1000 ST-CREATE DROP',
         'CREATE _R1 32 ALLOT  CREATE _R2 32 ALLOT',
         # Root before adding second account
-        'ST-ROOT _R1 32 CMOVE',
+        'ST-ROOT DROP _R1 32 CMOVE',
         # Add second account
         '_ADDR2 2000 ST-CREATE DROP',
         # Root after
-        'ST-ROOT _R2 32 CMOVE',
+        'ST-ROOT DROP _R2 32 CMOVE',
         # Compare
-        ': _RUN-LOOP _R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _R1 _R2 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0<> IF ." CHANGED" ELSE ." SAME" THEN',
     ]
     check("root changes after mutation", lines, "CHANGED")
@@ -407,11 +429,11 @@ def test_proof_changes_on_mutation():
         # Prove under old state
         '_ADDR1 _PROOF LC-STATE-PROOF _PL !',
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
-        'ST-ROOT _ROOT1 32 CMOVE',
+        'ST-ROOT DROP _ROOT1 32 CMOVE',
         # Mutate state
         '_ADDR2 9999 ST-CREATE DROP',
         # New root
-        'ST-ROOT _ROOT2 32 CMOVE',
+        'ST-ROOT DROP _ROOT2 32 CMOVE',
         # Proof now fails against new root
         '_ADDR1 _LEAF _PROOF _PL @ _ROOT2 LC-VERIFY-STATE IF ." STILL-VALID" ELSE ." INVALID" THEN',
     ]
@@ -427,7 +449,7 @@ def test_different_proofs():
         '_ADDR1 _P1 LC-STATE-PROOF DROP',
         '_ADDR2 _P2 LC-STATE-PROOF DROP',
         # Compare proof buffers (first 256 bytes)
-        ': _RUN-LOOP _P1 _P2 256 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _P1 _P2 0 256 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0<> IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("different accounts → different proofs", lines, "DIFF")
@@ -435,13 +457,13 @@ def test_different_proofs():
 def test_lc_state_root_at():
     """LC-STATE-ROOT-AT returns the state root from a block header."""
     print("\n=== LC-STATE-ROOT-AT ===")
-    # After CHAIN-INIT, height 0 (genesis) should have a state root
+    # After CHAIN-INIT, height 0 (genesis) holds the state's root, which an
+    # account makes non-zero.
     lines = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
         'CHAIN-INIT',
-        '0 LC-STATE-ROOT-AT DUP 0<> IF',
-        '  32 0 DO DUP I + C@ OR LOOP NIP',
-        '  0<> IF ." ROOT-OK" ELSE ." ROOT-ZERO" THEN',
-        'ELSE DROP ." NO-BLOCK" THEN',
+        ': _T 0 LC-STATE-ROOT-AT ?DUP 0= IF ." NO-BLOCK" EXIT THEN',
+        '  32 ST-ROOT DROP 32 COMPARE 0= IF ." ROOT-OK" ELSE ." ROOT-OTHER" THEN ; _T',
     ]
     check("genesis state root available", lines, "ROOT-OK")
 
@@ -472,7 +494,7 @@ def test_two_account_round_trip():
         '_ADDR3 3000 ST-CREATE DROP',
         'CREATE _P 10240 ALLOT  CREATE _L 32 ALLOT  CREATE _R 32 ALLOT',
         'VARIABLE _LEN',
-        'ST-ROOT _R 32 CMOVE',
+        'ST-ROOT DROP _R 32 CMOVE',
         # Account 1
         '_ADDR1 _P LC-STATE-PROOF _LEN !',
         '_ADDR1 _L LC-STATE-LEAF DROP',
