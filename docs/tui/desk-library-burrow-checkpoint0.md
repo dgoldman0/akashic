@@ -238,6 +238,9 @@ differs from the Gate-0 fixture's 187,791-byte `5bdb9709...` pin. That host test
 is a pre-existing stale baseline in the canonical workspace. Any later
 normative amendment must preserve the old hash lineage and update the fixture
 and test explicitly; this checkpoint does not silently bless either version.
+On 2026-11-20 the Gate-0 manifest re-pinned the contract at its 200,834-byte
+version of 2026-10-12 (`8abd2789...`), recorded as the `status_reconciliation`
+amendment with `5bdb9709...` as its previous hash.
 
 ## Minimum Library cleanup
 
