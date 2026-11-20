@@ -97,7 +97,13 @@ def bios_words(megapad_root: Path) -> dict[str, BiosWord]:
 
 
 def documented_effects(path: Path) -> dict[str, str]:
-    """Stack-effect cells of the dictionary document's word tables."""
+    """Stack-effect cells of the dictionary document's word tables.
+
+    Most tables number their words in a first column, as
+    ``| 56 | `WITHIN` | `( n lo hi -- flag )` |``, and some start with the
+    word, as ``| `CALLER-SPAN-STATUS` | `( addr len -- status )` |``; the
+    effect is the cell after the word's.
+    """
     effects: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").split("\n"):
         if not line.startswith("|") or "`" not in line:
@@ -105,16 +111,15 @@ def documented_effects(path: Path) -> dict[str, str]:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         # A cell may itself hold an escaped bar, as in ( x -- x x \| 0 ).
         cells = _rejoin_escaped(cells)
-        if len(cells) < 3:
-            continue
-        match = _TABLE_WORD_RE.match(cells[1])
-        if not match:
-            continue
-        effect = cells[2].replace("\\|", "|")
-        found = re.search(r"`(\(.*?\))`", effect)
-        if not found:
-            continue
-        effects.setdefault(match.group(1).upper(), found.group(1))
+        for index in range(min(2, len(cells) - 1)):
+            match = _TABLE_WORD_RE.match(cells[index])
+            if not match:
+                continue
+            effect = cells[index + 1].replace("\\|", "|")
+            found = re.search(r"`(\(.*?\))`", effect)
+            if found:
+                effects.setdefault(match.group(1).upper(), found.group(1))
+            break
     return effects
 
 

@@ -489,6 +489,13 @@ def test_placement_excludes_words_resting_on_declared_token_effects(base_checker
     assert summary["inferred in the strict run"] == 6
 
 
+def test_bios_effects_come_from_both_forms_of_the_dictionary_tables(base_checker_state):
+    checker = check(base_checker_state, "")
+    # Numbered tables put the word second; the span tables put it first.
+    assert checker.lookup("WITHIN").signature.shape() == "3 -- 1"
+    assert checker.lookup("CALLER-SPAN-STATUS").signature.shape() == "2 -- 1"
+
+
 def test_kdos_catch_and_throw_keep_their_exact_meaning(base_checker_state):
     checker = check(base_checker_state, "")
     assert checker.lookup("CATCH").prim == "CATCH"
