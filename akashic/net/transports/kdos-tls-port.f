@@ -78,15 +78,9 @@ REQUIRE ../../utils/memory-span.f
 \ descriptor-local fixtures without replacing production words globally.
 \ Callbacks are stack-exact and non-reentrant; KDOSNET-WITH contains throws
 \ and preserves exact owner-release diagnostics around each complete call.
-\
-\ SEND-XT:      ( socket-sd buffer length record -- count )
-\ RECV-XT:      ( socket-sd buffer capacity record -- count )
-\ STATUS-XT:    ( socket-sd record -- ior )
-\ READY-XT:     ( socket-sd record -- flag )
-\ POLL-XT:      ( record -- )
-\ CLOSE-TRY-XT: ( socket-sd record -- ior )
-\ ABORT-XT:     ( socket-sd record -- abort-status ior )
-\ NOW-XT:       ( record -- monotonic-ms )
+\ Each callback field below declares, in Uroko's form, the effect of the
+\ token it holds; sd is the KDOS TLS socket descriptor.
+( kind: kdos-tls-port record )
 
   0 CONSTANT _KDOSTLSP-PORT
 NET-IO-PORT-SIZE CONSTANT _KDOSTLSP-MAGIC
@@ -99,17 +93,17 @@ _KDOSTLSP-OWNER-STATUS 8 + CONSTANT _KDOSTLSP-CLOSE-TIMEOUT
 _KDOSTLSP-CLOSE-TIMEOUT 8 + CONSTANT _KDOSTLSP-CLOSE-DEADLINE
 _KDOSTLSP-CLOSE-DEADLINE 8 + CONSTANT _KDOSTLSP-CLOSE-FALLBACKS
 _KDOSTLSP-CLOSE-FALLBACKS 8 + CONSTANT _KDOSTLSP-ABORT-STATUS
-_KDOSTLSP-ABORT-STATUS 8 + CONSTANT _KDOSTLSP-NOW-XT
-_KDOSTLSP-NOW-XT 8 + CONSTANT _KDOSTLSP-SEND-XT
-_KDOSTLSP-SEND-XT 8 + CONSTANT _KDOSTLSP-RECV-XT
-_KDOSTLSP-RECV-XT 8 + CONSTANT _KDOSTLSP-STATUS-XT
-_KDOSTLSP-STATUS-XT 8 + CONSTANT _KDOSTLSP-READY-XT
-_KDOSTLSP-READY-XT 8 + CONSTANT _KDOSTLSP-POLL-XT
-_KDOSTLSP-POLL-XT 8 + CONSTANT _KDOSTLSP-CLOSE-TRY-XT
-_KDOSTLSP-CLOSE-TRY-XT 8 + CONSTANT _KDOSTLSP-ABORT-XT
+_KDOSTLSP-ABORT-STATUS 8 + CONSTANT _KDOSTLSP-NOW-XT ( holds: xt( record -- ms: u ) )
+_KDOSTLSP-NOW-XT 8 + CONSTANT _KDOSTLSP-SEND-XT ( holds: xt( sd buf: span record -- count: n ) )
+_KDOSTLSP-SEND-XT 8 + CONSTANT _KDOSTLSP-RECV-XT ( holds: xt( sd buf: span record -- count: n ) )
+_KDOSTLSP-RECV-XT 8 + CONSTANT _KDOSTLSP-STATUS-XT ( holds: xt( sd record -- ior: n ) )
+_KDOSTLSP-STATUS-XT 8 + CONSTANT _KDOSTLSP-READY-XT ( holds: xt( sd record -- ready: flag ) )
+_KDOSTLSP-READY-XT 8 + CONSTANT _KDOSTLSP-POLL-XT ( holds: xt( record -- ) )
+_KDOSTLSP-POLL-XT 8 + CONSTANT _KDOSTLSP-CLOSE-TRY-XT ( holds: xt( sd record -- ior: n ) )
+_KDOSTLSP-CLOSE-TRY-XT 8 + CONSTANT _KDOSTLSP-ABORT-XT ( holds: xt( sd record -- abort-status ior: n ) )
 _KDOSTLSP-ABORT-XT 8 + CONSTANT KDOSTLSP-SIZE
 
-: KDOSTLSP.PORT            ( record -- port ) _KDOSTLSP-PORT + ;
+: KDOSTLSP.PORT            ( record: kdos-tls-port -- port: nio-port ) _KDOSTLSP-PORT + ;
 : KDOSTLSP.STATE           ( record -- a ) _KDOSTLSP-STATE + ;
 : KDOSTLSP.SOCKET-SD       ( record -- a ) _KDOSTLSP-SOCKET-SD + ;
 : KDOSTLSP.LAST-ERROR      ( record -- a ) _KDOSTLSP-LAST-ERROR + ;
@@ -207,7 +201,7 @@ _KDOSTLSP-ABORT-XT 8 + CONSTANT KDOSTLSP-SIZE
 
 \ The scratch below is protected by a per-call KDOSNET claim.  No scratch
 \ value is authority and no callback may rely on it after returning.
-VARIABLE _KDOSTLSP-R
+VARIABLE _KDOSTLSP-R ( holds: kdos-tls-port )
 VARIABLE _KDOSTLSP-B
 VARIABLE _KDOSTLSP-U
 VARIABLE _KDOSTLSP-N
@@ -373,13 +367,13 @@ VARIABLE _KDOSTLSP-RELEASE-STATUS
 \ The installer is intentionally shared by initialization and post-XIO
 \ adoption, while the callback bodies appear later in source.  These private
 \ deferred entries are bound before the module can be used.
-DEFER _KDOSTLSP-NIO-SEND
-DEFER _KDOSTLSP-NIO-RECV
-DEFER _KDOSTLSP-NIO-POLL
-DEFER _KDOSTLSP-NIO-CLOSE
-DEFER _KDOSTLSP-NIO-CLOSE-START
-DEFER _KDOSTLSP-NIO-CLOSE-POLL
-DEFER _KDOSTLSP-NIO-CANCEL
+DEFER _KDOSTLSP-NIO-SEND ( buf: span record -- count: u status: nio-status )
+DEFER _KDOSTLSP-NIO-RECV ( buf: span record -- count: u status: nio-status )
+DEFER _KDOSTLSP-NIO-POLL ( record -- )
+DEFER _KDOSTLSP-NIO-CLOSE ( record -- )
+DEFER _KDOSTLSP-NIO-CLOSE-START ( record -- status: nio-status )
+DEFER _KDOSTLSP-NIO-CLOSE-POLL ( record -- status: nio-status )
+DEFER _KDOSTLSP-NIO-CANCEL ( record -- )
 
 : _KDOSTLSP-BIND-ESTABLISHED  ( record -- )
     DUP OVER KDOSTLSP.PORT NIO.CONTEXT !
@@ -398,7 +392,7 @@ DEFER _KDOSTLSP-NIO-CANCEL
     DUP KDOSTLSP.PORT NIO-INIT
     _KDOSTLSP-BIND-ESTABLISHED ;
 
-: KDOSTLSP-INIT  ( record -- status )
+: KDOSTLSP-INIT  ( record: kdos-tls-port -- status: n )
     _KDOSTLSP-IN-CALL @ IF DROP KDOSTLSP-S-BUSY EXIT THEN
     COREID 0<> IF DROP KDOSTLSP-S-PLATFORM EXIT THEN
     DUP 0= IF DROP KDOSTLSP-S-INVALID EXIT THEN
@@ -458,7 +452,7 @@ DEFER _KDOSTLSP-NIO-CANCEL
 VARIABLE _KDOSTLSP-STAGE-SD
 VARIABLE _KDOSTLSP-STAGE-R
 
-: KDOSTLSP-PUBLISH  ( socket-sd record -- status )
+: KDOSTLSP-PUBLISH  ( socket-sd record: kdos-tls-port -- status: n )
     _KDOSTLSP-IN-CALL @ IF 2DROP KDOSTLSP-S-BUSY EXIT THEN
     _KDOSTLSP-STAGE-R ! _KDOSTLSP-STAGE-SD !
     COREID 0<> IF KDOSTLSP-S-PLATFORM EXIT THEN
@@ -524,7 +518,7 @@ VARIABLE _KDOSTLSP-ACTIVATE-R
     _KDOSTLSP-ACTIVATE-R @ _KDOSTLSP-BIND-ESTABLISHED
     KDOSTLSP-S-OK ;
 
-: KDOSTLSP-ADOPT-OPEN  ( record -- port|0 status )
+: KDOSTLSP-ADOPT-OPEN  ( record: kdos-tls-port -- port|0: nio-port status: n )
     _KDOSTLSP-IN-CALL @ IF DROP 0 KDOSTLSP-S-PENDING EXIT THEN
     DUP _KDOSTLSP-ACTIVATE-R ! KDOSTLSP-ACTIVATE
     DUP KDOSTLSP-S-OK <> IF 0 SWAP EXIT THEN DROP
