@@ -245,6 +245,20 @@ With `--linked` each of the three options adds its part, so
 other profile builds as it did, linked or from plain source, and takes the
 three options when they are given.
 
+Two checks of Desk with one applet fail in the shipping form and pass with
+`--linked`: `--applet daybook` and `--applet agent`. Each boot seeds its
+applet's records through the activation's home, which in the linked form is
+the applet's home as well. In the shipping form an applet's home is a folder
+named by its id under the records place, so Daybook's reminders and the
+Agent's long conversation land outside the folders those applets read, and
+the Agent's check waits for a transcript that never shows. Daybook's check
+also expects entries on its first day, which the linked form's Daybook reads
+from the sample `daybook.md` in its home, while the shipping form keeps that
+sample in Documents. Both checks fail the same way on a build of the
+previous main in the shipping form, so they predate its becoming the
+default; run them with `--linked` until their seeds write into the applet's
+home.
+
 ```bash
 export AKASHIC_E2FSPROGS_TOOL_DIR=~/.cache/fantasy-engine/e2fsprogs-1.47.4/sbin
 python3 local_testing/akashic_tui.py build --profile desktop-apt1 --backend simulator

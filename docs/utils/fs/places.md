@@ -455,9 +455,11 @@ every file under `akashic/` to it.
    own remount and the host tools' recovery, then `e2fsck`. One killed run
    of the whole Desk in the shipping form, through its interface, comes
    before the release (Decided, 2026-11-19) and is still to do.
-9. Both journeys, linked and shipping form, the shipping form with the
-   user volume. Once both pass, the shipping form with the user volume
-   becomes the builder's default (Decided, 2026-11-18).
+9. Done: both journeys, linked and shipping form, the shipping form with
+   the user volume. Once both passed, the shipping form with the user
+   volume became the builder's default (Decided, 2026-11-18): the rich
+   Desktop and Desk with one applet build it unless `--linked` asks for
+   the linked form.
 
 Slices 2, 5, 6 and 7 change files the ext4 tests read. Those tests run on
 MegaPad's simulator, so each of these slices runs them whole and ends
@@ -467,10 +469,10 @@ emulator or the simulator").
 
 ## Status
 
-Slices 1 to 8 are in the tree, and so is the recovery that comes before
-slice 9. The linked build declares one place and
-everything below runs on it; a build with `--user-volume` declares the
-shipping form's places.
+Slices 1 to 9 are in the tree, and so is the recovery that came before
+slice 9. The linked form declares one place and everything below runs on
+it; the shipping form, which the rich Desktop and Desk with one applet
+build by default, declares the user volume's places.
 
 - `utils/fs/place-name.f` and `utils/fs/places.f`, tested by
   `local_testing/test_places.py` on two RAM volumes.
@@ -558,7 +560,9 @@ shipping form's places.
   on every launch path, and declares the shipping form's places: `system`,
   read-only over the root of the volume that holds the shipped files and
   required, as origin; `documents` over `/documents`; and `records` over
-  `/records`, the home. The sample documents ship in `/documents`.
+  `/records`, the home. Every sample the image carries ships in
+  `/documents`, and the boot volume holds none; the profile's resources and
+  the files it ships for its own code stand on the origin.
 - The set marks a third role, the documents place (`PLSET-DOCUMENTS!`),
   which composition declares: the one place in the linked build,
   `documents` with `--user-volume`, and the test sets'
@@ -649,6 +653,10 @@ shipping form's places.
   generation pair now reads an unreadable first slot beside a second one
   never written as a store with nothing saved (Decided, 2026-11-20;
   [generation-pair.md](../generation-pair.md)).
+- The four ext4 files ran whole on the emulator after slice 8, as the
+  order of work asks: the test tool's run 20261120-134359.285-2d83 passed
+  all four in 7,765 s, with a peak of 4,797 MiB, on Akashic 75dfbc81 and
+  MegaPad 60526b21.
 - Recovery, the step before slice 9. When the activation finds no usable
   home or no valid Practice head, Desk composes its stores and applets over
   the places the activation narrowed to read-only, and each store that
@@ -663,6 +671,26 @@ shipping form's places.
   whose home holds no Practice head, and `local_testing/test_app_catalog.py`,
   which no test ran before it gained a pytest entry, checks the catalog over
   a read-only place.
+- Both journeys (slice 9). The canonical physical Desktop journey passes in
+  the shipping form with the user volume, in 129 s with its build, and in
+  the linked form, in 146 s (2026-11-20, Akashic 3cf38082, MegaPad
+  60526b21). It learns its form from the driver, as the journeys of Desk
+  with File Explorer and Desk with Pad do, and does its work with files in
+  the documents place, where File Explorer opens and where a build with the
+  user volume puts every sample; the boot volume of such a build holds
+  none. The documents place holds the image's samples and thirty sample
+  documents, 41 files, so the journey's wheel step over File Explorer's
+  table of 35 rows has rows to turn. Afterwards the driver finds the renamed
+  fixture holding the large sample's bytes and nothing at its old name.
+  The builder's default for the rich Desktop and Desk with one applet is
+  now the shipping form with the user volume, and `--linked` builds the
+  linked form (`local_testing/README.md`). In the shipping form the checks
+  of Desk with File Explorer, Pad, Streams, Sound Lab, Observatory and
+  Worlds, the small terminal, the photograph and the damaged picture pass.
+  Those of Desk with Daybook and Desk with the Agent fail there, as they do
+  on a build of main 75dfbc81 in that form, and pass in the linked form:
+  their boots seed the applet's records through the activation's home
+  rather than the applet's own folder (Open, below).
 
 ## Open
 
@@ -671,6 +699,14 @@ shipping form's places.
 - Explicit-parent VFS words in place of the current-directory bracket.
 - The user volume's two places, documents and records, are the layout for
   now and may change.
+- The boots of the Daybook and Agent checks seed their applet's records
+  through the activation's home, in the shipping form the records place's
+  root, while each applet reads the folder named by its id under it.
+  Daybook's check also expects the sample day that the linked form's
+  Daybook reads in its home, and which the shipping form keeps among the
+  documents. For both to pass in the shipping form, the seeds need the
+  applet's home (`PACT-STORE-PLACES`), and Daybook's sample a place among
+  its records.
 - The ext4 writer makes one journal transaction for each write call, about
   0.2 s on the user volume, so a Streams or Library commit of 12 pages takes
   2.9 s whatever the transaction size
