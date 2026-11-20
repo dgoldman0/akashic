@@ -855,6 +855,14 @@ def _reaches_itself(word: Word) -> bool:
     return False
 
 
+def _learn_fact(state: State, ident, fact: int) -> None:
+    """Every copy of a value a branch tested learns which way it went."""
+    for stack in (state.items, state.r):
+        for index, value in enumerate(stack):
+            if isinstance(value, Value) and value.ident == ident and value.fact != fact:
+                stack[index] = value.with_fact(fact)
+
+
 def _learn_bounds(state: State, relations: frozenset) -> None:
     """After a branch, a length compared with a span's length bounds it.
 
@@ -1153,6 +1161,10 @@ class Analysis:
                 other = state.copy()
                 _learn_bounds(state, flag.rel_true)
                 _learn_bounds(other, flag.rel_false)
+                # Copies of the tested cell, as DUP IF leaves one, are the
+                # same value: nonzero on the true branch, zero on the false.
+                _learn_fact(state, flag.ident, E.NONZERO)
+                _learn_fact(other, flag.ident, E.ZERO)
                 true_states.append(state)
                 false_states.append(other)
         return true_states, false_states

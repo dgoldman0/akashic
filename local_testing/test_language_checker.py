@@ -182,6 +182,15 @@ def test_control_flow_and_unbalanced_branches(base_checker_state):
     assert record(checker, "NAME-OF").failure.category == "result depth varies"
 
 
+def test_a_branch_teaches_copies_of_the_cell_it_tested(base_checker_state):
+    checker = check(base_checker_state, (
+        ": RETHROW  ( ior -- )  DUP IF THROW THEN DROP ;\n"
+    ))
+    # In the true branch the cell left under the tested copy is nonzero, so
+    # THROW never returns there.
+    assert record(checker, "RETHROW").comparison == "match"
+
+
 def test_a_constant_count_fixes_a_loop_that_changes_depth(base_checker_state):
     checker = check(base_checker_state, (
         ": DROP3  ( a b c -- )  3 0 DO DROP LOOP ;\n"
