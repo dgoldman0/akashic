@@ -3,7 +3,7 @@
 \ WebSocket protocol for real-time bidirectional communication.
 \ Uses HTTP for the upgrade handshake, then switches to framed mode.
 \
-\ REQUIRE http.f
+\ REQUIRE http.f base64.f
 \
 \ Prefix: WS-   (public API)
 \         _WS-  (internal helpers)
@@ -11,6 +11,7 @@
 \ Load with:   REQUIRE ws.f
 
 REQUIRE http.f
+REQUIRE base64.f
 
 PROVIDED akashic-websocket
 
