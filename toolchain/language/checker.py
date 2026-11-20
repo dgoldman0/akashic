@@ -205,6 +205,8 @@ class Pending:
     outer: "Pending | None" = None
     quotation: bool = False
     header_lines: list = field(default_factory=list)
+    header_parens: list = field(default_factory=list)
+    header_done: bool = False
 
 
 class Checker:
@@ -235,6 +237,7 @@ class Checker:
         self.inlining: list[Word] = []
         # When a list, each analyzed step appends (line, op, word, depths).
         self.trace: list | None = None
+        self.defined_here: dict[str, Word] | None = None
 
     # ------------------------------------------------------------------
     # Loading
@@ -279,7 +282,26 @@ class Checker:
         key = word.name.upper()
         word.hides = self.words.get(key)
         self.words[key] = word
+        if self.defined_here is not None:
+            self.defined_here[key] = word
         return word
+
+    def begin_module(self, visible: dict[str, Word], group: str) -> dict[str, Word]:
+        """Start a module whose dictionary holds exactly what ``visible`` holds.
+
+        The measurement checks each module against the base vocabulary and
+        the modules its REQUIRE lines load, as an image would hold them.
+        The returned map collects the words the module defines.
+        """
+        self.words = visible
+        self.defined_here = {}
+        self.group = group
+        self.top.clear()
+        self.base = 10
+        self.skipping = False
+        self.cond_frames.clear()
+        self.pending = None
+        return self.defined_here
 
     def lookup(self, name: str) -> Word | None:
         return self.words.get(name.upper())
@@ -315,7 +337,7 @@ class Checker:
         ``: NAME`` followed by ``\\ ( a b`` and ``\\   -- c )`` declares the
         effect across two comment lines, which the paren rule cannot.
         """
-        if pending.word.declared_text is not None:
+        if pending.header_done:
             return
         stripped = text.strip()
         if not pending.header_lines and not stripped.startswith("("):
@@ -332,6 +354,7 @@ class Checker:
         if "--" in inner.split():
             self._set_declared(pending.word, inner)
             pending.word.declared_reason = pending.word.declared_reason or "comment in backslash lines"
+            pending.header_done = True
         pending.header_lines.clear()
 
     def _note_preceding(self, text: str) -> None:
@@ -440,8 +463,14 @@ class Checker:
         line = self.line
         if token == "(":
             text = cursor.paren()
-            if pending.header_open and pending.word.declared_text is None:
-                self._set_declared(pending.word, text)
+            if pending.header_open and not pending.header_done:
+                # A long effect may run over several paren groups:
+                # "( verb-a verb-u )" then "( xt router -- status )".
+                pending.header_parens.append(text)
+                joined = " ".join(pending.header_parens)
+                self._set_declared(pending.word, joined)
+                if "--" in joined.split():
+                    pending.header_done = True
             elif pending.after_does and pending.does_comment is None:
                 pending.does_comment = text
             return
@@ -489,7 +518,6 @@ class Checker:
         assert pending is not None
         word = pending.word
         word.items = pending.items
-        word.compiling = False
         word.end_line = self.line
         self.pending = pending.outer
         if word.declared_text is None and word.declared_reason is None:
@@ -506,7 +534,10 @@ class Checker:
         )
         record.hides_older = word.hides is not None and record.self_named
         self.records.append(record)
+        # The word stays "compiling" while it is analyzed, so a call to its
+        # own name, or RECURSE, takes the effect its comment declares.
         self._analyze_definition(word, pending, record)
+        word.compiling = False
         return word
 
     # ------------------------------------------------------------------
@@ -538,7 +569,8 @@ class Checker:
             word.signature_source = "inferred"
             if record.comparison in ("match", "match with pass-through") and word.declared:
                 analysis.check_output_kinds(inferred, word.declared)
-        elif word.declared is not None and not word.declared.variable and not word.higher_order:
+        elif (word.declared is not None and not word.declared.variable and not word.higher_order
+              and not _runs_what_it_is_given(word)):
             word.signature = word.declared
             word.signature_source = "declared"
         # Defining words: what the words they make do when run.
@@ -600,6 +632,19 @@ class Checker:
 
 # BIOS words that keep whatever cell they are given.
 _STORES_ANY_CELL = {"CONSTANT", "VALUE", ",", "LITERAL", "TO"}
+
+
+def _runs_what_it_is_given(word: Word) -> bool:
+    """A word that takes an xt and runs one the checker cannot follow.
+
+    Its comment, such as ``( xt -- )``, says nothing of what that xt takes
+    and leaves, so callers cannot rely on it.
+    """
+    failure = word.failure
+    if failure is None or failure.category not in ("EXECUTE of an unknown xt",
+                                                   "CATCH of an unknown xt"):
+        return False
+    return any(slot.kind == E.XT for slot in word.declared.inputs)
 
 
 def _generic_letters(effect: Effect | None, any_cell: bool = False) -> Effect | None:
@@ -759,12 +804,17 @@ class Analysis:
         exits = self.run(items, [entry])
         return self.summarize(exits)
 
-    def run(self, items: list, entry: list[State]) -> list[State]:
+    def run(self, items: list, entry: list[State], segment: bool = False) -> list[State]:
+        """Run ``items`` from ``entry`` and return the states that leave them.
+
+        A segment is a loop body run again for a counted loop; it ends with
+        its loop frame still parked, so the end-of-definition checks skip it.
+        """
         current = entry
         control: list = []
         exits: list[State] = []
         trace = self.checker.trace if self.parent is None else None
-        for op, arg, line in items:
+        for index, (op, arg, line) in enumerate(items):
             self.line = line
             if trace is not None:
                 trace.append((line, op, getattr(arg, "name", arg),
@@ -775,7 +825,7 @@ class Analysis:
                 for state in current:
                     state.items.append(literal(arg))
             elif op == "ctl":
-                current = self.control(arg, current, control, exits)
+                current = self.control(arg, current, control, exits, items, index)
             elif op == "xt":
                 for state in current:
                     state.items.append(Value(E.XT, xt=arg, origin=f"['] {arg.name}",
@@ -808,6 +858,10 @@ class Analysis:
                 break
         if control:
             raise self.fail("unbalanced control structure", str(control[-1][0]))
+        if segment:
+            if exits:
+                raise self.fail("loop changes the stack depth", "EXIT inside a counted loop")
+            return current
         for state in current:
             self.check_return_stack(state, "the end of the definition")
         exits.extend(current)
@@ -857,7 +911,8 @@ class Analysis:
                 raise self.fail("loop changes the return stack depth", what)
             raise self.fail("loop changes the stack depth", what)
 
-    def control(self, word: str, current: list[State], control: list, exits: list[State]):
+    def control(self, word: str, current: list[State], control: list, exits: list[State],
+                items: list | None = None, index: int = 0):
         if word == "IF":
             true_states, false_states = self.branch(current)
             control.append(("orig", false_states))
@@ -894,22 +949,38 @@ class Analysis:
             return states
         if word in ("DO", "?DO"):
             entered, skipped = [], []
+            trips = set()
             for state in current:
                 start = self.pop(state)
-                self.pop(state)
+                limit = self.pop(state)
+                if start.const is not None and limit.const is not None:
+                    trips.add(limit.const - start.const)
+                else:
+                    trips.add(None)
                 if word == "?DO":
                     skipped.append(state.copy())
                 state.r.append(LoopFrame(start))
                 entered.append(state)
-            control.append(("do", [s.copy() for s in entered], [], skipped))
+            # A constant count, as in "26 0 DO DROP LOOP", fixes the effect
+            # of a body that changes the depth on each pass.
+            trip = trips.pop() if len(trips) == 1 else None
+            control.append(("do", [s.copy() for s in entered], [], skipped, trip, index + 1))
             return entered
         if word in ("LOOP", "+LOOP"):
             if word == "+LOOP":
                 for state in current:
                     self.pop(state)
             frame = self._pop_control(control, "do", word)
-            _, head, leaves, skipped = frame
-            self.back_edge(current, head, "DO ... LOOP")
+            _, head, leaves, skipped, trip, body_start = frame
+            try:
+                self.back_edge(current, head, "DO ... LOOP")
+            except Fail:
+                if (word != "LOOP" or trip is None or trip < 1 or leaves or skipped
+                        or items is None):
+                    raise
+                body = items[body_start:index]
+                for _ in range(trip - 1):
+                    current = self.merge(self.run(body, current, segment=True))
             for state in current:
                 self._unloop(state, word)
             return self.merge(current + leaves + skipped)
@@ -1112,6 +1183,13 @@ class Analysis:
         for index, alt in enumerate(effect.alts):
             target = state if index == len(effect.alts) - 1 else state.copy()
             spans: dict[int, int] = {}
+            # "( a u -- a u' )" keeps the address and shortens the length: the
+            # new length belongs to the span the address came from.
+            for slot in alt:
+                if slot.span is not None and slot.passthrough is not None:
+                    kept = args[-slot.passthrough]
+                    if kept.span is not None:
+                        spans.setdefault(slot.span, kept.span)
             for position, slot in enumerate(alt):
                 if slot.passthrough is not None:
                     target.items.append(args[-slot.passthrough])

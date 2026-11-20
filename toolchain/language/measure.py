@@ -18,6 +18,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +30,21 @@ from .effects import Effect
 BASE_MODULES = ("kdos.f", "networking.f", "rich-terminal.f", "tools.f", "graphics.f")
 PROPAGATED = "calls a word whose effect is unknown"
 
+# Comments such as "( eight-values -- )" count cells in words, so they
+# cannot match cell for cell however right they are.
+_PROSE_RE = re.compile(
+    r"(?<![a-z])(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|twenty|values|arguments|args|same|twice|"
+    r"fields|results|cells)(?![a-z])"
+)
+
+
+def mismatch_kind(record: Record) -> str:
+    text = (record.word.declared_text or "").lower()
+    if _PROSE_RE.search(text):
+        return "comment counts cells in words"
+    return "other"
+
 
 def tracked_forth(root: Path, pattern: str) -> list[str]:
     listed = subprocess.run(
@@ -38,56 +54,112 @@ def tracked_forth(root: Path, pattern: str) -> list[str]:
     return sorted(name for name in listed.split("\0") if name.endswith(".f"))
 
 
-def _normalizer(root: Path):
-    """KDOS's REQUIRE path rule, from the dependency tool the harness uses."""
+def _dependency_markers(root: Path):
+    """KDOS's REQUIRE rule, from the dependency tool the harness uses."""
     sys.path.insert(0, str(root / "local_testing"))
     try:
-        from forth_dependencies import normalize_module  # type: ignore
+        from forth_dependencies import dependency_markers  # type: ignore
     finally:
         sys.path.pop(0)
-    return normalize_module
+    return dependency_markers
+
+
+class Modules:
+    """Each module's REQUIRE closure, in the order KDOS would load it.
+
+    KDOS loads a module's REQUIREs where they appear, depth first, and
+    loads each module once, so a module's dictionary holds the base
+    vocabulary, then its closure in that order, then its own words.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.markers = _dependency_markers(root)
+        self.texts: dict[str, str | None] = {}
+        self.orders: dict[str, tuple[str, ...]] = {}
+        self.missing: list[tuple[str, str]] = []
+
+    def text(self, module: str) -> str | None:
+        if module not in self.texts:
+            path = self.root / module
+            self.texts[module] = (path.read_text(encoding="utf-8", errors="replace")
+                                  if path.is_file() else None)
+        return self.texts[module]
+
+    def requires(self, module: str) -> list[str]:
+        text = self.text(module)
+        if text is None:
+            return []
+        found = []
+        try:
+            markers = self.markers(text, module)
+        except ValueError:
+            return []
+        for marker in markers:
+            if self.text(marker.normalized) is None:
+                self.missing.append((marker.normalized, module))
+                continue
+            found.append(marker.normalized)
+        return found
+
+    def order(self, module: str, visiting: frozenset = frozenset()) -> tuple[str, ...]:
+        """The modules loaded before ``module``'s own text, in load order."""
+        if module in self.orders:
+            return self.orders[module]
+        result: list[str] = []
+        seen: set[str] = set()
+        for dependency in self.requires(module):
+            if dependency in visiting or dependency == module:
+                continue  # a cycle: KDOS's PROVIDED guard stops it
+            for item in self.order(dependency, visiting | {module}) + (dependency,):
+                if item not in seen and item != module:
+                    seen.add(item)
+                    result.append(item)
+        self.orders[module] = tuple(result)
+        return self.orders[module]
 
 
 def build(root: Path, megapad: Path, defines: list[str], groups: list[str]) -> Checker:
     checker = Checker()
     checker.load_bios(megapad)
     checker.load_base(megapad, BASE_MODULES)
-    normalize = _normalizer(root)
-    loaded: set[str] = set()
-    missing: list[tuple[str, str]] = []
-
-    def load(module: str) -> None:
-        if module in loaded:
-            return
-        loaded.add(module)
-        path = root / module
-        if not path.is_file():
-            missing.append((module, checker.module))
-            return
-        checker.load_text(path.read_text(encoding="utf-8", errors="replace"), module)
-
-    def require(name: str, requiring: str) -> None:
-        try:
-            module = normalize(name, requiring)
-        except ValueError:
-            missing.append((name, requiring))
-            return
-        load(module)
-
-    checker.require = require
-    checker.missing = missing  # type: ignore[attr-defined]
     for text in defines:
         checker.load_text(text, "(defines)")
+    base_words = dict(checker.words)
+    modules = Modules(root)
+    exports: dict[str, dict] = {}
+
+    def load(module: str, group: str) -> None:
+        if module in exports:
+            return
+        exports[module] = {}  # a placeholder that breaks REQUIRE cycles
+        order = modules.order(module)
+        for dependency in order:
+            load(dependency, group)
+        visible = dict(base_words)
+        for dependency in order:
+            visible.update(exports.get(dependency, {}))
+        text = modules.text(module)
+        defined = checker.begin_module(visible, group_of(module, group))
+        if text is not None:
+            checker.load_text(text, module)
+        exports[module] = defined
+
+    checker.missing = modules.missing  # type: ignore[attr-defined]
     patterns = {
         "library": ["akashic/*.f"],
         "tests": ["local_testing/*.f", "examples/*.f"],
     }
     for group in groups:
-        checker.group = group
         for pattern in patterns[group]:
             for module in tracked_forth(root, pattern):
-                load(module)
+                load(module, group)
     return checker
+
+
+def group_of(module: str, requested: str) -> str:
+    """Library modules count as library wherever they are first reached."""
+    return "library" if module.startswith("akashic/") else requested
 
 
 def effect_text(effect: Effect | None) -> str:
@@ -146,14 +218,15 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
                                 "deferred word without a declared effect"):
             detail_counts[failure.category][failure.detail.split(" (through")[0]] += 1
     mismatches = [r for r in inferred if r.comparison == "mismatch"]
+    mismatch_kinds = collections.Counter(mismatch_kind(r) for r in mismatches)
     mismatch_examples = [
         {
-            **_where(r, r.word.line, ""),
+            **_where(r, r.word.line, mismatch_kind(r)),
             "comment": f"( {r.word.declared_text} )",
             "inferred": effect_text(r.word.inferred),
         }
-        for r in mismatches[: examples * 4]
-    ]
+        for r in mismatches if mismatch_kind(r) == "other"
+    ][: examples * 4]
     findings = collections.Counter()
     finding_examples: dict[str, list] = collections.defaultdict(list)
     for record in records:
@@ -181,6 +254,7 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
         "with a stack comment": commented,
         "comment on a preceding line": preceding,
         "comparison of inferred effects": dict(comparison.most_common()),
+        "mismatches by comment form": dict(mismatch_kinds.most_common()),
         "comments of failed definitions": dict(declared_only.most_common()),
         "inferred relying on a comment-only callee": relying,
         "failure categories": dict(direct.most_common()),
@@ -214,7 +288,10 @@ def sample(checker: Checker, root: Path, group: str, category: str, count: int,
             continue
         failure = record.failure.category if record.failure else None
         kinds = {f.category for f in record.findings}
-        if category in (record.comparison, failure) or category in kinds:
+        if category == "mismatch other":
+            if record.comparison == "mismatch" and mismatch_kind(record) == "other":
+                chosen.append(record)
+        elif category in (record.comparison, failure) or category in kinds:
             chosen.append(record)
     picked = random.Random(seed).sample(chosen, min(count, len(chosen)))
     out = [f"{category}: {len(chosen)} definitions, {len(picked)} sampled (seed {seed})"]

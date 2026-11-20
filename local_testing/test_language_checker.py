@@ -154,6 +154,17 @@ def test_control_flow_and_unbalanced_branches(base_checker_state):
     assert record(checker, "NAME-OF").failure.category == "result depth varies"
 
 
+def test_a_constant_count_fixes_a_loop_that_changes_depth(base_checker_state):
+    checker = check(base_checker_state, (
+        ": DROP3  ( a b c -- )  3 0 DO DROP LOOP ;\n"
+        ": PUSH2  ( -- i0 i1 )  2 0 DO I LOOP ;\n"
+        ": UNKNOWN  ( ... n -- )  0 DO DROP LOOP ;\n"
+    ))
+    assert record(checker, "DROP3").comparison == "match"
+    assert record(checker, "PUSH2").comparison == "match"
+    assert record(checker, "UNKNOWN").failure.category == "loop changes the stack depth"
+
+
 def test_alternatives_are_routed_by_the_callers_if(base_checker_state):
     checker = check(base_checker_state, (
         ": FETCH?  ( key -- addr len true | false )  DUP IF 3 -1 ELSE DROP 0 THEN ;\n"
