@@ -55,14 +55,21 @@ arena, the volume and the unit, so a later call can try again. A volume
 ## The volume's format
 
 The image builder writes the user volume beside the boot image as
-`<image>-user.img` with `--user-volume`, in the format the staged writer
-takes: the pinned ext4 profile's features, 1 KiB blocks, 256-byte inodes,
-one inode for each 16 KiB of a full block group, and at least two groups.
-`--user-volume-mib` sets its size, 64 MiB by default and a whole number of
-at least 16. The volume holds the folders of the shipping form's places,
-`/documents` and `/records`, and the sample documents in `/documents`. Its
-identity follows from its size and content, and the build checks it with the
-pinned `e2fsck`. `local_testing/README.md` describes the option.
+`<image>-user.img` with `--user-volume`, which is part of the shipping form
+the rich Desktop and Desk with one applet build by default. It is in the
+format the staged writer takes: the pinned ext4 profile's features, 1 KiB
+blocks, 256-byte inodes, one inode for each 16 KiB of a full block group,
+and at least two groups. `--user-volume-mib` sets its size, 64 MiB by
+default and a whole number of at least 16. The volume holds the folders of
+the shipping form's places, `/documents` and `/records`, and in `/documents`
+every sample the image carries, the files a person works with: the text
+samples with `large.txt` among them, the sample picture, document and PDFs
+where File Explorer is composed, a check's own picture, and on a Desktop the
+notes and lists of `local_testing/sample_documents.py`. The boot volume then
+holds none of them, and the origin keeps the modules, the resources and the
+applets' configuration. The volume's identity follows from its size and
+content, and the build checks it with the pinned `e2fsck`.
+`local_testing/README.md` describes the option.
 
 ## The places composition declares on it
 

@@ -120,8 +120,10 @@ DAYBOOK_SHARED_SOURCE_MARKER = "# Daybook"
 FEXPLORER_TASKBAR_BUTTON = "[2:File Explo"
 # The pointer journey scrolls File Explorer's detail table, selects this
 # file's row, and opens it in Pad through item events, and then scrolls,
-# places the caret, and selects in Pad with the mouse alone.  The canonical Desktop image carries the 48-line fixture,
-# which is longer than Pad's viewport and sorts below the list's third row.
+# places the caret, and selects in Pad with the mouse alone.  The canonical
+# Desktop image carries the 48-line fixture in the list File Explorer opens
+# on: the boot volume's root, or with the user volume the documents place.
+# It is longer than Pad's viewport and sorts below the list's third row.
 # Loading text puts the caret at its end, so the preview and Pad both open
 # showing the fixture's last lines.
 POINTER_LIST_FILE = "large.txt"
@@ -145,6 +147,24 @@ RENAME_REPLACEMENT = "notes"
 RENAMED_FILE = f"{RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
 RENAMED_PATH = "/" + RENAMED_FILE
 RENAMED_NOTICE = "Renamed"
+# With the user volume the build declares the shipping form's places
+# (akashic_tui.USER_VOLUME_DOCUMENTS, USER_VOLUME_RECORDS and
+# USER_VOLUME_ORIGIN).  File Explorer's and Pad's sets hold them in this
+# order, by label: the documents place, the one they write, then the records
+# place and the origin, which they read.  File Explorer opens in the first,
+# where the image keeps its samples, and its status bar then names a path
+# after the label of the place that holds it; with the linked build's one
+# place it names the path alone.
+USER_VOLUME_PLACE_LABELS = ("Documents", "Records", "System")
+# What the journey leaves on the user volume, which
+# physical_desktop_acceptance.py checks on the host once a run with it has
+# passed, in the form of rich_terminal_applet_journeys.USER_VOLUME_FILES:
+# the renamed fixture in the documents place, holding the large sample's
+# bytes, since no stage saves it, and nothing at its old name.
+DESKTOP_USER_VOLUME_FILES = {
+    RENAMED_FILE: ("document", POINTER_LIST_FILE),
+    POINTER_LIST_FILE: None,
+}
 # Delete then asks before deleting the renamed file: a confirm question that
 # offers Delete, destructive, beside Cancel, the default.  Desk keeps running
 # while it waits: Alt+1 focuses Pad, Alt+2 brings File Explorer back with its
@@ -166,10 +186,10 @@ CELL_FINAL_STATIC_MARKERS = (
 SOUNDLAB_CELL_FINAL_MARKER = "SOUND LAB"
 # Pad's Open prompt, which Ctrl+O shows in its tile.
 PAD_OPEN_PROMPT_MARKER = "Open:"
-# The sample picture the Desktop image keeps in its root directory, and the
-# upper-half block every CELL picture cell is drawn with.  While the rich side
-# shows a picture, its CELL view shows what the picture is instead, as the
-# picture widget writes it, and decodes nothing.
+# The sample picture the Desktop image keeps beside the pointer fixture, and
+# the upper-half block every CELL picture cell is drawn with.  While the rich
+# side shows a picture, its CELL view shows what the picture is instead, as
+# the picture widget writes it, and decodes nothing.
 FEXPLORER_PICTURE = "sunset.qoi"
 FEXPLORER_PICTURE_FACTS = "QOI, 160 \u00d7 100"
 # The sample Markdown document beside it, which File Explorer previews as a
@@ -8971,11 +8991,23 @@ class FrameBoundJourney:
 
 class DesktopAcceptanceJourney(FrameBoundJourney):
     """The canonical journey across Desk, Pad, File Explorer and Daybook, and
-    through Sound Lab when SOUNDLAB says the Desktop composes it."""
+    through Sound Lab when SOUNDLAB says the Desktop composes it.
 
-    def __init__(self, ready_markers: tuple[str, ...], *, soundlab: bool = False):
+    USER_VOLUME says the image was built with the user volume.  File
+    Explorer then opens in the documents place, which holds the samples the
+    journey works with, and its status bar names each path there after the
+    place's label.  Every stage runs as in the linked build."""
+
+    def __init__(
+        self,
+        ready_markers: tuple[str, ...],
+        *,
+        soundlab: bool = False,
+        user_volume: bool = False,
+    ):
         super().__init__(ready_markers)
         self._soundlab = soundlab
+        self._user_volume = user_volume
         self._pad_area_before_edit: _CollectionStates | None = None
         self._pad_area_after_edit: _CollectionStates | None = None
         self._daybook_grid_before_navigation: _CollectionStates | None = None
@@ -9048,6 +9080,13 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
 
         if self._soundlab:
             _require_soundlab_desktop_semantics(projection)
+
+    def _fexplorer_path(self, path: str) -> str:
+        """PATH, a file's path in the place File Explorer opens on, as its
+        status bar names it: after the documents place's label with the user
+        volume, and alone over the linked build's one place."""
+
+        return USER_VOLUME_PLACE_LABELS[0] + path if self._user_volume else path
 
     def _fexplorer_task_press(
         self,
@@ -10038,7 +10077,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
                 or selected is None
                 or selected.fields[0].text != POINTER_LIST_FILE
-                or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH)
+                or not _fexplorer_selected_path_is(
+                    projection, self._fexplorer_path(POINTER_LIST_PATH)
+                )
             ):
                 return JourneyProgress()
             milestone = self._milestone("fexplorer-list-row-clicked")
@@ -10165,7 +10206,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     self._renamed = True
             if rename is not None:
                 return self._wait("the rename prompt closed")
-            if not _fexplorer_selected_path_is(projection, RENAMED_PATH):
+            if not _fexplorer_selected_path_is(projection, self._fexplorer_path(RENAMED_PATH)):
                 return self._wait(f"{RENAMED_PATH} in File Explorer's status bar")
             table = _fexplorer_table_claim(projection)
             row = None if table is None else table.named(RENAMED_FILE)
@@ -10259,7 +10300,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 )
             if delete is not None:
                 return self._wait("the delete question closed")
-            if not _fexplorer_selected_path_is(projection, RENAMED_PATH):
+            if not _fexplorer_selected_path_is(projection, self._fexplorer_path(RENAMED_PATH)):
                 return self._wait(f"{RENAMED_PATH} in File Explorer's status bar")
             table = _fexplorer_table_claim(projection)
             if table is None:
@@ -10889,7 +10930,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     >= content.item_total
                 ):
                     raise PhysicalDesktopAcceptanceError(
-                        f"File Explorer's root lists no {FEXPLORER_DOCUMENT}"
+                        f"File Explorer's listing has no {FEXPLORER_DOCUMENT}"
                     )
                 toward = (
                     -1 if row is not None and row.ordinal < content.viewport_first
@@ -10913,7 +10954,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             if (
                 selected is None
                 or selected.fields[0].text != FEXPLORER_DOCUMENT
-                or not _fexplorer_selected_path_is(projection, "/" + FEXPLORER_DOCUMENT)
+                or not _fexplorer_selected_path_is(
+                    projection, self._fexplorer_path("/" + FEXPLORER_DOCUMENT)
+                )
             ):
                 return JourneyProgress()
             tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
@@ -11001,7 +11044,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     >= content.item_total
                 ):
                     raise PhysicalDesktopAcceptanceError(
-                        f"File Explorer's root lists no {FEXPLORER_PICTURE}"
+                        f"File Explorer's listing has no {FEXPLORER_PICTURE}"
                     )
                 toward = (
                     -1 if row is not None and row.ordinal < content.viewport_first
@@ -11025,7 +11068,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             if (
                 selected is None
                 or selected.fields[0].text != FEXPLORER_PICTURE
-                or not _fexplorer_selected_path_is(projection, "/" + FEXPLORER_PICTURE)
+                or not _fexplorer_selected_path_is(
+                    projection, self._fexplorer_path("/" + FEXPLORER_PICTURE)
+                )
             ):
                 return JourneyProgress()
             tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
@@ -12448,10 +12493,13 @@ def run_physical_desktop_acceptance(
     journey: FrameBoundJourney | None = None,
     soundlab: bool = False,
     safe_mode: str | None = None,
+    user_volume: bool = False,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record a reference-sink journey: the canonical one across Desk,
     Pad, and Daybook, through Sound Lab when SOUNDLAB says the Desktop
-    composes it, or JOURNEY, such as one for Desk with a single applet.
+    composes it and in the places of the user volume when USER_VOLUME says
+    the image was built with it, or JOURNEY, such as one for Desk with a
+    single applet.
     SAFE_MODE is why the guest was asked to be in safe mode, "boot" or
     "config" (its system settings), or None: some frame before the journey
     ends must then show the warning notice that says so for that reason, in
@@ -12603,7 +12651,9 @@ def run_physical_desktop_acceptance(
         # changes from it.
         composed_frame = None
         if journey is None:
-            journey = DesktopAcceptanceJourney(tuple(ready_markers), soundlab=soundlab)
+            journey = DesktopAcceptanceJourney(
+                tuple(ready_markers), soundlab=soundlab, user_volume=user_volume
+            )
         journey.cell_pixels = (cell_width, cell_height)
         frames: list[PresentedFrameEvidence] = []
         inputs: list[AcceptedInputEvidence] = []

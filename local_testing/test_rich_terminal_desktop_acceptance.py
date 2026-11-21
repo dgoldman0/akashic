@@ -6894,6 +6894,48 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
     assert journey._daybook_wheel_date == week_later
 
 
+def test_with_the_user_volume_the_pointer_journey_reads_paths_in_documents() -> None:
+    """With the user volume File Explorer opens on the documents place, and
+    its status bar names the selected file after that place's label.  The
+    journey then waits for that exact path, as it waits for the path alone
+    over the linked build's one place, and takes neither form's path for
+    the other's."""
+
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    documents = acceptance_runner.USER_VOLUME_PLACE_LABELS[0]
+    for user_volume, path, other in (
+        (True, f"{documents}/large.txt", "/large.txt"),
+        (False, "/large.txt", f"{documents}/large.txt"),
+    ):
+        journey = DesktopAcceptanceJourney(
+            ("READY",), soundlab=True, user_volume=user_volume
+        )
+        assert journey._fexplorer_path("/guide.md") == (
+            f"{documents}/guide.md" if user_volume else "/guide.md")
+        journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LIST_ROW_STAGE
+        journey.frame_barrier = 100
+        journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
+        del actions[:]
+        for offer_id, status, milestone in ((101, other, None),
+                                            (102, path, "fexplorer-list-row-clicked")):
+            progress = journey.after_present(
+                _offer("X", offer_id=offer_id, pad_menu=True),
+                9,
+                _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), status=status,
+                               semantic_status=True),
+                sender,
+            )
+            assert progress == acceptance_runner.JourneyProgress(milestone)
+        assert actions == [("send_key", "f2", 102)]
+        assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE
+
+
 def test_exact_desk_content_bounds_reserve_dividers_and_assign_remainders() -> None:
     projection = RichScreenProjection(280, 84, (), 1)
     assert tuple(acceptance_runner._desktop_pane_content_bounds(projection, tile)

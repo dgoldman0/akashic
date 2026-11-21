@@ -34,24 +34,34 @@ either way the run fails when the guest did not report safe mode for that
 reason, or no frame showed the notice that says so.  Without either, it
 fails when the guest reports safe mode on.
 
+The image is the Desktop's shipping form unless --linked asks for the
+linked form.  The shipping form is three parts, each an option of its own:
+the modules in their token forms (--token-modules) on an ext4 system volume
+(--system-volume), and the user volume with the shipping form's places
+(--user-volume).  The build needs the pinned e2fsprogs that
+AKASHIC_E2FSPROGS_TOOL_DIR names.  With --linked the modules are linked
+chunks on the boot volume, with one place over it, and each of the three
+options adds its part to that form.
+
 With --system-volume the Desktop's modules are plain files on an ext4 system
 volume, built beside the boot image and attached as the third storage unit,
 and the boot mounts that volume and loads them from it
-(utils/fs/system-volume.f).  The journey is the same one.  The build needs
-the pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names.
+(utils/fs/system-volume.f).  The journey is the same one.
 
 With --user-volume the build also writes a fresh ext4 user volume of
 --user-volume-mib MiB (64 by default) beside the boot image, attached as the
 fourth storage unit, and the boot mounts it and declares the shipping form's
 places: documents and records on it, records the home, and a read-only origin
-(utils/fs/user-volume.f).  The build needs the same pinned e2fsprogs.  File
-Explorer's and Pad's journeys then follow those places and work across them.
-Once the run ends, the pinned e2fsck must pass the user volume's image
-without changing it and its journal must be empty, and after a journey that
-passed, each file the journey leaves on the volume must hold the bytes it
-should (rich_terminal_applet_journeys.USER_VOLUME_FILES), as the pinned
-debugfs reads them; the record of these checks is user-volume-check.json
-beside the evidence.
+(utils/fs/user-volume.f).  Every sample the journeys work with is a
+document there.  The canonical journey and File Explorer's and Pad's follow
+those places, and the latter two work across them.  Once the run ends, the
+pinned e2fsck must pass the user volume's image without changing it and its
+journal must be empty, and after a journey that passed, each file the
+journey leaves on the volume must hold the bytes it should
+(rich_terminal_desktop_acceptance.DESKTOP_USER_VOLUME_FILES and
+rich_terminal_applet_journeys.USER_VOLUME_FILES), as the pinned debugfs
+reads them; the record of these checks is user-volume-check.json beside the
+evidence.
 
 With --token-modules the image is first built and booted from source in the
 simulator, which records what the interpreter does with each source file,
@@ -189,6 +199,7 @@ def child(args) -> int:
         "every_frame_checks": args.every_frame_checks,
         "safe_mode": args.safe_mode,
         "settings_safe_mode": args.settings_safe_mode,
+        "linked": args.linked,
         "system_volume": args.system_volume,
         "token_modules": args.token_modules,
         "keep_module_source": args.keep_module_source,
@@ -215,6 +226,8 @@ def child(args) -> int:
         sys.argv.append("--safe-mode")
     if args.settings_safe_mode:
         sys.argv.append("--settings-safe-mode")
+    if args.linked:
+        sys.argv.append("--linked")
     if args.system_volume:
         sys.argv.append("--system-volume")
     if args.token_modules:
@@ -248,16 +261,23 @@ def child(args) -> int:
 
 def user_volume_expected(applet: str | None, tui) -> dict[str, bytes | None]:
     """What the journey of APPLET leaves on the user volume, as
-    rich_terminal_applet_journeys.USER_VOLUME_FILES names it: each path on
-    the volume, with the bytes of the file the image ships or the sample
-    document the volume is built with that it must hold, or None where
-    nothing may be.  TUI is the image builder's module, akashic_tui."""
+    rich_terminal_applet_journeys.USER_VOLUME_FILES names it, or the
+    canonical journey when APPLET is None, as
+    rich_terminal_desktop_acceptance.DESKTOP_USER_VOLUME_FILES names it:
+    each path on the volume, with the bytes of the file the image ships or
+    the sample document the volume is built with that it must hold, or None
+    where nothing may be.  TUI is the image builder's module, akashic_tui."""
 
     from rich_terminal_applet_journeys import USER_VOLUME_FILES
+    from rich_terminal_desktop_acceptance import DESKTOP_USER_VOLUME_FILES
 
+    files = (
+        DESKTOP_USER_VOLUME_FILES if applet is None
+        else USER_VOLUME_FILES.get(applet, {})
+    )
     folder = tui.USER_VOLUME_DOCUMENTS[1]
     expected: dict[str, bytes | None] = {}
-    for path, source in USER_VOLUME_FILES.get(applet, {}).items():
+    for path, source in files.items():
         content = None
         if source is not None:
             kind, name = source
@@ -362,6 +382,8 @@ def supervise(args) -> int:
         command.append("--safe-mode")
     if args.settings_safe_mode:
         command.append("--settings-safe-mode")
+    if args.linked:
+        command.append("--linked")
     if args.system_volume:
         command.append("--system-volume")
     if args.token_modules:
@@ -496,7 +518,12 @@ def safe_mode_mismatch(reason: str | None, expected: str | None) -> str | None:
     return f"asked for ({expected}), but the guest reported it for {reason}"
 
 
-def main() -> int:
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    """ARGV, or the command line, parsed, with its paths resolved and the
+    image's form settled.  Every profile this runs builds the shipping form
+    unless it is asked for the linked one (akashic_tui.SHIPPING_FORM_PROFILES),
+    so without --linked the three options of that form are all on."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--akashic-root", required=True, type=Path)
     parser.add_argument("--megapad-root", required=True, type=Path)
@@ -522,15 +549,24 @@ def main() -> int:
     parser.add_argument("--settings-safe-mode", action="store_true",
                         help="build the settings disk with Desk's system "
                              "settings asking for safe mode")
+    parser.add_argument("--linked", action="store_true",
+                        help="build the linked form: the Desktop's modules "
+                             "in linked chunks on the boot volume, with one "
+                             "place over it.  Without it the Desktop builds "
+                             "the shipping form, --system-volume "
+                             "--token-modules --user-volume; with it those "
+                             "options add their parts to the linked form")
     parser.add_argument("--system-volume", action="store_true",
                         help="put the Desktop's modules on an ext4 system "
                              "volume as plain files and load them from it "
-                             "(needs AKASHIC_E2FSPROGS_TOOL_DIR)")
+                             "(needs AKASHIC_E2FSPROGS_TOOL_DIR; part of the "
+                             "shipping form)")
     parser.add_argument("--token-modules", action="store_true",
                         help="load the Desktop's source from its token "
                              "forms, recorded from a source boot of the "
                              "simulator when the image is built; a system "
-                             "volume then holds no source")
+                             "volume then holds no source (part of the "
+                             "shipping form)")
     parser.add_argument("--keep-module-source", action="store_true",
                         help="with --token-modules and --system-volume, "
                              "write each module's source on the system "
@@ -538,7 +574,8 @@ def main() -> int:
     parser.add_argument("--user-volume", action="store_true",
                         help="build a fresh ext4 user volume beside the boot "
                              "image, attached as the fourth storage unit, "
-                             "and declare the shipping form's places on it")
+                             "and declare the shipping form's places on it "
+                             "(part of the shipping form)")
     parser.add_argument("--user-volume-mib", type=int, default=64,
                         help="the user volume's size in MiB (default: 64)")
     parser.add_argument("--screen-profile", action="store_true",
@@ -548,7 +585,7 @@ def main() -> int:
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--artifact", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--socket", type=Path, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     for name in ("akashic_root", "megapad_root", "font", "output_parent", "artifact", "socket"):
         value = getattr(args, name)
         if value is not None:
@@ -556,10 +593,16 @@ def main() -> int:
     if args.child:
         if args.artifact is None or args.socket is None:
             parser.error("internal child requires --artifact and --socket")
-        return child(args)
-    if args.output_parent is None:
+    elif args.output_parent is None:
         parser.error("--output-parent is required")
-    return supervise(args)
+    if not args.linked:
+        args.system_volume = args.token_modules = args.user_volume = True
+    return args
+
+
+def main() -> int:
+    args = parse_arguments()
+    return child(args) if args.child else supervise(args)
 
 
 if __name__ == "__main__":

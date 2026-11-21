@@ -226,6 +226,45 @@ stores its linked source verbatim (see the MP64FS note below), so those
 container and sector figures are historical. `--max-steps` and `--timeout` remain available for
 explicit qualification budgets and override the profile defaults exactly.
 
+### The shipping form and the linked form
+
+The rich Desktop, `desktop-apt1`, and Desk with one applet, the
+`desktop-apt1-<name>` profiles that `accept` and
+`physical_desktop_acceptance.py` run, build the shipping form unless they are
+asked for the linked one. The shipping form is three options that the
+sections below describe: the modules in their token form (`--token-modules`)
+on the ext4 system volume (`--system-volume`), and the user volume with the
+shipping form's places (`--user-volume`). Its build needs the pinned
+e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR` names, and it boots the image once
+in the simulator to record the token forms. `--linked` builds the linked form
+instead: the modules in linked chunks on the boot volume, with one place over
+it, as these profiles built before the canonical journey passed in the
+shipping form (places slice 9, [`docs/utils/fs/places.md`](../docs/utils/fs/places.md)).
+With `--linked` each of the three options adds its part, so
+`--linked --user-volume` builds the linked form with the user volume. Every
+other profile builds as it did, linked or from plain source, and takes the
+three options when they are given.
+
+Two checks of Desk with one applet fail in the shipping form and pass with
+`--linked`: `--applet daybook` and `--applet agent`. Each boot seeds its
+applet's records through the activation's home, which in the linked form is
+the applet's home as well. In the shipping form an applet's home is a folder
+named by its id under the records place, so Daybook's reminders and the
+Agent's long conversation land outside the folders those applets read, and
+the Agent's check waits for a transcript that never shows. Daybook's check
+also expects entries on its first day, which the linked form's Daybook reads
+from the sample `daybook.md` in its home, while the shipping form keeps that
+sample in Documents. Both checks fail the same way on a build of the
+previous main in the shipping form, so they predate its becoming the
+default; run them with `--linked` until their seeds write into the applet's
+home.
+
+```bash
+export AKASHIC_E2FSPROGS_TOOL_DIR=~/.cache/fantasy-engine/e2fsprogs-1.47.4/sbin
+python3 local_testing/akashic_tui.py build --profile desktop-apt1 --backend simulator
+python3 local_testing/akashic_tui.py build --profile desktop-apt1 --backend simulator --linked
+```
+
 ### Modules from the system volume
 
 `build`, `smoke`, `serve` and `accept` take `--system-volume`. The profile's
@@ -243,34 +282,43 @@ write-protected. A build without the option removes the volume's image
 again. [`docs/utils/fs/system-volume.md`](../docs/utils/fs/system-volume.md)
 describes the module, the volume's geometry and the rule for its size.
 
+The option alone, without the rest of the shipping form, takes `--linked`
+on the Desktop's profiles:
+
 ```bash
 export AKASHIC_E2FSPROGS_TOOL_DIR=~/.cache/fantasy-engine/e2fsprogs-1.47.4/sbin
 python3 local_testing/akashic_tui.py build \
-  --profile desktop-apt1 --backend simulator --system-volume
-python3 local_testing/physical_desktop_acceptance.py --system-volume \
+  --profile desktop-apt1 --backend simulator --linked --system-volume
+python3 local_testing/physical_desktop_acceptance.py --linked --system-volume \
   --akashic-root . --megapad-root ../megapad \
   --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
 ```
 
 The build needs the pinned e2fsprogs of the ext4 fixtures; it stops before
 writing anything when `AKASHIC_E2FSPROGS_TOOL_DIR` does not name them. The
-option is off unless it is given: the canonical Desktop still boots from
-linked chunks on its boot volume.
+option is part of the shipping form, which the Desktop's profiles build by
+default; any other profile, or one given `--linked`, has it only when it is
+given. With the user volume as well, the boot image's resources and samples
+move off it too (see "The user volume" below).
 
 The canonical journey passes with the option. Its wheel step in File
-Explorer needs a root listing at least three rows longer than the 35 its
-table shows there. A linked Desktop's 52 source chunks supply those rows
-without the step naming them; with the modules on the system volume the boot
-volume's root lists eight chunks. A Desktop built with the option therefore
-carries the sample documents (`sample_documents.py`), two dozen short notes
-and lists in text and Markdown. They ship where the modules live on the
-system volume, since there nothing else makes the root long, and they stand
-for what a user volume will hold. The files that image is built with, its
-chunks apart, number three more than the step needs, and the journey's
-pointer file is in the first view with rows to spare above and below it. A
-linked Desktop's image holds the files it held before: its chunks make its
-root long, and the documents would take 24 of the 42 entries its boot
-volume's directory has free. Desk with one applet carries none either way.
+Explorer needs a listing at least three rows longer than the 35 its table
+shows there. A linked Desktop's 53 source chunks supply those rows in its
+root without the step naming them; with the modules on the system volume the
+boot volume's root lists nine chunks. A Desktop built with the option, or with
+the user volume, therefore carries the sample documents
+(`sample_documents.py`), thirty short notes and lists in text and Markdown,
+in the list File Explorer opens on: with the option alone the boot volume's
+root, and with the user volume its documents place. Nothing else makes either
+list long, and the documents stand for what a person keeps there. The
+documents place sets their number. It holds the samples and the documents,
+41 files, which is the table's 35 rows, a detent and a detent to spare, with
+the journey's pointer file in the first view and rows to spare above and
+below it; the boot volume's root holds those files, five boot and system
+files and the folder of the profile's resources. A linked Desktop without the
+user volume holds the files it held before: its chunks make its root long,
+and the documents would take 30 of the 41 entries its boot volume's directory
+has free. Desk with one applet carries none in any form.
 `test_system_volume.py` boots a small profile built with the option on the
 emulator.
 
@@ -318,8 +366,9 @@ extended memory is free.
 token form is a record of what the interpreter did with its source, which
 KDOS loads without splitting text and with one dictionary search for each
 name; MegaPad's `docs/token-modules-proposal-2026-11-11.md` describes it.
-The option is off unless it is given, and the branch that holds it is not
-merged.
+The option is part of the shipping form, which the Desktop's profiles build by
+default; any other profile, or one given `--linked`, has it only when it is
+given.
 
 The build then runs twice. It first builds the image from source for the
 simulator, in a scratch directory, and boots it there once with MegaPad's
@@ -355,12 +404,15 @@ checks each token file against its source too, by length and CRC-32, and
 loads the source of a module that was edited, naming it. No other module is
 affected.
 
+The token forms on the system volume, without the user volume:
+
 ```bash
 python3 local_testing/akashic_tui.py build \
-  --profile desktop-apt1 --backend emulator --system-volume --token-modules
+  --profile desktop-apt1 --backend emulator --linked --system-volume --token-modules
 ```
 
-`physical_desktop_acceptance.py` takes both options. Three test files hold
+`physical_desktop_acceptance.py` takes both options, which its default form
+holds already. Three test files hold
 this to its rules: `test_token_modules_build.py` (what a build writes and
 that it boots, with a changed KDOS, an edited boot script and an edited
 module planted),
@@ -373,15 +425,19 @@ alone.
 ### The user volume
 
 `build`, `smoke`, `serve` and `accept` take `--user-volume`, and
-`physical_desktop_acceptance.py` takes it as well. The build then writes a
-fresh ext4 user volume beside the boot image, `<image>-user.img`, which a
-launch attaches as the fourth storage unit, unit 3. `--user-volume-mib N`
-sets its size, 64 MiB by default and a whole number of at least 16. The
-volume is in the format ext4's staged writer takes, 1 KiB blocks and 256-byte
-inodes with the pinned profile's features, and holds two folders,
-`/documents` and `/records`, with the sample documents in `/documents`. The
-build checks it with the pinned `e2fsck` and needs the same
-`AKASHIC_E2FSPROGS_TOOL_DIR` as `--system-volume`.
+`physical_desktop_acceptance.py` takes it as well; it is part of the shipping
+form the Desktop's profiles build by default. The build then writes a fresh
+ext4 user volume beside the boot image, `<image>-user.img`, which a launch
+attaches as the fourth storage unit, unit 3. `--user-volume-mib N` sets its
+size, 64 MiB by default and a whole number of at least 16. The volume is in
+the format ext4's staged writer takes, 1 KiB blocks and 256-byte inodes with
+the pinned profile's features, and holds two folders, `/documents` and
+`/records`. `/documents` holds every sample the image carries, which the
+boot volume then holds none of: the text samples, `large.txt` among them,
+with File Explorer the sample picture, document and PDFs, a check's own
+picture such as the photograph of `--applet photo`, and on a Desktop the
+sample documents. The build checks the volume with the pinned `e2fsck` and
+needs the same `AKASHIC_E2FSPROGS_TOOL_DIR` as `--system-volume`.
 
 The profile then loads `utils/fs/user-volume.f` with the ext4 driver, in its
 linked chunks or from the system volume, and its `autoexec.f` mounts the
@@ -389,34 +445,47 @@ volume and declares the shipping form's places in place of the one place over
 the boot volume: a read-only origin over the root of the volume that holds
 the profile's shipped files, and documents and records on the user volume,
 records being the home. With `--system-volume` as well, that origin is the
-system volume, and the profile's resources move onto it from the boot volume.
+system volume, and the profile's resources and the files it ships for its own
+code, such as the feed the Streams check reads through its origin, move onto
+it from the boot volume.
 The boot says `USER VOLUME ATTACHED`, or `USER VOLUME UNAVAILABLE` with the
 reason, and goes on either way; without its home Desk starts in recovery. A
 build without the option removes the user volume's image again and builds
 what it built before. [`docs/utils/fs/user-volume.md`](../docs/utils/fs/user-volume.md)
 describes the module, the volume and the places.
 
-Desk with File Explorer and Desk with Pad run their journeys on the user
-volume, and the driver tells each journey the form it runs in. Their
-sidebars then list Documents, Records and System, in that order, and both
-journeys work across those places. File Explorer makes a folder in Documents
-and moves a sample document into it, copies its own `fexplorer.toml` from
-System into Documents, and sees a paste into System and a cut from Records
-refused, each with its notice. Pad opens its `pad.toml` from System by its
-full locator, sees a save there refused with "This place is read-only", and
-saves the file as a typed name, which Save As puts in Documents:
+The driver tells each journey the form it runs in, and the canonical
+journey and those of Desk with File Explorer and Desk with Pad follow the
+user volume's places. File Explorer opens in Documents, and its status bar
+names a file there after the place's label, as `Documents/large.txt`. The
+canonical journey does its work with files in Documents: it scrolls the
+listing one detent, renames `large.txt` to `notes.txt` there and opens it in
+Pad, previews the sample document and picture, and Pad opens `notes.md` from
+it; Daybook keeps its file in Records, its home.
+File Explorer's and Pad's own journeys also work across the places, whose
+rows their sidebars list as Documents, Records and System, in that order.
+File Explorer makes a folder in Documents and moves a sample document into
+it, copies its own `fexplorer.toml` from System into Documents, and sees a
+paste into System and a cut from Records refused, each with its notice. Pad
+opens its `pad.toml` from System by its full locator, sees a save there
+refused with "This place is read-only", and saves the file as a typed name,
+which Save As puts in Documents. The driver builds the shipping form unless
+it is given `--linked`, so these run on the user volume as they stand:
 
 ```bash
-python3 local_testing/physical_desktop_acceptance.py --applet fexp --user-volume \
+python3 local_testing/physical_desktop_acceptance.py --applet fexp \
   --akashic-root . --megapad-root ../megapad \
   --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
 ```
 
-Once a run with `--user-volume` ends, the driver checks the user volume's
+Once a run with the user volume ends, the driver checks the user volume's
 image with the pinned tools: `e2fsck -f -n` passes it and its journal is
 empty, and after a journey that passed, each file the journey leaves there
-holds the bytes it should as `debugfs` reads them
-(`rich_terminal_applet_journeys.USER_VOLUME_FILES`).
+holds the bytes it should as `debugfs` reads them: for the canonical
+journey, `notes.txt` holds the large sample's bytes, since no stage saves
+it, and nothing is left at `large.txt`
+(`rich_terminal_desktop_acceptance.DESKTOP_USER_VOLUME_FILES`); for the
+applets', the files `rich_terminal_applet_journeys.USER_VOLUME_FILES` names.
 `user-volume-check.json` beside the evidence records each check.
 
 `test_user_volume.py` mounts, refuses and misses the volume, boots Desk with
@@ -1249,8 +1318,12 @@ python3 local_testing/physical_desktop_acceptance.py \
   --output-parent local_testing/out/physical-desktop
 ```
 
-Plain `akashic_tui.py accept --backend simulator` runs the same journey, with
-only its own 900-second timeout.
+The launcher builds the Desktop's shipping form, with its modules as token
+forms on the system volume and the user volume's places, and runs the
+journey there; `--linked` runs it on the linked form, the modules in linked
+chunks on the boot volume ("The shipping form and the linked form" above).
+Plain `akashic_tui.py accept --backend simulator` runs the same journey, on
+the same default form, with only its own 900-second timeout.
 
 For testing, `--terminal-link-pace BYTES_PER_SECOND:FRAME_US` on the launcher,
 or on `akashic_tui.py serve` and `accept`, makes the hosted terminal take the
