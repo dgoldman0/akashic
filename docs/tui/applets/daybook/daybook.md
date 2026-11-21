@@ -348,7 +348,10 @@ ordinary keys inside Desk, checking each change in the live reminder file:
 On the rich terminal, Desk with Daybook alone
 (`physical_desktop_acceptance.py --applet daybook`) ends its journey by
 waiting for a reminder made at boot and requiring Desk's notice in the
-physically presented frame, rich and CELL.
+physically presented frame, rich and CELL. Its boot writes those reminders
+and the sample day's four entries in Daybook's home before Desk starts, where
+Desk's reminder service and shared-document owner open them in either form
+(`local_testing/README.md`, "The shipping form and the linked form").
 
 ## Deliberate Next Steps
 

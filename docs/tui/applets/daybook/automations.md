@@ -65,8 +65,9 @@ moves, so a look with nothing due reads no schedule records.
 
 ## The service
 
-Desk opens one service in the home of the Practice's places, at
-`/daybook-automations.bin`, ticks it, and lends it to Daybook alone.
+Desk opens one service in Daybook's home, the home the Practice's activation
+gives Daybook's stores (`PACT-STORE-PLACES`), at `/daybook-automations.bin`,
+ticks it, and lends it to Daybook alone.
 
 ```forth
 DBSVC-SIZE        ( -- bytes )
@@ -424,7 +425,8 @@ each step:
 
 On the rich terminal, `physical_desktop_acceptance.py --applet daybook`
 runs Desk with Daybook alone on the real-time simulator. Its boot makes the
-same reminders, with the one-off two minutes after boot. Once the Daybook
+same reminders, with the one-off two minutes after boot, in that service's
+file in Daybook's home. Once the Daybook
 journey has checked its task, it waits for that reminder to fire and
 requires Desk's notice on the bottom row of the physically presented frame,
 in both the rich scene and CELL. The notice is Desk's ordinary toast, drawn

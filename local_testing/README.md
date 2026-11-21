@@ -245,19 +245,23 @@ With `--linked` each of the three options adds its part, so
 other profile builds as it did, linked or from plain source, and takes the
 three options when they are given.
 
-Two checks of Desk with one applet fail in the shipping form and pass with
-`--linked`: `--applet daybook` and `--applet agent`. Each boot seeds its
-applet's records through the activation's home, which in the linked form is
-the applet's home as well. In the shipping form an applet's home is a folder
-named by its id under the records place, so Daybook's reminders and the
-Agent's long conversation land outside the folders those applets read, and
-the Agent's check waits for a transcript that never shows. Daybook's check
-also expects entries on its first day, which the linked form's Daybook reads
-from the sample `daybook.md` in its home, while the shipping form keeps that
-sample in Documents. Both checks fail the same way on a build of the
-previous main in the shipping form, so they predate its becoming the
-default; run them with `--linked` until their seeds write into the applet's
-home.
+Desk with Daybook and Desk with the Agent start from records that their boot
+writes before Desk starts (`RecordsSeed` in `akashic_tui.py`): Daybook's two
+reminders and its sample day, and the Agent's long conversation. Desk keeps an
+applet's records in the home that the Practice's activation gives the stores
+of the applet's component (`PACT-STORE-PLACES`): in the shipping form a folder
+named by the component's id under Records, such as `/records/org.akashic.agent`,
+and in the linked form the one place. The boot asks for that home as Desk
+does: it activates the Practice over the default place set, runs each seed in
+the home that activation gives through the applet's own store, and ends the
+activation before Desk makes its own, so the seeds name no place or folder and
+their records lie where Desk reads them in either form. Daybook's sample day
+is the sample `daybook.md`, written into the file Daybook's owner keeps
+(`SDOC-PATH$`) through the checked replacement the owner saves with, unless
+the home holds that file already, as the linked form's does. The copy in
+Documents, where the shipping form puts every sample, is a document like the
+others there, and Daybook does not read it. `test_desk_records_seed.py` runs
+the boot's seeding over places laid out in each form.
 
 ```bash
 export AKASHIC_E2FSPROGS_TOOL_DIR=~/.cache/fantasy-engine/e2fsprogs-1.47.4/sbin

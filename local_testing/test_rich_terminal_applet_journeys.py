@@ -1574,9 +1574,83 @@ def test_every_single_applet_profile_has_a_journey() -> None:
 
 def test_daybook_alone_boots_the_reminder_its_journey_waits_for() -> None:
     assert DAYBOOK_REMINDER_NOTICE == f"Reminder: {akashic_tui.DAYBOOK_REMINDER_TITLE}"
-    setup = akashic_tui.daybook_reminder_setup(akashic_tui.DAYBOOK_APT1_REMINDER_DELAY_S)
-    assert setup in akashic_tui.PROFILES["desktop-apt1-daybook"].autoexec
-    assert f"DBSVC-NOW 1000 / {akashic_tui.DAYBOOK_APT1_REMINDER_DELAY_S} +" in setup
+    seed = akashic_tui.daybook_reminders_seed(akashic_tui.DAYBOOK_APT1_REMINDER_DELAY_S)
+    autoexec = akashic_tui.PROFILES["desktop-apt1-daybook"].autoexec
+    assert seed.forth in autoexec
+    assert f"' {seed.word} _boot-daybook-desc _boot-records-in\n" in autoexec
+    assert f"DBSVC-NOW 1000 / {akashic_tui.DAYBOOK_APT1_REMINDER_DELAY_S} +" in seed.forth
+    # The reminders are made in the service Desk opens, so the boot spells
+    # none of its files.
+    assert "DBSVC-OPEN" in seed.forth and ".bin" not in seed.forth
+
+
+def _checks_seeds():
+    """Each profile whose applet starts from records its boot writes: its
+    applet, and the seeds it runs, in order."""
+
+    tui = akashic_tui
+    return {
+        "desktop-apt1-daybook": ("daybook", (
+            tui.daybook_reminders_seed(tui.DAYBOOK_APT1_REMINDER_DELAY_S),
+            tui.DAYBOOK_SAMPLE_DAY_SEED,
+        )),
+        "desktop-apt1-agent": ("agent", (
+            tui.RecordsSeed(agent_transcript.forth_seed(), agent_transcript.SEED_WORD),
+        )),
+        "desktop-daybook-reminders": ("daybook", (
+            tui.daybook_reminders_seed(tui.DAYBOOK_REMINDER_DELAY_S),
+        )),
+    }
+
+
+def test_the_checks_seed_records_in_the_home_desk_gives_their_applet() -> None:
+    """Desk with Daybook and Desk with the Agent start from records their
+    boot writes before Desk starts: Daybook's reminders and sample day, and
+    the Agent's long conversation.  Each seed runs in the home that the
+    Practice's activation gives the stores of the applet's component
+    (PACT-STORE-PLACES), the home Desk then binds those stores in, so no
+    seed names a place or a folder.  The boot defines the word that runs
+    them once, after the Practice is provisioned and before Desk takes the
+    applet's descriptor; a Desk whose applets start from nothing has no such
+    word, so the canonical Desktop's boot is as it was."""
+
+    helper = akashic_tui._DESK_RECORDS_SEED
+    for name, (applet, seeds) in _checks_seeds().items():
+        autoexec = akashic_tui.PROFILES[name].autoexec
+        descriptor = f"_boot-{applet}-desc"
+        assert autoexec.count(helper) == 1, name
+        provisioned = autoexec.index("\n_boot-practice-provision\n")
+        filled = autoexec.index(
+            f"{descriptor} {akashic_tui.desk_applet(applet).entry}\n")
+        queued = autoexec.index(f"{descriptor} DESK-QUEUE-LAUNCH\n")
+        assert provisioned < autoexec.index(helper) < filled, name
+        last = filled
+        for seed in seeds:
+            call = f"' {seed.word} {descriptor} _boot-records-in\n"
+            assert autoexec.count(call) == 1, (name, seed.word)
+            assert last < autoexec.index(seed.forth) < autoexec.index(call) < queued
+            last = autoexec.index(call)
+            for spelled in ("PLACES-DEFAULT", "PLSET-HOME", "/records", "org.akashic"):
+                assert spelled not in seed.forth, (name, seed.word, spelled)
+    for name in ("desktop-apt1", "desktop", "desktop-apt1-pad", "desktop-apt1-streams"):
+        assert "_boot-records-in" not in akashic_tui.PROFILES[name].autoexec, name
+
+
+def test_daybook_alone_starts_from_the_sample_day() -> None:
+    """The sample day the Daybook check's agenda lists is the image's sample
+    daybook.md, which the linked form keeps in Daybook's home: the seed holds
+    its bytes and writes them in the owner's file, which it names through
+    the owner (SDOC-PATH$)."""
+
+    seed = akashic_tui.DAYBOOK_SAMPLE_DAY_SEED
+    buffer = seed.forth.split("CREATE _boot-day\n", 1)[1]
+    buffer = buffer.split(" CONSTANT _boot-day-u\n", 1)[0]
+    *rows, count = buffer.splitlines()
+    data = bytes(int(token) for row in rows for token in row.split() if token != "C,")
+    assert data == akashic_tui.DAYBOOK_SAMPLE == akashic_tui.SAMPLE_FILES["daybook.md"]
+    assert int(count) == len(data)
+    assert f"- [ ] {akashic_tui.SAMPLE_DATE} | " in data.decode()
+    assert "SDOC-PATH$" in seed.forth and "daybook.md" not in seed.forth
 
 
 def test_the_small_terminal_differs_from_desk_with_pad_only_in_text_room() -> None:
