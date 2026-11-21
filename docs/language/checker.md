@@ -187,11 +187,15 @@ declared. Since KDOS's `(` ends with its line, a slot that spells out a
 long effect makes a long line, and naming the effect keeps the slot's line
 short and states the shared contract in one place.
 
-Two conventions of Akashic's comments carry over. A bar inside a name says
-which values one cell may take, as `port|0: nio-port` for a port or zero,
-while a bar at a token's edge separates alternatives. An output span named
-like an input span with a prime, as `/STRING ( s: span n -- s': span )`
-writes, is part of that span.
+Two spellings of item names are Uroko syntax, taken from Akashic's
+comments. A bar inside a name lists the values one cell may take:
+`port|0: nio-port` is one cell holding a port or zero, and the checker
+gives the cell the kind `nio-port`, since zero serves as a null address of
+any kind. A bar standing alone, or at a token's edge as in `0 |xt 1`,
+separates alternatives instead. A prime after an output span's name makes
+it part of the input span of that name: `/STRING ( s: span n -- s': span )`
+returns the end of the span it was given, so the checker counts the
+address and the length it returns as parts of the caller's span `s`.
 
 Malformed declarations are findings: an unknown kind, a label with no kind
 after it, an `xt(`, `list(` or `handle(` without its `)`, a list of plain

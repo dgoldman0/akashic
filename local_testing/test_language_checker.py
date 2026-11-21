@@ -586,7 +586,30 @@ def test_a_prefix_checked_against_a_longer_span_is_part_of_it(base_checker_state
     assert findings(checker, "COMMON") == []
 
 
+def test_a_bar_inside_a_label_names_the_values_its_cell_may_take(base_checker_state):
+    effect = parse_effect(" r: addr -- port|0: nio-port status: n ").effect
+    assert [s.name for s in effect.alts[0]] == ["port|0", "status"]
+    assert len(effect.alts) == 1  # one cell, not two alternatives
+    checker = check(base_checker_state, (
+        "( kind: port struct )\n"
+        "( kind: other struct )\n"
+        ": ADOPT  ( r: addr -- port|0: port status: n )  @ 0 ;\n"
+        ": USE-PORT  ( p: port -- )  DROP ;\n"
+        ": USE-OTHER  ( o: other -- )  DROP ;\n"
+        ": ADOPTED  ( r: addr -- )  ADOPT DROP ?DUP IF USE-PORT THEN ;\n"
+        ": CONFUSED  ( r: addr -- )  ADOPT DROP ?DUP IF USE-OTHER THEN ;\n"
+    ))
+    # The cell is a port when it is not zero.
+    assert record(checker, "ADOPT").comparison == "match"
+    assert findings(checker, "ADOPTED") == []
+    assert any(f.startswith("kind: named kinds differ: port")
+               for f in findings(checker, "CONFUSED"))
+
+
 def test_a_primed_output_span_is_part_of_the_input_span(base_checker_state):
+    effect = parse_effect(" s: span n -- s': span ").effect
+    assert [s.part_of for s in effect.alts[0]] == [0, 0]
+    assert parse_effect(" s: span -- t: span ").effect.alts[0][0].part_of is None
     checker = check(base_checker_state, (
         ": SKIP1  ( s: span -- s': span )  1- SWAP 1+ SWAP ;\n"
         ": REST  ( s: span -- )  SKIP1 TYPE ;\n"
