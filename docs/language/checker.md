@@ -67,6 +67,20 @@ The first two run the ordinary and the strict analysis, about 15 seconds
 each for the library; `--placement` writes the definitions that qualify for
 LM1, one per line, and `--no-strict` skips the strict run.
 
+`local_testing/test_language_checker_ratchet.py` is the findings ratchet.
+It runs the checker over the plain library, with `GUARDED` undefined, in
+about 15 seconds, and compares its counts with the baseline in
+`local_testing/language_checker_counts.json`: the findings by type, the
+inferred effects that mismatch their comments, and the definitions not
+inferred, in all and by cause. A count that grows fails the test as a
+regression. A count that falls fails it too, until the baseline records
+the gain, so the baseline changes in the same commit as the change that
+moves it, and this command writes it:
+
+```
+python3 -m toolchain.language.measure --groups library --no-strict --ratchet local_testing/language_checker_counts.json
+```
+
 ## Reading source as KDOS does
 
 The checker follows the rules in MegaPad's `bios.asm` rather than standard
@@ -416,6 +430,13 @@ the NIO port and the KDOS TLS port, which made all but their four
 token-running helpers infer and let the checker compare all 24 callback
 stores in the library with the declarations. The evidence notes list the
 figures, the defects and where the checker misleads.
+
+After the rounds that fixed those defects, and with the base words' kinds
+now read from `uroko.f` and the BIOS words the dictionary lacked now
+catalogued, the checker infers 43,272 of 44,471 library definitions (97.3
+percent), and the strict run infers 36,908, of which 36,611 (82.3 percent)
+qualify for LM1. The findings ratchet's baseline holds the counts from
+which later changes are measured.
 
 ## What is not built
 

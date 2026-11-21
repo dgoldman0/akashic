@@ -301,6 +301,44 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
     }
 
 
+def ratchet_counts(checker: Checker, group: str = "library") -> dict[str, int]:
+    """The counts the findings ratchet holds for one group.
+
+    They are the definitions not inferred, in all and by the category of
+    their own failure, with those that fail through a callee counted
+    together; the inferred effects that mismatch their comments; and the
+    findings, by the types the measurement reports.  None of them should
+    grow, and each fall is recorded, so the baseline keeps every gain.
+    """
+    part = summarize(checker, group, 0)
+    counts = {
+        "not inferred": part["failed"],
+        "mismatch": part["comparison of inferred effects"].get("mismatch", 0),
+    }
+    for category, number in part["failure categories"].items():
+        counts[f"not inferred: {category}"] = number
+    propagated = sum(part["propagated failures by root cause"].values())
+    if propagated:
+        counts["not inferred: through a callee that fails"] = propagated
+    for kind, number in part["findings"].items():
+        counts[f"finding: {kind}"] = number
+    return dict(sorted(counts.items()))
+
+
+def ratchet_baseline(checker: Checker, megapad: Path, group: str = "library") -> dict:
+    """The ratchet's baseline file: the counts, with what they were measured on."""
+    part = summarize(checker, group, 0)
+    revision = subprocess.run(["git", "-C", str(megapad), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    return {
+        "measured": f"Akashic's {group} group, with GUARDED undefined, on MegaPad "
+                    f"{revision or 'of unknown revision'}",
+        "definitions": part["definitions"],
+        "inferred": part["inferred"],
+        "counts": ratchet_counts(checker, group),
+    }
+
+
 def sample(checker: Checker, root: Path, group: str, category: str, count: int,
            seed: int) -> str:
     """A fixed random sample of one category's definitions, with their source.
@@ -442,10 +480,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--placement", type=Path,
                         help="write the definitions that qualify for LM1, one per line")
     parser.add_argument("--no-strict", action="store_true", help="skip the strict run")
+    parser.add_argument("--ratchet", type=Path, metavar="BASELINE",
+                        help="write the findings ratchet's baseline of the plain library's counts")
     args = parser.parse_args(argv)
     defines = ["-1 CONSTANT GUARDED"] if args.guarded else []
     started = time.monotonic()
     groups = args.groups.split(",")
+    if args.ratchet and (args.guarded or "library" not in groups):
+        parser.error("--ratchet measures the plain library: include it and leave out --guarded")
     if args.sample:
         checker = build(args.akashic, args.megapad, defines, groups, strict=args.strict)
         print(sample(checker, args.akashic, groups[0], args.sample, args.count, args.seed))
@@ -478,6 +520,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(report, indent=1, default=str))
+    if args.ratchet:
+        args.ratchet.write_text(
+            json.dumps(ratchet_baseline(checker, args.megapad), indent=1) + "\n")
     for group in groups:
         part = report[group]
         print(f"{group}: {part['definitions']} definitions, {part['inferred']} inferred "
