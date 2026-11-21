@@ -538,7 +538,7 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
                 200 OF KEY-T-PASTE KEY-PASTE-START R> _KEY-SET-EV EXIT ENDOF
                 201 OF KEY-T-PASTE KEY-PASTE-END   R> _KEY-SET-EV EXIT ENDOF
                 \ Unknown tilde sequence — return as char event
-                KEY-T-CHAR _KEY-CSI-P1 @ R> _KEY-SET-EV EXIT
+                DROP KEY-T-CHAR _KEY-CSI-P1 @ R> _KEY-SET-EV EXIT
             ENDCASE
         ENDOF
 
@@ -647,8 +647,9 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
         [CHAR] B OF KEY-T-SPECIAL KEY-DOWN  0 _KEY-SET-EV EXIT ENDOF
         [CHAR] C OF KEY-T-SPECIAL KEY-RIGHT 0 _KEY-SET-EV EXIT ENDOF
         [CHAR] D OF KEY-T-SPECIAL KEY-LEFT  0 _KEY-SET-EV EXIT ENDOF
+        \ Unknown SS3 — keep the final byte past ENDCASE to return as char
+        DUP
     ENDCASE
-    \ Unknown SS3 — return as char
     KEY-T-CHAR SWAP 0 _KEY-SET-EV ;
 
 \ =====================================================================
@@ -688,6 +689,8 @@ VARIABLE _KEY-B0             \ first raw byte
                     DROP _KEY-BUF-RESET
                     _KEY-TIMEOUT @ _KEY-TIMED? IF
                         _KEY-BUF-ADD
+                    ELSE
+                        DROP                   \ no final byte arrived
                     THEN
                     _KEY-DECODE-SS3
                     -1 EXIT

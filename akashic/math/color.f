@@ -409,8 +409,8 @@ VARIABLE _CL-HSV-TMP
         2 OF _CL-E @ _CL-C @ _CL-H @ ENDOF   \ p, V, t
         3 OF _CL-E @ _CL-G @ _CL-C @ ENDOF   \ p, q, V
         4 OF _CL-H @ _CL-E @ _CL-C @ ENDOF   \ t, p, V
-        \ 5 or default
-        _CL-C @ _CL-E @ _CL-G @               \ V, p, q
+        \ 5 or default; the sector stays on top for ENDCASE
+        >R _CL-C @ _CL-E @ _CL-G @ R>         \ V, p, q
     ENDCASE
     ;
 

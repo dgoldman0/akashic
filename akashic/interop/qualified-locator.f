@@ -300,6 +300,8 @@ CREATE _QLW-BUILDER CVB-SIZE ALLOT
         QLOC-DK-NONE OF S" none" ENDOF
         QLOC-DK-SEMANTIC-STATE OF S" semantic-state" ENDOF
         QLOC-DK-PROJECTION-CONTENT OF S" projection-content" ENDOF
+        \ QLOC-VALID? admits no other kind; refuse one rather than write it.
+        2DROP _QLW-BUILDER CVB-ABORT DROP QLOC-S-INVALID EXIT
     ENDCASE
     ROT _QLW-BUILDER CVB-STRING! IF _QLOC-WRITE-FAIL EXIT THEN
     S" state_digest" 5 _QLOC-WRITE-SLOT ?DUP 0= IF
