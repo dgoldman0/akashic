@@ -433,7 +433,7 @@ VARIABLE _OAIRHB-STATUS
         SSE-S-ID-OVERFLOW OF S" Responses stream event id exceeded its bound" ENDOF
         SSE-S-CALLBACK OF S" Responses stream event handling failed" ENDOF
         SSE-S-CANCELLED OF S" Responses stream was cancelled" ENDOF
-        DROP S" Responses stream parsing failed"
+        S" Responses stream parsing failed" ROT
     ENDCASE
     R> OAIR-S.CONTEXT @ _OAIR-MARK-ERROR DROP 1 ;
 

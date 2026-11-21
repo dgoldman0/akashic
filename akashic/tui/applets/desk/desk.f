@@ -2568,7 +2568,7 @@ CREATE _DESK-EV  24 ALLOT
         ACAT-S-DISABLED OF S" disabled" ENDOF
         ACAT-S-RECOVERY OF S" recovery mode" ENDOF
         ACAT-S-BUSY OF S" applet is open" ENDOF
-        DROP S" unknown error"
+        S" unknown error" ROT
     ENDCASE ;
 
 : _DESK-CATALOG-ENTRY-STATUS$  ( entry -- a u )

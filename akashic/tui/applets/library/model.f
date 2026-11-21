@@ -592,7 +592,7 @@ REQUIRE ../../../utils/memory-span.f
                 DROP _LIBM-LINEAGE-VALUE?
             THEN
         ENDOF
-        DROP 2DROP 0
+        >R 2DROP 0 R>
     ENDCASE ;
 
 : _LIBM-SUMMARY-CANONICAL?
