@@ -248,7 +248,7 @@ RECORD plan  placed left  END-RECORD   \ tasks placed, tasks still to place
 : plan-done?     ( plan -- flag )    plan.left NULL? ;
 
 : day-plan  ( plan scorer -- list status )
-    [ plan-children ] [ plan-features ] [ plan-done? ] problem
+    { plan-children } { plan-features } { plan-done? } problem
     SWAP  16 beam ;
 ```
 
