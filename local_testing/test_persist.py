@@ -27,11 +27,34 @@ EMU_DIR    = os.environ.get(
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
-from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
+from forth_snapshot import KDOS_DIAGNOSTICS, _run_input, program_output, run_file_tests, transcript_checks, module_source_lines
 from diskutil import format_image
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+
+# The mempool keeps 4096 transaction buffers of 8320 bytes in the dictionary,
+# about 34 MB with their index and hashes.  KDOS gives the userland
+# dictionary half of extended memory unless told otherwise, so the default
+# split of 64 MiB could not hold them: ALLOT failed with "Userland
+# dictionary full" and the load went on, so a later MP-ADD would copy a
+# transaction over the words after the empty pool.  64 MiB with 16 MiB
+# reserved for ALLOCATE leaves the dictionary about 48 MiB.
+EXT_MEM_SIZE = 64 << 20
+XMEM_RESERVE = 16 << 20
+
+
+def _load_errors(text, lines):
+    """The lines KDOS printed while loading LINES that report a refused line.
+
+    The echo of the source is dropped first, since the source itself names
+    some of these messages.
+    """
+    printed = program_output(text, lines)
+    return [line.strip() for line in printed.split('\n')
+            if ('?' in line and 'not found' in line.lower())
+            or 'dictionary full' in line.lower()
+            or any(item in line for item in KDOS_DIAGNOSTICS)]
 
 # ── Emulator helpers ──
 
@@ -53,13 +76,9 @@ def _load_forth_lines(path):
             lines.append(line)
         return lines
 
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
 def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
+    buf = bytearray()
+    sys_obj.uart.on_tx = buf.append
     return buf
 
 def uart_text(buf):
@@ -143,40 +162,24 @@ def build_snapshot():
         'MP-INIT',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=64 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=EXT_MEM_SIZE)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    all_lines = (kdos_lines + ["ENTER-USERLAND"]
+    all_lines = (kdos_lines + [f"{XMEM_RESERVE} U-XMEM-RESERVE!", "ENTER-USERLAND"]
                  + dep_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
-    data = payload.encode(); pos = 0; steps = 0; mx = 900_000_000
-    while steps < mx:
-        if sys_obj.cpu.halted:
-            break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else:
-                break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
+    steps = _run_input(sys_obj, payload.encode(), 900_000_000, buf)
 
     text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        if '?' in l and 'not found' in l.lower():
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
+    errors = _load_errors(text, all_lines)
     if errors:
-        print(f"  [FATAL] {len(errors)} 'not found' errors during load!")
-        for l in text.strip().split('\n')[-40:]:
-            print(f"    {l}")
-        sys.exit(1)
+        tail = "\n".join(text.strip().split('\n')[-30:])
+        raise AssertionError(
+            f"{len(errors)} line(s) failed to load:\n" + "\n".join(errors[-10:])
+            + "\n--- transcript tail ---\n" + tail)
 
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
@@ -202,7 +205,7 @@ def run_forth(lines, max_steps=200_000_000):
     try:
         sys_obj = MegapadSystem(ram_size=1024*1024,
                                 storage_image=disk_path,
-                                ext_mem_size=64 * (1 << 20))
+                                ext_mem_size=EXT_MEM_SIZE)
         buf = capture_uart(sys_obj)
         sys_obj.load_binary(0, bios_code)
         sys_obj.boot()
@@ -215,19 +218,7 @@ def run_forth(lines, max_steps=200_000_000):
         restore_cpu_state(sys_obj.cpu, cpu_state)
         buf.clear()
         payload = "\n".join(lines) + "\nBYE\n"
-        data = payload.encode(); pos = 0; steps = 0
-        while steps < max_steps:
-            if sys_obj.cpu.halted:
-                break
-            if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-                if pos < len(data):
-                    chunk = _next_line_chunk(data, pos)
-                    sys_obj.uart.inject_input(chunk); pos += len(chunk)
-                else:
-                    break
-                continue
-            batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-            steps += max(batch, 1)
+        _run_input(sys_obj, payload.encode(), max_steps, buf)
         return uart_text(buf)
     finally:
         try:
