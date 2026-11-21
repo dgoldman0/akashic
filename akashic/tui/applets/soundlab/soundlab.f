@@ -233,7 +233,7 @@ VARIABLE _SL-TN
         OSC-SAW OF S" saw" ENDOF
         OSC-TRI OF S" triangle" ENDOF
         OSC-PULSE OF S" pulse" ENDOF
-        DROP S" unknown"
+        S" unknown" ROT
     ENDCASE ;
 
 : _SL-SHAPE-FROM-NAME  ( addr len -- shape flag )
@@ -271,7 +271,7 @@ VARIABLE _SL-TN
         AUDIO-OUT-S-UNSUPPORTED OF S" unsupported" ENDOF
         AUDIO-OUT-S-IO OF S" io-failed" ENDOF
         AUDIO-OUT-S-CORE OF S" core-rejected" ENDOF
-        DROP S" unknown"
+        S" unknown" ROT
     ENDCASE ;
 
 : _SL-PLAY-ERROR-TEXT  ( status -- addr len )
@@ -288,7 +288,7 @@ VARIABLE _SL-TN
         AUDIO-OUT-S-UNSUPPORTED OF S" Audio device cannot capture PCM16" ENDOF
         AUDIO-OUT-S-IO OF S" Audio output I/O failed" ENDOF
         AUDIO-OUT-S-CORE OF S" Audio output mutation requires the owner core" ENDOF
-        DROP S" Audio output request failed"
+        S" Audio output request failed" ROT
     ENDCASE ;
 
 : _SL-OWNED-ACTIVE?  ( -- flag )
@@ -721,6 +721,7 @@ VARIABLE _SL-FB-BANK
         _SL-SEL-DURATION OF
             _SL-DURATION @ _SL-DURATION-MIN _SL-DURATION-MAX 100
         ENDOF
+        DROP UFLD-S-INVALID EXIT
     ENDCASE _SL-FIELD-BUILDER UFLD-INTEGER ;
 
 : _SL-FIELD-BUILD ( index destination -- bytes status )
@@ -740,6 +741,7 @@ VARIABLE _SL-FB-BANK
         _SL-SEL-FREQUENCY OF S" Frequency (Hz)" ENDOF
         _SL-SEL-AMPLITUDE OF S" Amplitude (%)" ENDOF
         _SL-SEL-DURATION OF S" Duration (ms)" ENDOF
+        DROP 0 UFLD-S-INVALID EXIT
     ENDCASE _SL-FIELD-BUILDER UFLD-LABEL ?DUP IF 0 SWAP EXIT THEN
     _SL-FIELD-CONTENT ?DUP IF 0 SWAP EXIT THEN
     _SL-FIELD-BUILDER UFLD-FINISH ;
@@ -1178,6 +1180,7 @@ VARIABLE _SL-H-WIDGET
                 [CHAR] p OF _SL-PLAYBACK-ACTION -1 EXIT ENDOF
                 BL OF _SL-RENDER-ACTION -1 EXIT ENDOF
             ENDCASE
+            0 EXIT
         THEN
     THEN
     DROP 0 ;

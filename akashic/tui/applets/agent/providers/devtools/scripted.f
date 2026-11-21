@@ -300,7 +300,7 @@ VARIABLE _SPS-C
             THEN
             THEN
         ENDOF
-        0
+        0 SWAP
     ENDCASE
     DUP 0= IF 1 _SPP-C @ _SPC.STEP +! THEN ;
 
@@ -339,7 +339,7 @@ VARIABLE _SPT-IOR
         9 OF S" Tool request was cancelled." ENDOF
         10 OF S" Tool handler failed." ENDOF
         11 OF S" Tool handler was not installed." ENDOF
-        DROP S" Tool request was not completed."
+        S" Tool request was not completed." ROT
     ENDCASE ;
 
 : _SCRIPTED-TOOL-BUFFER-FREE  ( -- )

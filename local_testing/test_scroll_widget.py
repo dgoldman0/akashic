@@ -14,7 +14,11 @@ so the offsets clamp to 0..90 and 0..30:
 - the handler moves by one for an arrow key and by half the viewport for
   Page Up and Page Down, and leaves other keys to its caller.
 
-Nothing here draws: the widget's indicators are not part of these words.
+The indicators are drawn on a screen of their own: with the view at 45 by
+15 the thumb sits in row 4 of the right-most column and column 6 of the
+bottom row, each on a shaded track.  _SCRL-DRAW-INDICATORS used to divide
+the offset by the content size it had first multiplied by, and to read its
+column and row from the wrong cells.
 """
 
 from __future__ import annotations
@@ -115,6 +119,19 @@ def test_other_keys_are_left_to_the_caller():
         '      65 KEY-T-CHAR T-KEY ." char=" . T-AT. ;',
         "T1",
     ], "cells=-1 home=0 at=5 5 char=0 at=5 5")
+
+
+def test_indicators_mark_the_view_on_shaded_tracks():
+    check("thumbs and tracks", [
+        "20 10 SCR-NEW SCR-USE",
+        ": T-CP  ( row col -- cp )  SCR-GET CELL-CP@ ;",
+        ": T1  T-NEW T-W @ 45 15 SCRL-SCROLL-TO  SCR-CLEAR",
+        "      T-W @ WDG-REGION RGN-USE  T-W @ T{ _SCRL-DRAW-INDICATORS }T",
+        '      4 19 T-CP ." vthumb=" .  0 19 T-CP ." vtrack=" .',
+        '      9 6 T-CP ." hthumb=" .  9 0 T-CP ." htrack=" .',
+        '      0 0 T-CP ." inside=" . ;',
+        "T1",
+    ], "cells=-1 vthumb=9608 vtrack=9617 hthumb=9608 htrack=9617 inside=32")
 
 
 if __name__ == "__main__":

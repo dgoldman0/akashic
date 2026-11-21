@@ -1115,9 +1115,10 @@ VARIABLE _SATP-ALLOC-FIELD
             _SATP-C @ SATP.POST-OWNER-P @
                 AT-TEXT-POST-CONNECTOR-LAST-STATUS@
         ENDOF
-        DROP
+        >R
         _SATP-C @ _SATP-RECEIPT-CLEAR
         SAUTH-STATE-POST-UNCERTAIN SAUTH-S-INDETERMINATE SAUTH-S-POST
+        R>
     ENDCASE ;
 
 \ =====================================================================

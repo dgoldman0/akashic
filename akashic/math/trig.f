@@ -145,11 +145,12 @@ VARIABLE _TR-CP
         _TR-SP @  _TR-CP @
         _TR-SP !  _TR-CP !
     THEN
+    \ _TR-REDUCE leaves a quadrant 0-3; the default serves quadrant 3.
     _TR-QUAD @ CASE
         0 OF _TR-SP @          _TR-CP @          ENDOF
         1 OF _TR-CP @          _TR-SP @ FP16-NEG ENDOF
         2 OF _TR-SP @ FP16-NEG _TR-CP @ FP16-NEG ENDOF
-        3 OF _TR-CP @ FP16-NEG _TR-SP @          ENDOF
+        _TR-CP @ FP16-NEG _TR-SP @ ROT
     ENDCASE ;
 
 : TRIG-SIN  ( angle -- sin )   TRIG-SINCOS DROP ;

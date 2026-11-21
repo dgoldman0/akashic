@@ -409,8 +409,8 @@ VARIABLE _CL-HSV-TMP
         2 OF _CL-E @ _CL-C @ _CL-H @ ENDOF   \ p, V, t
         3 OF _CL-E @ _CL-G @ _CL-C @ ENDOF   \ p, q, V
         4 OF _CL-H @ _CL-E @ _CL-C @ ENDOF   \ t, p, V
-        \ 5 or default
-        _CL-C @ _CL-E @ _CL-G @               \ V, p, q
+        \ 5 or default; the sector stays on top for ENDCASE
+        >R _CL-C @ _CL-E @ _CL-G @ R>         \ V, p, q
     ENDCASE
     ;
 
@@ -561,8 +561,10 @@ VARIABLE _CL-HP-LEN
     SWAP 4 LSHIFT OR TRUE ;
 
 : COLOR-HEX-PARSE  ( addr len -- r g b flag )
-    \ Skip leading # if present
-    OVER C@ [CHAR] # = IF 1- SWAP 1+ SWAP THEN
+    \ Skip leading # if present; an empty string has no byte to read
+    DUP 0> IF
+        OVER C@ [CHAR] # = IF 1- SWAP 1+ SWAP THEN
+    THEN
     _CL-HP-LEN !  _CL-HP-ADDR !
 
     _CL-HP-LEN @ CASE

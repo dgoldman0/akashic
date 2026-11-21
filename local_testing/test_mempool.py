@@ -26,10 +26,34 @@ EMU_DIR    = os.environ.get(
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
-from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
+from forth_snapshot import KDOS_DIAGNOSTICS, _run_input, program_output, run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+
+# The mempool keeps 4096 transaction buffers of 8320 bytes in the dictionary,
+# about 34 MB with their index and hashes.  KDOS gives the userland
+# dictionary half of extended memory unless told otherwise, so 16 MiB could
+# not hold them: ALLOT failed with "Userland dictionary full", the load went
+# on, and MP-ADD copied a transaction over the words after the empty pool.
+# 64 MiB with 16 MiB reserved for ALLOCATE leaves the dictionary about
+# 48 MiB.
+EXT_MEM_SIZE = 64 << 20
+XMEM_RESERVE = 16 << 20
+
+
+def _load_errors(text, lines):
+    """The lines KDOS printed while loading LINES that report a refused line.
+
+    The echo of the source is dropped first, since the source itself names
+    some of these messages.
+    """
+    printed = program_output(text, lines)
+    return [line.strip() for line in printed.split('\n')
+            if ('?' in line and 'not found' in line.lower())
+            or 'dictionary full' in line.lower()
+            or any(item in line for item in KDOS_DIAGNOSTICS)]
+
 
 # ── Emulator helpers ──
 
@@ -53,13 +77,9 @@ def _load_forth_lines(path):
             lines.append(line)
         return lines
 
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
 def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
+    buf = bytearray()
+    sys_obj.uart.on_tx = buf.append
     return buf
 
 def uart_text(buf):
@@ -119,38 +139,23 @@ def build_snapshot():
         ': .HEX  ( addr n -- ) FMT-.HEX ;',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=EXT_MEM_SIZE)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    all_lines = (kdos_lines + ["ENTER-USERLAND"]
+    all_lines = (kdos_lines + [f"{XMEM_RESERVE} U-XMEM-RESERVE!", "ENTER-USERLAND"]
                  + dep_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
-    data = payload.encode(); pos = 0; steps = 0; mx = 800_000_000
-    while steps < mx:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
+    steps = _run_input(sys_obj, payload.encode(), 800_000_000, buf)
     text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        if '?' in l and 'not found' in l.lower():
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
+    errors = _load_errors(text, all_lines)
     if errors:
-        print(f"  [FATAL] {len(errors)} 'not found' errors during load!")
-        print(f"  Aborting — mempool.f failed to compile cleanly.")
-        for l in text.strip().split('\n')[-30:]:
-            print(f"    {l}")
-        sys.exit(1)
+        tail = "\n".join(text.strip().split('\n')[-30:])
+        raise AssertionError(
+            f"{len(errors)} line(s) failed to load:\n" + "\n".join(errors[-10:])
+            + "\n--- transcript tail ---\n" + tail)
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
@@ -160,7 +165,7 @@ def run_forth(lines, max_steps=800_000_000):
     if _snapshot is None:
         build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=EXT_MEM_SIZE)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -173,17 +178,7 @@ def run_forth(lines, max_steps=800_000_000):
     restore_cpu_state(sys_obj.cpu, cpu_state)
     buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode(); pos = 0; steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
+    _run_input(sys_obj, payload.encode(), max_steps, buf)
     return uart_text(buf)
 
 # ── Test framework ──
@@ -215,47 +210,50 @@ TV3_SEED = "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
 TV3_PUB  = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"
 
 
-def _keygen_preamble():
-    """Create keypairs, address buffers, and initialize state + mempool."""
-    lines = create_hex_buf('_SEED1', TV1_SEED) + [
-        'CREATE _PUB1 32 ALLOT',
-        'CREATE _PRIV1 64 ALLOT',
-        '_SEED1 _PUB1 _PRIV1 ED25519-KEYGEN',
-        'CREATE _ADDR1 32 ALLOT',
-        '_PUB1 _ADDR1 ST-ADDR-FROM-KEY',
-    ] + create_hex_buf('_SEED2', TV2_SEED) + [
-        'CREATE _PUB2 32 ALLOT',
-        'CREATE _PRIV2 64 ALLOT',
-        '_SEED2 _PUB2 _PRIV2 ED25519-KEYGEN',
-        'CREATE _ADDR2 32 ALLOT',
-        '_PUB2 _ADDR2 ST-ADDR-FROM-KEY',
-    ] + create_hex_buf('_SEED3', TV3_SEED) + [
-        'CREATE _PUB3 32 ALLOT',
-        'CREATE _PRIV3 64 ALLOT',
-        '_SEED3 _PUB3 _PRIV3 ED25519-KEYGEN',
-        'CREATE _ADDR3 32 ALLOT',
-        '_PUB3 _ADDR3 ST-ADDR-FROM-KEY',
-        # Initialize
-        'ST-INIT',
-        '_ADDR1 10000 ST-CREATE DROP',
-        '_ADDR2 5000 ST-CREATE DROP',
-        '_ADDR3 3000 ST-CREATE DROP',
-        'MP-INIT',
-    ]
+_SEEDS = {1: TV1_SEED, 2: TV2_SEED, 3: TV3_SEED}
+_BALANCES = {1: 10000, 2: 5000, 3: 3000}
+
+
+def _keygen_preamble(keys=(1, 2, 3)):
+    """Create the keypairs KEYS name, their addresses and accounts, and
+    initialize state + mempool.
+
+    Each key costs about 54 million steps of a run's 800 million, so a case
+    makes only the keys it signs or sends with.
+    """
+    lines = []
+    for k in keys:
+        lines += create_hex_buf(f'_SEED{k}', _SEEDS[k]) + [
+            f'CREATE _PUB{k} 32 ALLOT',
+            f'CREATE _PRIV{k} 64 ALLOT',
+            f'_SEED{k} _PUB{k} _PRIV{k} ED25519-KEYGEN',
+            f'CREATE _ADDR{k} 32 ALLOT',
+            f'_PUB{k} _ADDR{k} ST-ADDR-FROM-KEY',
+        ]
+    lines.append('ST-INIT')
+    lines += [f'_ADDR{k} {_BALANCES[k]} ST-CREATE DROP' for k in keys]
+    lines.append('MP-INIT')
     return lines
 
 
-def _make_tx(from_idx, to_idx, amount, nonce, name):
-    """Generate Forth lines to create and sign a transfer tx."""
-    return [
+def _make_tx(from_idx, to_idx, amount, nonce, name, fee=None):
+    """Generate Forth lines to create and sign a transfer tx.
+
+    FEE, when given, is set before the transaction is signed, since a
+    signature covers the fee.
+    """
+    lines = [
         f'CREATE {name} TX-BUF-SIZE ALLOT',
         f'{name} TX-INIT',
         f'_PUB{from_idx} {name} TX-SET-FROM',
         f'_PUB{to_idx} {name} TX-SET-TO',
         f'{amount} {name} TX-SET-AMOUNT',
         f'{nonce} {name} TX-SET-NONCE',
-        f'{name} _PRIV{from_idx} _PUB{from_idx} TX-SIGN',
     ]
+    if fee is not None:
+        lines.append(f'{fee} {name} TX-SET-FEE')
+    lines.append(f'{name} _PRIV{from_idx} _PUB{from_idx} TX-SIGN')
+    return lines
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -456,7 +454,7 @@ def test_add_invalid():
 def test_multi_sender_interleaved():
     """Multiple senders' txs should interleave correctly by address order."""
     check("multi-sender interleaved count=4",
-          _keygen_preamble()
+          _keygen_preamble((1, 2))
           + _make_tx(1, 2, 10, 0, '_T1A')
           + _make_tx(1, 2, 20, 1, '_T1B')
           + _make_tx(2, 1, 30, 0, '_T2A')
@@ -519,53 +517,39 @@ def test_fee_eviction():
     we test the eviction machinery directly with a small pool."""
     # Add 3 txs with fees 0, 50, 100 and verify _MP-FIND-LOWEST-FEE finds fee=0
     check("_MP-FIND-LOWEST-FEE finds lowest",
-          _keygen_preamble()
-          + _make_tx(1, 2, 100, 0, '_TXA')
+          _keygen_preamble((1, 2))
+          + _make_tx(1, 2, 100, 0, '_TXA', fee=0)
           + [
-              '0 _TXA TX-SET-FEE',
-              '_TXA _PRIV1 _PUB1 TX-SIGN',
               '_TXA MP-ADD DROP',
           ]
-          + _make_tx(1, 2, 200, 1, '_TXB')
+          + _make_tx(1, 2, 200, 1, '_TXB', fee=50)
           + [
-              '50 _TXB TX-SET-FEE',
-              '_TXB _PRIV1 _PUB1 TX-SIGN',
               '_TXB MP-ADD DROP',
           ]
-          + _make_tx(2, 1, 300, 0, '_TXC')
+          + _make_tx(2, 1, 300, 0, '_TXC', fee=100)
           + [
-              '100 _TXC TX-SET-FEE',
-              '_TXC _PRIV2 _PUB2 TX-SIGN',
               '_TXC MP-ADD DROP',
-              'MP-COUNT .',                    # 3
-              '_MP-FIND-LOWEST-FEE . . CR',    # fee=0, idx (order: fee idx)
-          ], "3 0")  # count=3, lowest fee=0
+              # count 3, then the lowest fee 0 and its index, on one line
+              'MP-COUNT . _MP-FIND-LOWEST-FEE . . CR',
+          ], "3 0")
 
 def test_evict_removes_entry():
     """_MP-EVICT should remove an entry and decrement count."""
     check("_MP-EVICT removes entry",
-          _keygen_preamble()
-          + _make_tx(1, 2, 100, 0, '_TXA')
+          _keygen_preamble((1, 2))
+          + _make_tx(1, 2, 100, 0, '_TXA', fee=0)
           + [
-              '0 _TXA TX-SET-FEE',
-              '_TXA _PRIV1 _PUB1 TX-SIGN',
               '_TXA MP-ADD DROP',
           ]
-          + _make_tx(1, 2, 200, 1, '_TXB')
+          + _make_tx(1, 2, 200, 1, '_TXB', fee=50)
           + [
-              '50 _TXB TX-SET-FEE',
-              '_TXB _PRIV1 _PUB1 TX-SIGN',
               '_TXB MP-ADD DROP',
           ]
-          + _make_tx(2, 1, 300, 0, '_TXC')
+          + _make_tx(2, 1, 300, 0, '_TXC', fee=100)
           + [
-              '100 _TXC TX-SET-FEE',
-              '_TXC _PRIV2 _PUB2 TX-SIGN',
               '_TXC MP-ADD DROP',
-              'MP-COUNT .',                    # 3
-              '_MP-FIND-LOWEST-FEE DROP',      # leave idx on stack
-              '_MP-EVICT',                     # evict lowest-fee entry
-              'MP-COUNT . CR',                 # 2
+              # count 3, evict the lowest-fee entry by its index, count 2
+              'MP-COUNT . _MP-FIND-LOWEST-FEE DROP _MP-EVICT MP-COUNT . CR',
           ], "3 2")
 
 

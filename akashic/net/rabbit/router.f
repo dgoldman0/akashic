@@ -370,6 +370,7 @@ VARIABLE _RROUTER-O-R
             R@ _RROUTER.ARENA-A @ R@ _RROUTER.ARENA-CAPACITY @
             RROUTER-S-OK
         ENDOF
+        >R 0 0 RROUTER-S-INVALID R>
     ENDCASE
     R> DROP ;
 

@@ -291,7 +291,7 @@ VARIABLE _RPB-HEND
 \ REQ-PARAM? ( key-a key-u -- flag )
 \   Test whether a query parameter exists.
 : REQ-PARAM?  ( key-a key-u -- flag )
-    REQ-PARAM-FIND IF 2DROP -1 ELSE 0 THEN ;
+    REQ-PARAM-FIND >R 2DROP R> ;
 
 \ REQ-PARAM-NEXT ( a u -- a' u' key-a key-u val-a val-u flag )
 \   Iterate query parameters from remaining cursor.

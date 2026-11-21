@@ -10,7 +10,8 @@ math library whose early or malformed-input paths broke their effects:
 - COLOR-HEX-PARSE ( addr len -- r g b flag ) returned five or three cells
   for a malformed #RGB or #RRGGBB, and the length in place of the red
   channel for a string of another length; every refusal is now four cells
-  with a false flag.
+  with a false flag.  It also read the byte at an empty string's address
+  to look for a leading #, which faults where nothing is mapped.
 """
 
 from __future__ import annotations
@@ -87,6 +88,14 @@ def test_hex_parse_accepts_both_lengths():
             f': T1  S" {text}" T{{ COLOR-HEX-PARSE }}T . DROP DROP DROP ;',
             "T1",
         ], "cells=2 -1")
+
+
+def test_hex_parse_reads_no_byte_of_an_empty_string():
+    # Nothing is mapped at this address, so reading it is a bus fault.
+    check("empty at an unmapped address", [
+        ": T1  0x7FFF000000000000 0 T{ COLOR-HEX-PARSE }T . . . . ;",
+        "T1",
+    ], "cells=2 0 0 0 0")
 
 
 if __name__ == "__main__":

@@ -856,7 +856,7 @@ DEFER _DB-AGENDA-SYNC-D
         7 OF S" July" ENDOF 8 OF S" August" ENDOF
         9 OF S" September" ENDOF 10 OF S" October" ENDOF
         11 OF S" November" ENDOF 12 OF S" December" ENDOF
-        S" Month"
+        S" Month" ROT
     ENDCASE ;
 
 \ =====================================================================
@@ -899,7 +899,7 @@ VARIABLE _DB-G-LAYOUT-COLUMN
         4 OF S" Fr" ENDOF
         5 OF S" Sa" ENDOF
         6 OF S" Su" ENDOF
-        S" ?"
+        S" ?" ROT
     ENDCASE ;
 
 : _DB-GRID-TITLE!  ( -- flag )
@@ -1487,6 +1487,7 @@ VARIABLE _DB-H-WIDGET
                 BL OF _DB-TOGGLE-SELECTED -1 EXIT ENDOF
                 [CHAR] t OF _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-TOUCH _DB-INVALIDATE -1 EXIT ENDOF
             ENDCASE
+            0 EXIT
         THEN
     THEN
     DROP 0 ;

@@ -156,7 +156,7 @@ DEFER _WORLD-DGRAPH-REBUILD-D
         WRUN-S-NO-CHECKPOINT OF S" Create a checkpoint first" ENDOF
         WRUN-S-CORRUPT OF S" Replay mismatch / corrupt evidence" ENDOF
         WRUN-S-OVERFLOW OF S" Revision or tick exhausted" ENDOF
-        DROP S" Unavailable"
+        S" Unavailable" ROT
     ENDCASE ;
 
 \ The status bar: whether the run is running, how its last action went,

@@ -905,7 +905,7 @@ DEFER _CV-COPY-VALUE
             LOOP
             2DROP 0
         ENDOF
-        2DROP CV-E-TYPE
+        >R 2DROP CV-E-TYPE R>
     ENDCASE ;
 
 : _CV-COPY-R  ( source destination -- ior )

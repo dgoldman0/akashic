@@ -368,7 +368,7 @@ CREATE _PN-T-TRNS  116 C, 82 C, 78 C, 83 C,
     _PN-STAGED 10 + C@ _PN-STAGED 11 + C@ OR _PN-STAGED 12 + C@ OR IF 0 EXIT THEN
     \ Samples a pixel, then bits a pixel.
     _PN.COLOUR _PN@ CASE 0 OF 1 ENDOF 2 OF 3 ENDOF 3 OF 1 ENDOF 4 OF 2 ENDOF
-        6 OF 4 ENDOF ENDCASE
+        6 OF 4 ENDOF DROP 0 EXIT ENDCASE
     _PN.DEPTH _PN@ *                                      ( bits )
     DUP 7 + 3 RSHIFT 1 MAX _PN.BPP _PN!
     _PN.W _PN@ * 7 + 3 RSHIFT _PN.STRIDE _PN!

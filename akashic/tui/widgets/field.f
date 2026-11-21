@@ -187,6 +187,7 @@ VARIABLE _FLD-D-W VARIABLE _FLD-D-M
         UFLD-K-INTEGER OF _FLD-D-M @ UFLD-VALUE@ _FLD-NUMBER-TEXT ENDOF
         UFLD-K-CHOICE OF _FLD-D-M @ UFLD-CHOICE-SELECTED@ UFLD-CHOICE-LABEL@ ENDOF
         UFLD-K-TEXT OF _FLD-D-M @ UFLD-TEXT@ ENDOF
+        >R 0 0 R>                        \ no value text for another kind
     ENDCASE
     _FLD-D-M @ UFLD-VALUE-ROW@
         _FLD-D-M @ UFLD-VALUE-HEIGHT@ 1- 2/ +

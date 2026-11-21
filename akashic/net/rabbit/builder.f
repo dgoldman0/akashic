@@ -281,6 +281,7 @@ VARIABLE _RMSGBF-BYTES
         1 OF
             R@ _RMSGB.ARENA @ R@ _RMSGB.ARENA-CAP @ RMSGB-S-OK
         ENDOF
+        >R 0 0 RMSGB-S-INVALID R>
     ENDCASE
     R> DROP ;
 
@@ -808,7 +809,7 @@ VARIABLE _RMSGBC-BUILDER
         RABBIT-CAP-F-LANES OF S" lanes" -1 ENDOF
         RABBIT-CAP-F-ASYNC OF S" async" -1 ENDOF
         RABBIT-CAPS-LANES-ASYNC OF S" lanes,async" -1 ENDOF
-        0 0 0 ROT
+        >R 0 0 0 R>
     ENDCASE ;
 
 VARIABLE _RMSGBHE-CAPS

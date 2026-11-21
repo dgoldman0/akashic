@@ -105,43 +105,35 @@ REQUIRE ../keys.f
     DUP _SCRL-O-CONTENT-H + @            ( w ch )
     OVER WDG-REGION RGN-H                ( w ch vh )
     2DUP > IF                             ( w ch vh )  \ content taller than viewport
-        \ Thumb position: (offset-y * vh) / ch
+        \ Thumb row: (offset-y * vh) / ch, clamped to 0..vh-1
         2 PICK _SCRL-O-OFFSET-Y + @      ( w ch vh oy )
-        2 PICK *                          ( w ch vh oy*vh )
-        2 PICK /                          ( w ch vh thumb-row )
-        \ Clamp to 0..vh-1
-        OVER 1- MIN
-        DUP 0< IF DROP 0 THEN
-        \ Draw track on right edge
-        _SCRL-SHADE 0                    ( w ch vh thumb col-offset=0 )
-        \ Actually, right edge = w-1
-        4 PICK WDG-REGION RGN-W 1-       ( w ch vh thumb col )
-        >R >R                             ( w ch vh   R: thumb col )
-        _SCRL-SHADE 0 R@ ROT             ( w ch shade 0 col vh )
-        DRW-VLINE                         ( w ch )
-        \ Draw thumb
-        _SCRL-BLOCK R> R>                 ( w ch block col thumb )
-        SWAP DRW-CHAR                     ( w ch )
+        OVER * 2 PICK /                  ( w ch vh thumb-row )
+        OVER 1- MIN 0 MAX
+        \ Track and thumb in the right-most column
+        3 PICK WDG-REGION RGN-W 1-       ( w ch vh thumb col )
+        SWAP >R >R                       ( w ch vh   R: thumb col )
+        _SCRL-SHADE 0 R@ 3 PICK          ( w ch vh shade 0 col vh )
+        DRW-VLINE                        ( w ch vh )
+        _SCRL-BLOCK R> R> SWAP           ( w ch vh block thumb col )
+        DRW-CHAR                         ( w ch vh )
     THEN
-    2DROP
+    2DROP                                ( w )
 
     \ Horizontal indicator (bottom edge)
     DUP _SCRL-O-CONTENT-W + @            ( w cw )
     OVER WDG-REGION RGN-W                ( w cw vw )
-    2DUP > IF
+    2DUP > IF                             ( w cw vw )  \ content wider than viewport
+        \ Thumb column: (offset-x * vw) / cw, clamped to 0..vw-1
         2 PICK _SCRL-O-OFFSET-X + @      ( w cw vw ox )
-        2 PICK *                          ( w cw vw ox*vw )
-        2 PICK /                          ( w cw vw thumb-col )
-        OVER 1- MIN
-        DUP 0< IF DROP 0 THEN
-        \ Bottom row
-        4 PICK WDG-REGION RGN-H 1-       ( w cw vw thumb row )
-        >R >R                             ( w cw vw   R: thumb row )
-        _SCRL-SHADE R@ 0 ROT             ( w cw shade row 0 vw )
-        DRW-HLINE                         ( w cw )
-        \ Draw thumb
-        _SCRL-BLOCK R> R>                 ( w cw block thumb row )
-        SWAP DRW-CHAR                     ( w cw )
+        OVER * 2 PICK /                  ( w cw vw thumb-col )
+        OVER 1- MIN 0 MAX
+        \ Track and thumb in the bottom row
+        3 PICK WDG-REGION RGN-H 1-       ( w cw vw thumb row )
+        SWAP >R >R                       ( w cw vw   R: thumb row )
+        _SCRL-SHADE R@ 0 3 PICK          ( w cw vw shade row 0 vw )
+        DRW-HLINE                        ( w cw vw )
+        _SCRL-BLOCK R> R>                ( w cw vw block row thumb )
+        DRW-CHAR                         ( w cw vw )
     THEN
     2DROP DROP ;
 

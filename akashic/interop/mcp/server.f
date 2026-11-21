@@ -414,7 +414,7 @@ VARIABLE _MSC-VALUE-IOR
         MCP-S-BUSY OF S" Tool target is busy" ENDOF
         MCP-S-TIMEOUT OF S" Tool call timed out" ENDOF
         MCP-S-CANCELLED OF S" Tool call cancelled" ENDOF
-        S" Tool call failed" ROT DROP
+        S" Tool call failed" ROT
     ENDCASE ;
 
 : _MS-TOOL-RESULT  ( status -- output-len status )
@@ -655,5 +655,5 @@ VARIABLE _MSRR-STATUS
     _MSH-M @ JRPC.KIND @ CASE
         JRPC-K-NOTIFICATION OF _MS-HANDLE-NOTIFICATION ENDOF
         JRPC-K-REQUEST OF _MS-HANDLE-REQUEST ENDOF
-        JRPC-E-INVALID-REQUEST S" Invalid Request" _MS-ERROR ROT DROP
+        JRPC-E-INVALID-REQUEST S" Invalid Request" _MS-ERROR ROT
     ENDCASE ;

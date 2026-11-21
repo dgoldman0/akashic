@@ -306,7 +306,7 @@ CREATE _OAITR-WIRE-NAME OAI-TOOL-NAME-CAPACITY ALLOT
         AROLE-USER OF S" user" -1 ENDOF
         AROLE-ASSISTANT OF S" assistant" -1 ENDOF
         AROLE-SYSTEM OF S" system" -1 ENDOF
-        0 0 0 ROT DROP
+        >R 0 0 0 R>
     ENDCASE ;
 
 : _OAITR-WRITE-MESSAGE  ( item -- )

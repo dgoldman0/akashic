@@ -442,6 +442,7 @@ VARIABLE _AN-NTOT               \ total N
         3 OF _AN-N4 !  _AN-G4 ! ENDOF
         4 OF _AN-N5 !  _AN-G5 ! ENDOF
         5 OF _AN-N6 !  _AN-G6 ! ENDOF
+        >R 2DROP R>                      \ no seventh group is kept
     ENDCASE ;
 
 : _AN-GET-GROUP  ( idx -- addr n )
@@ -452,6 +453,7 @@ VARIABLE _AN-NTOT               \ total N
         3 OF _AN-G4 @ _AN-N4 @ ENDOF
         4 OF _AN-G5 @ _AN-N5 @ ENDOF
         5 OF _AN-G6 @ _AN-N6 @ ENDOF
+        >R 0 0 R>                        \ an empty group
     ENDCASE ;
 
 : ADVS-ANOVA-1  ( g1 n1 g2 n2 ... gk nk k -- F-fp16 p-fp16 )

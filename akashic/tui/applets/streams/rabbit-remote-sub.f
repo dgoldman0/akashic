@@ -289,6 +289,7 @@ VARIABLE _SRRSV-OWNER-STATE
             OVER SRRS.CALLBACK-DELIVERY @ _SRRS-CALLBACK-DELIVERY? AND
             OVER SRRS.EVENT-APPROVED @ 0= AND
         ENDOF
+        0 SWAP                           \ no other action has a shape
     ENDCASE
     NIP ;
 

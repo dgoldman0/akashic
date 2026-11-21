@@ -189,11 +189,12 @@ VARIABLE _F3T-CP
         _F3T-SP @  _F3T-CP @
         _F3T-SP !  _F3T-CP !
     THEN
+    \ _F3T-REDUCE leaves a quadrant 0-3; the default serves quadrant 3.
     _F3T-QUAD @ CASE
         0 OF _F3T-SP @              _F3T-CP @              ENDOF
         1 OF _F3T-CP @              _F3T-SP @ FP32-NEGATE  ENDOF
         2 OF _F3T-SP @ FP32-NEGATE  _F3T-CP @ FP32-NEGATE  ENDOF
-        3 OF _F3T-CP @ FP32-NEGATE  _F3T-SP @              ENDOF
+        _F3T-CP @ FP32-NEGATE  _F3T-SP @ ROT
     ENDCASE ;
 
 : F32T-SIN  ( angle -- sin )   F32T-SINCOS DROP ;

@@ -300,7 +300,7 @@ VARIABLE _GCSV-STATUS
             _GCSV-ST-UNQUOTED OF _GCSV-STEP-UNQUOTED ENDOF
             _GCSV-ST-QUOTED OF _GCSV-STEP-QUOTED ENDOF
             _GCSV-ST-AFTER-QUOTE OF _GCSV-STEP-AFTER-QUOTE ENDOF
-            DROP _GRID-L-S-INVALID _GCSV-FAIL DROP
+            _GRID-L-S-INVALID _GCSV-FAIL DROP
         ENDCASE
     REPEAT
     _GCSV-STATUS @ ?DUP IF EXIT THEN
@@ -511,12 +511,12 @@ VARIABLE _GP-EXPR-XT
         _GP-SKIP-WS _GP-PEEK DUP [CHAR] * = OVER [CHAR] / = OR
     WHILE
         _GP-ADV _GP-PARSE-FACTOR SWAP
-        CASE
-            [CHAR] * OF * ENDOF
-            [CHAR] / OF
-                DUP 0= IF 2DROP 0 0 _GP-OK ! ELSE / THEN
-            ENDOF
-        ENDCASE
+        \ WHILE admitted only * and /.
+        [CHAR] * = IF
+            *
+        ELSE
+            DUP 0= IF 2DROP 0 0 _GP-OK ! ELSE / THEN
+        THEN
     REPEAT DROP ;
 
 : _GP-PARSE-EXPR  ( -- value )
@@ -525,10 +525,8 @@ VARIABLE _GP-EXPR-XT
         _GP-SKIP-WS _GP-PEEK DUP [CHAR] + = OVER [CHAR] - = OR
     WHILE
         _GP-ADV _GP-PARSE-TERM SWAP
-        CASE
-            [CHAR] + OF + ENDOF
-            [CHAR] - OF - ENDOF
-        ENDCASE
+        \ WHILE admitted only + and -.
+        [CHAR] + = IF + ELSE - THEN
     REPEAT DROP ;
 
 ' _GP-PARSE-EXPR _GP-EXPR-XT !
@@ -1212,7 +1210,8 @@ VARIABLE _GRID-H-WIDGET
                 _GRID-CHAR-BUF C!
                 _GRID-CHAR-BUF 1 _GRID-BEGIN-REPLACE
                 -1 EXIT
-            THEN DROP
+            THEN
+            DROP 0 EXIT                  \ the event's cell is spent
         THEN
     THEN
     DROP 0 ;

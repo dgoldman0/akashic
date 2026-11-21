@@ -165,7 +165,7 @@ VARIABLE _GR-SPTR
     CASE
         0 OF _GR-HANN ENDOF        \ Hann
         1 OF _GR-TRAP ENDOF        \ trapezoidal
-        DROP FP16-POS-ONE EXIT     \ flat (type 2 or any other)
+        2DROP FP16-POS-ONE EXIT    \ flat (type 2 or any other)
     ENDCASE ;
 
 \ =====================================================================
