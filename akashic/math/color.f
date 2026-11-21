@@ -561,8 +561,10 @@ VARIABLE _CL-HP-LEN
     SWAP 4 LSHIFT OR TRUE ;
 
 : COLOR-HEX-PARSE  ( addr len -- r g b flag )
-    \ Skip leading # if present
-    OVER C@ [CHAR] # = IF 1- SWAP 1+ SWAP THEN
+    \ Skip leading # if present; an empty string has no byte to read
+    DUP 0> IF
+        OVER C@ [CHAR] # = IF 1- SWAP 1+ SWAP THEN
+    THEN
     _CL-HP-LEN !  _CL-HP-ADDR !
 
     _CL-HP-LEN @ CASE

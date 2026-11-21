@@ -429,16 +429,16 @@ VARIABLE _SNA-KIND
 VARIABLE _SNA-LA
 VARIABLE _SNA-LL
 
-\ SML-NODE-ADD ( parent kind label-a label-u -- node )
+\ SML-NODE-ADD ( parent kind-a kind-u label-a label-u -- node )
 \   Create an element node with the given SML element name and
 \   optional label, append to parent.
 : SML-NODE-ADD  ( parent kind-a kind-u label-a label-u -- node )
     _SNA-LL !  _SNA-LA !
     _SML-USE-DOC
     \ Create DOM element with kind as tag name
-    DOM-CREATE-ELEMENT
-    \ Tag with SML type
-    2DUP DOM-TAG-NAME SML-TYPE? SWAP _SML-SET-TYPE DROP
+    DOM-CREATE-ELEMENT                    ( parent node )
+    \ Tag the new node with its SML type
+    DUP DOM-TAG-NAME SML-TYPE? OVER _SML-SET-TYPE
     \ Set label attribute if non-empty
     _SNA-LL @ 0> IF
         DUP S" label" _SNA-LA @ _SNA-LL @ DOM-ATTR!

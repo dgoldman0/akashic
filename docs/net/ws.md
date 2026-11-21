@@ -184,7 +184,9 @@ Build and send one WebSocket frame:
 - Client frames are always masked (RFC 6455 §5.3)
 - Generates a random 4-byte mask key via `RANDOM`
 - Supports 7-bit, 16-bit (126), and 64-bit (127) length encodings
-- Masks payload in place, then sends via `HTTP-SEND`
+- Sends the payload masked through `HTTP-SEND`, a staging chunk at a time,
+  so the caller's bytes are left as they were; the chunk is a multiple of
+  four bytes, so every chunk starts with key byte 0
 
 ### WS-FRAME-RECV
 
@@ -199,7 +201,8 @@ Receive and decode one frame:
 - Reads optional mask key, reads payload into caller's buffer
 - Unmasks payload if server sent masked frames
 - Auto-pong: if opcode is PING and `WS-AUTO-PONG` is set, automatically
-  sends a PONG with the same payload
+  sends a PONG with the same payload, and returns the ping's payload to the
+  caller unmasked
 - Returns -1 on error/closed connection
 
 ### _WS-MASK

@@ -224,9 +224,30 @@ VARIABLE _WS-MKEY-TMP
     LOOP
     DROP ;
 
+\ _WS-SEND-MASKED ( data-a data-u mask -- )
+\   Send data masked with MASK, leaving the caller's bytes as they were.
+\   Each chunk is copied to the staging buffer and masked there.  The
+\   chunk is a multiple of four bytes, so every chunk starts with key
+\   byte 0 and the payload of any length masks as one run.
+1024 CONSTANT _WS-MCHUNK
+CREATE _WS-MBUF _WS-MCHUNK ALLOT
+VARIABLE _WS-SM-KEY
+VARIABLE _WS-SM-N
+: _WS-SEND-MASKED  ( data-a data-u mask -- )
+    _WS-SM-KEY !
+    BEGIN DUP 0> WHILE
+        DUP _WS-MCHUNK MIN _WS-SM-N !
+        OVER _WS-MBUF _WS-SM-N @ CMOVE
+        _WS-MBUF _WS-SM-N @ _WS-SM-KEY @ _WS-MASK
+        _WS-MBUF _WS-SM-N @ HTTP-SEND DROP
+        _WS-SM-N @ - SWAP _WS-SM-N @ + SWAP
+    REPEAT
+    2DROP ;
+
 \ WS-FRAME-SEND ( ctx opcode payload-a payload-u -- )
 \   Build and send one WebSocket frame.
-\   Client frames are always masked (RFC 6455 §5.3).
+\   Client frames are always masked (RFC 6455 §5.3).  The payload is
+\   masked as it is sent, so the caller's bytes are left as they were.
 : WS-FRAME-SEND  ( ctx opcode payload-a payload-u -- )
     >R >R                        \ save payload ( R: len addr )
     \ Byte 0: FIN + opcode
@@ -259,7 +280,7 @@ VARIABLE _WS-MKEY-TMP
         RANDOM _WS-FHDR 10 + _SHA1-BE!
         _WS-FHDR 14 HTTP-SEND DROP
     THEN THEN
-    \ Mask payload in place and send
+    \ Send the payload masked
     R> R>                        \ ( addr len )
     DUP 0> IF
         \ Read mask key back from header
@@ -272,8 +293,7 @@ VARIABLE _WS-MKEY-TMP
         ELSE
             _WS-FHDR 10 + _SHA1-BE@
         THEN THEN
-        >R 2DUP R> _WS-MASK     \ mask payload
-        HTTP-SEND DROP
+        _WS-SEND-MASKED
     ELSE
         2DROP
     THEN
@@ -452,7 +472,7 @@ CREATE _WS-HS-BUF 2048 ALLOT
     URL-PORT @
     URL-SCHEME @ URL-S-WSS =
     HTTP-CONNECT
-    DUP 0= IF WS-E-CONNECT WS-FAIL 0 EXIT THEN
+    DUP 0= IF DROP WS-E-CONNECT WS-FAIL 0 EXIT THEN
     _WS-CTX !
     URL-SCHEME @ URL-S-WSS = _WS-TLS !
     \ Generate key

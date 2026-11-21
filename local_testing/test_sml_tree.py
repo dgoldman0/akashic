@@ -510,6 +510,22 @@ def test_node_add_remove():
           check_fn=lambda o: 'Click' in o)
 
 
+def test_node_add_tags_the_new_node():
+    """SML-NODE-ADD ( parent kind-a kind-u label-a label-u -- node ) types
+    the node it creates, leaves its parent's type alone, appends the node to
+    the parent, and takes no cell of its caller's."""
+    check("NODE-ADD types the node it creates",
+          mstr('<sml><seq></seq></sml>') +
+          [': _T TA SML-INIT DROP 77',
+           '  SML-TREE SOM-SCOPE DUP >R',
+           '  S" item" S" Hello" SML-NODE-ADD',
+           '  DUP SML-NODE-TYPE@ ." node=" .',
+           '  R@ SML-NODE-TYPE@ ." scope=" .',
+           '  DOM-PARENT R> = ." child=" .',
+           '  ." below=" . ; _T'],
+          "node=3 scope=2 child=-1 below=77")
+
+
 # ===========================================================================
 #  Test: Cursor API — SOM-CURRENT / SCOPE / POSITION
 # ===========================================================================

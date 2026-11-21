@@ -523,6 +523,22 @@ def test_query_params():
           "NOTFOUND")
 
 
+def test_param_test_leaves_one_cell():
+    """REQ-PARAM? ( key-a key-u -- flag ) used to leave the missing value's
+    address and length under its false flag."""
+    check("REQ-PARAM? hit leaves its flag",
+          http_request("GET", "/search?q=hello", ["Host: localhost"]) +
+          [': _T TA REQ-PARSE',
+           'DEPTH >R S" q" REQ-PARAM? DEPTH R> - ." cells=" . ." flag=" . ; _T'],
+          "cells=1 flag=-1")
+
+    check("REQ-PARAM? miss leaves its flag",
+          http_request("GET", "/search?q=hello", ["Host: localhost"]) +
+          [': _T TA REQ-PARSE',
+           'DEPTH >R S" x" REQ-PARAM? DEPTH R> - ." cells=" . ." flag=" . ; _T'],
+          "cells=1 flag=0")
+
+
 def test_method_checks():
     print("\n── REQ-GET? / REQ-POST? / etc. ──\n")
 

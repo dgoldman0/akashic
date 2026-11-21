@@ -10,12 +10,20 @@ The cases hold the frame words to their stack comments and to the RFC:
 
 - WS-FRAME-SEND ( ctx opcode payload-a payload-u -- ) writes the header
   for each of the three length encodings and a mask key that the server
-  applies as RFC 6455 section 5.3 says, byte i with key byte i mod 4;
+  applies as RFC 6455 section 5.3 says, byte i with key byte i mod 4,
+  masks the payload as it sends it, across its staging chunks, and leaves
+  the caller's bytes as they were;
 - WS-FRAME-RECV ( ctx buf max -- opcode buf len ) reads a frame into the
   caller's buffer, unmasks a masked one in network byte order, stops at
-  MAX, and answers a ping;
+  MAX, and answers a ping with a pong of its payload, which the caller
+  still reads unmasked;
 - WS-RECV ( ctx buf max -- opcode len ) joins a fragmented message and
-  reports a close or a closed connection as -1.
+  reports a close or a closed connection as -1;
+- WS-CONNECT ( url-a url-u -- ctx | 0 ) returns one cell when the
+  connection cannot be opened.
+
+The transport keeps a window of 256 bytes sent, from offset T-SKIP on,
+so a case can read the bytes around a staging chunk's edge.
 """
 
 from __future__ import annotations
@@ -34,15 +42,18 @@ from forth_snapshot import (
 
 
 TRANSPORT = (
-    "CREATE T-CAP 256 ALLOT  VARIABLE T-CAP-LEN  VARIABLE T-SENT",
+    "CREATE T-CAP 256 ALLOT  VARIABLE T-CAP-LEN  VARIABLE T-SENT  VARIABLE T-SKIP",
     "CREATE T-FEED 256 ALLOT  VARIABLE T-FEED-LEN  VARIABLE T-FEED-POS",
     ": TCP-POLL  ( -- ) ;",
     ": NET-IDLE  ( -- ) ;",
-    "\\ Keep the first 256 bytes sent, and count them all.",
-    ": HTTP-SEND  ( buf len -- flag )",
-    "    DUP T-SENT +!",
-    "    T-CAP-LEN @ OVER + 256 > IF 2DROP -1 EXIT THEN",
-    "    T-CAP T-CAP-LEN @ + SWAP DUP T-CAP-LEN +! CMOVE -1 ;",
+    "\\ Keep the 256 bytes sent from offset T-SKIP on, and count them all.",
+    ": T-KEEP  ( c -- )",
+    "    T-SENT @ T-SKIP @ - DUP 0 256 WITHIN IF",
+    "        T-CAP + C!  1 T-CAP-LEN +!",
+    "    ELSE 2DROP THEN  1 T-SENT +! ;",
+    ": HTTP-SEND  ( buf len -- flag )  0 ?DO DUP I + C@ T-KEEP LOOP DROP -1 ;",
+    "\\ A connection that cannot be opened.",
+    ": HTTP-CONNECT  ( host-a host-u port tls? -- ctx )  2DROP 2DROP 0 ;",
     "\\ Hand out the scripted bytes, then -1 as a closed connection.",
     ": HTTP-RECV  ( buf max -- n )",
     "    T-FEED-LEN @ T-FEED-POS @ - DUP 0= IF DROP 2DROP -1 EXIT THEN",
@@ -58,7 +69,7 @@ HELPERS = (
     ': CAP.  ( -- )  ." cap:" T-CAP-LEN @ 0 ?DO T-CAP I + C@ . LOOP ;',
     "CREATE T-PAY 256 ALLOT",
     "CREATE T-BUF 64 ALLOT",
-    ": T-RESET  ( -- )  0 T-CAP-LEN ! 0 T-SENT ! 0 T-FEED-LEN ! 0 T-FEED-POS !",
+    ": T-RESET  ( -- )  0 T-CAP-LEN ! 0 T-SENT ! 0 T-SKIP ! 0 T-FEED-LEN ! 0 T-FEED-POS !",
     "    T-BUF 64 238 FILL ;",
 )
 
@@ -135,7 +146,7 @@ def test_send_frame_with_64_bit_length_stays_in_its_header():
         frame = captured(printed)
         return (int(match.group(1)) == 14 + 65536 and match.group(2) == "-1"
                 and frame[:10] == [0x82, 0xFF, 0, 0, 0, 0, 0, 1, 0, 0]
-                and len(frame) == 14)
+                and len(frame) == 256)
 
     check_fn("64-bit length", [
         "VARIABLE T-BIG  65536 ALLOCATE DROP T-BIG !",
@@ -146,6 +157,43 @@ def test_send_frame_with_64_bit_length_stays_in_its_header():
         '      ." kept=" _WS-FHDR 14 + @ T-AFTER @ = . CAP. ;',
         "T1",
     ], sent_big, "a 14-byte header with 127 and length 65536, nothing past it")
+
+
+def test_send_leaves_the_callers_payload():
+    def kept(printed: str) -> bool:
+        frame = captured(printed)
+        return ("payload=Hello" in printed and frame[:2] == [0x81, 0x80 | 5]
+                and unmasked(frame, 2) == b"Hello")
+
+    check_fn("payload kept", [
+        ': T1  T-RESET S" Hello" T-PAY SWAP CMOVE'
+        '      0 1 T-PAY 5 WS-FRAME-SEND ." payload=" T-PAY 5 TYPE CAP. ;',
+        "T1",
+    ], kept, "Hello still in the caller's buffer and Hello masked on the wire")
+
+
+def test_send_masks_across_staging_chunks():
+    # 1300 bytes go out in staging chunks of 1024; the window holds payload
+    # bytes 1000 to 1255 of the frame, whose header and key take 8.
+    payload = bytes((i * 7) & 255 for i in range(1300))
+
+    def masked_across(printed: str) -> bool:
+        match = re.search(r"sent=(\d+) key:((?:\d+ ){4})cap:", printed)
+        if not match:
+            return False
+        key = [int(v) for v in match.group(2).split()]
+        window = captured(printed)
+        return (int(match.group(1)) == 8 + 1300 and len(window) == 256
+                and all(b ^ key[(1000 + i) % 4] == payload[1000 + i]
+                        for i, b in enumerate(window)))
+
+    check_fn("chunks", [
+        "VARIABLE T-BIGP  1300 ALLOCATE DROP T-BIGP !",
+        ": T1  T-RESET T-BIGP @ 1300 0 DO I 7 * 255 AND OVER I + C! LOOP DROP",
+        "      1008 T-SKIP !  0 2 T-BIGP @ 1300 WS-FRAME-SEND",
+        '      ." sent=" T-SENT @ . ." key:" 4 0 DO _WS-FHDR 4 + I + C@ . LOOP CAP. ;',
+        "T1",
+    ], masked_across, "every byte around the chunk edge masked with key byte i mod 4")
 
 
 def test_receive_unmasked_frame():
@@ -192,6 +240,19 @@ def test_receive_ping_answers_with_a_pong():
     ], ponged, "a masked empty pong")
 
 
+def test_receive_ping_payload_stays_unmasked_for_the_caller():
+    def echoed(printed: str) -> bool:
+        frame = captured(printed)
+        return ("cells=0 9 ping" in printed and frame[:2] == [0x8A, 0x84]
+                and unmasked(frame, 2) == b"ping")
+
+    check_fn("ping payload", [
+        f": T1  T-RESET {feed(bytes([0x89, 4]) + b'ping')}"
+        "      0 T-BUF 64 T{ WS-FRAME-RECV }T ROT . TYPE CAP. ;",
+        "T1",
+    ], echoed, "the ping read as ping and a masked pong of it")
+
+
 def test_recv_joins_fragments():
     frames = bytes([0x01, 3]) + b"abc" + bytes([0x80, 2]) + b"de"
     check("fragmented text", [
@@ -211,6 +272,14 @@ def test_recv_reports_close_and_closed_connection():
         ": T1  T-RESET 0 T-BUF 64 T{ WS-RECV }T . . ;",
         "T1",
     ], "cells=-1 0 -1")
+
+
+def test_connect_that_cannot_open_returns_one_cell():
+    check("no connection", [
+        ': T1  S" ws://example.org/x" T{ WS-CONNECT }T ." ctx=" .'
+        '      WS-ERR @ WS-E-CONNECT = ." err=" . ;',
+        "T1",
+    ], "cells=-1 ctx=0 err=-1")
 
 
 if __name__ == "__main__":
