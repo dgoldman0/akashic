@@ -1,6 +1,6 @@
 # The checker core of Uroko
 
-Status: prototype, 2026-11-20. This note describes host tooling that runs
+Status: prototype, 2026-11-21. This note describes host tooling that runs
 and is measured. The checker that ships runs on the machine instead,
 written in Forth in MegaPad's `uroko.f` module, checking each definition as
 it closes (decided 2026-11-20); this prototype settles its rules and
@@ -52,9 +52,8 @@ covers the machine models, not the toolchain.
 
 `local_testing/test_language_checker.py` runs small programs against the
 real BIOS and KDOS vocabulary, with `uroko.f`'s declarations, in about
-eight seconds. The measurement runs
-from the Akashic checkout, with `MEGAPAD_ROOT` naming the MegaPad checkout
-when it is not beside Akashic:
+eight seconds. The measurement runs from the Akashic checkout, with
+`MEGAPAD_ROOT` naming the MegaPad checkout when it is not beside Akashic:
 
 ```
 python3 -m toolchain.language.measure --json report.json
@@ -232,8 +231,8 @@ fails to infer. KDOS is then read as Forth, and each of its words takes the
 effect its stack comment declares.
 
 Those tables and comments name cells informally, so MegaPad's `uroko.f`, a
-system module that KDOS loads after itself, declares the kinds of the base
-words in Uroko's form, one word to a line:
+system module loaded after KDOS, declares the kinds of the base words in
+Uroko's form, one word to a line:
 
 ```forth
 EFFECT COMPARE   ( s1: span s2: span -- n: n )
@@ -248,11 +247,12 @@ effect and kinds, and reports a declaration that names no word, is
 malformed, or changes the shape of the word's effect in the tables or in
 KDOS's comment. Uroko's checker on the machine will give `EFFECT` a body
 that records each effect for the word it names, so that one file serves
-both checkers. MegaPad's other system modules, `networking.f`,
-`rich-terminal.f`, `tools.f` and `graphics.f`, are read after `uroko.f`,
-as an image loads them, and their words take their comments' effects. The
-checker finds MegaPad through `MEGAPAD_ROOT`, or as the checkout beside
-Akashic's, and stops with an error when that checkout has no `uroko.f`.
+both checkers. The checker reads MegaPad's other system modules,
+`networking.f`, `rich-terminal.f`, `tools.f` and `graphics.f`, after
+`uroko.f`, so they compile with its declarations in place, and their words
+take their comments' effects. The checker finds MegaPad through
+`MEGAPAD_ROOT`, or as the checkout beside Akashic's, and stops with an
+error when that checkout has no `uroko.f`.
 
 Some words have meanings that no effect can state, and the checker gives
 them exact rules: the shuffles, `PICK` and `ROLL` with a constant depth,
@@ -452,6 +452,11 @@ which later changes are measured.
   declared and checked as a kind, but `RECORD`, which would define its
   fields and the check that narrows a reference to it, waits on the object
   side of Part 9d.
+- Narrowing objects. A kind still mixes with the kinds it refines in both
+  directions, so a `tagged` word or a `ref` may stand where a `concept` is
+  expected, as an address may stand for a struct. Rule 7 of the checks of
+  windows and handles makes that narrowing pass through `OBJ>REF` or a
+  kind's check.
 - Kinds through loops. Each loop body runs once, plus the repeats of a
   counted loop, so a kind that changes on a later pass is not followed.
 - Offsets within spans. A length shortened by arithmetic loses its span, so
