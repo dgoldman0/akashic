@@ -79,8 +79,13 @@ REQUIRE ../../utils/memory-span.f
 \ Callbacks are stack-exact and non-reentrant; KDOSNET-WITH contains throws
 \ and preserves exact owner-release diagnostics around each complete call.
 \ Each callback field below declares, in Uroko's form, the effect of the
-\ token it holds; sd is the KDOS TLS socket descriptor.
+\ token it holds, by name where the effect is shared or long; sd is the
+\ KDOS TLS socket descriptor.
 ( kind: kdos-tls-port struct )
+( kind: kdos-tls-io xt( sd buf: span record -- count: n ) )
+( kind: kdos-tls-op xt( sd record -- ior: n ) )
+( kind: kdos-tls-ready xt( sd record -- ready: flag ) )
+( kind: kdos-tls-abort xt( sd record -- abort-status ior: n ) )
 
   0 CONSTANT _KDOSTLSP-PORT
 NET-IO-PORT-SIZE CONSTANT _KDOSTLSP-MAGIC
@@ -94,13 +99,13 @@ _KDOSTLSP-CLOSE-TIMEOUT 8 + CONSTANT _KDOSTLSP-CLOSE-DEADLINE
 _KDOSTLSP-CLOSE-DEADLINE 8 + CONSTANT _KDOSTLSP-CLOSE-FALLBACKS
 _KDOSTLSP-CLOSE-FALLBACKS 8 + CONSTANT _KDOSTLSP-ABORT-STATUS
 _KDOSTLSP-ABORT-STATUS 8 + CONSTANT _KDOSTLSP-NOW-XT ( holds: xt( record -- ms: u ) )
-_KDOSTLSP-NOW-XT 8 + CONSTANT _KDOSTLSP-SEND-XT ( holds: xt( sd buf: span record -- count: n ) )
-_KDOSTLSP-SEND-XT 8 + CONSTANT _KDOSTLSP-RECV-XT ( holds: xt( sd buf: span record -- count: n ) )
-_KDOSTLSP-RECV-XT 8 + CONSTANT _KDOSTLSP-STATUS-XT ( holds: xt( sd record -- ior: n ) )
-_KDOSTLSP-STATUS-XT 8 + CONSTANT _KDOSTLSP-READY-XT ( holds: xt( sd record -- ready: flag ) )
+_KDOSTLSP-NOW-XT 8 + CONSTANT _KDOSTLSP-SEND-XT ( holds: kdos-tls-io )
+_KDOSTLSP-SEND-XT 8 + CONSTANT _KDOSTLSP-RECV-XT ( holds: kdos-tls-io )
+_KDOSTLSP-RECV-XT 8 + CONSTANT _KDOSTLSP-STATUS-XT ( holds: kdos-tls-op )
+_KDOSTLSP-STATUS-XT 8 + CONSTANT _KDOSTLSP-READY-XT ( holds: kdos-tls-ready )
 _KDOSTLSP-READY-XT 8 + CONSTANT _KDOSTLSP-POLL-XT ( holds: xt( record -- ) )
-_KDOSTLSP-POLL-XT 8 + CONSTANT _KDOSTLSP-CLOSE-TRY-XT ( holds: xt( sd record -- ior: n ) )
-_KDOSTLSP-CLOSE-TRY-XT 8 + CONSTANT _KDOSTLSP-ABORT-XT ( holds: xt( sd record -- abort-status ior: n ) )
+_KDOSTLSP-POLL-XT 8 + CONSTANT _KDOSTLSP-CLOSE-TRY-XT ( holds: kdos-tls-op )
+_KDOSTLSP-CLOSE-TRY-XT 8 + CONSTANT _KDOSTLSP-ABORT-XT ( holds: kdos-tls-abort )
 _KDOSTLSP-ABORT-XT 8 + CONSTANT KDOSTLSP-SIZE
 
 : KDOSTLSP.PORT            ( record: kdos-tls-port -- port: nio-port ) _KDOSTLSP-PORT + ;

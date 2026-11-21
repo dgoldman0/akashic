@@ -452,6 +452,57 @@ def test_struct_fields_and_tables_declare_what_they_hold(base_checker_state):
     assert accessor.holds is not None and accessor.holds.effect.shape() == "3 -- 1"
 
 
+def test_a_named_effect_is_declared_once_and_shared_by_its_slots(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: port struct )\n"
+        "( kind: status n )\n"
+        "( kind: port-io xt( buf: span context -- count: u s: status ) )\n"
+        "( kind: port-recv port-io )\n"
+        " 8 CONSTANT _P-RECV ( holds: port-io )\n"
+        "16 CONSTANT _P-SEND ( holds: port-io )\n"
+        ": PORT-RECV  ( buf: span p: port -- count: u s: status )\n"
+        "    DUP @ SWAP _P-RECV + @ EXECUTE ;\n"
+        ": PORT-SEND  ( buf: span p: port -- count: u s: status )\n"
+        "    DUP @ SWAP _P-SEND + @ EXECUTE ;\n"
+        ": GOOD-IO  ( buf: span context -- count: u s: status )  DROP NIP 0 ;\n"
+        ": WRONG-IO  ( buf: span context -- count: u )  DROP NIP ;\n"
+        ": INSTALL  ( p: port -- )  ['] GOOD-IO SWAP _P-RECV + ! ;\n"
+        ": BAD-INSTALL  ( p: port -- )  ['] WRONG-IO SWAP _P-SEND + ! ;\n"
+        ": WITH-IO  ( buf: span context io: port-recv -- count: u s: status )  EXECUTE ;\n"
+        ": USE-IO  ( buf: span context -- count: u s: status )  ['] GOOD-IO WITH-IO ;\n"
+    ))
+    assert record(checker, "PORT-RECV").comparison == "match"
+    assert record(checker, "PORT-SEND").comparison == "match"
+    assert findings(checker, "INSTALL") == []
+    assert record(checker, "INSTALL").typed_stores_checked == 1
+    assert any(f.startswith("token effect: WRONG-IO ( 3 -- 1 ) stored by ! into")
+               for f in findings(checker, "BAD-INSTALL"))
+    # A second name for an effect, and a named effect as a typed input.
+    assert record(checker, "WITH-IO").comparison == "match"
+    assert not record(checker, "WITH-IO").word.higher_order
+    assert record(checker, "USE-IO").comparison == "match" and findings(checker, "USE-IO") == []
+    assert {name for group, name in checker.named_effects} == {"port-io", "port-recv"}
+
+
+def test_named_effects_are_checked_where_they_are_declared(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: hook xt( c: char -- ) )\n"
+        "( kind: hook xt( c: char -- ) )\n"
+        "( kind: hook xt( -- ) )\n"
+        "( kind: hook struct )\n"
+        "( kind: grab xt( i*x -- j*x ) )\n"
+        "( kind: hooks list( hook ) )\n"
+        "( kind: plain xt )\n"
+    ))
+    assert all_findings(checker) == [
+        "declaration: kind: hook already names another effect",
+        "declaration: kind: hook already names an effect",
+        "declaration: kind: grab names an effect that is not fixed",
+        "declaration: kind: hooks: list( xt ): an execution token is plain data",
+        "declaration: kind: plain cannot refine xt",
+    ]
+
+
 def test_children_of_defining_words_take_holds_declarations(base_checker_state):
     checker = check(base_checker_state, (
         "VARIABLE _LAYOUT-OFF\n"

@@ -191,8 +191,10 @@ class Word:
     # A data word's declared content: what its cell, value or field holds.
     holds: Slot | None = field(default=None, repr=False)
     # A kind declared with ( kind: NAME BASE ), kept in the dictionary under
-    # a key no Forth token can spell, so REQUIRE closures carry it.
+    # a key no Forth token can spell, so REQUIRE closures carry it.  A named
+    # effect, ( kind: NAME xt( effect ) ), refines xt and keeps its effect.
     kind_parent: str | None = field(default=None, repr=False)
+    kind_effect: Effect | None = field(default=None, repr=False)
     problems: list = field(default_factory=list, repr=False)
     declared_count: int = field(default=0, repr=False)
 
@@ -272,7 +274,10 @@ class Checker:
         self.strict = strict
         # Every kind declared anywhere, for comparing kinds that flow between
         # modules; resolving a name in a declaration uses the dictionary.
+        # Named effects are kept apart, since no value takes one as its kind:
+        # a token of a named effect is an xt carrying that effect.
         self.all_kinds: dict[str, str] = {}
+        self.all_effects: dict[str, Effect] = {}
         self.words: dict[str, Word] = {}
         self.records: list[Record] = []
         self.findings: list[Finding] = []
@@ -296,8 +301,10 @@ class Checker:
         self.inlining: list[Word] = []
         # Data words declared with ( holds: KIND ), as (group, word).
         self.typed_slots: list[tuple[str, Word]] = []
-        # Kinds declared with ( kind: NAME BASE ), as (group, name).
+        # Kinds declared with ( kind: NAME BASE ), and effects named with
+        # ( kind: NAME xt( effect ) ), as (group, name).
         self.declared_kinds: list[tuple[str, str]] = []
+        self.named_effects: list[tuple[str, str]] = []
         # When a list, each analyzed step appends (line, op, word, depths).
         self.trace: list | None = None
         self.defined_here: dict[str, Word] | None = None
@@ -358,14 +365,17 @@ class Checker:
 
     # Kinds
 
-    def resolve_kind(self, name: str) -> str | None:
-        """The kind a declaration's name stands for, if this module sees it."""
+    def resolve_kind(self, name: str) -> str | Effect | None:
+        """The kind a declaration's name stands for, if this module sees it,
+        or the effect a named effect stands for."""
         lowered = name.lower()
         builtin = E.BUILTIN_KINDS.get(lowered)
         if builtin is not None:
             return builtin
         entry = self.words.get(KIND_KEY + lowered.upper())
-        return entry.name if entry is not None else None
+        if entry is None:
+            return None
+        return entry.kind_effect if entry.kind_effect is not None else entry.name
 
     def kind_parent(self, kind: str) -> str | None:
         """The kind ``kind`` refines: a built-in's, a declared kind's base, or
@@ -389,19 +399,40 @@ class Checker:
             kind = self.kind_parent(kind)
         return False
 
-    def declare_kind(self, name: str, parent: str) -> str | None:
-        """Add a kind; a problem when the name already means another kind."""
+    def declare_kind(self, name: str, parent: str | Effect) -> str | None:
+        """Add a kind, or name an effect when ``parent`` is one; a problem
+        when the name already means another kind or another effect."""
         key = KIND_KEY + name.upper()
+        effect = parent if isinstance(parent, Effect) else None
         existing = self.words.get(key)
-        if existing is not None and existing.kind_parent != parent:
-            return f"kind: {name} already refines {existing.kind_parent}"
-        known = self.all_kinds.get(name)
-        if known is not None and known != parent:
-            return f"kind: {name} refines {known} elsewhere"
+        if existing is not None:
+            if existing.kind_effect is not None and effect is None:
+                return f"kind: {name} already names an effect"
+            if effect is not None and existing.kind_effect is None:
+                return f"kind: {name} already refines {existing.kind_parent}"
+            if effect is None and existing.kind_parent != parent:
+                return f"kind: {name} already refines {existing.kind_parent}"
+            if effect is not None and E.effect_key(effect) != E.effect_key(existing.kind_effect):
+                return f"kind: {name} already names another effect"
+        if effect is not None:
+            known_effect = self.all_effects.get(name)
+            if name in self.all_kinds or (known_effect is not None
+                                          and E.effect_key(known_effect) != E.effect_key(effect)):
+                return f"kind: {name} means another kind elsewhere"
+        else:
+            known = self.all_kinds.get(name)
+            if name in self.all_effects:
+                return f"kind: {name} names an effect elsewhere"
+            if known is not None and known != parent:
+                return f"kind: {name} refines {known} elsewhere"
         entry = Word(name, self.module, self.line, self._origin(), kind="kind")
-        entry.kind_parent = parent
+        entry.kind_parent = E.XT if effect is not None else parent
+        entry.kind_effect = effect
         self.define_entry(key, entry)
-        self.all_kinds[name] = parent
+        if effect is not None:
+            self.all_effects[name] = effect
+        else:
+            self.all_kinds[name] = parent
         return None
 
     def define_entry(self, key: str, word: Word) -> None:
@@ -2341,6 +2372,8 @@ def _top_paren(checker: Checker, cursor: LineCursor, word: Word) -> None:
         problem = checker.declare_kind(name, parent)
         if problem is not None:
             checker.declaration_problem(problem, "(kind)")
+        elif isinstance(parent, Effect):
+            checker.named_effects.append((checker.group, name))
         else:
             checker.declared_kinds.append((checker.group, name))
 

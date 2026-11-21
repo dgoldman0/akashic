@@ -12,6 +12,9 @@ effect as a nested comment, ``xt( text: span -- )``, and an item labelled
 ``holds:`` is the address of a cell holding the kind that follows, as in
 ``VARIABLE YAML-EMIT-XT ( holds: xt( text: span -- ) )``.  KDOS's ``(``
 counts nested parentheses, so it skips the whole declaration as a comment.
+A module names an effect once, ``( kind: nio-io xt( buf: span context --
+count: u ) )``, and writes the name wherever a kind may stand, as in
+``( holds: nio-io )``; the name stands for the effect.
 
 The built-in kinds of plain data are ``cell`` (no kind), ``n``, ``u``,
 ``flag``, ``char``, ``addr``, ``span``, ``xt``, ``task``, and ``struct``, a
@@ -216,9 +219,10 @@ class ParsedComment:
 
 
 # A resolver maps a kind name written in a declaration to the checker's kind,
-# or None when no such kind is visible.  Parents maps a kind to the kind it
-# refines, which a parametric kind needs to check its parameter.
-Resolver = Callable[[str], "str | None"]
+# to the effect a named effect stands for, or to None when no such kind is
+# visible.  Parents maps a kind to the kind it refines, which a parametric
+# kind needs to check its parameter.
+Resolver = Callable[[str], "str | Effect | None"]
 Parents = Callable[[str], "str | None"]
 
 
@@ -329,8 +333,9 @@ class _Parser:
     def kind_expression(self, name: str) -> tuple[str | None, Effect | None]:
         """One kind at the cursor, as the kind and the effect a token kind has.
 
-        A kind is a kind's name, ``xt( effect )``, or ``list( k )`` or
-        ``handle( k )`` around another kind.  The kind is None after a
+        A kind is a kind's name, ``xt( effect )``, the name of an effect that
+        a ``( kind: NAME xt( effect ) )`` declaration named, or ``list( k )``
+        or ``handle( k )`` around another kind.  The kind is None after a
         problem, which the parser records.
         """
         token = self.tokens[self.pos]
@@ -366,6 +371,8 @@ class _Parser:
         if kind is None:
             self.problems.append(f"{name}: names an unknown kind '{token}'")
             return None, None
+        if isinstance(kind, Effect):
+            return XT, kind  # a named effect: a token that runs it
         return kind, None
 
     def kind_item(self, name: str) -> _Item:
@@ -604,11 +611,15 @@ def parse_holds(text: str, resolve: Resolver | None = None, parents: Parents | N
 
 def parse_kind_declaration(text: str, resolve: Resolver | None = None,
                            parents: Parents | None = None
-                           ) -> tuple[tuple[str, str] | None, list[str], bool]:
+                           ) -> tuple[tuple[str, "str | Effect"] | None, list[str], bool]:
     """A ``( kind: NAME BASE )`` declaration: the new kind and its base.
 
     The base is a kind's name or a parametric kind, as in
-    ``( kind: path list( string ) )``.
+    ``( kind: path list( string ) )``.  A base written as an effect,
+    ``( kind: nio-io xt( buf: span context -- count: u ) )``, names that
+    effect instead, and so does the name of an effect named before: the
+    declaration's second element is then the effect.  A token of any word
+    with that effect may stand where the name is written.
     """
     tokens = _tokens(text)
     if not tokens or tokens[0].lower() != "kind:":
@@ -621,6 +632,7 @@ def parse_kind_declaration(text: str, resolve: Resolver | None = None,
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", name):
         return None, [f"kind: '{tokens[1]}' is not a kind name"], True
     resolve = resolve or builtin_resolver
+    effect = None
     if not _opens(base):
         if len(tokens) != 3:
             return None, ["kind: takes a name and the kind it refines"], True
@@ -629,18 +641,30 @@ def parse_kind_declaration(text: str, resolve: Resolver | None = None,
         parent = resolve(base)
         if parent is None:
             return None, [f"kind: {name} refines an unknown kind '{tokens[2]}'"], True
+        if isinstance(parent, Effect):
+            parent, effect = XT, parent
     else:
         problems: list[str] = []
         parser = _Parser(tokens, resolve, problems, parents)
         parser.pos = 2
-        parent, _ = parser.kind_expression(name)
+        parent, effect = parser.kind_expression(name)
         if problems:
             return None, [f"kind: {problem}" for problem in problems], True
         if parser.pos < len(tokens):
             return None, ["kind: takes a name and the kind it refines"], True
+    if parent == XT and effect is not None:
+        if effect.variable:
+            return None, [f"kind: {name} names an effect that is not fixed"], True
+        return (name, effect), [], True
     if parent in (X, XT):
         return None, [f"kind: {name} cannot refine {base}"], True
     return (name, parent), [], True
+
+
+def effect_key(effect: Effect) -> tuple:
+    """What makes two effects the same: their shapes and their cells' kinds."""
+    return (len(effect.inputs), effect.depths, tuple(slot.kind for slot in effect.inputs),
+            tuple(tuple(slot.kind for slot in alt) for alt in effect.alts))
 
 
 def effect_shape(effect: Effect) -> tuple[int, tuple[int, ...]]:

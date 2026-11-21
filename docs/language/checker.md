@@ -171,6 +171,22 @@ Because a field offset carries its declaration, an accessor written as
 `: NIO.RECV-XT ( port -- a ) _NIO-RECV-XT + ;` needs none of its own: the
 checker infers that it returns the address of a cell holding the token.
 
+A module names an effect once and then uses the name wherever a kind may
+stand. The NIO port's receive and send callbacks share one:
+
+```forth
+( kind: nio-io xt( buf: span context -- count: u status: nio-status ) )
+ 8 CONSTANT _NIO-RECV-XT  ( holds: nio-io )
+16 CONSTANT _NIO-SEND-XT  ( holds: nio-io )
+```
+
+A named effect stands for its effect, so a token of any word with that
+effect may fill a slot that names it, and `( kind: nio-recv nio-io )` gives
+the same effect a second name. A name keeps one effect wherever it is
+declared. Since KDOS's `(` ends with its line, a slot that spells out a
+long effect makes a long line, and naming the effect keeps the slot's line
+short and states the shared contract in one place.
+
 Two conventions of Akashic's comments carry over. A bar inside a name says
 which values one cell may take, as `port|0: nio-port` for a port or zero,
 while a bar at a token's edge separates alternatives. An output span named
@@ -180,9 +196,11 @@ writes, is part of that span.
 Malformed declarations are findings: an unknown kind, a label with no kind
 after it, an `xt(`, `list(` or `handle(` without its `)`, a list of plain
 data or a handle of something other than an object, a `holds:` with text
-after its kind, a kind that refines an unknown kind, and a declaration whose
-`(` finds no `)` on its line. The last matters to KDOS as well, since an unclosed comment
-runs to the end of its line and hides any code after it there.
+after its kind, a kind that refines an unknown kind, a name declared again
+as another kind or another effect, a named effect that is not fixed, and a
+declaration whose `(` finds no `)` on its line. The last matters to KDOS as
+well, since an unclosed comment runs to the end of its line and hides any
+code after it there.
 
 ## The base vocabulary
 
@@ -412,11 +430,13 @@ figures, the defects and where the checker misleads.
 
 **How kinds are written.** Declared kinds work as decided: a declaration
 sits where Forth programmers already read effects, KDOS skips it, and the
-checker reports a malformed one. The pilot shows the cost of the one-line
-rule: KDOS's `(` ends with its line, so a field holding a token with a long
-effect makes a long line, up to 104 characters in the pilot. Field offsets
-are the natural place for a struct's declarations in Akashic's Forth, since
-every accessor and inline use inherits them.
+checker reports a malformed one. KDOS's `(` ends with its line, so a field
+holding a token with a long effect made a long line, up to 104 characters
+in the second round's pilot. Named effects remove that cost: with the
+callbacks' effects named once, the pilot's two modules have no line longer
+than 85 characters, and callbacks that share a contract share its name.
+Field offsets are the natural place for a struct's declarations in
+Akashic's Forth, since every accessor and inline use inherits them.
 
 **Spans are two cells.** Following value identity keeps a span whole
 through any shuffle, and the checker reports a call that pairs one span's

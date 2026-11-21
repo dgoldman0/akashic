@@ -263,6 +263,8 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
                                           if w.holds is not None and w.holds.effect is not None),
         "kinds declared": sum(1 for kind_group, _ in checker.declared_kinds
                               if kind_group == group),
+        "effects named": sum(1 for effect_group, _ in checker.named_effects
+                             if effect_group == group),
         "calls through a declared token effect": sum(r.declared_tokens for r in records),
         "such calls by source": dict(sum((collections.Counter(r.declared_token_sources)
                                           for r in records), collections.Counter())),
