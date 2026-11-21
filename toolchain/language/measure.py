@@ -3,13 +3,19 @@
 Run from the Akashic checkout::
 
     python3 -m toolchain.language.measure --json report.json
+    python3 -m toolchain.language.measure --groups library --placement lm1.txt
 
 The run loads MegaPad's BIOS dictionary, KDOS and the system modules as the
 base vocabulary, then every library file under ``akashic/`` in sorted order,
 following each REQUIRE where it appears, then the Forth test drivers and
 examples.  It reports how many colon definitions have an inferred effect,
 how those compare with their stack comments, why the rest could not be
-inferred, and what the kind, span and return-stack checks found.
+inferred, what the kind, span, token and return-stack checks found, and how
+many declarations the source carries.
+
+A second, strict run trusts no stack comment (release plan decision 32's
+rule for placing a word on LM1) and counts the definitions whose effect it
+works out from code all the way down.  ``--placement`` lists them.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-from .checker import Checker, Record
+from .checker import Checker, Record, Word
 from .effects import Effect
 
 BASE_MODULES = ("kdos.f", "networking.f", "rich-terminal.f", "tools.f", "graphics.f")
@@ -119,8 +125,9 @@ class Modules:
         return self.orders[module]
 
 
-def build(root: Path, megapad: Path, defines: list[str], groups: list[str]) -> Checker:
-    checker = Checker()
+def build(root: Path, megapad: Path, defines: list[str], groups: list[str],
+          strict: bool = False) -> Checker:
+    checker = Checker(strict=strict)
     checker.load_bios(megapad)
     checker.load_base(megapad, BASE_MODULES)
     for text in defines:
@@ -229,22 +236,40 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
     ][: examples * 4]
     findings = collections.Counter()
     finding_examples: dict[str, list] = collections.defaultdict(list)
-    for record in records:
-        for finding in record.findings:
-            key = finding.category
-            if finding.category in ("kind", "managed rule", "return stack", "span"):
-                key = f"{finding.category}: {finding.detail.split(':')[0]}"
-                if finding.category == "return stack":
-                    key = f"return stack: {finding.detail}"
-            findings[key] += 1
-            if len(finding_examples[key]) < examples:
-                finding_examples[key].append({
-                    "module": finding.module, "line": finding.line,
-                    "word": finding.word, "detail": finding.detail,
-                })
+    for finding in checker.findings:
+        if finding.group != group:
+            continue
+        key = finding.category
+        if finding.category in ("kind", "managed rule", "return stack", "span"):
+            key = f"{finding.category}: {finding.detail.split(':')[0]}"
+            if finding.category == "return stack":
+                key = f"return stack: {finding.detail}"
+        if finding.category == "declaration":
+            key = "declaration: " + re.sub(r"'[^']*'", "'…'", finding.detail.split(": ", 1)[-1])
+        findings[key] += 1
+        if len(finding_examples[key]) < examples:
+            finding_examples[key].append({
+                "module": finding.module, "line": finding.line,
+                "word": finding.word, "detail": finding.detail,
+            })
     relying = sum(1 for r in inferred if r.relies_on_declared)
-    grounded = sum(1 for r in inferred if _grounded(r.word, {}))
     self_named = [r for r in records if r.hides_older]
+    typed_slots = [word for slot_group, word in checker.typed_slots if slot_group == group]
+    declarations = {
+        "definitions with declared kinds": sum(1 for r in records if r.declared_items),
+        "declared items in stack comments": sum(r.declared_items for r in records),
+        "typed slots": len(typed_slots),
+        "typed slots holding tokens": sum(1 for w in typed_slots
+                                          if w.holds is not None and w.holds.effect is not None),
+        "kinds declared": sum(1 for kind_group, _ in checker.declared_kinds
+                              if kind_group == group),
+        "calls through a declared token effect": sum(r.declared_tokens for r in records),
+        "such calls by source": dict(sum((collections.Counter(r.declared_token_sources)
+                                          for r in records), collections.Counter())),
+        "definitions making such calls": sum(1 for r in records if r.declared_tokens),
+        "token stores checked against a slot": sum(r.typed_stores_checked for r in records),
+        "token stores of unknown tokens": sum(r.typed_stores_unchecked for r in records),
+    }
     commented = sum(1 for r in records if r.word.declared is not None)
     preceding = sum(1 for r in records
                     if r.word.declared_reason == "comment on a preceding line")
@@ -258,7 +283,7 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
         "mismatches by comment form": dict(mismatch_kinds.most_common()),
         "comments of failed definitions": dict(declared_only.most_common()),
         "inferred relying on a comment-only callee": relying,
-        "inferred with no comment-only word anywhere below": grounded,
+        "declarations": declarations,
         "failure categories": dict(direct.most_common()),
         "failure examples": category_examples,
         "propagated failures by root cause": dict(roots.most_common()),
@@ -312,12 +337,63 @@ def sample(checker: Checker, root: Path, group: str, category: str, count: int,
     return "\n".join(out)
 
 
-def _grounded(word, memo: dict) -> bool:
-    """Whether a word's effect rests on inference all the way down.
+def placement(strict: Checker, group: str, examples: int) -> tuple[dict, list[Record]]:
+    """Decision 32's rule, measured on a strict run.
 
-    Base words count as grounded, since their effects are given; a source
-    word counts when it was inferred and every source word it calls is
-    grounded in turn.
+    A definition qualifies when the strict run infers its effect and no
+    definition at or below it runs a token whose effect only a declaration
+    states: a token read from a typed slot, a typed token input or a
+    deferred word.  The second count also admits those declared effects,
+    which every store the checker sees is compared with.
+    """
+    records = [r for r in strict.records if r.group == group]
+    total = len(records)
+    inferred = [r for r in records if r.status == "inferred"]
+    memo: dict[int, bool] = {}
+    qualifying = [r for r in inferred if _code_all_the_way_down(r.word, memo)]
+    failed = collections.Counter()
+    roots = collections.Counter()
+    for record in records:
+        if record.status != "failed":
+            continue
+        failure = record.failure
+        if failure.category == PROPAGATED:
+            roots[failure.root[0]] += 1
+        else:
+            failed[failure.category] += 1
+    by_area = collections.Counter(_area(r.word.module) for r in qualifying)
+    totals = collections.Counter(_area(r.word.module) for r in records)
+    resting = [r for r in inferred if r.word.record is not None and r.declared_tokens]
+    summary = {
+        "definitions": total,
+        "inferred in the strict run": len(inferred),
+        "qualify for LM1": len(qualifying),
+        "share qualifying": round(100 * len(qualifying) / max(total, 1), 1),
+        "share inferred in the strict run": round(100 * len(inferred) / max(total, 1), 1),
+        "inferred, making a declared token call themselves": len(resting),
+        "failure categories": dict(failed.most_common()),
+        "propagated failures by root cause": dict(roots.most_common()),
+        "qualifying by area": {area: [by_area[area], totals[area]]
+                               for area, _ in totals.most_common()},
+    }
+    return summary, qualifying
+
+
+def _area(module: str) -> str:
+    parts = module.split("/")
+    return parts[1] if len(parts) > 2 else module
+
+
+def _code_all_the_way_down(word: Word, memo: dict) -> bool:
+    """Whether a strict-run effect rests on code at and below this word.
+
+    Base words count, since their effects are given.  A source word counts
+    when the strict run inferred it, it ran no token whose effect only a
+    declaration states, and every word its analysis ran counts in turn: the
+    words it calls, the known tokens it executes, and the words it inlines.
+    A word that runs a token it is given is inlined at each call site, and
+    what its body runs there is recorded with the caller, so it counts as
+    code.  Naming a token without running it leaves the effect unchanged.
     """
     key = id(word)
     if key in memo:
@@ -325,15 +401,15 @@ def _grounded(word, memo: dict) -> bool:
     if word.origin != "source":
         return True
     if word.kind == "defer":
-        return word.signature_source == "inferred"  # bound by IS to an inferred word
-    if word.kind != "colon":
-        return True  # variables, constants and created words have exact effects
-    memo[key] = True  # a word that calls itself does not undo its own grounding
-    # A word that runs an xt it is given is inferred at each call site.
-    result = word.inferred is not None or word.higher_order
-    if result and word.items:
-        for op, arg, _ in word.items:
-            if op in ("call", "xt") and arg is not word and not _grounded(arg, memo):
+        return False  # whatever token IS stored last runs
+    if word.kind != "colon" or word.higher_order:
+        return True  # data words have exact effects; inlined words count at the caller
+    memo[key] = True  # a word that calls itself does not undo its own result
+    record = word.record
+    result = word.inferred is not None and (record is None or record.declared_tokens == 0)
+    if result and record is not None:
+        for callee in record.ran.values():
+            if callee is not word and not _code_all_the_way_down(callee, memo):
                 result = False
                 break
     memo[key] = result
@@ -362,15 +438,24 @@ def main(argv: list[str] | None = None) -> int:
                         help="print a random sample of one category's definitions")
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--seed", type=int, default=20261120)
+    parser.add_argument("--strict", action="store_true",
+                        help="with --sample, draw from the strict run")
+    parser.add_argument("--placement", type=Path,
+                        help="write the definitions that qualify for LM1, one per line")
+    parser.add_argument("--no-strict", action="store_true", help="skip the strict run")
     args = parser.parse_args(argv)
     defines = ["-1 CONSTANT GUARDED"] if args.guarded else []
     started = time.monotonic()
     groups = args.groups.split(",")
-    checker = build(args.akashic, args.megapad, defines, groups)
-    elapsed = time.monotonic() - started
     if args.sample:
+        checker = build(args.akashic, args.megapad, defines, groups, strict=args.strict)
         print(sample(checker, args.akashic, groups[0], args.sample, args.count, args.seed))
         return 0
+    checker = build(args.akashic, args.megapad, defines, groups)
+    elapsed = time.monotonic() - started
+    strict = None
+    if not args.no_strict:
+        strict = build(args.akashic, args.megapad, defines, groups, strict=True)
     report = {
         "seconds": round(elapsed, 1),
         "guarded": args.guarded,
@@ -379,8 +464,18 @@ def main(argv: list[str] | None = None) -> int:
         "undefined at top level": dict(collections.Counter(checker.top_undefined).most_common(20)),
         "base": summarize(checker, "base", args.examples),
     }
+    qualifying_lists = {}
     for group in groups:
         report[group] = summarize(checker, group, args.examples)
+        if strict is not None:
+            report[group]["placement"], qualifying_lists[group] = placement(
+                strict, group, args.examples)
+    report["seconds"] = round(time.monotonic() - started, 1)
+    if args.placement and strict is not None:
+        lines_out = [f"{r.word.module}:{r.word.line} {r.word.name}"
+                     for group in groups for r in qualifying_lists[group]]
+        args.placement.parent.mkdir(parents=True, exist_ok=True)
+        args.placement.write_text("\n".join(lines_out) + "\n")
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(report, indent=1, default=str))
@@ -393,7 +488,13 @@ def main(argv: list[str] | None = None) -> int:
         print("  failures:", part["failure categories"])
         print("  propagated roots:", part["propagated failures by root cause"])
         print("  findings:", part["findings"])
-    print(f"{elapsed:.1f} s")
+        print("  declarations:", part["declarations"])
+        if "placement" in part:
+            strict_part = part["placement"]
+            print(f"  strict: {strict_part['inferred in the strict run']} inferred, "
+                  f"{strict_part['qualify for LM1']} qualify for LM1 "
+                  f"({strict_part['share qualifying']}%)")
+    print(f"{report['seconds']:.1f} s")
     return 0
 
 

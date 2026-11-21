@@ -19,32 +19,27 @@ PROVIDED akashic-net-io-port
 3 CONSTANT NIO-OPEN-STATE-FAILED
 4 CONSTANT NIO-OPEN-STATE-CANCELLED
 
-\ RECV-XT:  ( buffer capacity context -- count io-status )
-\ SEND-XT:  ( buffer length context -- count io-status )
-\ POLL-XT:  ( context -- )
-\ CLOSE-XT: ( context -- )
-\ OPEN-XT:  ( context -- io-status )
-\ OPEN-START-XT: ( context -- io-status )
-\ OPEN-POLL-XT:  ( context -- io-status )
-\ CLOSE-START-XT: ( context -- io-status )
-\ CLOSE-POLL-XT:  ( context -- io-status )
-\ CANCEL-XT:     ( context -- )
+\ A port record holds the adapter's context cell and its callbacks.  Each
+\ callback field declares, in Uroko's form, the effect of the token it
+\ holds; the context is whatever cell the adapter chose.
+( kind: nio-port record )
+( kind: nio-status n )
  0 CONSTANT _NIO-CONTEXT
- 8 CONSTANT _NIO-RECV-XT
-16 CONSTANT _NIO-SEND-XT
-24 CONSTANT _NIO-POLL-XT
-32 CONSTANT _NIO-CLOSE-XT
-40 CONSTANT _NIO-OPEN-XT
-48 CONSTANT _NIO-OPEN-START-XT
-56 CONSTANT _NIO-OPEN-POLL-XT
-64 CONSTANT _NIO-CANCEL-XT
+ 8 CONSTANT _NIO-RECV-XT  ( holds: xt( buf: span context -- count: u status: nio-status ) )
+16 CONSTANT _NIO-SEND-XT  ( holds: xt( buf: span context -- count: u status: nio-status ) )
+24 CONSTANT _NIO-POLL-XT  ( holds: xt( context -- ) )
+32 CONSTANT _NIO-CLOSE-XT ( holds: xt( context -- ) )
+40 CONSTANT _NIO-OPEN-XT  ( holds: xt( context -- status: nio-status ) )
+48 CONSTANT _NIO-OPEN-START-XT ( holds: xt( context -- status: nio-status ) )
+56 CONSTANT _NIO-OPEN-POLL-XT  ( holds: xt( context -- status: nio-status ) )
+64 CONSTANT _NIO-CANCEL-XT     ( holds: xt( context -- ) )
 72 CONSTANT _NIO-OPEN-STATE
 80 CONSTANT _NIO-OPEN-STATUS
  88 CONSTANT _NIO-CLEANUP-FLAGS
  96 CONSTANT _NIO-CANCEL-ERROR
 104 CONSTANT _NIO-CLOSE-ERROR
-112 CONSTANT _NIO-CLOSE-START-XT
-120 CONSTANT _NIO-CLOSE-POLL-XT
+112 CONSTANT _NIO-CLOSE-START-XT ( holds: xt( context -- status: nio-status ) )
+120 CONSTANT _NIO-CLOSE-POLL-XT  ( holds: xt( context -- status: nio-status ) )
 128 CONSTANT _NIO-CLOSE-STATE
 136 CONSTANT _NIO-CLOSE-STATUS
 144 CONSTANT NET-IO-PORT-SIZE
@@ -77,7 +72,7 @@ PROVIDED akashic-net-io-port
 : NIO.CLOSE-STATE    ( port -- a ) _NIO-CLOSE-STATE + ;
 : NIO.CLOSE-STATUS   ( port -- a ) _NIO-CLOSE-STATUS + ;
 
-: NIO-INIT  ( port -- ) NET-IO-PORT-SIZE 0 FILL ;
+: NIO-INIT  ( port: nio-port -- ) NET-IO-PORT-SIZE 0 FILL ;
 
 : _NIO-CLEANUP-FLAG?  ( mask port -- flag )
     NIO.CLEANUP-FLAGS @ AND 0<> ;
@@ -114,7 +109,7 @@ PROVIDED akashic-net-io-port
     THEN
     R> DROP ;
 
-: NIO-POLL  ( port -- )
+: NIO-POLL  ( port: nio-port -- )
     DUP 0= IF DROP EXIT THEN
     DUP NIO.POLL-XT @ ?DUP IF
         OVER >R SWAP NIO.CONTEXT @ SWAP _NIO-CALL-CLEANUP IF
@@ -145,7 +140,7 @@ PROVIDED akashic-net-io-port
     DUP NIO-S-FAILED = IF NIO-OPEN-STATE-FAILED R@ NIO.OPEN-STATE ! THEN
     R> DROP ;
 
-: NIO-OPEN  ( port -- io-status )
+: NIO-OPEN  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     DUP _NIO-CLOSE-ACTIVE? IF DROP NIO-S-FAILED EXIT THEN
     DUP _NIO-CLEANUP-FAILED? IF DROP NIO-S-FAILED EXIT THEN
@@ -158,7 +153,7 @@ PROVIDED akashic-net-io-port
     THEN
     ;
 
-: NIO-OPEN-START  ( port -- io-status )
+: NIO-OPEN-START  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     DUP _NIO-CLOSE-ACTIVE? IF DROP NIO-S-FAILED EXIT THEN
     DUP _NIO-CLEANUP-FAILED? IF DROP NIO-S-FAILED EXIT THEN
@@ -174,7 +169,7 @@ PROVIDED akashic-net-io-port
         NIO-OPEN
     THEN ;
 
-: NIO-OPEN-POLL  ( port -- io-status )
+: NIO-OPEN-POLL  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     DUP NIO.OPEN-STATE @ DUP NIO-OPEN-STATE-OPEN = IF
         2DROP NIO-S-OK EXIT
@@ -210,7 +205,7 @@ PROVIDED akashic-net-io-port
     THEN
     R> DROP ;
 
-: NIO-CLOSE-STATUS  ( port -- io-status )
+: NIO-CLOSE-STATUS  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     DUP NIO.CLOSE-STATE @ CASE
         NIO-CLOSE-STATE-CLOSING OF DROP NIO-S-PENDING EXIT ENDOF
@@ -240,7 +235,7 @@ PROVIDED akashic-net-io-port
     THEN
     NIO-S-OK SWAP _NIO-CLOSE-PUBLISH ;
 
-: NIO-CLOSE-START  ( port -- io-status )
+: NIO-CLOSE-START  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     DUP NIO.CLOSE-STATE @ CASE
         NIO-CLOSE-STATE-CLOSING OF DROP NIO-S-PENDING EXIT ENDOF
@@ -257,7 +252,7 @@ PROVIDED akashic-net-io-port
         NIO-CLOSE-STATUS
     THEN ;
 
-: NIO-CLOSE-POLL  ( port -- io-status )
+: NIO-CLOSE-POLL  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     DUP NIO.CLOSE-STATE @ CASE
         NIO-CLOSE-STATE-CLOSED OF DROP NIO-S-OK EXIT ENDOF
@@ -274,9 +269,9 @@ PROVIDED akashic-net-io-port
     ENDCASE
     DROP NIO-S-FAILED ;
 
-: NIO-CLOSE  ( port -- ) NIO-CLOSE-STATUS DROP ;
+: NIO-CLOSE  ( port: nio-port -- ) NIO-CLOSE-STATUS DROP ;
 
-: NIO-CANCEL  ( port -- io-status )
+: NIO-CANCEL  ( port: nio-port -- status: nio-status )
     DUP 0= IF DROP NIO-S-FAILED EXIT THEN
     NIO-CLEANUP-F-CANCEL-ATTEMPTED OVER _NIO-CLEANUP-FLAG? IF
         DUP _NIO-CLEANUP-FAILED? IF DROP NIO-S-FAILED EXIT THEN
@@ -331,7 +326,7 @@ PROVIDED akashic-net-io-port
     THEN
     R> DROP ;
 
-: NIO-RECV  ( buffer capacity port -- count io-status )
+: NIO-RECV  ( buf: span port: nio-port -- count: u status: nio-status )
     DUP 0= IF DROP 2DROP 0 NIO-S-FAILED EXIT THEN
     OVER 0< IF DROP 2DROP 0 NIO-S-FAILED EXIT THEN
     2 PICK 0= 2 PICK 0> AND IF DROP 2DROP 0 NIO-S-FAILED EXIT THEN
@@ -346,7 +341,7 @@ PROVIDED akashic-net-io-port
     THEN
     ;
 
-: NIO-SEND  ( buffer length port -- count io-status )
+: NIO-SEND  ( buf: span port: nio-port -- count: u status: nio-status )
     DUP 0= IF DROP 2DROP 0 NIO-S-FAILED EXIT THEN
     OVER 0< IF DROP 2DROP 0 NIO-S-FAILED EXIT THEN
     2 PICK 0= 2 PICK 0> AND IF DROP 2DROP 0 NIO-S-FAILED EXIT THEN
