@@ -1,10 +1,14 @@
 # The checker core of Uroko
 
 Status: prototype, 2026-11-20. This note describes host tooling that runs
-and is measured. Uroko is the language of Leviathan, the machine of MegaPad
-and LM1; its only written form so far is the declaration of kinds inside
-stack comments (decided 2026-11-20), and the checker's other rules are
-drafts that the measurements test. The release plan's decisions 30 to 34
+and is measured. The checker that ships runs on the machine instead,
+written in Forth in MegaPad's `uroko.f` module, checking each definition as
+it closes (decided 2026-11-20); this prototype settles its rules and
+measures them on Akashic. Uroko is the language of Leviathan, the machine
+of MegaPad and LM1; its written forms so far are the declaration of kinds
+inside stack comments and the quotation in braces (decided 2026-11-20), and
+the checker's other rules are drafts that the measurements test. The
+release plan's decisions 30 to 34
 (fantasy-engine `dev/PLAN.md`) set out the language, and fantasy-engine
 `dev/ideas/language.md` holds its open questions.
 
