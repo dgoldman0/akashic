@@ -1,13 +1,13 @@
 """The checker core of Uroko, on small Forth programs.
 
 The checker lives in ``toolchain/language``; ``docs/language/checker.md``
-describes it.  Each test loads MegaPad's BIOS dictionary and KDOS as the
-base vocabulary, as the measurement does, then a few definitions.
+describes it.  Each test loads MegaPad's BIOS dictionary, KDOS and
+``uroko.f``, which declares the base words' kinds, as the measurement does,
+then a few definitions.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -21,8 +21,9 @@ from toolchain.language.checker import Checker  # noqa: E402
 from toolchain.language.effects import parse_effect, parse_holds  # noqa: E402
 from toolchain.language.measure import effect_text, placement  # noqa: E402
 from toolchain.language.source import LineCursor, parse_number  # noqa: E402
+from toolchain.language.vocabulary import megapad_root  # noqa: E402
 
-MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT") or AKASHIC_ROOT.parent / "megapad")
+MEGAPAD_ROOT = megapad_root(Path(__file__).absolute().parents[1])
 
 
 @pytest.fixture(scope="module")
@@ -35,7 +36,7 @@ def base_checker_state():
 def check(megapad: Path, source: str, strict: bool = False) -> Checker:
     checker = Checker(strict=strict)
     checker.load_bios(megapad)
-    checker.load_base(megapad, ("kdos.f",))
+    checker.load_base(megapad, ("kdos.f", "uroko.f"))
     checker.group = "library"
     checker.load_text(source, "test.f")
     return checker
@@ -672,3 +673,45 @@ def test_kdos_catch_and_throw_keep_their_exact_meaning(base_checker_state):
     assert checker.lookup("CATCH").prim == "CATCH"
     assert checker.lookup("THROW").prim == "THROW"
     assert len([r for r in checker.records if r.group == "base"]) > 800
+
+
+# The base words' declarations in MegaPad's uroko.f
+
+
+def test_uroko_declares_the_base_words_kinds(base_checker_state):
+    checker = Checker()
+    checker.load_bios(base_checker_state)
+    checker.load_base(base_checker_state)  # every base module, as the measurement loads them
+    assert [f.detail for f in checker.findings if f.module == "uroko.f"] == []
+    compare = checker.lookup("COMPARE").signature
+    assert [s.role for s in compare.inputs] == ["a", "u", "a", "u"]
+    assert [s.kind for s in checker.lookup("ALLOCATE").signature.alts[0]] == [E.ADDR, E.NUMBER]
+    assert checker.lookup("FREE").declared_text == "a: addr --"
+    # Words the dictionary's tables catalogue, with their kinds.
+    assert checker.lookup("TERMSIZE").signature.shape() == "0 -- 2"
+    assert checker.lookup("HBW-BASE").signature.alts[0][0].kind == E.ADDR
+    assert checker.lookup("_RELOC-COUNT").signature.alts[0][0].holds.kind == E.COUNT
+    assert checker.lookup("2@").signature.shape() == "1 -- 2"
+
+
+def test_effect_declares_a_words_kinds_and_keeps_its_shape(base_checker_state):
+    checker = check(base_checker_state, (
+        ": PAIR  ( a b -- c )  + ;\n"
+        "EFFECT PAIR ( a: addr n: n -- a': addr )\n"
+        "EFFECT PAIR ( a -- b )\n"
+        "EFFECT NOWHERE ( -- )\n"
+        "EFFECT PAIR\n"
+        "EFFECT PAIR ( a: blob n -- c )\n"
+        ": SCREEN-AREA  ( -- n )  TERMSIZE * ;\n"
+        ": HBW-END  ( -- a )  HBW-BASE HBW-SIZE + ;\n"
+    ))
+    assert [s.kind for s in checker.lookup("PAIR").signature.inputs] == [E.ADDR, E.NUMBER]
+    assert all_findings(checker) == [
+        "declaration: EFFECT PAIR ( 1 -- 1 ) changes its effect ( 2 -- 1 )",
+        "declaration: EFFECT names NOWHERE, which no word defines",
+        "declaration: EFFECT PAIR has no effect after its name",
+        "declaration: a: names an unknown kind 'blob'",
+    ]
+    # Words whose effects the dictionary lacked before now infer.
+    assert record(checker, "SCREEN-AREA").comparison == "match"
+    assert record(checker, "HBW-END").word.inferred.alts[0][0].kind == E.ADDR

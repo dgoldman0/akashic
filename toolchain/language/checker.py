@@ -32,7 +32,7 @@ from . import effects as E
 from .effects import (Effect, Slot, effect_shape, parse_effect, parse_holds,
                       parse_kind_declaration)
 from .source import LineCursor, lines, parse_number, wrap
-from .vocabulary import BASE_DECLARATIONS, bios_words
+from .vocabulary import BASE_MODULES, base_module_paths, bios_words
 
 _ident_counter = itertools.count(1)
 _span_counter = itertools.count(1)
@@ -327,41 +327,49 @@ class Checker:
             if name in PRIMS:
                 word.prim = name
             self.words[name] = word
-        self._declare_base_kinds("bios")
 
-    def load_base(self, megapad_root: Path, modules: tuple[str, ...]) -> None:
-        """Load KDOS and system modules; their words take their comments' effects."""
+    def load_base(self, megapad_root: Path, modules: tuple[str, ...] = BASE_MODULES) -> None:
+        """Load KDOS and system modules; their words take their comments' effects.
+
+        ``uroko.f`` among them declares the kinds of the BIOS and KDOS words
+        with ``EFFECT`` lines, which the checker applies as it reads them.
+        """
         self.group = "base"
-        for module in modules:
-            path = megapad_root / module
+        for module, path in zip(modules, base_module_paths(megapad_root, modules)):
             self.load_text(path.read_text(encoding="utf-8", errors="replace"), module)
-        self._declare_base_kinds("base")
         self.group = "library"
 
-    def _declare_base_kinds(self, origin: str) -> None:
-        """Give base words the kinds the toolchain declares for them.
+    def declare_effect(self, name: str, text: str, closed: bool) -> None:
+        """``EFFECT NAME ( effect )``: the effect, with kinds, of a word defined
+        before, as MegaPad's ``uroko.f`` declares the base words'.
 
-        The base vocabulary's comments and tables name cells informally, so
-        the kinds of its words are declared in the toolchain
-        (``vocabulary.BASE_DECLARATIONS``), each with the shape its given
-        effect already has.
+        The declaration keeps the shape of the word's given effect; one that
+        changes it, names no word or is malformed is reported and not used.
         """
-        for name, text in BASE_DECLARATIONS.items():
-            word = self.words.get(name)
-            if word is None or word.origin != origin:
-                continue
-            parsed = parse_effect(text[1:-1].strip(), self.resolve_kind)
-            given = word.signature or word.declared
-            effect = parsed.effect
-            if effect is None or parsed.problems:
-                raise ValueError(f"base declaration of {name} is malformed: {parsed.problems}")
-            if given is not None and not given.variable and effect_shape(given) != effect_shape(effect):
-                raise ValueError(f"base declaration of {name} changes its effect {given.shape()}")
-            word.declared = effect
-            word.declared_text = text[1:-1].strip()
-            if word.prim is None or word.prim not in PRIM_HANDLERS:
-                word.signature = effect
-                word.signature_source = "given"
+        problems = [] if closed else ["the declaration's ( has no ) on its line"]
+        target = self.lookup(name)
+        if target is None:
+            self.declaration_problem(f"EFFECT names {name}, which no word defines", name)
+            return
+        parsed = parse_effect(text, self.resolve_kind, self.kind_parent)
+        problems += parsed.problems
+        effect = parsed.effect
+        if effect is None or effect.variable:
+            problems.append(f"EFFECT {name} ( {text.strip()} ) is not a fixed effect")
+        for problem in problems:
+            self.declaration_problem(problem, name)
+        if problems:
+            return
+        given = target.signature or target.declared
+        if given is not None and not given.variable and effect_shape(given) != effect_shape(effect):
+            self.declaration_problem(
+                f"EFFECT {name} ( {effect.shape()} ) changes its effect ( {given.shape()} )", name)
+            return
+        target.declared = effect
+        target.declared_text = text.strip()
+        if target.prim is None or target.prim not in PRIM_HANDLERS:
+            target.signature = effect
+            target.signature_source = "given"
 
     # Kinds
 
@@ -2388,6 +2396,25 @@ def _top_skip_name(checker: Checker, cursor: LineCursor, word: Word) -> None:
     cursor.token()
 
 
+def _top_effect(checker: Checker, cursor: LineCursor, word: Word) -> None:
+    """``EFFECT NAME ( effect )``, the declaring word of MegaPad's ``uroko.f``.
+
+    On the machine EFFECT parses the name and the interpreter skips the
+    comment after it; the checker reads that comment as the word's effect.
+    """
+    name = cursor.token()
+    if name is None:
+        checker.declaration_problem("EFFECT takes a word's name and its effect", word.name)
+        return
+    saved = cursor.pos
+    if cursor.token() != "(":
+        cursor.pos = saved
+        checker.declaration_problem(f"EFFECT {name} has no effect after its name", name)
+        return
+    text, closed = cursor.paren_closed()
+    checker.declare_effect(name, text, closed)
+
+
 def _top_defined(defined: bool):
     def handler(checker: Checker, cursor: LineCursor, word: Word) -> None:
         name = cursor.token()
@@ -2491,6 +2518,7 @@ TOP_HANDLERS: dict[str, Callable] = {
     "REQUIRE": _top_require,
     "PROVIDED": _top_skip_name,
     "FSLOAD": _top_skip_name,
+    "EFFECT": _top_effect,
     "[DEFINED]": _top_defined(True),
     "[UNDEFINED]": _top_defined(False),
     "[IF]": _top_if,
@@ -2504,8 +2532,9 @@ TOP_HANDLERS: dict[str, Callable] = {
     ";": _top_semicolon,
 }
 
-# KDOS defines these at Forth level; the top-level handlers model them.
-BASE_TOP = {"DEFER", "IS", "REQUIRE", "PROVIDED", "MARKER"}
+# KDOS, and uroko.f for EFFECT, define these at Forth level; the top-level
+# handlers model them.
+BASE_TOP = {"DEFER", "IS", "REQUIRE", "PROVIDED", "MARKER", "EFFECT"}
 
 
 _TOP_WORD = Word("(top level)", "", 0, "source")

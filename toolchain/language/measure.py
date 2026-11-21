@@ -5,8 +5,8 @@ Run from the Akashic checkout::
     python3 -m toolchain.language.measure --json report.json
     python3 -m toolchain.language.measure --groups library --placement lm1.txt
 
-The run loads MegaPad's BIOS dictionary, KDOS and the system modules as the
-base vocabulary, then every library file under ``akashic/`` in sorted order,
+The run loads MegaPad's BIOS dictionary, KDOS, ``uroko.f`` and the system
+modules as the base vocabulary, then every library file under ``akashic/`` in sorted order,
 following each REQUIRE where it appears, then the Forth test drivers and
 examples.  It reports how many colon definitions have an inferred effect,
 how those compare with their stack comments, why the rest could not be
@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import collections
 import json
-import os
 import re
 import subprocess
 import sys
@@ -32,8 +31,8 @@ from pathlib import Path
 
 from .checker import Checker, Record, Word
 from .effects import Effect
+from .vocabulary import BASE_MODULES, megapad_root
 
-BASE_MODULES = ("kdos.f", "networking.f", "rich-terminal.f", "tools.f", "graphics.f")
 PROPAGATED = "calls a word whose effect is unknown"
 
 # Comments such as "( eight-values -- )" count cells in words, so they
@@ -425,11 +424,9 @@ def _where(record: Record, line: int | None, detail: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    here = Path(__file__).resolve().parents[2]
-    configured = os.environ.get("MEGAPAD_ROOT")
+    here = Path(__file__).absolute().parents[2]
     parser.add_argument("--akashic", type=Path, default=here)
-    parser.add_argument("--megapad", type=Path,
-                        default=Path(configured) if configured else here.parent / "megapad",
+    parser.add_argument("--megapad", type=Path, default=megapad_root(here),
                         help="MegaPad checkout (default: MEGAPAD_ROOT, else beside Akashic)")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--examples", type=int, default=6)

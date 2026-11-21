@@ -46,12 +46,13 @@ covers the machine models, not the toolchain.
 |------|-------|
 | `toolchain/language/source.py` | KDOS's reading rules: tokens, comments, strings, numbers |
 | `toolchain/language/effects.py` | Kinds, effects, and the reading of declarations in stack comments |
-| `toolchain/language/vocabulary.py` | The BIOS dictionary, its documented effects, and the declared kinds of base words |
+| `toolchain/language/vocabulary.py` | The BIOS dictionary, its documented effects, and where MegaPad's base modules are found |
 | `toolchain/language/checker.py` | The dictionary, the outer interpreter, and the abstract interpretation of each definition |
 | `toolchain/language/measure.py` | The measurement over Akashic's Forth, its strict run, and a sampler for reviewing a category by hand |
 
 `local_testing/test_language_checker.py` runs small programs against the
-real BIOS and KDOS vocabulary in about five seconds. The measurement runs
+real BIOS and KDOS vocabulary, with `uroko.f`'s declarations, in about
+eight seconds. The measurement runs
 from the Akashic checkout, with `MEGAPAD_ROOT` naming the MegaPad checkout
 when it is not beside Akashic:
 
@@ -211,19 +212,33 @@ code after it there.
 The BIOS dictionary comes from `bios.asm` itself: every entry's name and
 IMMEDIATE flag. The effects come from the word tables of MegaPad's
 `docs/BIOS-DICTIONARY.md`, in either of their forms: most tables number
-their words in a first column, and the newer ones start with the word.
-Four standard words the tables omit, `2!`, `2@`, `ON` and `CMOVE>`, take
-their ANS effects. KDOS and MegaPad's other system modules,
-`networking.f`, `rich-terminal.f`, `tools.f` and `graphics.f`, are then
-read as Forth, and each of their words takes the effect its stack comment
-declares.
+their words in a first column, and the newer ones start with the word. A
+BIOS word the tables omit has no effect, and a definition that calls one
+fails to infer. KDOS is then read as Forth, and each of its words takes the
+effect its stack comment declares.
 
-Those tables and comments name cells informally, so the kinds of the base
-words that take or return addresses, spans, characters and flags are
-declared in `vocabulary.py` in Uroko's form, such as
-`COMPARE ( s1: span s2: span -- n: n )` and
-`ALLOCATE ( u: u -- a: addr ior: n )`. Each keeps the shape of its given
-effect, and the checker refuses one whose shape differs.
+Those tables and comments name cells informally, so MegaPad's `uroko.f`, a
+system module that KDOS loads after itself, declares the kinds of the base
+words in Uroko's form, one word to a line:
+
+```forth
+EFFECT COMPARE   ( s1: span s2: span -- n: n )
+EFFECT ALLOCATE  ( u: u -- a: addr ior: n )
+EFFECT HBW-BASE  ( -- a: addr )
+```
+
+On the machine, `EFFECT` parses the name and records nothing yet, and KDOS's
+`(` skips the effect as a comment, so the module loads wherever KDOS runs.
+The checker reads the same lines: it gives the named word the declared
+effect and kinds, and reports a declaration that names no word, is
+malformed, or changes the shape of the word's effect in the tables or in
+KDOS's comment. Uroko's checker on the machine will give `EFFECT` a body
+that records each effect for the word it names, so that one file serves
+both checkers. MegaPad's other system modules, `networking.f`,
+`rich-terminal.f`, `tools.f` and `graphics.f`, are read after `uroko.f`,
+as an image loads them, and their words take their comments' effects. The
+checker finds MegaPad through `MEGAPAD_ROOT`, or as the checkout beside
+Akashic's, and stops with an error when that checkout has no `uroko.f`.
 
 Some words have meanings that no effect can state, and the checker gives
 them exact rules: the shuffles, `PICK` and `ROLL` with a constant depth,
