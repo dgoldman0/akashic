@@ -289,8 +289,10 @@ class Checker:
         self.require: Callable[[str, str], None] | None = None
         self.unknown_conditions = 0
         self.top_undefined: dict[str, int] = {}
-        # "\ NAME ( effect )" lines, which KDOS writes above a definition.
-        self.preceding: dict[str, str] = {}
+        # "\ NAME ( effect )" lines, which KDOS writes above a definition, by
+        # module and name: such a line describes the word its own file
+        # defines, never a word of the same name in another module.
+        self.preceding: dict[tuple[str, str], str] = {}
         self.inlining: list[Word] = []
         # Data words declared with ( holds: KIND ), as (group, word).
         self.typed_slots: list[tuple[str, Word]] = []
@@ -509,7 +511,7 @@ class Checker:
             return
         comment = cursor.paren()
         if "--" in comment.split():
-            self.preceding[name.upper()] = comment
+            self.preceding[(self.module, name.upper())] = comment
 
     def _skip_scan(self, cursor: LineCursor) -> None:
         """Skip a false [IF] branch as BIOS does: raw tokens, no comments."""
@@ -704,7 +706,7 @@ class Checker:
         word.end_line = self.line
         self.pending = pending.outer
         if word.declared_text is None and word.declared_reason is None:
-            preceding = self.preceding.get(word.name.upper())
+            preceding = self.preceding.get((word.module, word.name.upper()))
             if preceding is not None:
                 self._set_declared(word, preceding)
                 word.declared_reason = "comment on a preceding line"

@@ -254,6 +254,19 @@ def test_names_ignore_case_and_a_definition_can_name_itself(base_checker_state):
     assert later.hides_older and later.self_named
 
 
+def test_a_comment_on_a_preceding_line_describes_its_own_modules_word(base_checker_state):
+    checker = check(base_checker_state, (
+        "\\ PAIR ( -- a b )\n"
+        ": PAIR  1 2 ;\n"
+    ))
+    # Another module's PAIR, guarded or not, is a word of its own.
+    checker.load_text(": PAIR  3 ;\n", "other.f")
+    first, second = [r for r in checker.records if r.word.name == "PAIR"]
+    assert first.word.declared_reason == "comment on a preceding line"
+    assert first.comparison == "match"
+    assert second.comparison == "no comment"
+
+
 def test_tick_inside_a_definition_parses_when_the_word_runs(base_checker_state):
     checker = check(base_checker_state, (
         "VARIABLE HOOK\n"
