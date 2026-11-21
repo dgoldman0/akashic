@@ -2105,7 +2105,8 @@ VARIABLE _UL-CW   \ child width for flex
             1 OVER _UTUI-SC-H!
             _UL-CW @ 2 + _UL-POS +!
             DROP                       ( child )
-        ELSE                           ( child csc )
+        ELSE                           ( child csc 0 0 )
+            2DROP                      ( child csc )
             _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
             DROP                       ( child )
         THEN
@@ -3834,7 +3835,7 @@ VARIABLE _UDM-WPTR
 \   Parse a simple integer from a CSS value string.
 \   Returns n and -1 if successful, 0 0 otherwise.
 : _UTUI-CSS-INT  ( a u -- n flag )
-    CSS-PARSE-NUMBER 0= IF 2DROP 0 0 EXIT THEN
+    CSS-PARSE-NUMBER 0= IF 2DROP 2DROP DROP 0 0 EXIT THEN
     2DROP                        \ discard frac, frac-digits
     -ROT 2DROP                   \ discard remaining string
     -1 ;
@@ -3981,7 +3982,7 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 
 : _UTUI-CSS-SET-DIM  ( val-a val-u parent-dim offset -- )
     _UCD-OFF !  _UCD-PDIM !
-    CSS-PARSE-NUMBER 0= IF 2DROP EXIT THEN
+    CSS-PARSE-NUMBER 0= IF 2DROP 2DROP DROP EXIT THEN
     \ ( a' u' int frac frac-digits )
     2DROP                        \ discard frac, frac-digits
     -ROT                         \ ( int a' u' )

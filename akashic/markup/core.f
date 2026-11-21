@@ -41,7 +41,7 @@ VARIABLE MU-ABORT-ON-ERROR
 
 : MU-FAIL  ( err-code -- )
     MU-ERR !
-    MU-ABORT-ON-ERROR @ IF ABORT" Markup error" THEN ;
+    MU-ABORT-ON-ERROR @ ABORT" Markup error" ;
 
 : MU-OK?  ( -- flag )
     MU-ERR @ 0= ;

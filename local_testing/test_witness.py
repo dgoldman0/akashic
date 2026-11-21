@@ -306,11 +306,11 @@ def test_begin_captures_root():
         '_ADDR1 1000 ST-CREATE DROP',
         # Capture current root in RAM
         'CREATE _R1 32 ALLOT',
-        'ST-ROOT _R1 32 CMOVE',
+        'ST-ROOT DROP _R1 32 CMOVE',
         # Begin witness
         'WIT-BEGIN',
         # Compare WIT-PRE-ROOT with saved root
-        ': _RUN-LOOP WIT-PRE-ROOT _R1 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP WIT-PRE-ROOT _R1 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("pre-root matches ST-ROOT", lines, "SAME")
@@ -327,9 +327,9 @@ def test_end_captures_post_root():
         'WIT-END',
         # Capture current root
         'CREATE _R2 32 ALLOT',
-        'ST-ROOT _R2 32 CMOVE',
+        'ST-ROOT DROP _R2 32 CMOVE',
         # Compare
-        ': _RUN-LOOP WIT-POST-ROOT _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP WIT-POST-ROOT _R2 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("post-root matches ST-ROOT", lines, "SAME")
@@ -564,7 +564,7 @@ def test_verify_honest():
         'WIT-END',
         'WIT-VERIFY IF ." VALID" ELSE ." INVALID" THEN',
     ]
-    check("honest witness verifies", lines, "VALID")
+    check("honest witness verifies", lines, "VALID", not_expected="INVALID")
 
 
 def test_verify_tampered_post():
@@ -646,7 +646,7 @@ def test_empty_block():
         'WIT-BEGIN',
         'WIT-END',
         # Pre-root should equal post-root (no changes)
-        ': _RUN-LOOP WIT-PRE-ROOT WIT-POST-ROOT 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP WIT-PRE-ROOT WIT-POST-ROOT 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("empty block: pre-root = post-root", lines2, "SAME")
@@ -690,7 +690,7 @@ def test_multi_tx_verify():
         'WIT-END',
         'WIT-VERIFY IF ." VALID" ELSE ." INVALID" THEN',
     ]
-    check("multi-tx block verifies", lines, "VALID")
+    check("multi-tx block verifies", lines, "VALID", not_expected="INVALID")
 
 
 def test_overflow_flag():

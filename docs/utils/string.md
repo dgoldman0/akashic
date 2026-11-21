@@ -203,8 +203,9 @@ S"   hello world" STR-PARSE-TOKEN
 \ → tok-addr 5 rest-addr 5   (tok="hello", rest="world")
 ```
 
-If the input is empty or all blanks, returns `0 0` for the token and
-the remaining (empty) string.
+If the input is empty or all blanks, the token and the rest are both
+empty: four cells, each address the one past the blanks and each length
+0.
 
 Used by `utils/itc.f` for tokenizing ITC source text.
 

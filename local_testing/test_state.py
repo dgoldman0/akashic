@@ -286,7 +286,7 @@ def test_addr_from_key():
         'CREATE _AD 32 ALLOT',
         '_PK _AD ST-ADDR-FROM-KEY',
         # Address should not equal the raw key (SHA3 scrambles it)
-        ': _RUN-LOOP _AD _PK 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _AD _PK 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("address differs from raw key", lines, "DIFF")
@@ -296,7 +296,7 @@ def test_addr_from_key():
         'CREATE _A1 32 ALLOT  CREATE _A2 32 ALLOT',
         '_PK _A1 ST-ADDR-FROM-KEY',
         '_PK _A2 ST-ADDR-FROM-KEY',
-        ': _RUN-LOOP _A1 _A2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _A1 _A2 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("deterministic address", lines2, "SAME")
@@ -404,7 +404,7 @@ def test_verify_tx():
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
         '_TXBUF ST-VERIFY-TX IF ." VALID" ELSE ." INVALID" THEN',
     ]
-    check("valid tx passes verify", lines, "VALID")
+    check("valid tx passes verify", lines, "VALID", not_expected="INVALID")
 
     # Wrong nonce
     lines2 = _keygen_preamble() + [
@@ -442,7 +442,7 @@ def test_verify_tx():
         '." N=" _ADDR1 ST-NONCE@ .',
     ]
     check_fn("verify doesn't mutate", lines5,
-             lambda o: "BAL=" in o and "1000" in o and "N=" in o and " 0" in o,
+             lambda o: "BAL=1000 " in o and "N=0 " in o,
              "balance/nonce unchanged")
 
 def test_apply_tx():
@@ -578,10 +578,10 @@ def test_merkle_root():
     print("\n=== ST-ROOT ===")
     # Root is all zeroes for empty state (no accounts → empty SMT)
     lines = _keygen_preamble() + [
-        ': _RUN-LOOP ST-ROOT DROP 32 0 DO DUP I + C@ OR LOOP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP ST-ROOT DROP 0 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0= IF ." ZERO" ELSE ." NONZERO" THEN',
     ]
-    check("empty root is zero", lines, "ZERO")
+    check("empty root is zero", lines, "ZERO", not_expected="NONZERO")
 
     # Root changes after creating an account
     lines2 = _keygen_preamble() + [
@@ -589,7 +589,7 @@ def test_merkle_root():
         'ST-ROOT DROP _R1 32 CMOVE',
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-ROOT DROP _R2 32 CMOVE',
-        ': _RUN-LOOP _R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _R1 _R2 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0<> IF ." CHANGED" ELSE ." SAME" THEN',
     ]
     check("root changes after create", lines2, "CHANGED")
@@ -603,10 +603,11 @@ def test_merkle_root():
         'ST-INIT DROP',
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-ROOT DROP _R2 32 CMOVE',
-        ': _RUN-LOOP _R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _R1 _R2 0 32 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0= IF ." DETERMINISTIC" ELSE ." NONDETERMINISTIC" THEN',
     ]
-    check("root is deterministic", lines3, "DETERMINISTIC")
+    check("root is deterministic", lines3, "DETERMINISTIC",
+          not_expected="NONDETERMINISTIC")
 
 def _make_staking_tx(sender_pub, sender_priv, recip_pub, amount, nonce, stake_type, buf_name):
     """Create a staking tx (type 3=stake, 4=unstake).

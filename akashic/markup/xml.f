@@ -95,14 +95,14 @@ VARIABLE _XGC-A
             OVER C@ 93 =            \ ]
             IF OVER 1+ C@ 93 =      \ ]
             IF OVER 2 + C@ 62 = IF  \ >
-                OVER _XGC-A @ -      \ content length
+                DROP _XGC-A @ -      \ content length
                 _XGC-A @ SWAP EXIT
             THEN THEN THEN
         THEN
         1 /STRING
     REPEAT
     \ no closing ]]> found
-    OVER _XGC-A @ -
+    DROP _XGC-A @ -
     _XGC-A @ SWAP ;
 
 \ XML-PATH ( addr len path-a path-u -- addr' len' )

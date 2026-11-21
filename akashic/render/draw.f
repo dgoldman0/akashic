@@ -618,13 +618,13 @@ VARIABLE _DRAW-PATH-MAXY
     ;
 
 : DRAW-PATH-MOVE  ( x y -- )
+    2DUP _DRAW-PATH-BBOX
     DUP _DRAW-PATH-CY ! _DRAW-PATH-MY !
-    DUP _DRAW-PATH-CX ! _DRAW-PATH-MX !
-    OVER OVER _DRAW-PATH-BBOX ;
+    DUP _DRAW-PATH-CX ! _DRAW-PATH-MX ! ;
 
 : DRAW-PATH-LINE  ( x y -- )
     2DUP _DRAW-PATH-BBOX
-    _DRAW-PATH-CX @ _DRAW-PATH-CY @ ROT ROT RAST-EDGE
+    2DUP _DRAW-PATH-CX @ _DRAW-PATH-CY @ 2SWAP RAST-EDGE
     _DRAW-PATH-CY !  _DRAW-PATH-CX ! ;
 
 : DRAW-PATH-CLOSE  ( -- )
@@ -646,6 +646,7 @@ VARIABLE _DRAW-PBZ-X1   VARIABLE _DRAW-PBZ-Y1
 
 : DRAW-PATH-QUAD  ( cx cy x y -- )
     2DUP _DRAW-PATH-BBOX
+    2DUP 2>R                  \ the destination, for the cursor
     >R >R                     ( cx cy ) ( R: y x )
     2DUP _DRAW-PATH-BBOX
     INT>FP16 >R INT>FP16 R>   ( cx-fp cy-fp )
@@ -656,11 +657,12 @@ VARIABLE _DRAW-PBZ-X1   VARIABLE _DRAW-PBZ-Y1
     R> R> R> R>                ( cx0-fp cy0-fp cx-fp cy-fp x-fp y-fp )
     _DRAW-BZ-TOL ['] _DRAW-PBZ-CB BZ-QUAD-FLATTEN
     \ Update cursor to destination
-    2DUP _DRAW-PATH-CY ! _DRAW-PATH-CX !
+    2R> _DRAW-PATH-CY ! _DRAW-PATH-CX !
     ;
 
 : DRAW-PATH-CUBIC  ( c1x c1y c2x c2y x y -- )
     2DUP _DRAW-PATH-BBOX
+    2DUP 2>R                  \ the destination, for the cursor
     >R >R                     ( c1x c1y c2x c2y ) ( R: y x )
     2DUP _DRAW-PATH-BBOX
     INT>FP16 >R INT>FP16 R>   ( c1x c1y c2x-fp c2y-fp )
@@ -674,7 +676,7 @@ VARIABLE _DRAW-PBZ-X1   VARIABLE _DRAW-PBZ-Y1
     _DRAW-PATH-CY @ INT>FP16
     R> R> R> R> R> R>          ( p0x p0y c1x c1y c2x c2y x y )
     _DRAW-BZ-TOL ['] _DRAW-PBZ-CB BZ-CUBIC-FLATTEN
-    2DUP _DRAW-PATH-CY ! _DRAW-PATH-CX !
+    2R> _DRAW-PATH-CY ! _DRAW-PATH-CX !
     ;
 
 \ Path temp bitmap buffer (allocated on demand)

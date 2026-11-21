@@ -329,6 +329,28 @@ def test_init():
           [': _T SRV-CLEAR-ERR -1 SRV-LOG-ENABLED ! 4567 SRV-INIT ; _T'],
           check_fn=lambda t: "Listening" in t and "4567" in t)
 
+    # SRV-INIT ( port -- ) keeps the port in _SRV-PORT, not on the stack.
+    check("SRV-INIT leaves no cell",
+          [': _T SRV-CLEAR-ERR DEPTH >R 8080 SRV-INIT',
+           '  ." left=" DEPTH R> - . ; _T'],
+          "left=0 ")
+    check("SRV-INIT leaves no cell when the socket fails",
+          [': _SOCK-BAD ( type -- sd ) DROP -1 ;',
+           "' _SOCK-BAD _SRV-SOCKET-XT !",
+           ': _T SRV-CLEAR-ERR DEPTH >R 8080 SRV-INIT',
+           '  ." left=" DEPTH R> - . ; _T'],
+          "left=0 ")
+
+
+def test_default_close_drops_the_status():
+    """The default close word runs KDOS CLOSE ( sd -- ior ) as ( sd -- )."""
+    print("\n── _SRV-CLOSE-DEFAULT ──\n")
+
+    check("default close on a fresh socket",
+          [': _T SOCK-TYPE-TCP SOCKET DEPTH >R _SRV-CLOSE-DEFAULT',
+           '  ." left=" DEPTH R> - . ; _T'],
+          "left=-1 ")
+
 
 def test_catch():
     """Test CATCH/THROW works standalone."""

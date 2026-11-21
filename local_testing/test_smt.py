@@ -239,6 +239,42 @@ def test_init_empty():
     ]
     check("count = 0", lines2, "CZERO")
 
+    # SMT-INIT ( tree -- flag ) gives the flag alone, not the tree under it.
+    check("init gives one cell",
+          [': _T 7 _TREE SMT-INIT ." flag=" . ." below=" . ; _T'],
+          "flag=-1 below=7")
+
+def test_prove_empty_tree():
+    """SMT-PROVE on an empty tree gives a zero length and a false flag."""
+    print("\n=== SMT-PROVE empty ===")
+    lines = _init_tree() + [
+        ': _T 7 _K1 _PROOF 10240 _TREE SMT-PROVE',
+        '  ." flag=" . ." len=" . ." below=" . ; _T',
+    ]
+    check("two cells for an empty tree", lines, "flag=0 len=0 below=7")
+
+def test_many_keys_prove_and_verify():
+    """Twelve keys build branches below branches; each proves and verifies.
+
+    A new branch goes above the first branch on the key's path whose bit
+    lies after the new key's first differing bit.
+    """
+    print("\n=== many keys ===")
+    lines = _init_tree() + [
+        'CREATE _KS 32 ALLOT  CREATE _VS 32 ALLOT',
+        ': _T-KV  ( n -- )  DUP _KS SWAP FILL-KEY  _VS SWAP 3 * FILL-VAL ;',
+        ': _T-ADD  ( n -- flag )  _T-KV _KS _VS _TREE SMT-INSERT ;',
+        ': _T-OK?  ( n -- flag )  _T-KV',
+        '  _KS _PROOF 10240 _TREE SMT-PROVE 0= IF DROP 0 EXIT THEN _PL !',
+        '  _KS _VS _PROOF _PL @ _TREE SMT-ROOT SMT-VERIFY ;',
+        ': _T  7 0 13 1 DO I _T-ADD IF 1+ THEN LOOP ." inserted=" .',
+        '  _TREE SMT-COUNT ." count=" .',
+        '  0 13 1 DO I _T-OK? IF 1+ THEN LOOP ." verified=" .',
+        '  ." below=" . ; _T',
+    ]
+    check("insert, prove and verify twelve keys", lines,
+          "inserted=12 count=12 verified=12 below=7")
+
 def test_smt_max():
     """SMT-MAX returns 4096."""
     print("\n=== SMT-MAX ===")
@@ -332,7 +368,7 @@ def test_root_nonzero():
     lines = _init_tree() + [
         '_K1 _V1 _TREE SMT-INSERT DROP',
         '_TREE SMT-ROOT _R1 32 CMOVE',
-        ': _RUN-LOOP 0 _R1 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _R1 0 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("root is non-zero", lines, "NONZERO")
@@ -342,10 +378,10 @@ def test_empty_root_zero():
     print("\n=== SMT-ROOT empty = zero ===")
     lines = _init_tree() + [
         '_TREE SMT-ROOT _R1 32 CMOVE',
-        ': _RUN-LOOP 0 _R1 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
+        ': _RUN-LOOP _R1 0 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0= IF ." ZERO" ELSE ." NONZERO" THEN',
     ]
-    check("empty root is zero", lines, "ZERO")
+    check("empty root is zero", lines, "ZERO", not_expected="NONZERO")
 
 def test_root_determinism():
     """Same inserts in same order -> same root hash."""
@@ -382,15 +418,15 @@ def test_prove_verify_round_trip():
     """Prove + verify round-trip for two-key tree."""
     print("\n=== SMT-PROVE + SMT-VERIFY round-trip ===")
     # BUG FIX: old code used ROT which only reaches 3-deep.
-    # SMT-PROVE returns len.  SMT-VERIFY needs ( key val proof len root ).
+    # SMT-PROVE returns len and a flag.  SMT-VERIFY needs ( key val proof len root ).
     # Correct: >R key val proof R> tree SMT-ROOT SMT-VERIFY
     lines = _init_tree() + [
         '_K1 _V1 _TREE SMT-INSERT DROP',
         '_K2 _V2 _TREE SMT-INSERT DROP',
-        '_K1 _PROOF 10240 _TREE SMT-PROVE _PL ! DROP',
+        '_K1 _PROOF 10240 _TREE SMT-PROVE DROP _PL !',
         '_K1 _V1 _PROOF _PL @ _TREE SMT-ROOT SMT-VERIFY IF ." VALID" ELSE ." INVALID" THEN',
     ]
-    check("prove+verify round-trip", lines, "VALID")
+    check("prove+verify round-trip", lines, "VALID", not_expected="INVALID")
 
 def test_prove_verify_second_key():
     """Prove + verify for second inserted key also works."""
@@ -398,7 +434,7 @@ def test_prove_verify_second_key():
     lines = _init_tree() + [
         '_K1 _V1 _TREE SMT-INSERT DROP',
         '_K2 _V2 _TREE SMT-INSERT DROP',
-        '_K2 _PROOF 10240 _TREE SMT-PROVE _PL ! DROP',
+        '_K2 _PROOF 10240 _TREE SMT-PROVE DROP _PL !',
         '_K2 _V2 _PROOF _PL @ _TREE SMT-ROOT SMT-VERIFY IF ." VALID2" ELSE ." INVALID2" THEN',
     ]
     check("second key proof verifies", lines, "VALID2")
@@ -408,7 +444,7 @@ def test_verify_wrong_value():
     print("\n=== SMT-VERIFY rejects wrong value ===")
     lines = _init_tree() + [
         '_K1 _V1 _TREE SMT-INSERT DROP',
-        '_K1 _PROOF 10240 _TREE SMT-PROVE _PL ! DROP',
+        '_K1 _PROOF 10240 _TREE SMT-PROVE DROP _PL !',
         # Use V2 (wrong value) instead of V1
         '_K1 _V2 _PROOF _PL @ _TREE SMT-ROOT SMT-VERIFY IF ." VALID" ELSE ." REJECTED" THEN',
     ]
@@ -419,7 +455,7 @@ def test_verify_wrong_root():
     print("\n=== SMT-VERIFY rejects wrong root ===")
     lines = _init_tree() + [
         '_K1 _V1 _TREE SMT-INSERT DROP',
-        '_K1 _PROOF 10240 _TREE SMT-PROVE _PL ! DROP',
+        '_K1 _PROOF 10240 _TREE SMT-PROVE DROP _PL !',
         # Tamper: make a fake root
         '_R1 32 255 FILL',
         '_K1 _V1 _PROOF _PL @ _R1 SMT-VERIFY IF ." VALID" ELSE ." REJECTED" THEN',
@@ -533,7 +569,7 @@ def test_prove_verify_three_keys():
     ]
     for i, (k, v) in enumerate([('_K1','_V1'), ('_K2','_V2'), ('_K3','_V3')], 1):
         lines += [
-            f'{k} _PROOF 10240 _TREE SMT-PROVE _PL ! DROP',
+            f'{k} _PROOF 10240 _TREE SMT-PROVE DROP _PL !',
             f'{k} {v} _PROOF _PL @ _TREE SMT-ROOT SMT-VERIFY',
             f'IF ." V{i}" ELSE ." F{i}" THEN',
         ]

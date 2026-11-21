@@ -557,14 +557,12 @@ VARIABLE _SOM-NNEW
 
     \ If ctx1 empty → copy ctx2 to dst
     OVER _SOL-N @ 0= IF
-        DROP R> 64 0 FILL
-        \ Actually just byte-copy ctx2
-        DROP R> 2DROP EXIT         \ placeholder — need to copy
+        NIP R> STAT-ONLINE-SIZE MOVE EXIT
     THEN
 
     \ If ctx2 empty → copy ctx1 to dst
     DUP _SOL-N @ 0= IF
-        DROP R> 2DROP EXIT
+        DROP R> STAT-ONLINE-SIZE MOVE EXIT
     THEN
 
     \ delta = mean2 - mean1

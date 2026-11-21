@@ -37,7 +37,7 @@ VARIABLE JSON-ABORT-ON-ERROR         \ -1 = abort, 0 = flag-only
 
 : JSON-FAIL  ( err-code -- )
     JSON-ERR !
-    JSON-ABORT-ON-ERROR @ IF ABORT" JSON error" THEN ;
+    JSON-ABORT-ON-ERROR @ ABORT" JSON error" ;
 
 : JSON-OK?  ( -- flag )
     JSON-ERR @ 0= ;

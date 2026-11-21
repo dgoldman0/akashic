@@ -28,7 +28,7 @@
 \
 \  Prefix: MNU- (public), _MNU- (internal)
 \  Provider: akashic-tui-menu
-\  Dependencies: widget.f, draw.f, box.f, region.f
+\  Dependencies: widget.f, draw.f, box.f, region.f, keys.f
 
 PROVIDED akashic-tui-menu
 
@@ -36,6 +36,7 @@ REQUIRE ../widget.f
 REQUIRE ../draw.f
 REQUIRE ../box.f
 REQUIRE ../region.f
+REQUIRE ../keys.f
 
 \ =====================================================================
 \ 1. Descriptor layout

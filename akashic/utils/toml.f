@@ -30,7 +30,7 @@ VARIABLE TOML-ABORT-ON-ERROR
 
 : TOML-FAIL  ( err-code -- )
     TOML-ERR !
-    TOML-ABORT-ON-ERROR @ IF ABORT" TOML error" THEN ;
+    TOML-ABORT-ON-ERROR @ ABORT" TOML error" ;
 
 : TOML-OK?  ( -- flag )  TOML-ERR @ 0= ;
 : TOML-CLEAR-ERR  ( -- )  0 TOML-ERR ! ;
@@ -566,14 +566,14 @@ VARIABLE _TGI-ACC
 \ ── Float / Datetime raw extraction ──────────────────────────────────
 
 : TOML-GET-FLOAT-STR  ( addr len -- str-a str-l )
-    TOML-SKIP-WS  OVER
+    TOML-SKIP-WS  OVER -ROT          ( str-a addr len )
     BEGIN DUP 0> WHILE
         OVER C@ DUP 32 = OVER 9 = OR OVER 10 = OR OVER 13 = OR
         OVER 44 = OR OVER 93 = OR OVER 125 = OR SWAP 35 = OR
-        IF NIP SWAP - EXIT THEN
+        IF DROP OVER - EXIT THEN
         1 /STRING
     REPEAT
-    NIP SWAP - ;
+    DROP OVER - ;
 
 : TOML-GET-DATETIME-STR  ( addr len -- str-a str-l )
     TOML-GET-FLOAT-STR ;

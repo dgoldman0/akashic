@@ -11,8 +11,11 @@ Tests:
   - chain_getBalance valid address → result 0
   - chain_getBalance bad address → error -32602
   - Repeated requests (state resets)
+  - chain_getProof, chain_getBlockProof and chain_getStateRoot → the
+    roots and header fields they name, leaving no cell
+  - chain_verifyProof → all five params read
 """
-import os, sys, time
+import os, re, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -487,6 +490,105 @@ def test_broadcast_after_send():
     check("GSP-BROADCAST-TX is defined",
           [": _T ['] GSP-BROADCAST-TX 0<> IF 1 ELSE 0 THEN . ; _T"],
           "1 ")
+
+
+# The proof and root methods answer with roots, so their tests print the
+# root they expect, as hex from FMT->HEX like the response's, and the cells
+# a request leaves on the stack.
+
+_ACCOUNTS = [
+    'CREATE _A 32 ALLOT  _A 32 7 FILL',
+    'CREATE _B 32 ALLOT  _B 32 9 FILL',
+    'CREATE _WANT 64 ALLOT',
+    ': _W ST-ROOT DROP 32 _WANT FMT->HEX DROP ." want=" _WANT 64 TYPE CR ;',
+]
+
+
+def _handled(req):
+    """Lines that send REQ through the server and print the cells it left."""
+    return ([': _T DEPTH >R'] +
+            ['  ' + l for l in tstr_compiled(req)] +
+            ['  TA SRV-HANDLE-BUF CR ." left=" DEPTH R> - . ; _T'])
+
+
+def _want(text):
+    found = re.search(r'want=([0-9A-Fa-f]{64})', text)
+    return found.group(1) if found else None
+
+
+def test_get_proof_root():
+    """chain_getProof reports ST-ROOT's root, not 32 bytes at its flag."""
+    print("\n── chain_getProof ──\n")
+
+    # The server and dispatcher leave no cell of their own.
+    check("a blockNumber request leaves no cell",
+          _handled(rpc_request("chain_blockNumber")),
+          check_fn=lambda t: '"result":' in t and 'left=0 ' in t)
+
+    req = rpc_request("chain_getProof", '["' + '07' * 32 + '"]')
+    check("getProof gives the current root and leaves no cell",
+          _ACCOUNTS + ['_A 1000 ST-CREATE DROP', '_B 2000 ST-CREATE DROP',
+                       '_W'] + _handled(req),
+          check_fn=lambda t: (_want(t) is not None
+                              and f'"stateRoot":"{_want(t)}"' in t
+                              and '"depth":1' in t
+                              and '"balance":1000' in t
+                              and 'left=0 ' in t))
+
+
+def test_get_block_proof():
+    """chain_getBlockProof reads every field from the block it found."""
+    print("\n── chain_getBlockProof ──\n")
+
+    req = rpc_request("chain_getBlockProof", '[0]')
+    check("getBlockProof gives the genesis header's fields",
+          _ACCOUNTS + ['_A 1000 ST-CREATE DROP', 'CHAIN-INIT', '_W'] +
+          _handled(req),
+          check_fn=lambda t: (_want(t) is not None
+                              and '"height":0' in t
+                              and '"prevHash":"' + '0' * 64 + '"' in t
+                              and f'"stateRoot":"{_want(t)}"' in t
+                              and '"timestamp":0' in t
+                              and 'left=0 ' in t))
+
+
+def test_get_state_root():
+    """chain_getStateRoot gives the current root without a height."""
+    print("\n── chain_getStateRoot ──\n")
+
+    # The genesis block holds the empty state's root, all zeros; the
+    # account created after it moves the current root.
+    setup = _ACCOUNTS + ['CHAIN-INIT', '_A 1000 ST-CREATE DROP', '_W']
+    check("getStateRoot without params gives the current root",
+          setup + _handled(rpc_request("chain_getStateRoot")),
+          check_fn=lambda t: (_want(t) is not None
+                              and f'"result":"{_want(t)}"' in t
+                              and 'left=0 ' in t))
+
+    check("getStateRoot at height 0 gives the genesis root",
+          setup + _handled(rpc_request("chain_getStateRoot", '[0]')),
+          check_fn=lambda t: ('"result":"' + '0' * 64 + '"' in t
+                              and 'left=0 ' in t))
+
+
+def test_verify_proof_params():
+    """chain_verifyProof reads all five params with one cursor."""
+    print("\n── chain_verifyProof ──\n")
+
+    # One proof entry: bit position 3, eight bytes little-endian, then a
+    # 32-byte sibling.
+    proof = '03' + '00' * 7 + '44' * 32
+    params = f'["{"11" * 32}",5,"{proof}",1,"{"33" * 32}"]'
+    req = rpc_request("chain_verifyProof", params)
+    check("verifyProof parses leaf, index, proof, depth and root",
+          _handled(req) + [
+              ': _V ." idx=" _RPC-VP-IDX @ . ." depth=" _RPC-VP-DEPTH @ .',
+              '  ." leaf=" _RPC-LEAF C@ . ." proof=" _RPC-PROOF C@ .',
+              '  ." root=" _RPC-ROOT C@ . ; _V'],
+          check_fn=lambda t: ('"result":false' in t
+                              and 'left=0 ' in t
+                              and 'idx=5 depth=1 leaf=17 proof=3 root=51 '
+                              in t))
 
 
 # =====================================================================

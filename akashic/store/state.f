@@ -38,7 +38,7 @@
 \   ST-NONCE@        ( addr -- nonce )        read nonce (0 if missing)
 \   ST-APPLY-TX      ( tx -- flag )           validate + apply tx
 \   ST-VERIFY-TX     ( tx -- flag )           validate without applying
-\   ST-ROOT          ( -- addr )              compute SMT root
+\   ST-ROOT          ( -- addr flag )         compute SMT root
 \   ST-PROVE         ( addr proof buf-len -- proof-len flag )
 \   ST-VERIFY-PROOF  ( key leaf proof len root -- flag )  verify proof
 \   ST-ADDR-FROM-KEY ( pubkey addr -- )       SHA3-256 hash pubkey
@@ -628,6 +628,7 @@ VARIABLE _st-snap-ptr
 
 : ST-RESTORE  ( src -- )
     _st-snap-ptr !
+    -1 _ST-DIRTY !                    \ the tree no longer describes the state
     \ Restore count + pgcnt
     _st-snap-ptr @ @ _ST-COUNT !
     _st-snap-ptr @ 8 + @ _ST-PGCNT !

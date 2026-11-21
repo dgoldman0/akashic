@@ -165,24 +165,15 @@ REQUIRE ../keys.f
 : _SCRL-HANDLE  ( event widget -- consumed? )
     OVER KEY-IS-SPECIAL? 0= IF 2DROP 0 EXIT THEN
 
+    \ SCRL-SCROLL-BY is defined after the handler, so each key applies
+    \ its delta here.
     OVER KEY-CODE@                        ( ev w code )
-    DUP KEY-UP = IF
-        DROP NIP
-        DUP 0 SWAP -1 0 SCRL-SCROLL-BY   ( )  \ actually wrong sig
-        \ Let me fix: SCRL-SCROLL-BY ( widget dy dx -- )
-        \ but it's not defined yet at this point — use inline version
-        -1 1 EXIT                         \ placeholder
-    THEN
-
-    \ Simpler approach: match code and call SCRL-SCROLL-BY post-definition
-    \ For now, implement inline delta logic
-    SWAP DROP                             ( ev code )
 
     DUP KEY-UP = IF
         DROP
         SWAP DROP                          ( widget )
         DUP _SCRL-O-OFFSET-Y + @
-        1- OVER _SCRL-CLAMP-Y
+        1- OVER SWAP _SCRL-CLAMP-Y
         OVER _SCRL-O-OFFSET-Y + !
         WDG-DIRTY -1 EXIT
     THEN
@@ -191,7 +182,7 @@ REQUIRE ../keys.f
         DROP
         SWAP DROP
         DUP _SCRL-O-OFFSET-Y + @
-        1+ OVER _SCRL-CLAMP-Y
+        1+ OVER SWAP _SCRL-CLAMP-Y
         OVER _SCRL-O-OFFSET-Y + !
         WDG-DIRTY -1 EXIT
     THEN
@@ -200,7 +191,7 @@ REQUIRE ../keys.f
         DROP
         SWAP DROP
         DUP _SCRL-O-OFFSET-X + @
-        1- OVER _SCRL-CLAMP-X
+        1- OVER SWAP _SCRL-CLAMP-X
         OVER _SCRL-O-OFFSET-X + !
         WDG-DIRTY -1 EXIT
     THEN
@@ -209,35 +200,34 @@ REQUIRE ../keys.f
         DROP
         SWAP DROP
         DUP _SCRL-O-OFFSET-X + @
-        1+ OVER _SCRL-CLAMP-X
+        1+ OVER SWAP _SCRL-CLAMP-X
         OVER _SCRL-O-OFFSET-X + !
         WDG-DIRTY -1 EXIT
     THEN
 
-    \ Page-Up: KEY-PGUP = 5 (if defined) — use raw value
-    DUP 5 = IF       \ KEY-PGUP
+    DUP KEY-PGUP = IF
         DROP
         SWAP DROP
         DUP WDG-REGION RGN-H 2/          ( w half-h )
         NEGATE
         OVER _SCRL-O-OFFSET-Y + @ +
-        OVER _SCRL-CLAMP-Y
+        OVER SWAP _SCRL-CLAMP-Y
         OVER _SCRL-O-OFFSET-Y + !
         WDG-DIRTY -1 EXIT
     THEN
 
-    DUP 6 = IF       \ KEY-PGDN
+    DUP KEY-PGDN = IF
         DROP
         SWAP DROP
         DUP WDG-REGION RGN-H 2/          ( w half-h )
         OVER _SCRL-O-OFFSET-Y + @ +
-        OVER _SCRL-CLAMP-Y
+        OVER SWAP _SCRL-CLAMP-Y
         OVER _SCRL-O-OFFSET-Y + !
         WDG-DIRTY -1 EXIT
     THEN
 
     \ Not consumed
-    2DROP 0 ;
+    DROP 2DROP 0 ;
 
 \ =====================================================================
 \  §5 — Constructor
@@ -272,30 +262,29 @@ REQUIRE ../keys.f
     R@ _SCRL-O-CONTENT-H + !
     \ Re-clamp offsets
     R@ _SCRL-O-OFFSET-Y + @
-    R@ _SCRL-CLAMP-Y
+    R@ SWAP _SCRL-CLAMP-Y
     R@ _SCRL-O-OFFSET-Y + !
     R@ _SCRL-O-OFFSET-X + @
-    R@ _SCRL-CLAMP-X
+    R@ SWAP _SCRL-CLAMP-X
     R@ _SCRL-O-OFFSET-X + !
     R> WDG-DIRTY ;
 
 : SCRL-SCROLL-TO  ( widget y x -- )
-    ROT DUP >R
-    >R                                    ( y   R: widget x )
-    R@ SWAP R@ _SCRL-CLAMP-Y             ( clamped-y   R: widget x )
+    ROT >R                                ( y x   R: widget )
+    R@ SWAP _SCRL-CLAMP-X                 ( y clamped-x )
+    R@ _SCRL-O-OFFSET-X + !               ( y )
+    R@ SWAP _SCRL-CLAMP-Y                 ( clamped-y )
     R@ _SCRL-O-OFFSET-Y + !
-    R> R@ _SCRL-CLAMP-X                  ( clamped-x   R: widget )
-    R@ _SCRL-O-OFFSET-X + !
     R> WDG-DIRTY ;
 
 : SCRL-SCROLL-BY  ( widget dy dx -- )
     ROT DUP >R                           ( dy dx w )
     DROP                                  ( dy dx )
     R@ _SCRL-O-OFFSET-X + @ +            ( dy new-x )
-    R@ SWAP R@ _SCRL-CLAMP-X             ( dy cx )
+    R@ SWAP _SCRL-CLAMP-X                ( dy cx )
     R@ _SCRL-O-OFFSET-X + !              ( dy )
     R@ _SCRL-O-OFFSET-Y + @ +            ( new-y )
-    R@ SWAP R@ _SCRL-CLAMP-Y             ( cy )
+    R@ SWAP _SCRL-CLAMP-Y                ( cy )
     R@ _SCRL-O-OFFSET-Y + !
     R> WDG-DIRTY ;
 
@@ -317,7 +306,7 @@ REQUIRE ../keys.f
             DROP R@ _SCRL-O-OFFSET-X + @ ( row col ox )  \ no change
         THEN
     THEN
-    R@ SWAP R@ _SCRL-CLAMP-X             ( row col cx )
+    R@ SWAP _SCRL-CLAMP-X                ( row col cx )
     R@ _SCRL-O-OFFSET-X + !              ( row col )
     DROP                                  ( row )
 
@@ -334,7 +323,7 @@ REQUIRE ../keys.f
             DROP R@ _SCRL-O-OFFSET-Y + @
         THEN
     THEN
-    R@ SWAP R@ _SCRL-CLAMP-Y
+    R@ SWAP _SCRL-CLAMP-Y
     R@ _SCRL-O-OFFSET-Y + !
     DROP
     R> WDG-DIRTY ;

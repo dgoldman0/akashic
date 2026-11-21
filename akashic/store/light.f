@@ -94,8 +94,9 @@ VARIABLE _LC-SL-LEAF
 
 : _LC-STATE-PROOF  ( addr proof -- len | 0 )
     >R
-    _ST-REBUILD-TREE
-    R> _ST-SMT SWAP SMT-PROVE ;
+    _ST-REBUILD-TREE 0= IF R> 2DROP 0 EXIT THEN
+    R> 10240 _ST-SMT SMT-PROVE    \ the buffer's 10240 bytes: 256 entries of 40
+    0= IF DROP 0 THEN ;
 
 : LC-STATE-PROOF  ( addr proof -- len | 0 )
     _LC-STATE-PROOF ;

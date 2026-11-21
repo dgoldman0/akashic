@@ -430,6 +430,23 @@ def test_next_prev():
            '  DOM-TAG-NAME TYPE ; _T'],
           check_fn=lambda o: 'act' in o)
 
+    # The walks climb out of each scope; a climb kept a cell on the stack.
+    nested = '<sml><seq><ring><item/></ring><ring><act/></ring><val/></seq></sml>'
+    check("loading a nested document leaves only the tree",
+          mstr(nested) +
+          [': _T DEPTH >R TA SML-INIT SML-TREE = ." tree=" .',
+           '  ." left=" DEPTH R> - . ; _T'],
+          "tree=-1 left=0 ")
+    check("walks that climb leave only their result",
+          mstr(nested) +
+          [': _T TA SML-INIT 7',
+           '  SML-TREE SML-FIRST  SML-TREE SML-NEXT',
+           '  DUP DOM-TAG-NAME TYPE SPACE',
+           '  SML-TREE SML-PREV DOM-TAG-NAME TYPE SPACE',
+           '  SML-TREE SML-LAST DOM-TAG-NAME TYPE SPACE',
+           '  ." below=" . ; _T'],
+          "act item val below=7 ")
+
 
 # ===========================================================================
 #  Test: SML-CHILDREN
@@ -555,6 +572,15 @@ def test_som_next():
            '  SML-TREE SOM-NEXT DROP',
            '  SML-TREE SOM-NEXT DROP',
            '  SML-TREE SOM-AT-BOUNDARY . ; _T'], "2 ")
+
+    # The cursor finds its index in the scope from its own two cells.
+    check("SOM-NEXT leaves the cells below it",
+          mstr('<sml><seq><item/><act/><val/></seq></sml>') +
+          [': _T TA SML-INIT 7',
+           '  SML-TREE SOM-NEXT DROP',
+           '  SML-TREE SOM-NEXT DROP',
+           '  SML-TREE SOM-POSITION ." position=" .',
+           '  ." below=" . ; _T'], "position=2 below=7 ")
 
 
 # ===========================================================================

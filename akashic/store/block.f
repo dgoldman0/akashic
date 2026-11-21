@@ -205,7 +205,8 @@ VARIABLE _BLK-AT-BLK
     _BLK-AT-BLK @ _BLK-TXCNT @ CELLS    \ offset = count * CELL
     _BLK-AT-BLK @ _BLK-TXPTRS + !       \ txptrs[count] = tx
     \ Increment count
-    _BLK-AT-BLK @ _BLK-TXCNT DUP @ 1+ SWAP ! ;
+    _BLK-AT-BLK @ _BLK-TXCNT DUP @ 1+ SWAP !
+    -1 ;
 
 \ =====================================================================
 \  9. Transaction Merkle tree (256-leaf, shared with state)

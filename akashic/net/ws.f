@@ -3,7 +3,7 @@
 \ WebSocket protocol for real-time bidirectional communication.
 \ Uses HTTP for the upgrade handshake, then switches to framed mode.
 \
-\ REQUIRE http.f
+\ REQUIRE http.f base64.f
 \
 \ Prefix: WS-   (public API)
 \         _WS-  (internal helpers)
@@ -11,6 +11,7 @@
 \ Load with:   REQUIRE ws.f
 
 REQUIRE http.f
+REQUIRE base64.f
 
 PROVIDED akashic-websocket
 
@@ -231,14 +232,12 @@ VARIABLE _WS-MKEY-TMP
     \ Byte 0: FIN + opcode
     128 OR _WS-FHDR C!           \ FIN=1, opcode in low 4 bits
     \ Payload length + mask bit (0x80)
-    R@ R@ DROP                   \ get len
-    2R> SWAP >R >R               \ rearrange: ( ctx ) R: addr len
-    R@                           \ len
+    2R@ DROP                     \ len
     DUP 126 < IF
         128 OR _WS-FHDR 1+ C!   \ mask bit + 7-bit length
         \ Total header = 2 + 4 (mask key) = 6
-        \ Generate mask key
-        RANDOM _WS-FHDR 2 + !
+        \ Generate mask key, its four bytes in network order
+        RANDOM _WS-FHDR 2 + _SHA1-BE!
         \ Send header
         _WS-FHDR 6 HTTP-SEND DROP
     ELSE DUP 65536 < IF
@@ -247,7 +246,7 @@ VARIABLE _WS-MKEY-TMP
         DUP 8 RSHIFT 255 AND _WS-FHDR 2 + C!
         255 AND _WS-FHDR 3 + C!
         \ Mask key at offset 4
-        RANDOM _WS-FHDR 4 + !
+        RANDOM _WS-FHDR 4 + _SHA1-BE!
         _WS-FHDR 8 HTTP-SEND DROP
     ELSE
         \ 64-bit length — unlikely on Megapad but handle it
@@ -257,7 +256,7 @@ VARIABLE _WS-MKEY-TMP
         DUP 16 RSHIFT 255 AND _WS-FHDR 7 + C!
         DUP  8 RSHIFT 255 AND _WS-FHDR 8 + C!
         255 AND _WS-FHDR 9 + C!
-        RANDOM _WS-FHDR 10 + !
+        RANDOM _WS-FHDR 10 + _SHA1-BE!
         _WS-FHDR 14 HTTP-SEND DROP
     THEN THEN
     \ Mask payload in place and send
@@ -267,11 +266,11 @@ VARIABLE _WS-MKEY-TMP
         \ Mask key position depends on length encoding
         _WS-FHDR 1+ C@ 127 AND  \ length byte without mask bit
         DUP 126 < IF
-            DROP _WS-FHDR 2 + @
+            DROP _WS-FHDR 2 + _SHA1-BE@
         ELSE 126 = IF
-            _WS-FHDR 4 + @
+            _WS-FHDR 4 + _SHA1-BE@
         ELSE
-            _WS-FHDR 10 + @
+            _WS-FHDR 10 + _SHA1-BE@
         THEN THEN
         >R 2DUP R> _WS-MASK     \ mask payload
         HTTP-SEND DROP
@@ -315,18 +314,18 @@ VARIABLE _WRB-GOT
         DUP 0> IF
             _WRB-GOT +!
         ELSE DUP -1 = IF
-            2DROP _WRB-GOT @ EXIT  \ error
+            DROP 2DROP _WRB-GOT @ EXIT  \ error
         ELSE
             DROP
         THEN THEN
     REPEAT
-    NIP _WRB-GOT @ ;
+    2DROP _WRB-GOT @ ;
 
 \ WS-FRAME-RECV ( ctx buf max -- opcode payload-a payload-u | -1 0 0 )
 \   Receive and decode one frame.
 \   Returns opcode + payload, or -1 on error/closed.
 : WS-FRAME-RECV  ( ctx buf max -- opcode payload-a payload-u )
-    >R >R DROP                   \ save buf max, drop ctx
+    2>R DROP                     \ save buf max, drop ctx
     \ Read 2-byte header
     _WS-RBUF 2 _WS-RECV-BYTES
     2 < IF R> R> 2DROP -1 0 0 EXIT THEN
@@ -352,15 +351,15 @@ VARIABLE _WRB-GOT
     \ Read mask key if present
     _WS-RX-MASK @ IF
         _WS-RBUF 4 _WS-RECV-BYTES DROP
-        _WS-RBUF @ _WS-RX-MKEY !
+        _WS-RBUF _SHA1-BE@ _WS-RX-MKEY !   \ key bytes in network order
     THEN
     \ Read payload into caller's buffer
     _WS-RX-PLEN @ R> MIN         \ don't exceed caller's max ( R: buf )
-    R> OVER _WS-RECV-BYTES        \ ( plen actual )
+    R> SWAP 2DUP _WS-RECV-BYTES   \ ( buf plen actual )
     DROP                          \ drop actual (use plen)
     \ Unmask if needed
     _WS-RX-MASK @ IF
-        R> _WS-RX-PLEN @ _WS-RX-MKEY @ _WS-MASK
+        2DUP _WS-RX-MKEY @ _WS-MASK
     THEN
     \ Auto-pong
     _WS-RX-OP @ WS-OP-PING = WS-AUTO-PONG @ AND IF
@@ -524,11 +523,11 @@ VARIABLE _WR-FIRST-OP
 
 : WS-RECV  ( ctx buf max -- opcode len )
     0 _WR-TOTAL !
-    >R OVER >R                   \ save buf, max on R
+    ROT >R 2DUP R> -ROT          \ keep buf max under ( buf max ctx buf max )
     \ First frame
-    R> R> WS-FRAME-RECV          \ ( opcode addr len )
+    WS-FRAME-RECV                \ ( buf max opcode addr len )
     ROT DUP -1 = IF
-        >R 2DROP R> 0 EXIT      \ error
+        >R 2DROP 2DROP R> 0 EXIT \ error
     THEN
     _WR-FIRST-OP !
     _WR-TOTAL +!                 \ accumulate length
@@ -536,11 +535,11 @@ VARIABLE _WR-FIRST-OP
     \ Handle control frames (close)
     _WR-FIRST-OP @ WS-OP-CLOSE = IF
         0 _WS-OPEN !
-        -1 0 EXIT
+        2DROP -1 0 EXIT
     THEN
     \ If FIN is set, we're done
     _WS-RX-FIN @ IF
-        _WR-FIRST-OP @ _WR-TOTAL @ EXIT
+        2DROP _WR-FIRST-OP @ _WR-TOTAL @ EXIT
     THEN
     \ Continuation frames
     BEGIN
@@ -548,15 +547,15 @@ VARIABLE _WR-FIRST-OP
     WHILE
         _WS-CTX @
         2 PICK _WR-TOTAL @ +    \ buf + total (append position)
-        3 PICK _WR-TOTAL @ -    \ max - total (remaining space)
-        WS-FRAME-RECV            \ ( opcode addr len )
+        2 PICK _WR-TOTAL @ -    \ max - total (remaining space)
+        WS-FRAME-RECV            \ ( buf max opcode addr len )
         ROT -1 = IF
-            2DROP -1 0 EXIT
+            2DROP 2DROP -1 0 EXIT
         THEN
         _WR-TOTAL +!
         DROP
     REPEAT
-    _WR-FIRST-OP @ _WR-TOTAL @ ;
+    2DROP _WR-FIRST-OP @ _WR-TOTAL @ ;
 
 \ =====================================================================
 \  Concurrency Guard

@@ -34,7 +34,7 @@ VARIABLE YAML-ABORT-ON-ERROR
 
 : YAML-FAIL  ( err-code -- )
     YAML-ERR !
-    YAML-ABORT-ON-ERROR @ IF ABORT" YAML error" THEN ;
+    YAML-ABORT-ON-ERROR @ ABORT" YAML error" ;
 
 : YAML-OK?  ( -- flag )  YAML-ERR @ 0= ;
 : YAML-CLEAR-ERR  ( -- )  0 YAML-ERR ! ;
@@ -887,14 +887,14 @@ VARIABLE _YGI-ACC
 \ YAML-GET-FLOAT-STR ( addr len -- str-a str-l )
 \   Extract a float value as a raw string token.
 : YAML-GET-FLOAT-STR  ( addr len -- str-a str-l )
-    YAML-SKIP-WS  OVER
+    YAML-SKIP-WS  OVER -ROT          ( str-a addr len )
     BEGIN DUP 0> WHILE
         OVER C@ DUP 32 = OVER 9 = OR OVER 10 = OR OVER 13 = OR
         SWAP 35 = OR
-        IF NIP SWAP - EXIT THEN
+        IF DROP OVER - EXIT THEN
         1 /STRING
     REPEAT
-    NIP SWAP - ;
+    DROP OVER - ;
 
 \ =====================================================================
 \  Layer 3 — Block Scalar Extraction
@@ -1489,8 +1489,8 @@ VARIABLE _YB-IN-FLOW                 \ in a flow context?
     2 _YB-INDENT-SIZE !
     0 _YB-NEED-NL !
     0 _YB-IN-FLOW !
-    ' _YAML-DEFAULT-EMIT YAML-EMIT-XT !
-    ' _YAML-DEFAULT-TYPE YAML-TYPE-XT ! ;
+    ['] _YAML-DEFAULT-EMIT YAML-EMIT-XT !
+    ['] _YAML-DEFAULT-TYPE YAML-TYPE-XT ! ;
 
 YAML-BUILD-RESET
 

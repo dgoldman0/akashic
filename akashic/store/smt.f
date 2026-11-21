@@ -104,7 +104,7 @@ VARIABLE _smt-init-tree   \ temp — holds tree addr during DO LOOP
 
 : _SMT-INIT  ( tree -- flag )
     DUP _smt-init-tree !
-    DUP >R
+    >R
     _SMT-MAX-NODES _SMT-NODE-SZ * XMEM-ALLOT
     DUP 0= IF DROP R> DROP 0 EXIT THEN
     R@ _SD-POOL + !
@@ -281,7 +281,7 @@ VARIABLE _smt-i-val
 
 \ _SMT-MAKE-LEAF ( key val tree -- idx | 0 )
 : _SMT-MAKE-LEAF  ( key val tree -- idx | 0 )
-    DUP >R _SMT-ALLOC DUP 0= IF R> 2DROP DROP EXIT THEN
+    DUP >R _SMT-ALLOC DUP 0= IF R> DROP NIP NIP EXIT THEN
     DUP R@ _SMT-NODE >R           ( key val idx  R: tree node )
     _SMT-LEAF R@ _SN-TYPE + !
     0 R@ _SN-X0 + !
@@ -362,7 +362,7 @@ VARIABLE _smt-i-val
 
     \ ---- Create new leaf ----
     _smt-i-key @ _smt-i-val @ _smt-i-tree @ _SMT-MAKE-LEAF
-    DUP 0= IF NIP NIP 0 EXIT THEN ( leaf-idx diff-bit new-leaf )
+    DUP 0= IF NIP NIP EXIT THEN   ( leaf-idx diff-bit new-leaf )
 
     \ ---- Create new branch ----
     _smt-i-tree @ _SMT-ALLOC
@@ -400,11 +400,12 @@ VARIABLE _smt-i-val
 
     0                              ( old-leaf diff new-leaf branch insert-pos )
     BEGIN
-        DUP _SMT-PDEPTH @ <
+        DUP _SMT-PDEPTH @ < IF
+            DUP CELLS _SMT-PATH + @
+            _smt-i-tree @ _SMT-NODE _SN-X0 + @   ( ... path-bit-pos )
+            4 PICK <=              \ a branch's bit > diff → insert here
+        ELSE 0 THEN
     WHILE
-        DUP CELLS _SMT-PATH + @
-        _smt-i-tree @ _SMT-NODE _SN-X0 + @   ( ... path-bit-pos )
-        3 PICK > IF LEAVE THEN    \ this branch's bit > diff → insert here
         1+
     REPEAT                         ( old-leaf diff new-leaf branch insert-pos )
 
@@ -537,7 +538,7 @@ VARIABLE _smt-pv-blen
     _smt-pv-proof !
     0 _smt-pv-len !
     _smt-pv-tree @ _SD-ROOT + @ DUP 0= IF
-        NIP 0 0 EXIT
+        2DROP 0 0 EXIT
     THEN
     \ Walk down, collecting siblings
     BEGIN
@@ -589,8 +590,9 @@ VARIABLE _smt-pv-blen
 VARIABLE _smt-vf-key
 
 : _SMT-VERIFY  ( key val proof len root -- flag )
-    \ Sanity: reject if len > 256 (max tree depth for 256-bit keys)
-    OVER 256 > IF 2DROP 2DROP DROP 0 EXIT THEN
+    \ Sanity: reject if len > 256 (max tree depth for 256-bit keys),
+    \ or negative
+    OVER 256 U> IF 2DROP 2DROP DROP 0 EXIT THEN
     >R >R >R                       ( key val  R: root len proof )
     \ Compute leaf hash: SHA3-256(0x00 || key || value)
     SWAP _smt-vf-key !
@@ -599,20 +601,23 @@ VARIABLE _smt-vf-key
     _SMT-HSC 33 + 32 CMOVE
     _SMT-HSC 65 _SMT-TMP SHA3-256-HASH
     R> R>                          ( proof len  R: root )
-    0 ?DO                          ( proof )
-        DUP I 40 * + @            ( proof bit-pos )
-        _smt-vf-key @ SWAP _SMT-KEY-BIT  ( proof bit )
+    \ Entries run root to leaf, so the hash climbs from the last one.
+    DUP 1- 40 * ROT + SWAP         ( entry len )
+    0 ?DO                          ( entry )
+        DUP @                      ( entry bit-pos )
+        _smt-vf-key @ SWAP _SMT-KEY-BIT  ( entry bit )
         1 _SMT-HSC C!
         IF
             \ bit=1: current is right
-            OVER I 40 * 8 + + _SMT-HSC 1 + 32 CMOVE
+            DUP 8 + _SMT-HSC 1 + 32 CMOVE
             _SMT-TMP _SMT-HSC 33 + 32 CMOVE
         ELSE
             \ bit=0: current is left
             _SMT-TMP _SMT-HSC 1 + 32 CMOVE
-            OVER I 40 * 8 + + _SMT-HSC 33 + 32 CMOVE
+            DUP 8 + _SMT-HSC 33 + 32 CMOVE
         THEN
         _SMT-HSC 65 _SMT-TMP SHA3-256-HASH
+        40 -                       \ the entry above it
     LOOP
     DROP
     _SMT-TMP R> SHA3-256-COMPARE ;

@@ -101,7 +101,7 @@ VARIABLE _SRV-RECV-XT
 : _SRV-RECV  ( sd addr maxlen -- actual )  _SRV-RECV-XT @ EXECUTE ;
 
 \ -- CLOSE (connection) --
-: _SRV-CLOSE-DEFAULT  ( sd -- )  CLOSE ;
+: _SRV-CLOSE-DEFAULT  ( sd -- )  CLOSE DROP ;
 VARIABLE _SRV-CLOSE-XT
 ' _SRV-CLOSE-DEFAULT _SRV-CLOSE-XT !
 
@@ -157,7 +157,7 @@ CREATE _SRV-LOG-BUF 32 ALLOT
 
 : SRV-INIT  ( port -- )
     SRV-CLEAR-ERR
-    DUP _SRV-PORT !
+    _SRV-PORT !
 
     \ Allocate a TCP socket
     SOCK-TYPE-TCP _SRV-SOCKET

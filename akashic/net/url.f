@@ -34,7 +34,7 @@ VARIABLE URL-ABORT-ON-ERROR
 
 : URL-FAIL  ( err-code -- )
     URL-ERR !
-    URL-ABORT-ON-ERROR @ IF ABORT" URL error" THEN ;
+    URL-ABORT-ON-ERROR @ ABORT" URL error" ;
 
 : URL-OK?  ( -- flag )
     URL-ERR @ 0= ;
@@ -497,7 +497,7 @@ VARIABLE _QF-KLEN
         URL-QUERY-NEXT                    ( a' u' k-a k-u v-a v-u flag )
         DUP 0= IF
             \ no more pairs — clean up & return not-found
-            2DROP 2DROP 2DROP 0 0 0 EXIT
+            2DROP 2DROP 2DROP DROP 0 0 0 EXIT
         THEN
         DROP                              \ drop flag (known true)
         2>R                               \ save val on R: ( v-a v-u )

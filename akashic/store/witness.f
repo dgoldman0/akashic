@@ -166,13 +166,13 @@ CREATE _WIT-HT  _WIT-HT-SIZE CELLS ALLOT
     \ Capture pre-state snapshot
     _WIT-PRE-SNAP-PTR @ ST-SNAPSHOT
     \ Capture pre-state root
-    ST-ROOT _WIT-PRE-ROOT 32 CMOVE
+    ST-ROOT DROP _WIT-PRE-ROOT 32 CMOVE
     _WIT-POST-ROOT 32 0 FILL
     -1 _WIT-ACTIVE ! ;
 
 : WIT-END  ( -- )
     \ Capture post-state root
-    ST-ROOT _WIT-POST-ROOT 32 CMOVE
+    ST-ROOT DROP _WIT-POST-ROOT 32 CMOVE
     0 _WIT-ACTIVE ! ;
 
 \ =====================================================================
@@ -413,7 +413,7 @@ VARIABLE _WIT-VF-ST
     \ 2. Restore pre-state
     _WIT-PRE-SNAP-PTR @ ST-RESTORE
     \ 3. Verify pre-root matches
-    ST-ROOT _WIT-PRE-ROOT _WIT-CMP32 0= IF
+    ST-ROOT DROP _WIT-PRE-ROOT _WIT-CMP32 0= IF
         0 _WIT-VF-OK !
     THEN
     \ 4. Verify each entry against pre-state
@@ -448,7 +448,7 @@ VARIABLE _WIT-VF-ST
     _WIT-TMP-SNAP-PTR @ ST-RESTORE
     \ 6. Verify post-root
     _WIT-VF-OK @ IF
-        ST-ROOT _WIT-POST-ROOT _WIT-CMP32 0= IF
+        ST-ROOT DROP _WIT-POST-ROOT _WIT-CMP32 0= IF
             0 _WIT-VF-OK !
         THEN
     THEN

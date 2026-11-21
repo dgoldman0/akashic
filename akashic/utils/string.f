@@ -367,7 +367,7 @@ VARIABLE _S2N-NEG
 
 : STR-PARSE-TOKEN  ( addr len -- tok tlen rest rlen )
     STR-SKIP-BL
-    DUP 0= IF EXIT THEN        \ empty → tok=addr, tlen=0, rest=addr, rlen=0
+    DUP 0= IF 2DUP EXIT THEN   \ empty → tok=addr, tlen=0, rest=addr, rlen=0
     2DUP                        ( addr len addr0 len0 )
     BEGIN _STR-NOT-BL WHILE 1 /STRING REPEAT
     \ Stack: ( addr len addr' len' ) — addr'=past token, len'=remaining

@@ -2,8 +2,9 @@
 \  crypt.f  —  PDF's standard security handler, with the empty password
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PDF-CRYPT- (public), _PDCR- (private)
-\  Depends on: pdf/lexer.f, math/md5.f, math/rc4.f, math/aes.f,
-\              math/sha256.f, math/sha512.f, utils/memory-source.f
+\  Depends on: pdf/lexer.f, pdf/filter.f, math/md5.f, math/rc4.f,
+\              math/aes.f, math/sha256.f, math/sha512.f,
+\              utils/memory-source.f
 \
 \  Public API:
 \   PDF-S-LOCKED        ( -- 6 )        a status: a password is needed
@@ -51,6 +52,7 @@
 PROVIDED akashic-pdf-crypt
 
 REQUIRE lexer.f
+REQUIRE filter.f
 REQUIRE ../math/md5.f
 REQUIRE ../math/rc4.f
 REQUIRE ../math/aes.f

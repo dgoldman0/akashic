@@ -350,7 +350,7 @@ VARIABLE _DL-N   VARIABLE _DL-TY   VARIABLE _DL-XT   VARIABLE _DL-FL
 : _DOME-LISTEN-INNER  ( node type xt flags -- )
     _DL-FL !  _DL-XT !  _DL-TY !  _DL-N !
     _DOME-LST-ALLOC
-    DUP >R
+    >R
     _DL-TY @  R@ L.TYPE !
     _DL-XT @  R@ L.XT !
     _DL-FL @  R@ L.FLAGS !
