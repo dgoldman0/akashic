@@ -668,6 +668,25 @@ def test_bios_effects_come_from_both_forms_of_the_dictionary_tables(base_checker
     assert checker.lookup("CALLER-SPAN-STATUS").signature.shape() == "2 -- 1"
 
 
+def test_megapad_is_found_beside_akashic_as_a_workspace_links_them(tmp_path, monkeypatch):
+    # A workspace links checkouts that live elsewhere side by side.
+    checkouts = tmp_path / "checkouts"
+    (checkouts / "akashic").mkdir(parents=True)
+    (checkouts / "megapad").mkdir()
+    (checkouts / "megapad" / "kdos.f").write_text("")
+    workspace = tmp_path / "workspace"
+    (workspace / "megapad").mkdir(parents=True)
+    (workspace / "megapad" / "kdos.f").write_text("")
+    (workspace / "akashic").symlink_to(checkouts / "akashic")
+    monkeypatch.delenv("MEGAPAD_ROOT", raising=False)
+    assert megapad_root(workspace / "akashic") == workspace / "megapad"
+    # Without a MegaPad in the workspace, the one beside the link's target.
+    (workspace / "megapad" / "kdos.f").unlink()
+    assert megapad_root(workspace / "akashic") == checkouts / "megapad"
+    monkeypatch.setenv("MEGAPAD_ROOT", str(tmp_path / "chosen"))
+    assert megapad_root(workspace / "akashic") == tmp_path / "chosen"
+
+
 def test_kdos_catch_and_throw_keep_their_exact_meaning(base_checker_state):
     checker = check(base_checker_state, "")
     assert checker.lookup("CATCH").prim == "CATCH"
