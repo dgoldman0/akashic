@@ -4110,6 +4110,7 @@ VARIABLE _RTAPT-SG-OLD-LEDGER-A VARIABLE _RTAPT-SG-OLD-LEDGER-U
         4 OF DUP R@ _RTAPT-E.CONTROL-LEDGER-U !
              RTAPT-CONTROL-LEDGER-SIZE / R@ _RTAPT-E.CONTROL-LEDGER-CAP !
              R@ _RTAPT-E.CONTROL-LEDGER-A ! ENDOF
+        >R 2DROP R>                      \ no other kind binds storage
     ENDCASE R> DROP ;
 
 : _RTAPT-SG-RESTORE  ( -- )

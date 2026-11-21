@@ -10677,6 +10677,7 @@ VARIABLE _RTHP-UB-SH-KEPT
         18 OF DUP _RTHP.SERIES-CORR-A @
                 SWAP _RTHP.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE * ENDOF
         19 OF DUP _RTHP.SERIES-SAMPLES-A @ SWAP _RTHP.SERIES-SAMPLES-USED @ ENDOF
+        >R DROP 0 0 R>                   \ an empty span past the last item
     ENDCASE ;
 
 \ Keep the candidate taken from the bank on screen in the stage's block.
