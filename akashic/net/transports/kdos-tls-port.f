@@ -80,7 +80,7 @@ REQUIRE ../../utils/memory-span.f
 \ and preserves exact owner-release diagnostics around each complete call.
 \ Each callback field below declares, in Uroko's form, the effect of the
 \ token it holds; sd is the KDOS TLS socket descriptor.
-( kind: kdos-tls-port record )
+( kind: kdos-tls-port struct )
 
   0 CONSTANT _KDOSTLSP-PORT
 NET-IO-PORT-SIZE CONSTANT _KDOSTLSP-MAGIC

@@ -22,7 +22,7 @@ PROVIDED akashic-net-io-port
 \ A port record holds the adapter's context cell and its callbacks.  Each
 \ callback field declares, in Uroko's form, the effect of the token it
 \ holds; the context is whatever cell the adapter chose.
-( kind: nio-port record )
+( kind: nio-port struct )
 ( kind: nio-status n )
  0 CONSTANT _NIO-CONTEXT
  8 CONSTANT _NIO-RECV-XT  ( holds: xt( buf: span context -- count: u status: nio-status ) )

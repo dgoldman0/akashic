@@ -13,13 +13,25 @@ effect as a nested comment, ``xt( text: span -- )``, and an item labelled
 ``VARIABLE YAML-EMIT-XT ( holds: xt( text: span -- ) )``.  KDOS's ``(``
 counts nested parentheses, so it skips the whole declaration as a comment.
 
-The built-in kinds are ``cell`` (no kind), ``n``, ``u``, ``flag``, ``char``,
-``addr``, ``span``, ``xt``, ``ref`` and ``handle`` (the managed data of
-release plan Part 9d), ``task``, and ``record``, the kind every record kind
-refines.  A source file adds kinds with ``( kind: NAME BASE )``, such as
-``( kind: nio-port record )`` for a record or ``( kind: nio-status n )`` for
-a kind of number; a named kind mixes freely with its base but not with
-another named kind.
+The built-in kinds of plain data are ``cell`` (no kind), ``n``, ``u``,
+``flag``, ``char``, ``addr``, ``span``, ``xt``, ``task``, and ``struct``, a
+record in plain memory that code manages by hand.  The kinds of managed
+data, the objects of release plan Part 9d that a collector manages, are
+``tagged`` (any word in LM1's format), ``ref`` (a reference, valid only in
+the window that read it), ``record``, ``string``, ``vector`` and ``bytes``
+(references to those objects), ``list`` and ``list( k )`` (nil or a cons
+cell, whose elements are of kind k), and ``handle`` and ``handle( k )`` (a
+handle, which names an object of kind k).  ``struct`` refines ``addr``;
+``record``, ``string``, ``vector`` and ``bytes`` refine ``ref``; ``ref`` and
+``list`` refine ``tagged``; ``list( j )`` refines ``list( k )`` and
+``handle( j )`` refines ``handle( k )`` when j refines k.  A handle is
+neither a reference nor an address.
+
+A source file adds kinds with ``( kind: NAME BASE )``, such as
+``( kind: nio-port struct )`` for a struct, ``( kind: concept record )``
+for a collected record or ``( kind: nio-status n )`` for a kind of number;
+a named kind mixes freely with the kinds it refines but not with another
+named kind.
 
 A stack effect lists its inputs and one or more alternatives for its
 outputs, each ordered from the deepest cell to the top.  Alternatives of
@@ -42,22 +54,111 @@ ADDR = "addr"
 COUNT = "u"
 NUMBER = "n"
 CHAR = "char"
-REF = "ref"
-HANDLE = "handle"
 TASK = "task"
+STRUCT = "struct"
+TAGGED = "tagged"
+REF = "ref"
 RECORD = "record"
+STRING = "string"
+VECTOR = "vector"
+BYTES = "bytes"
+LIST = "list"
+HANDLE = "handle"
 
 PLAIN_NUMBERS = frozenset({COUNT, NUMBER, CHAR})
-MANAGED = frozenset({REF, HANDLE})
 
 # The names a declaration may use for the built-in kinds.  "span" is two
-# cells and is handled where items become slots.
+# cells and is handled where items become slots; "list( k )" and
+# "handle( k )" are read where kinds are.
 BUILTIN_KINDS = {
     "cell": X, "n": NUMBER, "u": COUNT, "flag": FLAG, "char": CHAR, "addr": ADDR,
-    "xt": XT, "ref": REF, "handle": HANDLE, "task": TASK, "record": RECORD,
+    "xt": XT, "task": TASK, "struct": STRUCT, "tagged": TAGGED, "ref": REF,
+    "record": RECORD, "string": STRING, "vector": VECTOR, "bytes": BYTES, "list": LIST,
+    "handle": HANDLE,
 }
-# Built-in kinds that refine another: every record is an address.
-BUILTIN_PARENTS = {RECORD: ADDR}
+# Built-in kinds that refine another: a struct is an address of plain
+# memory; records, strings, vectors and bytevectors are references; and a
+# reference or a list is a tagged word.
+BUILTIN_PARENTS = {
+    STRUCT: ADDR,
+    RECORD: REF, STRING: REF, VECTOR: REF, BYTES: REF,
+    REF: TAGGED, LIST: TAGGED,
+}
+
+# The forms that take a kind as a parameter, as "list( concept )" does.
+_PARAMETRIC = {"list(": LIST, "handle(": HANDLE}
+_OPENERS = ("xt(",) + tuple(_PARAMETRIC)
+
+
+def builtin_parent(kind: str) -> str | None:
+    """The kind a built-in or parametric kind refines, if any."""
+    if kind in BUILTIN_PARENTS:
+        return BUILTIN_PARENTS[kind]
+    return parametric_parent(kind, builtin_parent)
+
+
+def _parameter(kind: str) -> tuple[str, str] | None:
+    """A parametric kind's form and parameter: "list(concept)" gives both."""
+    for opener, form in _PARAMETRIC.items():
+        if kind.startswith(opener) and kind.endswith(")"):
+            return form, kind[len(opener):-1]
+    return None
+
+
+def chain(kind: str, parent: Callable[[str], "str | None"]) -> list[str]:
+    """A kind and every kind it refines, ending with the kind it rests on."""
+    found = [kind]
+    seen = {kind}
+    while True:
+        up = parent(found[-1])
+        if up is None or up in seen:
+            return found
+        found.append(up)
+        seen.add(up)
+
+
+def list_kind(element: str, parent: Callable[[str], "str | None"]) -> tuple[str | None, str | None]:
+    """The kind ``list( element )``, or the reason it is not one.
+
+    A list's elements are tagged words, so the element kind is one that
+    rests on ``tagged``, or a flag or a character, which a tagged word
+    holds as t or nil and as LM1's character.  A list of tagged words is
+    the plain ``list``.
+    """
+    rests_on = chain(element, parent)[-1]
+    if rests_on not in (TAGGED, FLAG, CHAR):
+        return None, f"a list holds tagged words, and {element} is plain data"
+    return (LIST if element == TAGGED else f"list({element})"), None
+
+
+def handle_kind(target: str, parent: Callable[[str], "str | None"]) -> tuple[str | None, str | None]:
+    """The kind ``handle( target )``, or the reason it is not one.
+
+    A handle names an object, so the target is a reference kind or a list;
+    a handle of any object is the plain ``handle``.
+    """
+    lineage = chain(target, parent)
+    if REF not in lineage and LIST not in lineage:
+        return None, f"a handle names an object, and {target} is not a kind of object"
+    return (HANDLE if target == REF else f"handle({target})"), None
+
+
+def parametric_parent(kind: str, parent: Callable[[str], "str | None"]) -> str | None:
+    """What ``list( k )`` or ``handle( k )`` refines: the same form of k's parent.
+
+    ``list( concept )`` refines ``list( record )``, which refines
+    ``list( ref )`` and then the plain ``list``; a handle's kinds refine
+    one another the same way, down to the plain ``handle``.
+    """
+    found = _parameter(kind)
+    if found is None:
+        return None
+    form, inner = found
+    up = parent(inner)
+    if up is None:
+        return form
+    made, _ = (list_kind if form == LIST else handle_kind)(up, parent)
+    return made if made is not None else form
 
 # Facts about a cell that the checker can route an IF on.
 ZERO = 0
@@ -115,8 +216,10 @@ class ParsedComment:
 
 
 # A resolver maps a kind name written in a declaration to the checker's kind,
-# or None when no such kind is visible.
+# or None when no such kind is visible.  Parents maps a kind to the kind it
+# refines, which a parametric kind needs to check its parameter.
 Resolver = Callable[[str], "str | None"]
+Parents = Callable[[str], "str | None"]
 
 
 def builtin_resolver(name: str) -> str | None:
@@ -144,14 +247,24 @@ def name_fact(name: str) -> int | None:
     return None
 
 
+def _opens(token: str) -> bool:
+    """Whether a token opens a nested form: ``xt(``, ``list(`` or ``handle(``."""
+    return token.lower() in _OPENERS
+
+
 def _tokens(text: str) -> list[str]:
-    """Split a comment into tokens, with ``xt(`` and ``)`` standing alone."""
+    """Split a comment into tokens, with each opener and ``)`` standing alone."""
     out: list[str] = []
     for token in text.replace("—", " -- ").split():
-        while token.lower().startswith("xt(") and len(token) > 3:
-            out.append(token[:3])
-            token = token[3:]
-        if token.lower() == "xt(" or token == ")":
+        while True:
+            lowered = token.lower()
+            opener = next((o for o in _OPENERS if lowered.startswith(o) and len(token) > len(o)),
+                          None)
+            if opener is None:
+                break
+            out.append(token[: len(opener)])
+            token = token[len(opener):]
+        if _opens(token) or token == ")":
             out.append(token)
             continue
         closing = 0
@@ -178,10 +291,12 @@ class _Item:
 class _Parser:
     """Reads one comment's tokens; nested ``xt( ... )`` effects recurse."""
 
-    def __init__(self, tokens: list[str], resolve: Resolver, problems: list[str]) -> None:
+    def __init__(self, tokens: list[str], resolve: Resolver, problems: list[str],
+                 parents: Parents | None = None) -> None:
         self.tokens = tokens
         self.pos = 0
         self.resolve = resolve
+        self.parents = parents or builtin_parent
         self.problems = problems
         self.declared = 0
 
@@ -192,13 +307,14 @@ class _Parser:
         while self.pos < len(self.tokens):
             token = self.tokens[self.pos]
             self.pos += 1
-            if token.lower() == "xt(":
+            if _opens(token):
                 depth += 1
             elif token == ")":
                 depth -= 1
                 if depth == 0:
                     inner = self.tokens[start : self.pos - 1]
-                    parsed = _effect_from_tokens(inner, self.resolve, self.problems)
+                    parsed = _effect_from_tokens(inner, self.resolve, self.problems,
+                                                 self.parents)
                     self.declared += parsed.declared
                     if parsed.effect is None:
                         self.problems.append(
@@ -210,31 +326,66 @@ class _Parser:
         self.problems.append("xt( has no closing )")
         return None
 
+    def kind_expression(self, name: str) -> tuple[str | None, Effect | None]:
+        """One kind at the cursor, as the kind and the effect a token kind has.
+
+        A kind is a kind's name, ``xt( effect )``, or ``list( k )`` or
+        ``handle( k )`` around another kind.  The kind is None after a
+        problem, which the parser records.
+        """
+        token = self.tokens[self.pos]
+        self.pos += 1
+        lowered = token.lower()
+        if lowered == "xt(":
+            return XT, self.nested()
+        if lowered in _PARAMETRIC:
+            form = _PARAMETRIC[lowered]
+            if self.pos >= len(self.tokens) or self.tokens[self.pos] in (")", "--", "|"):
+                self.problems.append(f"{name}: {form}( names no kind")
+                return None, None
+            if self.tokens[self.pos].lower() == "span":
+                self.pos += 1
+                inner, effect = None, None
+                self.problems.append(f"{name}: {form}( span ) names two cells, not one")
+            else:
+                inner, effect = self.kind_expression(name)
+            if self.pos >= len(self.tokens) or self.tokens[self.pos] != ")":
+                self.problems.append(f"{name}: {form}( has no closing )")
+                return None, None
+            self.pos += 1
+            if inner is None:
+                return None, None
+            if inner == XT:
+                self.problems.append(f"{name}: {form}( xt ): an execution token is plain data")
+                return None, None
+            made, problem = (list_kind if form == LIST else handle_kind)(inner, self.parents)
+            if problem is not None:
+                self.problems.append(f"{name}: {problem}")
+            return made, None
+        kind = self.resolve(lowered)
+        if kind is None:
+            self.problems.append(f"{name}: names an unknown kind '{token}'")
+            return None, None
+        return kind, None
+
     def kind_item(self, name: str) -> _Item:
         """The kind after a ``name:`` label."""
         if self.pos >= len(self.tokens):
             self.problems.append(f"{name}: has no kind")
             return _Item(name)
         token = self.tokens[self.pos]
-        self.pos += 1
-        if token.lower() == "xt(":
-            effect = self.nested()
-            self.declared += 1
-            return _Item(name, XT, effect=effect, declared=True)
-        lowered = token.lower()
-        if lowered == "span":
+        if token.lower() == "span":
+            self.pos += 1
             self.declared += 1
             return _Item(name, span=True, declared=True)
         if token in ("--", "|", ")") or _LABEL_RE.match(token):
-            self.pos -= 1
             self.problems.append(f"{name}: has no kind")
             return _Item(name)
-        kind = self.resolve(lowered)
+        kind, effect = self.kind_expression(name)
         if kind is None:
-            self.problems.append(f"{name}: names an unknown kind '{token}'")
             return _Item(name)
         self.declared += 1
-        return _Item(name, kind, declared=True)
+        return _Item(name, kind, effect=effect, declared=True)
 
     def item(self, token: str) -> _Item:
         if _LABEL_RE.match(token):
@@ -246,21 +397,31 @@ class _Parser:
                     content = _Item(name)
                 return _Item(name, ADDR, holds=content, declared=content.declared)
             return self.kind_item(name)
-        if token.lower() == "xt(":
-            effect = self.nested()
+        if _opens(token):
+            # A kind written without a name, as "xt( n -- n )" alone.
+            self.pos -= 1
+            kind, effect = self.kind_expression(token.lower()[:-1])
+            if kind is None:
+                return _Item(token.lower()[:-1])
             self.declared += 1
-            return _Item("xt", XT, effect=effect, declared=True)
+            return _Item(token.lower()[:-1], kind, effect=effect, declared=True)
         return _Item(token)
 
 
-def parse_effect(text: str, resolve: Resolver | None = None) -> ParsedComment:
+def parse_effect(text: str, resolve: Resolver | None = None,
+                 parents: Parents | None = None) -> ParsedComment:
     """Read a stack comment's text (without its parentheses) as an effect."""
     problems: list[str] = []
     tokens = _tokens(text)
-    parsed = _effect_from_tokens(tokens, resolve or builtin_resolver, problems)
-    opened = sum(1 for token in tokens if token.lower() == "xt(")
-    if opened > sum(1 for token in tokens if token == ")"):
-        problems.append("xt( has no closing )")
+    parsed = _effect_from_tokens(tokens, resolve or builtin_resolver, problems, parents)
+    unclosed: list[str] = []
+    for token in tokens:
+        if _opens(token):
+            unclosed.append(token.lower())
+        elif token == ")" and unclosed:
+            unclosed.pop()
+    if unclosed:
+        problems.append(f"{unclosed[0]} has no closing )")
     parsed.problems = list(dict.fromkeys(problems + parsed.problems))
     if parsed.effect is not None:
         parsed.effect = Effect(parsed.effect.inputs, parsed.effect.alts, parsed.effect.parses,
@@ -269,11 +430,11 @@ def parse_effect(text: str, resolve: Resolver | None = None) -> ParsedComment:
 
 
 def _top_level_split(tokens: list[str]) -> list[int]:
-    """Positions of ``--`` outside any nested ``xt( ... )``."""
+    """Positions of ``--`` outside any nested ``xt( ... )`` or parametric kind."""
     depth = 0
     found = []
     for index, token in enumerate(tokens):
-        if token.lower() == "xt(":
+        if _opens(token):
             depth += 1
         elif token == ")" and depth:
             depth -= 1
@@ -286,7 +447,7 @@ def _outer_tokens(tokens: list[str]) -> list[str]:
     depth = 0
     outer = []
     for token in tokens:
-        if token.lower() == "xt(":
+        if _opens(token):
             depth += 1
         elif token == ")" and depth:
             depth -= 1
@@ -295,8 +456,8 @@ def _outer_tokens(tokens: list[str]) -> list[str]:
     return outer
 
 
-def _effect_from_tokens(tokens: list[str], resolve: Resolver,
-                        problems: list[str]) -> ParsedComment:
+def _effect_from_tokens(tokens: list[str], resolve: Resolver, problems: list[str],
+                        parents: Parents | None = None) -> ParsedComment:
     splits = _top_level_split(tokens)
     if not splits:
         return ParsedComment(None, "no --")
@@ -311,7 +472,7 @@ def _effect_from_tokens(tokens: list[str], resolve: Resolver,
             # "R:" starts a return-stack picture; "r:" does too unless a kind
             # follows, as in "r: ref", where it names an item.
             following = side[index + 1].lower() if index + 1 < len(side) else ""
-            if token == "R:" or (token == "r:" and following not in ("xt(", "span")
+            if token == "R:" or (token == "r:" and not _opens(following) and following != "span"
                                  and resolve(following) is None):
                 returns_r = True
                 del side[index:]
@@ -321,7 +482,7 @@ def _effect_from_tokens(tokens: list[str], resolve: Resolver,
         return ParsedComment(Effect((), (), variable=True), "variable", outer)
     parses = 0
     in_items: list[_Item] = []
-    parser = _Parser(left, resolve, problems)
+    parser = _Parser(left, resolve, problems, parents)
     while parser.pos < len(left):
         token = left[parser.pos]
         parser.pos += 1
@@ -338,7 +499,7 @@ def _effect_from_tokens(tokens: list[str], resolve: Resolver,
     # whole alternatives; a bar inside a token, as in "dentry|0", names the
     # values one cell may take.
     alternatives: list[list[_Item]] = [[]]
-    out_parser = _Parser(right, resolve, problems)
+    out_parser = _Parser(right, resolve, problems, parents)
     while out_parser.pos < len(right):
         token = right[out_parser.pos]
         out_parser.pos += 1
@@ -416,7 +577,8 @@ def _span_source(name: str, inputs: list[_Item], in_slots: list[Slot]) -> int | 
     return None
 
 
-def parse_holds(text: str, resolve: Resolver | None = None) -> tuple[Slot | None, list[str], bool]:
+def parse_holds(text: str, resolve: Resolver | None = None, parents: Parents | None = None
+                ) -> tuple[Slot | None, list[str], bool]:
     """A data word's ``( holds: KIND )`` declaration.
 
     Returns the slot for what the cell holds, the declaration's problems,
@@ -427,7 +589,7 @@ def parse_holds(text: str, resolve: Resolver | None = None) -> tuple[Slot | None
     if not tokens or tokens[0].lower() != "holds:":
         return None, [], False
     problems: list[str] = []
-    parser = _Parser(tokens, resolve or builtin_resolver, problems)
+    parser = _Parser(tokens, resolve or builtin_resolver, problems, parents)
     parser.pos = 1
     item = parser.kind_item("holds")
     if item.span:
@@ -440,22 +602,42 @@ def parse_holds(text: str, resolve: Resolver | None = None) -> tuple[Slot | None
     return _slot(item, outputs=True), problems, True
 
 
-def parse_kind_declaration(text: str, resolve: Resolver | None = None
+def parse_kind_declaration(text: str, resolve: Resolver | None = None,
+                           parents: Parents | None = None
                            ) -> tuple[tuple[str, str] | None, list[str], bool]:
-    """A ``( kind: NAME BASE )`` declaration: the new kind and its base."""
+    """A ``( kind: NAME BASE )`` declaration: the new kind and its base.
+
+    The base is a kind's name or a parametric kind, as in
+    ``( kind: path list( string ) )``.
+    """
     tokens = _tokens(text)
     if not tokens or tokens[0].lower() != "kind:":
         return None, [], False
-    if len(tokens) != 3:
+    if len(tokens) < 3:
         return None, ["kind: takes a name and the kind it refines"], True
     name, base = tokens[1].lower(), tokens[2].lower()
     if name in BUILTIN_KINDS or name == "span":
         return None, [f"kind: {name} is a built-in kind"], True
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", name):
         return None, [f"kind: '{tokens[1]}' is not a kind name"], True
-    parent = (resolve or builtin_resolver)(base)
-    if parent is None:
-        return None, [f"kind: {name} refines an unknown kind '{tokens[2]}'"], True
+    resolve = resolve or builtin_resolver
+    if not _opens(base):
+        if len(tokens) != 3:
+            return None, ["kind: takes a name and the kind it refines"], True
+        if base == "span":
+            return None, [f"kind: {name} cannot refine span, which is two cells"], True
+        parent = resolve(base)
+        if parent is None:
+            return None, [f"kind: {name} refines an unknown kind '{tokens[2]}'"], True
+    else:
+        problems: list[str] = []
+        parser = _Parser(tokens, resolve, problems, parents)
+        parser.pos = 2
+        parent, _ = parser.kind_expression(name)
+        if problems:
+            return None, [f"kind: {problem}" for problem in problems], True
+        if parser.pos < len(tokens):
+            return None, ["kind: takes a name and the kind it refines"], True
     if parent in (X, XT):
         return None, [f"kind: {name} cannot refine {base}"], True
     return (name, parent), [], True
@@ -465,31 +647,39 @@ def effect_shape(effect: Effect) -> tuple[int, tuple[int, ...]]:
     return len(effect.inputs), effect.depths
 
 
-def compatible(value_kind: str, param_kind: str,
-               parents: Callable[[str], "str | None"] | None = None) -> str | None:
+def compatible(value_kind: str, param_kind: str, parents: Parents | None = None) -> str | None:
     """None when a value of one kind may fill a slot of another; else a class.
 
-    A named kind mixes freely with the kinds it refines, so a record serves
-    as an address and an address may stand where a record is expected, but
-    two named kinds that do not refine one another do not mix.  Numbers and
-    flags mix freely, as Forth code uses any nonzero cell as true, and an
-    address may serve as a flag, as code tests for a null pointer.
+    A named kind mixes freely with the kinds it refines, so a struct serves
+    as an address and an address may stand where a struct is expected, but
+    two named kinds that do not refine one another do not mix, nor do two
+    kinds of object, such as a string and a record.  Managed data stays
+    apart from plain data, except that a reference may stand where an
+    address is read, as rule 1 of Part 9d reads objects directly; a handle
+    is neither.  Numbers and flags mix freely, as Forth code uses any
+    nonzero cell as true, and an address may serve as a flag, as code tests
+    for a null pointer.
     """
     if param_kind in (X, LIT) or value_kind in (X, LIT) or value_kind == param_kind:
         return None
-    parent = parents or (lambda kind: BUILTIN_PARENTS.get(kind))
-    value_chain = _chain(value_kind, parent)
-    param_chain = _chain(param_kind, parent)
+    parent = parents or builtin_parent
+    value_chain = chain(value_kind, parent)
+    param_chain = chain(param_kind, parent)
     if param_kind in value_chain or value_kind in param_chain:
         return None
     value_base, param_base = value_chain[-1], param_chain[-1]
     if value_base == param_base:
         # Neither refines the other, yet both rest on one built-in kind: two
-        # named kinds, such as two records or two kinds of status.
+        # kinds of object, or two named kinds such as two structs or two
+        # kinds of status.
+        if value_base in (TAGGED, HANDLE):
+            return "object kinds differ"
         return "named kinds differ"
-    if value_base in MANAGED or param_base in MANAGED:
-        if value_base == REF and param_base == ADDR:
-            return None  # rule 1: managed objects are read directly
+    if REF in value_chain and param_kind == ADDR:
+        return None  # rule 1: an object's words are read directly
+    if HANDLE in (value_base, param_base):
+        return "handle mixed with other data"
+    if TAGGED in (value_base, param_base):
         return "managed kind crosses plain data"
     if value_base == XT or param_base == XT:
         return "execution token mixed with data"
@@ -507,17 +697,6 @@ def compatible(value_kind: str, param_kind: str,
     if value_base in PLAIN_NUMBERS and param_base == ADDR:
         return "number used as an address"
     return "other"
-
-
-def _chain(kind: str, parent: Callable[[str], "str | None"]) -> list[str]:
-    chain = [kind]
-    seen = {kind}
-    while True:
-        up = parent(chain[-1])
-        if up is None or up in seen:
-            return chain
-        chain.append(up)
-        seen.add(up)
 
 
 def join_kinds(one: str, two: str) -> str:

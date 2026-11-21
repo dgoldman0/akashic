@@ -368,9 +368,13 @@ class Checker:
         return entry.name if entry is not None else None
 
     def kind_parent(self, kind: str) -> str | None:
+        """The kind ``kind`` refines: a built-in's, a declared kind's base, or
+        the same form of a parametric kind's parameter's parent."""
         if kind in E.BUILTIN_PARENTS:
             return E.BUILTIN_PARENTS[kind]
-        return self.all_kinds.get(kind)
+        if kind in self.all_kinds:
+            return self.all_kinds[kind]
+        return E.parametric_parent(kind, self.kind_parent)
 
     def compatible(self, value_kind: str, param_kind: str) -> str | None:
         return E.compatible(value_kind, param_kind, self.kind_parent)
@@ -614,7 +618,7 @@ class Checker:
             cursor.pos = saved
             return None
         text, closed = cursor.paren_closed()
-        held, problems, declaration = parse_holds(text, self.resolve_kind)
+        held, problems, declaration = parse_holds(text, self.resolve_kind, self.kind_parent)
         if not declaration:
             cursor.pos = saved
             return None
@@ -687,7 +691,7 @@ class Checker:
         pending.items.append(("call", word, line))
 
     def _set_declared(self, word: Word, text: str) -> None:
-        parsed = parse_effect(text, self.resolve_kind)
+        parsed = parse_effect(text, self.resolve_kind, self.kind_parent)
         word.declared_text = text.strip()
         word.declared = parsed.effect
         word.declared_reason = parsed.reason
@@ -805,7 +809,7 @@ class Checker:
             # address it receives on top.
             declared = None
             if does_comment is not None:
-                parsed = parse_effect(does_comment, self.resolve_kind).effect
+                parsed = parse_effect(does_comment, self.resolve_kind, self.kind_parent).effect
                 if parsed is not None and not parsed.variable and parsed.inputs:
                     declared = Effect(parsed.inputs[:-1], parsed.alts, parsed.parses,
                                       False, parsed.text)
@@ -1101,7 +1105,7 @@ class Analysis:
             elif op == "to":
                 for state in current:
                     value = self.pop(state)
-                    if value.kind == E.REF:
+                    if self.checker.refines(value.kind, E.REF):
                         self.note("managed rule", "ref kept in a VALUE by TO")
                     if arg is not None and arg.holds is not None:
                         self.check_held(value, arg.holds, f"TO {arg.name}")
@@ -2005,7 +2009,7 @@ def _fetch(kind: str, cell: bool = False):
     """A read; ``@`` of a typed slot gives what the slot's declaration holds."""
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         address = analysis.pop(state)
-        if address.kind == E.HANDLE:
+        if analysis.checker.refines(address.kind, E.HANDLE):
             analysis.note("managed rule", f"{word.name} reads through a handle")
         else:
             analysis.check_kind(address, Slot("addr", E.ADDR), word)
@@ -2024,14 +2028,15 @@ def _store(cells: int, cell: bool = False):
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         address = analysis.pop(state)
         values = [analysis.pop(state) for _ in range(cells)]
-        if address.kind == E.REF:
+        refines = analysis.checker.refines
+        if refines(address.kind, E.REF):
             analysis.note("managed rule", f"{word.name} writes a managed object directly")
-        elif address.kind == E.HANDLE:
+        elif refines(address.kind, E.HANDLE):
             analysis.note("managed rule", f"{word.name} writes through a handle")
         else:
             analysis.check_kind(address, Slot("addr", E.ADDR), word)
         for value in values:
-            if value.kind == E.REF:
+            if refines(value.kind, E.REF):
                 analysis.note("managed rule", f"{word.name} keeps a ref in plain memory")
         if cell and address.holds is not None:
             analysis.check_held(values[0], address.holds, f"! into {address.origin}")
@@ -2133,7 +2138,7 @@ def _swap_relations(value: Value, result: Value) -> Value:
 
 def _comma(analysis: Analysis, state: State, word: Word) -> list[State]:
     value = analysis.pop(state)
-    if value.kind == E.REF:
+    if analysis.checker.refines(value.kind, E.REF):
         analysis.note("managed rule", f"{word.name} keeps a ref in the dictionary")
     return [state]
 
@@ -2323,7 +2328,8 @@ def _top_abortquote(checker: Checker, cursor: LineCursor, word: Word) -> None:
 
 def _top_paren(checker: Checker, cursor: LineCursor, word: Word) -> None:
     text, closed = cursor.paren_closed()
-    declared, problems, declaration = parse_kind_declaration(text, checker.resolve_kind)
+    declared, problems, declaration = parse_kind_declaration(text, checker.resolve_kind,
+                                                             checker.kind_parent)
     if not declaration:
         return
     if not closed:

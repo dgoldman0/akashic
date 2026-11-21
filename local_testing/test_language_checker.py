@@ -293,10 +293,10 @@ def test_kind_span_and_managed_findings(base_checker_state):
     assert findings(checker, "UNDECLARED") == []
 
 
-def test_kind_declarations_add_records_and_kinds_of_number(base_checker_state):
+def test_kind_declarations_add_structs_and_kinds_of_number(base_checker_state):
     checker = check(base_checker_state, (
-        "( kind: port record )\n"
-        "( kind: widget record )\n"
+        "( kind: port struct )\n"
+        "( kind: widget struct )\n"
         "( kind: port-status n )\n"
         ": PORT-USE  ( p: port -- s: port-status )  @ ;\n"
         ": FROM-ADDRESS  ( a: addr -- s: port-status )  PORT-USE ;\n"
@@ -305,11 +305,95 @@ def test_kind_declarations_add_records_and_kinds_of_number(base_checker_state):
         ": STATUS-AS-COUNT  ( p: port -- n: u )  PORT-USE ;\n"
         "( kind: blob gadget )\n"
     ))
-    assert findings(checker, "FROM-ADDRESS") == []  # an address may stand for a record
+    assert findings(checker, "FROM-ADDRESS") == []  # an address may stand for a struct
     assert any(f.startswith("kind: named kinds differ: widget") for f in findings(checker, "FROM-WIDGET"))
     assert any(f.startswith("kind: number used as an address") for f in findings(checker, "FROM-NUMBER"))
     assert findings(checker, "STATUS-AS-COUNT") == []  # a kind of n mixes with numbers
     assert "declaration: kind: blob refines an unknown kind 'gadget'" in all_findings(checker)
+
+
+def test_object_kinds_refine_ref_and_tagged_and_keep_apart_from_plain_data(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: concept record )\n"
+        "( kind: port struct )\n"
+        ": NAME@  ( r: ref -- t: tagged )  @ ;\n"
+        ": CONCEPT-NAME  ( c: concept -- t: tagged )  NAME@ ;\n"
+        ": STRING-NAME  ( s: string -- t: tagged )  NAME@ ;\n"
+        ": OPEN  ( p: port -- )  DROP ;\n"
+        ": OPEN-CONCEPT  ( c: concept -- )  OPEN ;\n"
+        ": TAGGED-AS-REF  ( t: tagged -- )  NAME@ DROP ;\n"
+        ": COUNT-AS-TAGGED  ( n: u -- t: tagged )  NAME@ ;\n"
+        ": SHOW  ( r: record -- )  DROP ;\n"
+        ": SHOW-STRING  ( s: string -- )  SHOW ;\n"
+        ": HANDLE-AS-ADDRESS  ( h: handle -- x )  @ ;\n"
+        ": HANDLE-AS-REF  ( h: handle -- t: tagged )  NAME@ ;\n"
+        "VARIABLE SLOT\n"
+        ": KEEP-CONCEPT  ( c: concept -- )  SLOT ! ;\n"
+        ": WRITE-CONCEPT  ( x c: concept -- )  ! ;\n"
+    ))
+    # Part 9d's rules hold for every kind that refines ref.
+    assert findings(checker, "KEEP-CONCEPT") == ["managed rule: ! keeps a ref in plain memory"]
+    assert findings(checker, "WRITE-CONCEPT") == [
+        "managed rule: ! writes a managed object directly"]
+    # A record kind is a record, a record a reference: both read directly.
+    assert findings(checker, "CONCEPT-NAME") == []
+    assert findings(checker, "STRING-NAME") == []
+    # A struct is plain memory managed by hand, and a record is not one.
+    assert any(f.startswith("kind: managed kind crosses plain data: concept")
+               for f in findings(checker, "OPEN-CONCEPT"))
+    # Only a reference is read as an address; a tagged word may be a fixnum.
+    assert findings(checker, "TAGGED-AS-REF") == []  # a tagged word may stand for a ref
+    assert any(f.startswith("kind: managed kind crosses plain data: u")
+               for f in findings(checker, "COUNT-AS-TAGGED"))
+    assert any(f.startswith("kind: object kinds differ: string")
+               for f in findings(checker, "SHOW-STRING"))
+    assert findings(checker, "HANDLE-AS-ADDRESS") == ["managed rule: @ reads through a handle"]
+    assert any(f.startswith("kind: handle mixed with other data")
+               for f in findings(checker, "HANDLE-AS-REF"))
+
+
+def test_lists_and_handles_take_the_kind_of_what_they_hold(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: concept record )\n"
+        "( kind: topic record )\n"
+        "( kind: path list( string ) )\n"
+        ": LINKS  ( c: concept -- l: list( concept ) )  @ ;\n"
+        ": WALK  ( l: list( record ) -- )  DROP ;\n"
+        ": WALK-LINKS  ( c: concept -- )  LINKS WALK ;\n"
+        ": TOPICS  ( l: list( topic ) -- )  DROP ;\n"
+        ": TOPIC-LINKS  ( c: concept -- )  LINKS TOPICS ;\n"
+        ": ANY-LIST  ( l: list -- )  DROP ;\n"
+        ": PATH-LIST  ( p: path -- )  ANY-LIST ;\n"
+        "VARIABLE SHOWN ( holds: handle( concept ) )\n"
+        ": KEEP  ( h: handle( record ) -- )  DROP ;\n"
+        ": KEEP-SHOWN  ( -- )  SHOWN @ KEEP ;\n"
+        ": KEEP-TOPIC  ( h: handle( topic ) -- )  DROP ;\n"
+        ": SHOWN-TOPIC  ( -- )  SHOWN @ KEEP-TOPIC ;\n"
+    ))
+    # list( concept ) refines list( record ), as a concept is a record.
+    assert findings(checker, "WALK-LINKS") == []
+    assert any(f.startswith("kind: object kinds differ: list(concept)")
+               for f in findings(checker, "TOPIC-LINKS"))
+    assert findings(checker, "PATH-LIST") == []
+    assert findings(checker, "KEEP-SHOWN") == []
+    assert any(f.startswith("kind: object kinds differ: handle(concept)")
+               for f in findings(checker, "SHOWN-TOPIC"))
+    assert checker.kind_parent("list(concept)") == "list(record)"
+    assert checker.kind_parent("list(ref)") == E.LIST
+    assert checker.kind_parent("handle(record)") == E.HANDLE
+
+
+def test_parametric_kinds_are_checked_where_they_are_declared():
+    assert parse_effect(" l: list( tagged ) -- ").effect.inputs[0].kind == E.LIST
+    assert parse_effect(" h: handle( ref ) -- ").effect.inputs[0].kind == E.HANDLE
+    assert parse_effect(" l: list( flag ) -- ").effect.inputs[0].kind == "list(flag)"
+    assert parse_effect(" l: list( u ) -- ").problems == [
+        "l: a list holds tagged words, and u is plain data"]
+    assert parse_effect(" h: handle( tagged ) -- ").problems == [
+        "h: a handle names an object, and tagged is not a kind of object"]
+    assert parse_effect(" l: list( span ) -- ").problems == [
+        "l: list( span ) names two cells, not one"]
+    assert parse_effect(" l: list( string -- ").problems == ["list( has no closing )"]
 
 
 def test_malformed_declarations_in_source_are_findings(base_checker_state):
@@ -348,9 +432,9 @@ def test_a_typed_variable_gives_the_token_it_holds_an_effect(base_checker_state)
     assert record(checker, "UNTYPED").failure.category == "EXECUTE of an unknown xt"
 
 
-def test_record_fields_and_tables_declare_what_they_hold(base_checker_state):
+def test_struct_fields_and_tables_declare_what_they_hold(base_checker_state):
     checker = check(base_checker_state, (
-        "( kind: port record )\n"
+        "( kind: port struct )\n"
         " 0 CONSTANT _P-CONTEXT\n"
         " 8 CONSTANT _P-SEND ( holds: xt( buf: span context -- count: u ) )\n"
         ": P.SEND  ( p: port -- a )  _P-SEND + ;\n"

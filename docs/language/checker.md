@@ -105,6 +105,8 @@ An item without a kind is a plain cell, and the checker reads no kind from
 a name: `addr` and `flag` written alone are names of plain cells. The
 source stays plain Forth, since KDOS's `(` skips the whole comment.
 
+The kinds of plain data describe cells that code manages by hand:
+
 | Kind | Stands for |
 |------|------------|
 | `cell` | Any cell; the same as an item without a kind |
@@ -112,18 +114,44 @@ source stays plain Forth, since KDOS's `(` skips the whole comment.
 | `flag`, `char` | A truth value, a character |
 | `addr` | An address of plain memory |
 | `span` | Two cells, an address and a length, that bound one piece of memory the caller provides |
+| `struct` | A record in plain memory: the address of its fields; every struct kind refines it |
 | `xt`, `xt( effect )` | An execution token, with or without the effect it runs |
-| `ref`, `handle` | Managed data, the two kinds of release plan Part 9d |
 | `task` | Work whose result comes later |
-| `record` | The kind every record kind refines; a record is an address of its fields |
+
+The kinds of managed data describe objects in LM1's tagged format that a
+collector manages, which release plan Part 9d and MegaPad's
+`docs/managed-data.md` specify:
+
+| Kind | Stands for |
+|------|------------|
+| `tagged` | Any word in LM1's format: a fixnum, nil, t, a character or a reference |
+| `ref` | A reference to an object, valid only inside the window in which it was read |
+| `record` | A reference to a collected record; every record kind refines it |
+| `string`, `vector`, `bytes` | A reference to a string, whose bytes are UTF-8, to a vector of tagged words, or to a bytevector |
+| `list`, `list( k )` | Nil, or a reference to a cons cell; the second form says that the elements are of kind k |
+| `handle`, `handle( k )` | A handle, which code keeps past a window; the second form names an object of kind k |
+
+`struct` refines `addr`. `record`, `string`, `vector` and `bytes` refine
+`ref`, and `ref` and `list` refine `tagged`. A parametric kind refines the
+same form of what its parameter refines, so `list( concept )` refines
+`list( record )`, then `list( ref )`, which is the plain `list`;
+`handle( k )` refines `handle( j )` the same way, down to the plain `handle`.
+A list holds tagged words, so its elements are of a kind that rests on
+`tagged`, or flags or characters; a handle names an object, so its kind is
+a reference kind or a list. A handle is neither a reference nor an address,
+and the checker keeps the three apart.
 
 A source file adds kinds with a comment of its own:
-`( kind: nio-port record )` declares a record kind, and
+`( kind: nio-port struct )` declares a struct kind,
+`( kind: concept record )` a kind of collected record,
+`( kind: path list( string ) )` a kind of list, and
 `( kind: nio-status n )` a kind of number. A named kind mixes freely with
-the kinds it refines, so a record serves as an address and an address may
-stand where a record is expected, and the checker reports one named kind
-standing for another when neither refines the other, as two records or two
-kinds of status do.
+the kinds it refines, so a struct serves as an address and an address may
+stand where a struct is expected. The checker reports one named kind
+standing for another when neither refines the other, as two structs or two
+kinds of status do, and reports two kinds of object that differ, such as a
+string where a record is expected or a `list( topic )` where a
+`list( concept )` is.
 
 A token's effect is a nested comment, which KDOS's counting of parentheses
 skips with the rest: `each: xt( item: addr -- keep: flag )`. An item
@@ -135,7 +163,7 @@ Data words declare what they hold with that label right after their name:
 | `VARIABLE HOOK ( holds: xt( c: char -- ) )` | HOOK's cell holds a token of that effect |
 | `CREATE OPS ( holds: xt( n -- n ) )` | Every cell of the table holds one; an address computed from OPS by adding a number stays in the table |
 | `0 VALUE CB ( holds: xt( -- ) )` | CB pushes such a token, and `TO CB` must store one |
-| `8 CONSTANT _P-SEND ( holds: xt( ... ) )` | A field offset: added to a record's address it gives the address of a cell holding the token |
+| `8 CONSTANT _P-SEND ( holds: xt( ... ) )` | A field offset: added to a struct's address it gives the address of a cell holding the token |
 | `_STATE CMP-CELL: _ON-CLOSE ( holds: xt( ... ) )` | The child of a defining word that pushes one address, such as Akashic's CMP-FIELD: and CMP-CELL:, declares what that address holds |
 | `: P.SEND ( p: port -- holds: xt( ... ) )` | A colon definition returns the address of such a cell |
 
@@ -150,9 +178,10 @@ like an input span with a prime, as `/STRING ( s: span n -- s': span )`
 writes, is part of that span.
 
 Malformed declarations are findings: an unknown kind, a label with no kind
-after it, an `xt(` without its `)`, a `holds:` with text after its kind, a
-kind that refines an unknown kind, and a declaration whose `(` finds no `)`
-on its line. The last matters to KDOS as well, since an unclosed comment
+after it, an `xt(`, `list(` or `handle(` without its `)`, a list of plain
+data or a handle of something other than an object, a `holds:` with text
+after its kind, a kind that refines an unknown kind, and a declaration whose
+`(` finds no `)` on its line. The last matters to KDOS as well, since an unclosed comment
 runs to the end of its line and hides any code after it there.
 
 ## The base vocabulary
@@ -238,7 +267,7 @@ name, takes the effect the comment declares.
 
 Callers see the inferred effect, with the comment's names and kinds where
 the two line up; a declared kind replaces an inferred one it refines, as a
-record kind refines the address a field accessor computes. When a
+struct kind refines the address a field accessor computes. When a
 definition cannot be inferred, callers use its comment, unless the
 definition runs an execution token it cannot follow, since a comment such
 as `( xt: xt -- )` says nothing of what that token takes.
@@ -281,11 +310,12 @@ Flags and numbers mix freely, since Forth tests any nonzero cell, and an
 address may serve as a flag. The reports fall into classes: an execution
 token used as data or data used as one, a flag used as an address, an
 address used as a number or a number used as an address, two named kinds
-that differ, a task mixed with other data, and a managed kind meeting plain
-data. A token stored into a typed slot, passed as a typed input, bound to a
-deferred word by IS or returned as a declared token is compared with the
-declared effect, by its inputs and output depths and the kinds of its
-inputs, and a difference is reported.
+that differ, two kinds of object that differ, a task mixed with other data,
+a managed kind meeting plain data, and a handle mixed with anything that is
+not a handle. A token stored into a typed slot, passed as a typed input,
+bound to a deferred word by IS or returned as a declared token is compared
+with the declared effect, by its inputs and output depths and the kinds of
+its inputs, and a difference is reported.
 
 A declared span must receive the address and the length of one span. A call
 that pairs one span's address with another's length is reported, unless the
@@ -297,10 +327,13 @@ of one string is compared with another string's length. A word declared
 `( a u -- a u' )` does, returns a part of the span it was given.
 
 For managed data the checker enforces what Part 9d's rules say in terms of
-kinds: a `ref` may be read through directly (rule 1) but not written to
-with `!` (rule 2), and it may not be kept in plain memory, a VALUE or the
-dictionary (rule 4); a `handle` is not an address. The rules about windows
-need words that open and close them, which do not exist yet.
+kinds: a reference, of `ref` or any kind that refines it, may be read
+through directly (rule 1) but not written to with `!` (rule 2), and it may
+not be kept in plain memory, a VALUE or the dictionary (rule 4); a `handle`
+is not an address. The checks of windows and handles that
+fantasy-engine `dev/ideas/language.md` lists under "The rules as the
+checker enforces them" need the `OBJ-` words that open and close windows
+and make and release handles, which do not exist yet.
 
 ## Strict placement
 
@@ -353,12 +386,14 @@ figures, the defects and where the checker misleads.
   still written as Forth.
 - A compiler, placement on engines, a machine description, tasks, and any
   backend for LM1.
-- Windows and handles. The checker knows the kinds `ref` and `handle` and
-  three of Part 9d's rules; inserting windows and handles needs the words
-  that open, close, make and release them.
-- Records as objects. A record kind names an address of a plain-memory
-  record; a collected record, as the sketch's `concept` is, needs the
-  object side of Part 9d.
+- Windows and handles. The checker knows the kinds of objects and handles
+  and three of Part 9d's rules; the eight checks of windows and handles,
+  and inserting them, need the words that open, close, make and release
+  them.
+- Records as objects. A record kind such as the sketch's `concept` is
+  declared and checked as a kind, but `RECORD`, which would define its
+  fields and the check that narrows a reference to it, waits on the object
+  side of Part 9d.
 - Kinds through loops. Each loop body runs once, plus the repeats of a
   counted loop, so a kind that changes on a later pass is not followed.
 - Offsets within spans. A length shortened by arithmetic loses its span, so
@@ -380,7 +415,7 @@ sits where Forth programmers already read effects, KDOS skips it, and the
 checker reports a malformed one. The pilot shows the cost of the one-line
 rule: KDOS's `(` ends with its line, so a field holding a token with a long
 effect makes a long line, up to 104 characters in the pilot. Field offsets
-are the natural place for a record's declarations in Akashic's Forth, since
+are the natural place for a struct's declarations in Akashic's Forth, since
 every accessor and inline use inherits them.
 
 **Spans are two cells.** Following value identity keeps a span whole
