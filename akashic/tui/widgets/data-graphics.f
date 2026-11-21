@@ -612,12 +612,14 @@ VARIABLE _DGRAPH-M-LENGTH
             UDG-STATUS-CIRCLE  OF 0x25CF ENDOF
             UDG-STATUS-SQUARE  OF 0x25A0 ENDOF
             UDG-STATUS-DIAMOND OF 0x25C6 ENDOF
+            [CHAR] ? SWAP                \ a shape the model does not define
         ENDCASE
     ELSE
         UDG-STATUS-SHAPE@ CASE
             UDG-STATUS-CIRCLE  OF 0x25CB ENDOF
             UDG-STATUS-SQUARE  OF 0x25A1 ENDOF
             UDG-STATUS-DIAMOND OF 0x25C7 ENDOF
+            [CHAR] ? SWAP
         ENDCASE
     THEN ;
 
