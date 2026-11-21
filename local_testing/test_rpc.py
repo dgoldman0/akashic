@@ -11,11 +11,16 @@ Tests:
   - chain_getBalance valid address → result 0
   - chain_getBalance bad address → error -32602
   - Repeated requests (state resets)
-  - chain_getProof, chain_getBlockProof and chain_getStateRoot → the
-    roots and header fields they name, leaving no cell
-  - chain_verifyProof → all five params read
+  - chain_getProof → the state tree's own proof, which a client checks
+    against the state root from the response alone; a lone account's
+    empty proof; a missing account's error
+  - chain_getBlockProof and chain_getStateRoot → the roots and header
+    fields they name, leaving no cell
+  - chain_verifyProof → a proof from chain_getProof verifies as it came,
+    a changed leaf, sibling or root does not, and malformed params get
+    an error
 """
-import os, re, sys, time
+import hashlib, json, os, re, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -507,8 +512,61 @@ def _want(text):
     return found.group(1) if found else None
 
 
-def test_get_proof_root():
-    """chain_getProof reports ST-ROOT's root, not 32 bytes at its flag."""
+def _response(text):
+    """The JSON-RPC response the server printed, as Python values."""
+    for line in text.split('\n'):
+        line = line.strip()
+        if line.startswith('{"jsonrpc"'):
+            return json.loads(line)
+    return None
+
+
+def _client_check(result):
+    """Check a getProof result as a light client would, from it alone.
+
+    The entry's hash must be the leaf, the entry must begin with the
+    address and hold the balance and nonce reported, and the proof must
+    climb from the leaf to the state root: each entry names a branch's bit
+    position and the hash of its other child, root to leaf, and the
+    address's bit there, most significant first, says which side the
+    climbing hash takes.
+    """
+    entry = bytes.fromhex(result['entry'])
+    address = bytes.fromhex(result['address'])
+    leaf = hashlib.sha3_256(entry).digest()
+    node = hashlib.sha3_256(b'\x00' + address + leaf).digest()
+    for step in reversed(result['proof']):
+        bit = step['bit']
+        sibling = bytes.fromhex(step['sibling'])
+        right = (address[bit >> 3] >> (7 - (bit & 7))) & 1
+        pair = sibling + node if right else node + sibling
+        node = hashlib.sha3_256(b'\x01' + pair).digest()
+    return (len(entry) == 72
+            and entry[:32] == address
+            and int.from_bytes(entry[32:40], 'little') == result['balance']
+            and int.from_bytes(entry[40:48], 'little') == result['nonce']
+            and leaf.hex() == result['leaf'].lower()
+            and node.hex() == result['stateRoot'].lower())
+
+
+# Three accounts whose addresses first differ at bit 4 (07.. against 08..
+# and 09..) and at bit 7 (08.. against 09..), so _B's proof has two entries.
+_THREE = _ACCOUNTS + ['CREATE _C 32 ALLOT  _C 32 8 FILL',
+                      '_A 1000 ST-CREATE DROP', '_B 2000 ST-CREATE DROP',
+                      '_C 3000 ST-CREATE DROP']
+
+
+def _get_proof(setup, address):
+    """Run getProof for ADDRESS after SETUP; the transcript and result."""
+    lines = setup + ['_W'] + _handled(
+        rpc_request("chain_getProof", '["' + address + '"]'))
+    text = run_forth(lines)
+    response = _response(text)
+    return text, (response or {}).get('result')
+
+
+def test_get_proof():
+    """chain_getProof gives the state tree's proof with the current root."""
     print("\n── chain_getProof ──\n")
 
     # The server and dispatcher leave no cell of their own.
@@ -516,15 +574,77 @@ def test_get_proof_root():
           _handled(rpc_request("chain_blockNumber")),
           check_fn=lambda t: '"result":' in t and 'left=0 ' in t)
 
-    req = rpc_request("chain_getProof", '["' + '07' * 32 + '"]')
-    check("getProof gives the current root and leaves no cell",
-          _ACCOUNTS + ['_A 1000 ST-CREATE DROP', '_B 2000 ST-CREATE DROP',
-                       '_W'] + _handled(req),
-          check_fn=lambda t: (_want(t) is not None
-                              and f'"stateRoot":"{_want(t)}"' in t
-                              and '"depth":1' in t
-                              and '"balance":1000' in t
+    text, result = _get_proof(_THREE, '09' * 32)
+    assert result is not None, text[-2000:]
+    assert result['stateRoot'].lower() == (_want(text) or '').lower(), result
+    assert result['address'].lower() == '09' * 32, result
+    assert result['balance'] == 2000 and result['nonce'] == 0, result
+    assert [step['bit'] for step in result['proof']] == [4, 7], result
+    assert _client_check(result), result
+    assert 'left=0 ' in text, text[-600:]
+
+
+def test_get_proof_lone_and_missing():
+    """A lone account's proof is empty; a missing account is an error."""
+    print("\n── chain_getProof lone and missing ──\n")
+
+    lone = _ACCOUNTS + ['_A 1000 ST-CREATE DROP']
+    text, result = _get_proof(lone, '07' * 32)
+    assert result is not None, text[-2000:]
+    assert result['proof'] == [], result
+    assert _client_check(result), result
+    assert 'left=0 ' in text, text[-600:]
+
+    check("getProof for a missing account is an error and leaves no cell",
+          lone + ['_W'] + _handled(
+              rpc_request("chain_getProof", '["' + '09' * 32 + '"]')),
+          check_fn=lambda t: ('account not found' in t and '"result"' not in t
                               and 'left=0 ' in t))
+
+
+def _verify_request(*params):
+    return rpc_request("chain_verifyProof",
+                       json.dumps(list(params), separators=(',', ':')))
+
+
+def _flip(hex_text):
+    """HEX_TEXT with its first byte changed."""
+    return '%02x' % (int(hex_text[:2], 16) ^ 1) + hex_text[2:]
+
+
+def test_verify_proof_round_trip():
+    """A proof from chain_getProof verifies through chain_verifyProof.
+
+    The address, leaf, proof and root go back exactly as getProof gave
+    them, in a run from the same state.  A changed leaf, sibling or root
+    must not verify."""
+    print("\n── chain_verifyProof round trip ──\n")
+
+    text, result = _get_proof(_THREE, '09' * 32)
+    assert result is not None, text[-2000:]
+    address, leaf, proof, root = (result['address'], result['leaf'],
+                                  result['proof'], result['stateRoot'])
+    check("getProof's proof verifies as it came",
+          _THREE + _handled(_verify_request(address, leaf, proof, root)),
+          check_fn=lambda t: '"result":true' in t and 'left=0 ' in t)
+
+    other_sibling = [dict(proof[0], sibling=_flip(proof[0]['sibling']))] + proof[1:]
+    for name, request in (
+            ("a changed leaf", _verify_request(address, _flip(leaf), proof, root)),
+            ("a changed sibling", _verify_request(address, leaf, other_sibling, root)),
+            ("a changed root", _verify_request(address, leaf, proof, _flip(root)))):
+        check(f"{name} does not verify",
+              _THREE + _handled(request),
+              check_fn=lambda t: '"result":false' in t and 'left=0 ' in t)
+
+    # A lone account's empty proof verifies against its root too.
+    lone = _ACCOUNTS + ['_A 1000 ST-CREATE DROP']
+    text, result = _get_proof(lone, '07' * 32)
+    assert result is not None, text[-2000:]
+    check("a lone account's empty proof verifies",
+          lone + _handled(_verify_request(result['address'], result['leaf'],
+                                          result['proof'], result['stateRoot'])),
+          check_fn=lambda t: '"result":true' in t and 'left=0 ' in t)
 
 
 def test_get_block_proof():
@@ -563,23 +683,34 @@ def test_get_state_root():
 
 
 def test_verify_proof_params():
-    """chain_verifyProof reads all five params with one cursor."""
-    print("\n── chain_verifyProof ──\n")
+    """chain_verifyProof refuses malformed params and leaves no cell."""
+    print("\n── chain_verifyProof params ──\n")
 
-    # One proof entry: bit position 3, eight bytes little-endian, then a
-    # 32-byte sibling.
-    proof = '03' + '00' * 7 + '44' * 32
-    params = f'["{"11" * 32}",5,"{proof}",1,"{"33" * 32}"]'
-    req = rpc_request("chain_verifyProof", params)
-    check("verifyProof parses leaf, index, proof, depth and root",
-          _handled(req) + [
-              ': _V ." idx=" _RPC-VP-IDX @ . ." depth=" _RPC-VP-DEPTH @ .',
-              '  ." leaf=" _RPC-LEAF C@ . ." proof=" _RPC-PROOF C@ .',
+    good = {'bit': 3, 'sibling': '44' * 32}
+    for name, request, message in (
+            ("a short address", _verify_request('11' * 31, '22' * 32, [good], '33' * 32),
+             "address must be 64 hex chars"),
+            ("a short leaf", _verify_request('11' * 32, '22', [good], '33' * 32),
+             "leaf must be 64 hex chars"),
+            ("a proof that is no array", _verify_request('11' * 32, '22' * 32, '44' * 32, '33' * 32),
+             "proof must be an array"),
+            ("an entry without its sibling", _verify_request('11' * 32, '22' * 32, [{'bit': 3}], '33' * 32),
+             "proof must be an array"),
+            ("a short root", _verify_request('11' * 32, '22' * 32, [good], '33'),
+             "root must be 64 hex chars")):
+        check(f"{name} is refused",
+              _handled(request),
+              check_fn=lambda t, m=message: ('-32602' in t and m in t
+                                             and 'left=0 ' in t))
+
+    # A well-formed proof that does not reach the root reads every param.
+    check("a well-formed proof is read and answered",
+          _handled(_verify_request('11' * 32, '22' * 32, [good], '33' * 32)) + [
+              ': _V ." len=" _RPC-VP-LEN @ . ." bit=" _RPC-PROOF @ .',
+              '  ." sibling=" _RPC-PROOF 8 + C@ . ." leaf=" _RPC-LEAF C@ .',
               '  ." root=" _RPC-ROOT C@ . ; _V'],
-          check_fn=lambda t: ('"result":false' in t
-                              and 'left=0 ' in t
-                              and 'idx=5 depth=1 leaf=17 proof=3 root=51 '
-                              in t))
+          check_fn=lambda t: ('"result":false' in t and 'left=0 ' in t
+                              and 'len=1 bit=3 sibling=68 leaf=34 root=51 ' in t))
 
 
 # =====================================================================

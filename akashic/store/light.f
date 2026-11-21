@@ -10,11 +10,16 @@
 \  Sparse Merkle Tree (smt.f).
 \
 \  Public API:
-\   LC-STATE-PROOF  ( addr proof -- len | 0 )
+\   LC-STATE-PROOF  ( addr proof buf-len -- len flag )
 \       Generate SMT proof for an account.
-\       addr  = 32-byte account address
-\       proof = buffer (>= 10240 bytes) to receive proof data
-\       Returns number of proof entries on success, 0 if not found.
+\       addr    = 32-byte account address
+\       proof   = buffer to receive proof data
+\       buf-len = the buffer's size in bytes; a proof takes 40 bytes
+\                 an entry, and 256 entries (10240 bytes) hold any proof
+\       Returns the number of proof entries and TRUE, or 0 and FALSE
+\       when the account is missing, the tree cannot be built or the
+\       proof does not fit.  A lone account's leaf is the root, so its
+\       proof has no entries.
 \
 \   LC-STATE-LEAF   ( addr leaf -- flag )
 \       Find an account, hash its entry into leaf buffer.
@@ -84,22 +89,13 @@ VARIABLE _LC-SL-LEAF
 \ =====================================================================
 \  3. LC-STATE-PROOF — generate SMT proof for account
 \ =====================================================================
-\  ( addr proof -- len | 0 )
-\    addr  = 32-byte account address
-\    proof = buffer (>= 10240 bytes)
-\  Steps:
-\    1. Rebuild SMT (ensures consistency)
-\    2. Generate inclusion proof via SMT-PROVE
-\  Returns number of proof entries on success, 0 if not found.
+\  ( addr proof buf-len -- len flag )
+\  ST-PROVE rebuilds the state's tree when the state has changed and
+\  proves the account within the caller's buf-len bytes.  The flag tells
+\  an empty proof, a lone account's, from a missing account.
 
-: _LC-STATE-PROOF  ( addr proof -- len | 0 )
-    >R
-    _ST-REBUILD-TREE 0= IF R> 2DROP 0 EXIT THEN
-    R> 10240 _ST-SMT SMT-PROVE    \ the buffer's 10240 bytes: 256 entries of 40
-    0= IF DROP 0 THEN ;
-
-: LC-STATE-PROOF  ( addr proof -- len | 0 )
-    _LC-STATE-PROOF ;
+: LC-STATE-PROOF  ( addr proof buf-len -- len flag )
+    ST-PROVE ;
 
 \ =====================================================================
 \  4. LC-VERIFY-STATE — verify a state SMT proof
@@ -135,10 +131,9 @@ VARIABLE _LC-SL-LEAF
 \ =====================================================================
 \  7. Concurrency guard
 \ =====================================================================
-\  LC-STATE-PROOF calls _ST-REBUILD-TREE then SMT-PROVE (both
-\  acquire their own guards via re-entrant nesting).
-\  We need our own guard to ensure atomicity of the whole sequence:
-\  rebuild + prove must not interleave with state mutations.
+\  LC-STATE-PROOF calls ST-PROVE, which holds the state's guard across
+\  the tree's rebuild and the proof, so no state mutation falls between
+\  them.  This guard serializes the light client's own words.
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f

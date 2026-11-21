@@ -8,8 +8,11 @@ Tests:
   - LC-STATE-LEAF (finds account, returns flag, hashes entry)
   - LC-STATE-LEAF miss (returns 0 for unknown address)
   - LC-STATE-PROOF (generates SMT proof for existing account)
-  - LC-STATE-PROOF miss (returns 0 for unknown account)
+  - LC-STATE-PROOF miss (returns 0 and FALSE for unknown account)
+  - LC-STATE-PROOF cells (two cells for a hit, a miss, a lone account
+    and a buffer too small)
   - LC-VERIFY-STATE (verify SMT proof against root)
+  - LC-VERIFY-STATE refuses bit positions past the key
   - Round-trip (prove + verify = TRUE)
   - Proof changes after state mutation
   - Different accounts get different proofs
@@ -306,49 +309,59 @@ def test_lc_state_proof():
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR2 2000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
-        '_ADDR1 _PROOF LC-STATE-PROOF .',
+        '_ADDR1 _PROOF 10240 LC-STATE-PROOF ." flag=" . ." len=" .',
     ]
-    check_fn("proof len > 0", lines,
-             lambda o: any(int(w) > 0 for w in o.strip().split() if w.lstrip('-').isdigit()),
-             "expected positive proof length")
+    check("one entry and a true flag", lines, "flag=-1 len=1 ")
 
     # Proof buffer is non-zero (at least some siblings are populated)
     lines2 = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR2 2000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
-        '_ADDR1 _PROOF LC-STATE-PROOF DROP',
+        '_ADDR1 _PROOF 10240 LC-STATE-PROOF 2DROP',
         ': _RUN-LOOP _PROOF 0 256 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("proof buffer non-zero", lines2, "NONZERO")
 
 def test_lc_state_proof_miss():
-    """LC-STATE-PROOF returns 0 for unknown address."""
+    """LC-STATE-PROOF returns 0 and FALSE for unknown address."""
     print("\n=== LC-STATE-PROOF miss ===")
     lines = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
-        '." len=" _ADDR2 _PROOF LC-STATE-PROOF .',
+        '_ADDR2 _PROOF 10240 LC-STATE-PROOF ." flag=" . ." len=" .',
     ]
-    check("missing account returns 0", lines, "len=0 ")
+    check("missing account returns 0 and FALSE", lines, "flag=0 len=0 ")
 
 def test_lc_state_proof_cells():
-    """LC-STATE-PROOF ( addr proof -- len | 0 ) gives one cell either way.
+    """LC-STATE-PROOF ( addr proof buf-len -- len flag ) gives two cells.
 
     Two accounts make a tree of one branch, so each account's proof holds
-    one entry, its sibling."""
+    one entry, its sibling, and a buffer of 39 bytes cannot hold it.  A
+    lone account's leaf is the root: its proof holds no entries, and the
+    flag tells it from a missing account's."""
     print("\n=== LC-STATE-PROOF cells ===")
     lines = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR2 2000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
-        ': _T 7 _ADDR1 _PROOF LC-STATE-PROOF ." found=" .',
-        '  _ADDR3 _PROOF LC-STATE-PROOF ." missing=" .',
+        ': _T 7 _ADDR1 _PROOF 10240 LC-STATE-PROOF ." found=" . .',
+        '  _ADDR3 _PROOF 10240 LC-STATE-PROOF ." missing=" . .',
+        '  _ADDR1 _PROOF 39 LC-STATE-PROOF ." small=" . .',
         '  ." below=" . ; _T',
     ]
-    check("one cell for a hit and for a miss", lines,
-          "found=1 missing=0 below=7")
+    check("two cells for a hit, a miss and a short buffer", lines,
+          "found=-1 1 missing=0 0 small=0 0 below=7")
+
+    lone = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        'CREATE _PROOF 10240 ALLOT',
+        ': _T 7 _ADDR1 _PROOF 10240 LC-STATE-PROOF ." lone=" . .',
+        '  ." below=" . ; _T',
+    ]
+    check("a lone account's proof is empty and found", lone,
+          "lone=-1 0 below=7")
 
 def test_lc_verify_state():
     """LC-VERIFY-STATE wraps SMT-VERIFY."""
@@ -360,7 +373,7 @@ def test_lc_verify_state():
         'CREATE _LEAF 32 ALLOT',
         'CREATE _ROOT 32 ALLOT',
         # Generate proof and save len
-        '_ADDR1 _PROOF LC-STATE-PROOF _PL !',
+        '_ADDR1 _PROOF 10240 LC-STATE-PROOF DROP _PL !',
         # Get leaf hash
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
         # Get current root
@@ -369,6 +382,27 @@ def test_lc_verify_state():
         '_ADDR1 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE IF ." VALID" ELSE ." INVALID" THEN',
     ]
     check("proof verifies", lines, "VALID", not_expected="INVALID")
+
+def test_verify_refuses_bits_past_key():
+    """LC-VERIFY-STATE refuses an entry whose bit position lies past the key.
+
+    A proof can come from anyone, so SMT-VERIFY checks each entry's bit
+    position before it reads the key's bit there: 300 and -1 name no bit
+    of a 256-bit key, and the proof must fail without reading past it."""
+    print("\n=== LC-VERIFY-STATE bit positions ===")
+    lines = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '_ADDR2 2000 ST-CREATE DROP',
+        'CREATE _PROOF 10240 ALLOT  CREATE _LEAF 32 ALLOT  CREATE _ROOT 32 ALLOT',
+        '_ADDR1 _PROOF 10240 LC-STATE-PROOF DROP _PL !',
+        '_ADDR1 _LEAF LC-STATE-LEAF DROP',
+        'ST-ROOT DROP _ROOT 32 CMOVE',
+        ': _V _ADDR1 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE ;',
+        ': _T DEPTH >R _V ." good=" . 300 _PROOF ! _V ." far=" .',
+        '  -1 _PROOF ! _V ." negative=" . DEPTH R> - ." left=" . ; _T',
+    ]
+    check("bit positions past the key are refused", lines,
+          "good=-1 far=0 negative=0 left=0 ")
 
 def test_round_trip():
     """Full round-trip: create account, prove, verify."""
@@ -380,7 +414,7 @@ def test_round_trip():
         'CREATE _LEAF 32 ALLOT',
         'CREATE _ROOT 32 ALLOT',
         # Prove account 1
-        '_ADDR1 _PROOF LC-STATE-PROOF _PL !',
+        '_ADDR1 _PROOF 10240 LC-STATE-PROOF DROP _PL !',
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
         'ST-ROOT DROP _ROOT 32 CMOVE',
         '_ADDR1 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE IF ." RT1-OK" ELSE ." RT1-FAIL" THEN',
@@ -395,7 +429,7 @@ def test_round_trip():
         'CREATE _LEAF 32 ALLOT',
         'CREATE _ROOT 32 ALLOT',
         # Prove account 2
-        '_ADDR2 _PROOF LC-STATE-PROOF _PL !',
+        '_ADDR2 _PROOF 10240 LC-STATE-PROOF DROP _PL !',
         '_ADDR2 _LEAF LC-STATE-LEAF DROP',
         'ST-ROOT DROP _ROOT 32 CMOVE',
         '_ADDR2 _LEAF _PROOF _PL @ _ROOT LC-VERIFY-STATE IF ." RT2-OK" ELSE ." RT2-FAIL" THEN',
@@ -427,7 +461,7 @@ def test_proof_changes_on_mutation():
         'CREATE _LEAF 32 ALLOT',
         'CREATE _ROOT1 32 ALLOT  CREATE _ROOT2 32 ALLOT',
         # Prove under old state
-        '_ADDR1 _PROOF LC-STATE-PROOF _PL !',
+        '_ADDR1 _PROOF 10240 LC-STATE-PROOF DROP _PL !',
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
         'ST-ROOT DROP _ROOT1 32 CMOVE',
         # Mutate state
@@ -446,8 +480,8 @@ def test_different_proofs():
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR2 2000 ST-CREATE DROP',
         'CREATE _P1 10240 ALLOT  CREATE _P2 10240 ALLOT',
-        '_ADDR1 _P1 LC-STATE-PROOF DROP',
-        '_ADDR2 _P2 LC-STATE-PROOF DROP',
+        '_ADDR1 _P1 10240 LC-STATE-PROOF 2DROP',
+        '_ADDR2 _P2 10240 LC-STATE-PROOF 2DROP',
         # Compare proof buffers (first 256 bytes)
         ': _RUN-LOOP _P1 _P2 0 256 0 DO 2 PICK I + C@ 2 PICK I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0<> IF ." DIFF" ELSE ." SAME" THEN',
@@ -496,17 +530,17 @@ def test_two_account_round_trip():
         'VARIABLE _LEN',
         'ST-ROOT DROP _R 32 CMOVE',
         # Account 1
-        '_ADDR1 _P LC-STATE-PROOF _LEN !',
+        '_ADDR1 _P 10240 LC-STATE-PROOF DROP _LEN !',
         '_ADDR1 _L LC-STATE-LEAF DROP',
         '_ADDR1 _L _P _LEN @ _R LC-VERIFY-STATE',
         'IF ." V1" ELSE ." F1" THEN',
         # Account 2 (reuse buffers)
-        '_ADDR2 _P LC-STATE-PROOF _LEN !',
+        '_ADDR2 _P 10240 LC-STATE-PROOF DROP _LEN !',
         '_ADDR2 _L LC-STATE-LEAF DROP',
         '_ADDR2 _L _P _LEN @ _R LC-VERIFY-STATE',
         'IF ." V2" ELSE ." F2" THEN',
         # Account 3
-        '_ADDR3 _P LC-STATE-PROOF _LEN !',
+        '_ADDR3 _P 10240 LC-STATE-PROOF DROP _LEN !',
         '_ADDR3 _L LC-STATE-LEAF DROP',
         '_ADDR3 _L _P _LEN @ _R LC-VERIFY-STATE',
         'IF ." V3" ELSE ." F3" THEN',

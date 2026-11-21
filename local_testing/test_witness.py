@@ -20,8 +20,9 @@ Tests:
   - Mixed success/failure → only good tx's entries
   - WIT-VERIFY honest → -1
   - WIT-VERIFY tampered post-balance → 0
-  - WIT-PROVE returns len > 0
-  - WIT-PROVE + SMT-VERIFY round-trip → TRUE
+  - WIT-PROVE gives ( len flag ): one entry for a present account, 0 and
+    FALSE for an account the pre-state lacks or a buffer too small
+  - WIT-PROVE + ST-VERIFY-PROOF round-trip → TRUE against the pre-root
   - Empty block → 0 entries, roots equal
   - Multi-tx block → correct entry count
 """
@@ -584,50 +585,72 @@ def test_verify_tampered_post():
 
 
 def test_prove_returns_len():
-    """WIT-PROVE returns len > 0 for existing account."""
-    print("\n=== WIT-PROVE returns len > 0 ===")
+    """WIT-PROVE ( idx proof buf-len -- len flag ) against the pre-state.
+
+    The pre-state holds two accounts, so the sender's proof has one entry.
+    The recipient is new, absent from the pre-state, and a 39-byte buffer
+    cannot hold an entry; both give 0 and FALSE.  A lone account's leaf is
+    the root, so its proof holds no entries under a true flag."""
+    print("\n=== WIT-PROVE length and flag ===")
     lines = _keygen_preamble() + [
+        '_ADDR1 1000 ST-CREATE DROP',
+        '_ADDR3 3000 ST-CREATE DROP',
+        'WIT-BEGIN',
+    ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
+        '_TXBUF WIT-APPLY-TX DROP',
+        'WIT-END',
+        'CREATE _PRF 10240 ALLOT',
+        'WIT-PROVE-BEGIN',
+        ': _T DEPTH >R 0 _PRF 10240 WIT-PROVE ." sender=" . .',
+        '  1 _PRF 10240 WIT-PROVE ." created=" . .',
+        '  0 _PRF 39 WIT-PROVE ." small=" . .',
+        '  DEPTH R> - ." left=" . ; _T',
+        'WIT-PROVE-END',
+    ]
+    check("entry counts and flags", lines,
+          "sender=-1 1 created=0 0 small=0 0 left=0 ")
+
+    lone = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
         '_TXBUF WIT-APPLY-TX DROP',
         'WIT-END',
-        'CREATE _PRF 4096 ALLOT',
+        'CREATE _PRF 10240 ALLOT',
         'WIT-PROVE-BEGIN',
-        '0 _PRF WIT-PROVE',
-        '_PL !',
+        '0 _PRF 10240 WIT-PROVE ." lone=" . .',
         'WIT-PROVE-END',
-        '_PL @ 0> IF ." HASLEN" ELSE ." NOLEN" THEN',
     ]
-    check("proof has positive length", lines, "HASLEN")
+    check("a lone account's proof is empty and found", lone, "lone=-1 0 ")
 
 
 def test_prove_verify_round_trip():
-    """SMT-VERIFY(key, leaf, proof, len, pre-root) = TRUE."""
-    print("\n=== WIT-PROVE + SMT-VERIFY round-trip ===")
+    """ST-VERIFY-PROOF(key, leaf, proof, len, pre-root) = TRUE.
+
+    The leaf is the hash of the sender's pre-state entry, the value the
+    pre-state tree keeps under its address.  The same proof does not reach
+    the post-state root, where the sender's entry has changed."""
+    print("\n=== WIT-PROVE + ST-VERIFY-PROOF round-trip ===")
     lines = _keygen_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
+        '_ADDR3 3000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
         '_TXBUF WIT-APPLY-TX DROP',
         'WIT-END',
-        # Generate proof for entry 0 (sender)
-        'CREATE _PRF 4096 ALLOT',
-        'WIT-PROVE-BEGIN',
-        '0 _PRF WIT-PROVE',
-        '_PL !',
-        'WIT-PROVE-END',
-        # Verify the proof against the pre-root
-        # ST-VERIFY-PROOF ( addr proof len root -- flag )
-        'CREATE _PRE_R 32 ALLOT',
-        'WIT-PRE-ROOT _PRE_R 32 CMOVE',
-        # Get address from entry 0
-        'CREATE _E0ADDR 32 ALLOT',
+        'CREATE _PRF 10240 ALLOT  CREATE _LEAF 32 ALLOT  CREATE _E0ADDR 32 ALLOT',
         '0 WIT-ENTRY _E0ADDR 32 CMOVE',
-        '_E0ADDR _PRF _PL @ _PRE_R ST-VERIFY-PROOF',
-        'IF ." VERIFIED" ELSE ." BADPROOF" THEN',
+        'WIT-PROVE-BEGIN',
+        '0 _PRF 10240 WIT-PROVE DROP _PL !',
+        '_E0ADDR ST-LOOKUP ST-ENTRY-SIZE _LEAF SHA3-256-HASH',
+        'WIT-PROVE-END',
+        ': _T _E0ADDR _LEAF _PRF _PL @ WIT-PRE-ROOT ST-VERIFY-PROOF',
+        '  IF ." VERIFIED" ELSE ." BADPROOF" THEN',
+        '  _E0ADDR _LEAF _PRF _PL @ WIT-POST-ROOT ST-VERIFY-PROOF',
+        '  IF ." POST-TOO" ELSE ." PRE-ONLY" THEN ; _T',
     ]
-    check("proof verifies against pre-root", lines, "VERIFIED")
+    check("proof verifies against the pre-root only", lines,
+          "VERIFIEDPRE-ONLY")
 
 
 def test_empty_block():

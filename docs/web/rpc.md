@@ -72,6 +72,9 @@ RPC-DISPATCH  ( -- )
 
 Called by the router on `POST /rpc`.  Parses the JSON body, extracts
 `method`, `id`, and `params`, then dispatches to the matching handler.
+The handlers read `params` in place in the request body, which lasts
+the dispatch, so a request's params are bounded only by the server's
+8192-byte request; a request without `params` reads as `[]`.
 If the body is too short (< 2 bytes), returns a parse error immediately.
 
 ---
@@ -100,7 +103,9 @@ adds to mempool, returns the tx hash as hex.
 
 **Params:** `["<cbor-hex>"]`  
 **Result:** `"<64-hex-char tx hash>"`  
-**Error:** `RPC-E-INTERNAL` on decode failure or mempool rejection.
+**Error:** `RPC-E-PARAMS` if the decoded bytes would not fit a
+transaction buffer (`TX-BUF-SIZE`); `RPC-E-INTERNAL` on decode failure
+or mempool rejection.
 
 ### mempool_status
 
@@ -118,23 +123,38 @@ Returns node-level information.
 
 ### chain_getProof
 
-Returns a Merkle inclusion proof for an account, plus the account's
-balance, nonce, leaf index, and the current state root.
+Returns the state tree's inclusion proof for an account, with the
+account's entry and the current state root, so that a client can check
+the account against the root without trusting the server.
 
 **Params:** `["<64-hex-char address>"]`  
 **Result:**
 ```json
 {
   "stateRoot": "<hex-64>",
-  "index": 0,
-  "depth": 8,
+  "address": "<hex-64>",
+  "entry": "<hex-144>",
+  "leaf": "<hex-64>",
   "balance": 1000,
   "nonce": 0,
-  "proof": ["<hex-64>", "<hex-64>", ...]
+  "proof": [{"bit": 4, "sibling": "<hex-64>"}, ...]
 }
 ```
+
+`entry` is the account's 72-byte state entry (address, balance, nonce,
+staked amount, unstake height and last block, the numbers in
+little-endian order), and `leaf` is its SHA3-256 hash, the value the
+state tree keeps under the address.  `proof` is the tree's own proof,
+root to leaf: each element names a branch's bit position and the hash
+of the branch's other child.  A lone account's leaf is the root, so its
+proof is `[]`.  The light client protocol in
+[light.md](../store/light.md#light-client-verification-flow) gives the
+check.
+
 **Error:** `RPC-E-PARAMS` if address is not exactly 64 hex chars.
-`RPC-E-INTERNAL` if account not found.
+`RPC-E-INTERNAL` if the account is not found, if the state tree cannot
+be built, or if the proof does not fit the 4096-byte response (about 40
+entries).
 
 ### chain_getBlockProof
 
@@ -164,12 +184,17 @@ if no height is specified.
 
 ### chain_verifyProof
 
-Server-side Merkle proof verification.
+Server-side verification of a state proof, taking `chain_getProof`'s
+fields as they came.
 
-**Params:** `["<leaf-hex-64>", index, "<proof-hex>", depth, "<root-hex-64>"]`  
-The `proof-hex` is the concatenated sibling hashes (depth × 64 hex chars).  
-**Result:** `true` or `false`  
-**Error:** `RPC-E-PARAMS` on invalid hex lengths.
+**Params:** `["<address-hex-64>", "<leaf-hex-64>", proof, "<root-hex-64>"]`  
+`proof` is the array `chain_getProof` returns, `[{"bit": n, "sibling":
+"<hex-64>"}, ...]`, at most 256 entries.  
+**Result:** `true` if the proof climbs from the address and leaf to the
+root, else `false`; an entry whose bit position is 256 or more makes
+the proof invalid.  
+**Error:** `RPC-E-PARAMS` on an address, leaf or root that is not 64
+hex chars, or a proof that is not an array of such entries.
 
 ---
 

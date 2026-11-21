@@ -586,6 +586,9 @@ VARIABLE _smt-pv-blen
 \ =====================================================================
 
 \ ( key val proof len root -- flag )
+\ A proof may come from anyone, so every bit position is checked to lie
+\ within the 256-bit key before the key's bit is read; an entry past it
+\ makes the proof invalid.
 
 VARIABLE _smt-vf-key
 
@@ -604,6 +607,9 @@ VARIABLE _smt-vf-key
     \ Entries run root to leaf, so the hash climbs from the last one.
     DUP 1- 40 * ROT + SWAP         ( entry len )
     0 ?DO                          ( entry )
+        DUP @ 256 U< 0= IF         \ no branch of a 256-bit key
+            DROP UNLOOP R> DROP 0 EXIT
+        THEN
         DUP @                      ( entry bit-pos )
         _smt-vf-key @ SWAP _SMT-KEY-BIT  ( entry bit )
         1 _SMT-HSC C!

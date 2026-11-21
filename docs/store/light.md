@@ -1,16 +1,16 @@
 # akashic-light — Light Client Protocol for KDOS / Megapad-64
 
-Merkle proof generation and verification for light clients.  A light
-client holds only block headers and verifies account state against the
-state root using authentication paths from the 256-leaf SHA3-256 Merkle
-tree.
+Inclusion proofs of account state for light clients.  A light client
+holds only block headers.  It checks an account against the state root
+in a trusted header with a proof from the state's sparse Merkle tree
+(`smt.f`), so it never needs the rest of the state.
 
 ```forth
 REQUIRE light.f
 ```
 
 `PROVIDED akashic-light` — depends on `akashic-state`, `akashic-block`,
-`akashic-merkle`, `akashic-sha3`.
+`akashic-sha3`.
 
 ---
 
@@ -32,26 +32,42 @@ REQUIRE light.f
 
 | Principle | Detail |
 |---|---|
-| **Thin wrappers** | Leverages existing `MERKLE-OPEN` / `MERKLE-VERIFY` from merkle.f |
-| **Zero-copy** | Proof buffers filled in-place; root pointers into ring buffer |
-| **Guard-wrapped** | `_lc-guard` serializes proof generation to prevent state/tree races |
-| **Header-only** | Light client needs only 248-byte block headers, not full blocks |
-| **Drop-in SMT** | When Phase 3b (Sparse Merkle Tree) lands, internal tree changes but the LC- API stays the same |
+| **Thin wrappers** | `LC-STATE-PROOF` is `ST-PROVE` and `LC-VERIFY-STATE` is `SMT-VERIFY`, under the light client's names |
+| **Caller's storage** | A proof is written into the caller's buffer, within the size the caller gives |
+| **Guard-wrapped** | `_lc-guard` serializes the light client's words |
+| **Header-only** | A light client needs only 248-byte block headers, not full blocks |
 
 ---
 
 ## Proof Format
 
-The state tree is a 256-leaf binary Merkle tree (SHA3-256).
-- **Depth**: 8 (= log₂(256))
-- **Proof size**: 256 bytes (8 × 32-byte sibling hashes)
-- **Layout**: Bottom-to-top — proof[0] is the sibling at the leaf level,
-  proof[7] is the sibling one level below the root.
+The state tree is a compact sparse Merkle tree, a Patricia tree keyed
+by the 32-byte account address.  The value it keeps under an address is
+the account's leaf, the SHA3-256 hash of its 72-byte entry:
+`[32B addr | 8B balance | 8B nonce | 8B staked | 8B unstake_h | 8B last_blk]`,
+each number a little-endian cell.  The tree hashes its nodes with
+domain tags:
 
-Each leaf is `SHA3-256(account_entry)` where account_entry is the 72-byte
-record: `[32B addr | 8B balance | 8B nonce | 8B staked | 8B unstake_h | 8B last_blk]`.
+```
+leaf node:   SHA3-256( 0x00 || address[32] || leaf[32] )
+branch node: SHA3-256( 0x01 || left-hash[32] || right-hash[32] )
+```
 
-Unused leaf slots contain a zero hash (consistent empty commitment).
+A proof lists the branches above the account's leaf, root to leaf, one
+40-byte entry each:
+
+```
++0    8 bytes    bit position of the branch (a little-endian cell)
++8   32 bytes    hash of the branch's other child, the sibling
+```
+
+The bit position names a bit of the address, counted from the most
+significant bit of its first byte.  The address's bit there says which
+side the path takes: 1 goes right, so the sibling is the left child,
+and 0 goes left.  A proof is as long as the leaf is deep, which is
+about log₂ of the number of accounts and never more than 256 entries
+(10240 bytes).  A lone account's leaf is the root, so its proof holds no
+entries.
 
 ---
 
@@ -60,26 +76,27 @@ Unused leaf slots contain a zero hash (consistent empty commitment).
 ### LC-STATE-PROOF
 
 ```forth
-LC-STATE-PROOF  ( addr proof -- depth | 0 )
+LC-STATE-PROOF  ( addr proof buf-len -- len flag )
 ```
 
-Generate a Merkle authentication path for the account at `addr`.
+Write the inclusion proof for the account at `addr` into `proof`.
 
 | Parameter | Description |
 |---|---|
 | `addr` | 32-byte account address (SHA3-256 of Ed25519 public key) |
-| `proof` | Buffer ≥ 256 bytes to receive the authentication path |
-| **Returns** | `depth` (8) on success; `0` if account not found |
+| `proof` | Buffer to receive the proof's entries |
+| `buf-len` | The buffer's size in bytes; 10240 bytes hold any proof |
+| **Returns** | The number of entries and `TRUE`; `0 FALSE` if the account is missing, the tree cannot be built, or the proof does not fit |
 
-Internally:
-1. Calls `_ST-REBUILD-TREE` to rebuild the Merkle tree from current state
-2. Finds the account via `_ST-BSEARCH` (O(log n) binary search)
-3. Calls `MERKLE-OPEN` on `_ST-TREE` at the found leaf index
+The flag tells a lone account's empty proof, `0 TRUE`, from a missing
+account, `0 FALSE`.  The word is `ST-PROVE`: it rebuilds the state tree
+when the state has changed since the last rebuild, then proves the
+account with `SMT-PROVE`.
 
 ### LC-STATE-LEAF
 
 ```forth
-LC-STATE-LEAF  ( addr leaf -- idx | -1 )
+LC-STATE-LEAF  ( addr leaf -- flag )
 ```
 
 Find an account and hash its 72-byte entry into a 32-byte leaf buffer.
@@ -88,7 +105,7 @@ Find an account and hash its 72-byte entry into a 32-byte leaf buffer.
 |---|---|
 | `addr` | 32-byte account address |
 | `leaf` | 32-byte buffer to receive `SHA3-256(entry)` |
-| **Returns** | Sorted index in state table; `-1` if not found |
+| **Returns** | `TRUE` (-1) if found; `FALSE` (0) if not |
 
 ---
 
@@ -97,27 +114,25 @@ Find an account and hash its 72-byte entry into a 32-byte leaf buffer.
 ### LC-VERIFY-STATE
 
 ```forth
-LC-VERIFY-STATE  ( leaf idx proof depth root -- flag )
+LC-VERIFY-STATE  ( key leaf proof len root -- flag )
 ```
 
-Verify a state Merkle proof.  Thin wrapper around `MERKLE-VERIFY`.
+Verify a state proof.  The word is `SMT-VERIFY`: it hashes the leaf
+node from `key` and `leaf`, climbs the proof from its last entry to its
+first, and compares the result with `root`.
 
 | Parameter | Description |
 |---|---|
-| `leaf` | 32-byte leaf hash (from `LC-STATE-LEAF` or computed locally) |
-| `idx` | Leaf index in the tree (0–255) |
-| `proof` | Authentication path (depth × 32 bytes) |
-| `depth` | Tree depth (8 for the 256-leaf state tree) |
-| `root` | 32-byte expected state root (from block header) |
+| `key` | 32-byte account address |
+| `leaf` | 32-byte leaf, from `LC-STATE-LEAF` or computed locally |
+| `proof` | The proof's entries, from `LC-STATE-PROOF` or a peer |
+| `len` | Number of entries |
+| `root` | 32-byte expected state root, from a block header |
 | **Returns** | `TRUE` (-1) if valid; `FALSE` (0) otherwise |
 
-### LC-DEPTH
-
-```forth
-LC-DEPTH  ( -- 8 )
-```
-
-Constant: proof depth for the 256-leaf state tree.
+A proof can come from an untrusted peer.  One longer than 256 entries,
+or holding an entry whose bit position is 256 or more, is invalid; the
+position is checked before the key's bit is read.
 
 ---
 
@@ -131,7 +146,7 @@ LC-STATE-ROOT-AT  ( height -- addr | 0 )
 
 Return a pointer to the 32-byte state root stored in the block header at
 `height`.  Returns `0` if the block is not in the ring buffer (evicted or
-future).  The ring buffer holds the last 64 blocks.
+future).  The ring buffer holds the last `CHAIN-HISTORY` (256) blocks.
 
 ### LC-BLOCK-HEADER
 
@@ -146,7 +161,8 @@ Alias for `CHAIN-BLOCK@`.
 
 ## RPC Methods
 
-Four new JSON-RPC 2.0 methods in rpc.f:
+rpc.f serves the light client protocol over JSON-RPC 2.0;
+[rpc.md](../web/rpc.md) gives each method's errors.
 
 ### chain_getProof
 
@@ -159,17 +175,19 @@ Response:
 {
   "result": {
     "stateRoot": "<hex-64>",
-    "index": 0,
-    "depth": 8,
+    "address": "<hex-64>",
+    "entry": "<hex-144>",
+    "leaf": "<hex-64>",
     "balance": 1000,
     "nonce": 0,
-    "proof": ["<hex-64>", "<hex-64>", ... ]
+    "proof": [{"bit": 4, "sibling": "<hex-64>"}, ...]
   }
 }
 ```
 
-Returns the Merkle proof, account data, and current state root for the
-given account address.  Error if account not found.
+Returns the account's entry, its leaf, the current state root, and the
+proof in the format above, its entries in the same order.  Error if the
+account is not found.
 
 ### chain_getBlockProof
 
@@ -212,7 +230,7 @@ returns the current state root.
 ```json
 {
   "method": "chain_verifyProof",
-  "params": ["<leaf-hex-64>", 0, "<proof-hex>", 8, "<root-hex-64>"]
+  "params": ["<address-hex-64>", "<leaf-hex-64>", [{"bit": 4, "sibling": "<hex-64>"}], "<root-hex-64>"]
 }
 ```
 
@@ -221,38 +239,42 @@ Response:
 { "result": true }
 ```
 
-Server-side proof verification.  The `proof-hex` is the concatenated
-sibling hashes (depth × 64 hex chars = 512 hex chars for depth 8).
+Server-side proof verification with `LC-VERIFY-STATE`.  The address,
+leaf, proof and state root from `chain_getProof` verify as they came.
 
 ---
 
 ## Light Client Verification Flow
 
-A light client verifies an account balance in 4 steps:
+A light client checks an account's balance in four steps:
 
-1. **Get proof**: Call `chain_getProof` with the account address.
-2. **Get header**: Call `chain_getBlockProof` at the desired height (or
-   use a locally synced header).
-3. **Compute leaf**: Hash the 72-byte account entry locally:
-   `SHA3-256([addr‖balance‖nonce‖staked‖unstake_h‖last_blk])`.
-4. **Verify**: Call `chain_verifyProof` (or verify locally):
-   `MERKLE-VERIFY(leaf, index, proof, 8, stateRoot)` → `TRUE`.
+1. **Get proof**: call `chain_getProof` with the account's address.
+2. **Get header**: take the state root from a trusted block header,
+   synced locally or read with `chain_getBlockProof`.
+3. **Check the entry**: hash `entry` with SHA3-256 and compare it with
+   `leaf`; the entry's first 32 bytes are the address, and its balance
+   and nonce follow as little-endian cells.
+4. **Verify**: start from `SHA3-256(0x00 || address || leaf)` and climb
+   the proof from its last entry to its first.  At each entry, read the
+   address's bit at the entry's position: if it is 1, hash
+   `0x01 || sibling || current`, else `0x01 || current || sibling`.
+   The result must equal the state root.  On the machine,
+   `LC-VERIFY-STATE` performs the climb and the comparison; a client
+   can also ask the server with `chain_verifyProof`.
 
-If the state root in the block header is trusted (e.g., from a finalized
-block signed by validators), the proof proves the account state without
-downloading the full state.
+If the header's state root is trusted, for example from a finalized
+block signed by validators, the proof establishes the account's entry
+without the rest of the state.
 
 ---
 
 ## Concurrency
 
 All public `LC-` words are serialized via `_lc-guard` (a `GUARD` from
-guard.f).  The guard ensures that the rebuild-tree + binary-search +
-merkle-open sequence is atomic — no interleaving with state mutations.
-
-The underlying calls to `MERKLE-OPEN`, `MERKLE-VERIFY`, `MERKLE-BUILD`,
-and `MERKLE-LEAF!` use `_merkle-guard`.  State access uses `_st-guard`.
-All three guards are distinct, so no deadlock.
+guard.f).  `LC-STATE-PROOF` runs `ST-PROVE`, which holds the state's
+guard, `_st-guard`, across the tree's rebuild and the proof, so no state
+mutation falls between them.  The tree's own words take `_smt-guard`.
+The three guards are distinct, so no deadlock.
 
 ---
 
@@ -260,9 +282,8 @@ All three guards are distinct, so no deadlock.
 
 | Word | Stack Effect | Description |
 |---|---|---|
-| `LC-STATE-PROOF` | `( addr proof -- depth \| 0 )` | Generate state Merkle proof |
-| `LC-STATE-LEAF` | `( addr leaf -- idx \| -1 )` | Find account, hash entry to leaf |
-| `LC-VERIFY-STATE` | `( leaf idx proof depth root -- flag )` | Verify state proof |
+| `LC-STATE-PROOF` | `( addr proof buf-len -- len flag )` | Generate an account's state proof |
+| `LC-STATE-LEAF` | `( addr leaf -- flag )` | Find account, hash entry to leaf |
+| `LC-VERIFY-STATE` | `( key leaf proof len root -- flag )` | Verify state proof |
 | `LC-STATE-ROOT-AT` | `( height -- addr \| 0 )` | State root from block header |
 | `LC-BLOCK-HEADER` | `( height -- blk \| 0 )` | Block header at height |
-| `LC-DEPTH` | `( -- 8 )` | Proof depth constant |

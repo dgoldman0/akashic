@@ -113,8 +113,11 @@ Entry layout (40 bytes):
   +8   32 bytes    sibling hash at that branch
 ```
 
-The proof length (number of entries) is returned by `SMT-PROVE` and
-passed to `SMT-VERIFY`. A length of 0 means the key was not found.
+`SMT-PROVE` returns the proof length (number of entries) with a flag,
+and the length is passed to `SMT-VERIFY`. In a tree of one leaf the
+leaf is the root, so its proof holds no entries: a length of 0 with a
+true flag is a valid proof, and only the false flag means the key was
+not found or the buffer was too small.
 
 ---
 
@@ -236,7 +239,10 @@ SMT-VERIFY  ( key val proof len root -- flag )
 
 Verify an inclusion proof. `root` is the address of the expected
 32-byte root hash. Returns true if the reconstructed root matches.
-Rejects proofs with `len > 256` (max depth for 256-bit keys).
+Rejects proofs with `len > 256` (max depth for 256-bit keys), and
+proofs holding an entry whose bit position is 256 or more, since a
+256-bit key has no such bit. A proof can come from an untrusted peer,
+so the position is checked before the key's bit is read.
 
 **Stack setup after SMT-PROVE:**
 

@@ -35,7 +35,7 @@
 \   WIT-POST-ROOT    ( -- addr )           32-byte post-root
 \   WIT-CREATED?     ( idx -- flag )       was account new?
 \   WIT-PROVE-BEGIN  ( -- )                save post, restore pre
-\   WIT-PROVE        ( idx proof -- len )  SMT proof for entry
+\   WIT-PROVE        ( idx proof buf-len -- len flag )  SMT proof for entry
 \   WIT-PROVE-END    ( -- )                restore post-state
 \   WIT-VERIFY       ( -- flag )           check consistency
 \
@@ -363,7 +363,11 @@ VARIABLE _WIT-TX
 \  11. WIT-PROVE bracket — generate SMT proofs against pre-state
 \ =====================================================================
 \  WIT-PROVE-BEGIN saves the post-state, restores the pre-state.
-\  WIT-PROVE generates a proof for one entry.
+\  WIT-PROVE generates a proof for one entry within the caller's buf-len
+\  bytes, 40 bytes an entry.  It returns the entry count and TRUE, or 0
+\  and FALSE when the account is missing, the tree cannot be built or
+\  the proof does not fit; a lone account's proof has no entries and a
+\  true flag.
 \  WIT-PROVE-END restores the post-state.
 
 : _WIT-ENSURE-TMP-SNAP  ( -- )
@@ -378,12 +382,12 @@ VARIABLE _WIT-TX
     \ Restore pre-state
     _WIT-PRE-SNAP-PTR @ ST-RESTORE ;
 
-: WIT-PROVE  ( idx proof -- len )
-    SWAP _WIT-ENTRY-ADDR           ( proof entry )
+: WIT-PROVE  ( idx proof buf-len -- len flag )
+    ROT _WIT-ENTRY-ADDR            ( proof buf-len entry )
     \ Copy 32-byte address from XMEM → RAM scratch
-    _WIT-PRV-ADDR 32 CMOVE        ( proof )
-    _WIT-PRV-ADDR SWAP             ( addr proof )
-    ST-PROVE ;                     ( len )
+    _WIT-PRV-ADDR 32 CMOVE         ( proof buf-len )
+    _WIT-PRV-ADDR -ROT             ( addr proof buf-len )
+    ST-PROVE ;                     ( len flag )
 
 : WIT-PROVE-END  ( -- )
     _WIT-TMP-SNAP-PTR @ ST-RESTORE ;
