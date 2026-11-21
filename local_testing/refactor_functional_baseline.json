@@ -305,7 +305,7 @@
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-PANEL-HANDLE",
-          "sha256": "5a417e6203b1e66a71ac59555f205300c0090ec5a85fa75b95114e0cd9a05d70",
+          "sha256": "1c0a15e29bcb331d70273219abac1d053422e3bb9d03a2471ef9741d9349f8cb",
           "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today", "Reminders view shown -> keys go to the reminders"]
         },
         {
@@ -459,7 +459,7 @@
         {
           "path": "akashic/tui/applets/grid/grid.f",
           "word": "_GRID-PANEL-HANDLE",
-          "sha256": "7e55afc6d95979654e004873ea0642c34dba2dd913c5c95755f2cdad674016c9",
+          "sha256": "846d861cc3d3fe1e5057a9214381ebc78b9194de014d73f9997236ab523487ee",
           "bindings": ["Left -> previous column", "Right -> next column", "Up -> previous row", "Down -> next row", "PageUp -> previous visible page", "PageDown -> next visible page", "Home -> first column", "End -> last used column", "Tab -> next column", "Shift+Tab -> previous column", "Enter -> edit cell", "F2 -> edit cell", "Delete -> clear cell", "printable ASCII -> replace cell and edit"]
         }
       ],
@@ -623,7 +623,7 @@
         {
           "path": "akashic/tui/applets/soundlab/soundlab.f",
           "word": "_SL-PANEL-HANDLE",
-          "sha256": "ce012e758bd3b80c03557f7ac08008a1923b8cc9dc7b2ace8ccc03dafeac7e53",
+          "sha256": "e7cae8134283e54c163fb5d807ccfdc164af1a5b86df263de3dd936d01712ef2",
           "bindings": ["Up -> previous control", "Down -> next control", "Left -> decrement selected value", "Right -> increment selected value", "Enter -> edit selected value", "F2 -> edit selected value", "F5 -> render", "r -> render", "s -> save WAV", "p -> play current render", "Space -> render"]
         }
       ],
