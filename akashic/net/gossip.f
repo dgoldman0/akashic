@@ -280,7 +280,7 @@ VARIABLE _GSP-RX-PEER
     CBOR-NEXT-BSTR 2DROP               \ skip hash
     CBOR-NEXT-UINT                     ( height )
     GSP-ON-BLK-ANN-XT @ ?DUP IF
-        _GSP-RX-PEER @ ROT EXECUTE     \ ( height peer xt )
+        _GSP-RX-PEER @ SWAP EXECUTE    \ ( height peer xt )
     ELSE DROP THEN ;
 
 \ Handle BLOCK-RESPONSE
@@ -297,7 +297,7 @@ VARIABLE _GSP-RX-PEER
     CBOR-NEXT-BSTR 2DROP               \ skip hash
     CBOR-NEXT-UINT                     ( height )
     GSP-ON-STATUS-XT @ ?DUP IF
-        _GSP-RX-PEER @ ROT EXECUTE
+        _GSP-RX-PEER @ SWAP EXECUTE    \ ( height peer xt )
     ELSE DROP THEN ;
 
 \ =====================================================================
@@ -324,25 +324,23 @@ VARIABLE _GSP-RX-PEER
 \  13. GSP-POLL — poll all peers for incoming messages
 \ =====================================================================
 
+\  WS-RECV answers ( opcode len ), and opcode -1 when the peer closed its
+\  connection or the connection failed; that peer is dropped.  A binary
+\  message goes to GSP-ON-MSG.  Text, ping, pong and empty messages are
+\  ignored.
+
 : GSP-POLL  ( -- )
     GSP-MAX-PEERS 0 ?DO
         _GSP-ACTIVE I + C@ IF
             I CELLS _GSP-CTX + @
             _GSP-RBUF _GSP-BUF-SZ WS-RECV    ( opcode len )
-            DUP 0> IF
-                OVER WS-OP-BINARY = IF
-                    DROP                      \ drop opcode
-                    _GSP-RBUF SWAP I GSP-ON-MSG
-                ELSE
-                    OVER WS-OP-CLOSE = IF
-                        2DROP I GSP-DISCONNECT
-                    ELSE
-                        2DROP                 \ ignore text/ping/pong
-                    THEN
-                THEN
+            OVER -1 = IF
+                2DROP I GSP-DISCONNECT        \ closed or failed
+            ELSE OVER WS-OP-BINARY = OVER 0> AND IF
+                NIP _GSP-RBUF SWAP I GSP-ON-MSG
             ELSE
-                2DROP                         \ no data
-            THEN
+                2DROP                         \ text, ping, pong or empty
+            THEN THEN
         THEN
     LOOP ;
 

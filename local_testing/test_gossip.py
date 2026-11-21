@@ -12,6 +12,9 @@ Tests:
   - GSP-ON-MSG unknown type → silently ignored
   - GSP-ON-MSG empty buffer → no crash
   - Seen-hash ring buffer wrap-around
+  - GSP-POLL over a scripted WebSocket transport: binary messages reach
+    GSP-ON-MSG with their length and peer, a closed peer is dropped, and
+    text messages are ignored
 """
 import os, sys, time
 
@@ -102,15 +105,30 @@ def restore_cpu_state(cpu, state):
         if k != 'regs':
             setattr(cpu, k, v)
 
-def build_snapshot():
-    global _snapshot
-    if _snapshot: return _snapshot
-    print("[*] Building snapshot: BIOS + KDOS + all gossip.f dependencies ...")
-    t0 = time.time()
-    bios_code   = _load_bios()
-    kdos_lines  = _load_forth_lines(KDOS_PATH)
+# GSP-POLL reads its peers through WS-RECV, which a test cannot feed from a
+# real connection.  The snapshot therefore defines a scripted transport after
+# ws.f and before gossip.f, so gossip.f compiles against it: WS-RECV hands
+# out the scripted messages in order, copying each one's bytes into the
+# caller's buffer, and records the context it was given; WS-DISCONNECT
+# records the context it closes.  A close is scripted as opcode -1 with no
+# bytes, as the real WS-RECV reports one.  No other test reaches either word.
+WS_SCRIPT = [
+    'VARIABLE _WSS-N  VARIABLE _WSS-I  VARIABLE _WSS-CLOSED',
+    'CREATE _WSS-OP 8 CELLS ALLOT  CREATE _WSS-A 8 CELLS ALLOT',
+    'CREATE _WSS-U 8 CELLS ALLOT  CREATE _WSS-CTX 8 CELLS ALLOT',
+    ': WSS-RESET  ( -- )  0 _WSS-N !  0 _WSS-I !  0 _WSS-CLOSED ! ;',
+    ': WSS-MSG  ( opcode a u -- )',
+    '    _WSS-N @ CELLS >R  R@ _WSS-U + !  R@ _WSS-A + !  R> _WSS-OP + !',
+    '    1 _WSS-N +! ;',
+    ': WS-RECV  ( ctx buf max -- opcode len )',
+    '    _WSS-I @ _WSS-N @ < 0= IF 2DROP DROP WS-OP-PONG 0 EXIT THEN',
+    '    _WSS-I @ CELLS >R  ROT R@ _WSS-CTX + !',
+    '    R@ _WSS-U + @ MIN  R@ _WSS-A + @ -ROT  DUP >R CMOVE',
+    '    R> R> _WSS-OP + @ SWAP  1 _WSS-I +! ;',
+    ': WS-DISCONNECT  ( ctx -- )  _WSS-CLOSED ! ;',
+]
 
-    dep_lines = module_source_lines((
+GOSSIP_ROOTS = (
         "concurrency/event.f",
         "concurrency/semaphore.f",
         "concurrency/guard.f",
@@ -137,8 +155,23 @@ def build_snapshot():
         "net/base64.f",
         "net/http.f",
         "net/ws.f",
-        "net/gossip.f",
-    ))
+)
+
+
+def build_snapshot():
+    global _snapshot
+    if _snapshot: return _snapshot
+    print("[*] Building snapshot: BIOS + KDOS + all gossip.f dependencies ...")
+    t0 = time.time()
+    bios_code   = _load_bios()
+    kdos_lines  = _load_forth_lines(KDOS_PATH)
+
+    # gossip.f needs nothing the other roots do not already load, so its own
+    # lines are what its closure adds to theirs.
+    before = module_source_lines(GOSSIP_ROOTS)
+    closure = module_source_lines(GOSSIP_ROOTS + ("net/gossip.f",))
+    assert closure[:len(before)] == before, "gossip.f needs a module the suite does not name"
+    dep_lines = before + WS_SCRIPT + closure[len(before):]
 
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -534,6 +567,83 @@ def test_unknown_msg_counter():
 def test_seen_cap_constant():
     """_GSP-SEEN-CAP should be 1024 (FIX P27)."""
     check("_GSP-SEEN-CAP=1024", ['_GSP-SEEN-CAP . CR'], "1024")
+
+
+# ── GSP-POLL over the scripted transport ──
+
+def _status_message(name, height):
+    """Lines that build a STATUS message NAME of HEIGHT and its length NAME-LEN."""
+    return [
+        f'CREATE {name} 128 ALLOT',
+        f'6 {name} C!',
+        f'{name} 1+ 127 CBOR-RESET',
+        '2 CBOR-ARRAY',
+    ] + create_hex_buf(f'{name}-H', 'cc' * 32) + [
+        f'{name}-H 32 CBOR-BSTR',
+        f'{height} CBOR-UINT',
+        f'CBOR-RESULT NIP 1+ CONSTANT {name}-LEN',
+    ]
+
+
+def _active(peer, ctx):
+    """A line that marks PEER active with WebSocket context CTX."""
+    return f'1 _GSP-ACTIVE {peer} + C!  {ctx} _GSP-CTX {peer} CELLS + !'
+
+
+# GSP-POLL runs inside _P, which prints how many cells it left.  Each test
+# prints what it reads in a word of its own, run on the line with _P so the
+# whole report is one printed line.
+_POLL = ': _P DEPTH >R GSP-POLL DEPTH R> - ." left=" . ;'
+
+
+def test_poll_binary_messages():
+    """GSP-POLL hands each binary message to GSP-ON-MSG with its length.
+
+    Peer 1 sends a message of an unknown tag and peer 2 a STATUS message.
+    The status callback must see height 42 from peer 2, so the whole message
+    reached the handler, and each peer's own context must reach WS-RECV."""
+    lines = ['GSP-INIT  WSS-RESET'] + _status_message('_SM', 42) + [
+        'CREATE _UM 3 ALLOT  200 _UM C!  0 _UM 1+ C!  0 _UM 2 + C!',
+        'VARIABLE _GOT-HT  VARIABLE _GOT-PEER  0 _GOT-HT !  -1 _GOT-PEER !',
+        ': _MY-STATUS-CB  ( height peer -- ) _GOT-PEER ! _GOT-HT ! ;',
+        "' _MY-STATUS-CB GSP-ON-STATUS-XT !",
+        _active(1, 1111),
+        _active(2, 2222),
+        'WS-OP-BINARY _UM 3 WSS-MSG',
+        'WS-OP-BINARY _SM _SM-LEN WSS-MSG',
+        _POLL,
+        ': _SHOW ." ht=" _GOT-HT @ . ." peer=" _GOT-PEER @ .',
+        '  ." unknown=" GSP-UNKNOWN-COUNT . ." taken=" _WSS-I @ .',
+        '  ." ctx=" _WSS-CTX @ . _WSS-CTX CELL+ @ . ." peers=" GSP-PEER-COUNT . CR ;',
+        '_P _SHOW',
+    ]
+    check("binary messages reach their handlers", lines,
+          "left=0 ht=42 peer=2 unknown=1 taken=2 ctx=1111 2222 peers=2")
+
+
+def test_poll_close_drops_peer():
+    """A peer whose WS-RECV reports a close is disconnected."""
+    lines = ['GSP-INIT  WSS-RESET',
+             _active(5, 777),
+             '-1 0 0 WSS-MSG',
+             _POLL,
+             ': _SHOW ." peers=" GSP-PEER-COUNT . ." closed=" _WSS-CLOSED @ . CR ;',
+             '_P _SHOW']
+    check("a closed peer is dropped", lines, "left=0 peers=0 closed=777")
+
+
+def test_poll_ignores_text():
+    """A text message reaches no handler and keeps its peer."""
+    lines = ['GSP-INIT  WSS-RESET',
+             'CREATE _TXT 8 ALLOT  _TXT 8 255 FILL',
+             _active(0, 99),
+             'WS-OP-TEXT _TXT 8 WSS-MSG',
+             _POLL,
+             ': _SHOW ." unknown=" GSP-UNKNOWN-COUNT . ." peers=" GSP-PEER-COUNT .',
+             '  ." taken=" _WSS-I @ . CR ;',
+             '_P _SHOW']
+    check("a text message is ignored", lines,
+          "left=0 unknown=0 peers=1 taken=1")
 
 
 # ══════════════════════════════════════════════════════════════════════

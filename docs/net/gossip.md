@@ -154,8 +154,11 @@ checks the seen cache, and fires the appropriate callback.
 GSP-POLL  ( -- )
 ```
 
-Poll all connected peers for incoming WebSocket frames.  Each frame
-is dispatched via `GSP-ON-MSG`.
+Poll all connected peers for incoming WebSocket messages.  Each binary
+message goes to `GSP-ON-MSG` with its length and the peer it came from.
+A peer whose connection closed or failed, which `WS-RECV` reports as
+opcode -1, is disconnected and its slot freed.  Text, ping and pong
+messages are ignored.
 
 ### GSP-SEEN?
 
