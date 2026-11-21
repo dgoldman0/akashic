@@ -685,15 +685,23 @@ build by default, declares the user volume's places.
   The builder's default for the rich Desktop and Desk with one applet is
   now the shipping form with the user volume, and `--linked` builds the
   linked form (`local_testing/README.md`). In the shipping form the checks
-  of Desk with File Explorer, Pad, Streams, Sound Lab, Observatory and
-  Worlds, the small terminal, the photograph and the damaged picture pass.
-  The Daybook and Agent checks start from records their boot writes before
-  Desk starts, Daybook's reminders and sample day and the Agent's
-  conversation. The boot activates the Practice over the default set as Desk
-  does and writes each in the home that activation gives the applet's stores
-  (`PACT-STORE-PLACES`), so the records lie in the applet's folder under
-  records in the shipping form and in the one place in the linked form
-  (`local_testing/test_desk_records_seed.py`).
+  of Desk with File Explorer, Pad, Daybook, the Agent, Streams, Sound Lab,
+  Observatory and Worlds, the small terminal, the photograph and the damaged
+  picture pass. The Daybook and Agent checks start from records their boot
+  writes before Desk starts, Daybook's reminders and sample day and the
+  Agent's conversation. The boot activates the Practice over the default set
+  as Desk does and writes each in the home that activation gives the
+  applet's stores (`PACT-STORE-PLACES`), so the records lie in the applet's
+  folder under records in the shipping form and in the one place in the
+  linked form (`local_testing/test_desk_records_seed.py`). Both checks pass
+  in either form (2026-11-21, Akashic 2929838d; MegaPad 70e2f3dc for the
+  first run and a60fa472 for the rest): Desk with Daybook in 144 s in the
+  shipping form and 138 s linked, Desk with the Agent in 69 s and 60 s,
+  each with its build. After each shipping run `e2fsck` passed the user
+  volume and its journal was empty. The root of Records held only the
+  Practice head and a folder for each component whose records Desk keeps:
+  Daybook's reminders and document lay in `/records/org.akashic.daybook`,
+  and the Agent's conversation in `/records/org.akashic.agent`.
 
 ## Open
 
