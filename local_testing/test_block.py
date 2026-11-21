@@ -29,10 +29,30 @@ EMU_DIR    = os.environ.get(
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
-from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
+from forth_snapshot import KDOS_DIAGNOSTICS, _run_input, program_output, run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+
+# BLK-VERIFY snapshots the state into a 4.7 MB buffer of its own, and the
+# verify cases keep a second snapshot to undo BLK-FINALIZE.  KDOS gives
+# ALLOCATE and XMEM-ALLOT half of extended memory, so 16 MiB held only
+# one of them ("Ext mem overflow"); 32 MiB leaves 16 MiB for both, the
+# state's pages and its tree.
+EXT_MEM_SIZE = 32 << 20
+
+
+def _load_errors(text, lines):
+    """The lines KDOS printed while loading LINES that report a refused line.
+
+    The echo of the source is dropped first, since the source itself names
+    some of these messages.
+    """
+    printed = program_output(text, lines)
+    return [line.strip() for line in printed.split('\n')
+            if ('?' in line and 'not found' in line.lower())
+            or 'dictionary full' in line.lower()
+            or any(item in line for item in KDOS_DIAGNOSTICS)]
 
 # ── Emulator helpers ──
 
@@ -56,13 +76,9 @@ def _load_forth_lines(path):
             lines.append(line)
         return lines
 
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
 def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
+    buf = bytearray()
+    sys_obj.uart.on_tx = buf.append
     return buf
 
 def uart_text(buf):
@@ -120,7 +136,7 @@ def build_snapshot():
         ': .HEX  ( addr n -- ) FMT-.HEX ;',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=EXT_MEM_SIZE)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -129,29 +145,14 @@ def build_snapshot():
                  + dep_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
-    data = payload.encode(); pos = 0; steps = 0; mx = 800_000_000
-    while steps < mx:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
+    steps = _run_input(sys_obj, payload.encode(), 800_000_000, buf)
     text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        if '?' in l and 'not found' in l.lower():
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
+    errors = _load_errors(text, all_lines)
     if errors:
-        print(f"  [FATAL] {len(errors)} 'not found' errors during load!")
-        print(f"  Aborting — block.f failed to compile cleanly.")
-        for l in text.strip().split('\n')[-30:]:
-            print(f"    {l}")
-        sys.exit(1)
+        tail = "\n".join(text.strip().split('\n')[-30:])
+        raise AssertionError(
+            f"{len(errors)} line(s) failed to load:\n" + "\n".join(errors[-10:])
+            + "\n--- transcript tail ---\n" + tail)
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
@@ -161,7 +162,7 @@ def run_forth(lines, max_steps=800_000_000):
     if _snapshot is None:
         build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=EXT_MEM_SIZE)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
@@ -174,17 +175,7 @@ def run_forth(lines, max_steps=800_000_000):
     restore_cpu_state(sys_obj.cpu, cpu_state)
     buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode(); pos = 0; steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
+    _run_input(sys_obj, payload.encode(), max_steps, buf)
     return uart_text(buf)
 
 # ── Test framework ──
@@ -651,6 +642,66 @@ def test_verify_no_mutation():
     check("balance unchanged after verify", lines, "10000")
 
 
+def _verifiable_block():
+    """A funded state and a one-transaction block, finalized and undone.
+
+    BLK-FINALIZE applies the block's transaction to fill its state root,
+    and _SNAP gives the state back as it was, so BLK-VERIFY checks the
+    block against the state it was built on.
+    """
+    return _funded_state() + _make_tx_lines(
+        '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
+    ) + [
+        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
+        '_SNAP ST-SNAPSHOT',
+        'CREATE _BK BLK-STRUCT-SIZE ALLOT',
+        '_BK BLK-INIT',
+        '1 _BK BLK-SET-HEIGHT',
+        '1700000000 _BK BLK-SET-TIME',
+        'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
+        '_TX1 _BK BLK-ADD-TX DROP',
+        '_BK BLK-FINALIZE',
+        '_SNAP ST-RESTORE',
+        'CREATE _BAD 32 ALLOT  _BAD 32 0 FILL  255 _BAD C!',
+        # _V verifies _BK against PREV and prints the cells BLK-VERIFY
+        # left, then its flag.
+        ': _V  ( prev -- ) DEPTH 1- >R _BK SWAP BLK-VERIFY',
+        '  DEPTH R> - ." cells=" . ." flag=" . ;',
+    ]
+
+
+def test_verify_leaves_one_cell():
+    """BLK-VERIFY leaves its flag alone, on success and on rejection.
+
+    Each of its three hash comparisons left a cell behind, so a verified
+    block returned four cells."""
+    print("\n=== BLK-VERIFY cells ===")
+    lines = _verifiable_block() + [
+        ': _T ." valid: " _PH _V ." prev: " _BAD _V',
+        '  _BK BLK-STATE-ROOT@ DUP C@ 1 XOR SWAP C!',
+        '  ." state: " _PH _V ; _T',
+    ]
+    check("one cell for a valid block and for each rejection", lines,
+          "valid: cells=1 flag=-1 prev: cells=1 flag=0 state: cells=1 flag=0 ")
+
+
+def test_verify_checks_claimed_tx_root():
+    """BLK-VERIFY rejects a block whose claimed tx root is wrong.
+
+    Computing the root writes it into the block, and the check compared
+    that root with itself, so any claimed root passed.  A rejected block
+    keeps the root it claimed."""
+    print("\n=== BLK-VERIFY tx root ===")
+    lines = _verifiable_block() + [
+        'VARIABLE _CLAIM',
+        ': _T _BK BLK-TX-ROOT@ DUP C@ 1 XOR DUP _CLAIM ! SWAP C!',
+        '  ." txroot: " _PH _V',
+        '  ." kept=" _BK BLK-TX-ROOT@ C@ _CLAIM @ = . ; _T',
+    ]
+    check("a wrong tx root is rejected and kept", lines,
+          "txroot: cells=1 flag=0 kept=-1 ")
+
+
 def test_encode_decode():
     print("\n=== BLK-ENCODE / BLK-DECODE ===")
     # Round-trip header fields
@@ -958,6 +1009,51 @@ def test_decode_txs_b06():
     check("decode with txs succeeds", lines, "DECOK")
     check("decoded tx count is 1", lines, "1")
     check("decoded height is 1", lines, "1")
+
+
+def test_decode_reuses_buffers():
+    """BLK-DECODE decodes transactions into buffers it reuses.
+
+    Each decode used to ALLOT a fresh transaction buffer in the
+    dictionary, so the dictionary grew with every block decoded.  A
+    second decode of the same block must leave HERE and the heap where
+    they were, and hand back the same buffer holding the same
+    transaction.
+
+    The block's CBOR is written here, header map and one encoded
+    transaction, rather than by BLK-ENCODE: TX-ENCODE resets the CBOR
+    encoder BLK-ENCODE is writing with, so BLK-ENCODE cannot encode a
+    block that holds a transaction (test_decode_txs_b06)."""
+    print("\n=== BLK-DECODE buffers ===")
+    lines = _funded_blk() + _make_tx_lines(
+        '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
+    ) + [
+        'CREATE _TXE 16384 ALLOT  _TX1 _TXE 16384 TX-ENCODE CONSTANT _TXE-LEN',
+        'CREATE _EBUF 16384 ALLOT  VARIABLE _ELEN',
+        ': _ENC _EBUF 16384 CBOR-RESET  2 CBOR-ARRAY  7 CBOR-MAP',
+        '  S" proof" CBOR-TSTR  _BK BLK-PROOF@ CBOR-BSTR',
+        '  S" height" CBOR-TSTR  1 CBOR-UINT',
+        '  S" tx_root" CBOR-TSTR  _BK BLK-TX-ROOT@ 32 CBOR-BSTR',
+        '  S" version" CBOR-TSTR  1 CBOR-UINT',
+        '  S" prev_hash" CBOR-TSTR  _BK BLK-PREV-HASH@ 32 CBOR-BSTR',
+        '  S" timestamp" CBOR-TSTR  1700000000 CBOR-UINT',
+        '  S" state_root" CBOR-TSTR  _BK BLK-STATE-ROOT@ 32 CBOR-BSTR',
+        '  1 CBOR-ARRAY  _TXE _TXE-LEN CBOR-BSTR',
+        '  CBOR-RESULT NIP _ELEN ! ; _ENC',
+        'CREATE _BK2 BLK-STRUCT-SIZE ALLOT',
+        'VARIABLE _T1  VARIABLE _H0  VARIABLE _X1',
+        ': _T HERE _H0 !',
+        '  _EBUF _ELEN @ _BK2 BLK-DECODE ." first=" .',
+        '  0 _BK2 BLK-TX@ _T1 !  XMEM-HERE @ _X1 !',
+        '  _EBUF _ELEN @ _BK2 BLK-DECODE ." second=" .',
+        '  ." count=" _BK2 BLK-TX-COUNT@ .',
+        '  ." same=" 0 _BK2 BLK-TX@ _T1 @ = .',
+        '  ." here=" HERE _H0 @ - .',
+        '  ." heap=" XMEM-HERE @ _X1 @ - .',
+        '  ." amount=" 0 _BK2 BLK-TX@ TX-AMOUNT@ . ; _T',
+    ]
+    check("a second decode reuses the first's buffer", lines,
+          "first=-1 second=-1 count=1 same=-1 here=0 heap=0 amount=100 ")
 
 
 def test_chain_history_b09():

@@ -397,22 +397,34 @@ CREATE _BLK-TX-SCRATCH  16384 ALLOT
 \
 \  Expects: CBOR array of 2 = [ header-map, txs-array ]
 \  For txs: each is a CBOR byte string containing an encoded tx.
-\  The caller must provide pre-allocated tx buffers via BLK-ADD-TX
-\  AFTER decode, or we can decode into a pool.
 \
-\  Strategy: decode header fields from the map.  For txs, decode
-\  each bstr and TX-DECODE into caller-provided tx buffers.
-\  The blk must already have tx buffers registered via a tx pool.
-\
-\  For simplicity: BLK-DECODE only populates the header.  Tx decode
-\  is handled separately since tx buffer allocation is caller's
-\  responsibility.  Returns -1 on success, 0 on failure.
+\  The header fields fill the block; each transaction is decoded with
+\  TX-DECODE into one of block.f's decode buffers and added with
+\  BLK-ADD-TX.  The decode buffers, one TX-BUF-SIZE buffer each, come
+\  from the heap the first time a block needs that many and are reused
+\  by every later BLK-DECODE, so a decoded block's transactions stay
+\  valid until the next BLK-DECODE.  BLK-MAX-TXS bounds their number, as
+\  it bounds a block's.  Returns -1 on success, 0 on failure, including
+\  a heap that cannot hold another buffer.
 
 VARIABLE _BLK-D-BLK
 VARIABLE _BLK-D-PAIRS
 VARIABLE _BLK-D-KA
 VARIABLE _BLK-D-KL
 VARIABLE _BLK-D-TX
+
+CREATE _BLK-D-BUFS BLK-MAX-TXS CELLS ALLOT  \ the decode buffers
+VARIABLE _BLK-D-NBUF                         \ how many are allocated
+0 _BLK-D-NBUF !
+
+\ _BLK-D-BUF ( i -- tx | 0 )
+\   Decode buffer I, allocated when the decoder first reaches it; 0 when
+\   the heap cannot hold another.  The decoder reaches them in order.
+: _BLK-D-BUF  ( i -- tx | 0 )
+    DUP _BLK-D-NBUF @ < IF CELLS _BLK-D-BUFS + @ EXIT THEN
+    DROP TX-BUF-SIZE ALLOCATE IF DROP 0 EXIT THEN
+    DUP _BLK-D-NBUF @ CELLS _BLK-D-BUFS + !
+    1 _BLK-D-NBUF +! ;
 
 \ Helper: compare two byte sequences
 : _BLK-STREQ  ( a1 l1 a2 l2 -- flag )
@@ -485,8 +497,9 @@ VARIABLE _BLK-D-TX
     0 ?DO
         CBOR-TYPE 2 <> IF 0 UNLOOP EXIT THEN   \ expect bstr
         CBOR-NEXT-BSTR                 \ -- addr len
-        \ Allocate a tx buffer
-        HERE TX-BUF-SIZE ALLOT         \ -- addr len tx-buf
+        I _BLK-D-BUF DUP 0= IF         \ the heap holds no more
+            DROP 2DROP 0 UNLOOP EXIT
+        THEN
         _BLK-D-TX !                    \ -- addr len  ; save tx-buf
         _BLK-D-TX @ TX-INIT            \ -- addr len
         _BLK-D-TX @ TX-DECODE          \ -- flag  (buf len tx -- flag)
@@ -576,14 +589,8 @@ CREATE _BLK-DN-B 32 ALLOT
     _BLK-V-BLK !
 
     \ 1. prev_hash matches
-    _BLK-V-BLK @ _BLK-PREV _BLK-V-PREV @ 32
-    0                                     \ accumulate XOR diff
-    32 0 ?DO
-        3 PICK I + C@  3 PICK I + C@
-        XOR OR
-    LOOP
-    NIP NIP                               \ -- diff
-    0<> IF 0 EXIT THEN
+    _BLK-V-BLK @ _BLK-PREV _BLK-V-PREV @ SHA3-256-COMPARE
+    0= IF 0 EXIT THEN
 
     \ 2. Timestamp sanity (must be non-zero for non-genesis)
     _BLK-V-BLK @ BLK-HEIGHT@ 0> IF
@@ -600,17 +607,15 @@ CREATE _BLK-DN-B 32 ALLOT
     \ 4. No duplicate nonces per sender
     _BLK-V-BLK @ _BLK-CHECK-DUP-NONCES 0= IF 0 EXIT THEN
 
-    \ 5. Tx Merkle root check — recompute and compare
+    \ 5. Tx Merkle root check — recompute and compare.  The computation
+    \    writes its root into the block, so the root the block claims is
+    \    kept aside to compare with, and given back when they differ.
+    _BLK-V-BLK @ _BLK-TXROOT _BLK-V-TXROOT 32 CMOVE
     _BLK-V-BLK @ _BLK-COMPUTE-TX-ROOT
-    _BLK-TX-TREE MERKLE-ROOT _BLK-V-TXROOT 32 CMOVE
-    _BLK-V-BLK @ _BLK-TXROOT _BLK-V-TXROOT 32
-    0
-    32 0 ?DO
-        3 PICK I + C@  3 PICK I + C@
-        XOR OR
-    LOOP
-    NIP NIP
-    0<> IF 0 EXIT THEN
+    _BLK-V-BLK @ _BLK-TXROOT _BLK-V-TXROOT SHA3-256-COMPARE 0= IF
+        _BLK-V-TXROOT _BLK-V-BLK @ _BLK-TXROOT 32 CMOVE
+        0 EXIT
+    THEN
 
     \ 6. State root check — snapshot, apply txs, compare, restore
     _BLK-V-SNAP ST-SNAPSHOT
@@ -625,14 +630,8 @@ CREATE _BLK-DN-B 32 ALLOT
     \ Compute state root and compare
     ST-ROOT DROP _BLK-V-ROOT 32 CMOVE
     _BLK-V-SNAP ST-RESTORE               \ restore original state
-    _BLK-V-BLK @ _BLK-SROOT _BLK-V-ROOT 32
-    0
-    32 0 ?DO
-        3 PICK I + C@  3 PICK I + C@
-        XOR OR
-    LOOP
-    NIP NIP
-    0<> IF 0 EXIT THEN
+    _BLK-V-BLK @ _BLK-SROOT _BLK-V-ROOT SHA3-256-COMPARE
+    0= IF 0 EXIT THEN
 
     \ 7. Consensus proof check (via callback)
     _BLK-V-BLK @ _BLK-CON-CHECK-XT @ EXECUTE

@@ -194,10 +194,17 @@ BLK-DECODE  ( buf len blk -- flag )
 
 Deserialize a full block from CBOR.  Decodes the 7 header fields from
 the map, validates the version byte (must equal `_BLK-VERSION`, currently
-1), then decodes all transaction bodies — each tx is allocated via
-`HERE TX-BUF-SIZE ALLOT`, decoded with `TX-DECODE`, and added with
-`BLK-ADD-TX`.  Returns `TRUE` on success, `FALSE` on parse or version
-error.
+1), then decodes all transaction bodies with `TX-DECODE` and adds them
+with `BLK-ADD-TX`.  Returns `TRUE` on success, `FALSE` on parse or
+version error, or when the heap cannot hold a transaction buffer.
+
+The transactions go in block.f's decode buffers, one `TX-BUF-SIZE`
+buffer each.  A buffer comes from the heap the first time a block needs
+that many and is reused by every later `BLK-DECODE`, so decoding leaves
+the dictionary as it was, and a decoded block's transactions stay valid
+until the next `BLK-DECODE`.  A caller that keeps a decoded block past
+that copies its transactions first.  `BLK-MAX-TXS` bounds the buffers,
+as it bounds a block.
 
 ---
 
@@ -214,12 +221,13 @@ Full, non-destructive block validation:
 2. Timestamp is non-zero (except genesis)
 3. All transactions pass `TX-VERIFY`
 4. No duplicate `(sender, nonce)` pairs (O(n²), bounded by n ≤ 256)
-5. Transaction Merkle root matches `tx_root`
+5. Transaction Merkle root matches `tx_root`; a block that fails keeps
+   the `tx_root` it claimed
 6. State root matches — uses `ST-SNAPSHOT` / `ST-RESTORE` to
    tentatively apply transactions, compare `ST-ROOT`, then roll back
 7. Consensus proof passes `_BLK-CON-CHECK-XT` callback
 
-Returns `TRUE` if valid, `FALSE` otherwise.
+Returns `TRUE` if valid, `FALSE` otherwise, and nothing else.
 
 ### Getters (read-only, not guarded)
 
