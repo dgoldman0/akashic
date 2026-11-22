@@ -652,6 +652,16 @@ def test_tile_trans():
               '_b C@ .  _b 1 + C@ .  _b 2 + C@ .  _b 7 + C@ .',
           ],
           '0 1 2 7')
+    # The same tile as source and destination transposes in place:
+    # row 0 becomes [0..7], row 1 starts with 0, the last byte stays 7
+    check("transpose 8×8 in place",
+          ALLOC_ABC + [
+              'U8-MODE',
+          ] + fill_lines + [
+              '_a _a TILE-TRANS',
+              '_a C@ .  _a 1 + C@ .  _a 8 + C@ .  _a 63 + C@ .',
+          ],
+          '0 1 0 7')
 
 # ====================================================================
 #  FP16 regression: verify existing SIMD- API still works

@@ -519,7 +519,9 @@ VARIABLE _SIMD-I
     2DROP ;
 
 : TILE-TRANS  ( src dst -- )
-    _TILE-UNI TTRANS ;
+    \ TTRANS transposes the tile at TDST in place and reads no source,
+    \ so copy src to dst first; src = dst transposes in place
+    TUCK TILE-COPY TDST! TTRANS ;
 
 \ =====================================================================
 \  Mode-aware fill helpers

@@ -217,7 +217,7 @@ _a TILE-SUM .           \ prints 192  (64 × 3)
 |---|---|---|
 | `TILE-ZERO` | `( dst -- )` | Hardware tile zero (64 bytes) via `TZERO` |
 | `TILE-COPY` | `( src dst -- )` | Copy 64 bytes (byte-by-byte) |
-| `TILE-TRANS` | `( src dst -- )` | 8×8 byte transpose via `TTRANS` |
+| `TILE-TRANS` | `( src dst -- )` | 8×8 byte transpose of src into dst: copies src to dst, then `TTRANS` transposes dst in place |
 
 ### Fill Helpers
 
