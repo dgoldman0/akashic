@@ -101,7 +101,7 @@ KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 HTTP_TIMEOUT = 10.0
 
 # ---------------------------------------------------------------------------
-#  Low-level helpers (shared with test_live_web.py)
+#  Low-level helpers (shared with live_web.py)
 # ---------------------------------------------------------------------------
 
 def _load_bios():
@@ -176,7 +176,7 @@ def _forth_create_string(name: str, s: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-#  Demo Application (Forth source) — same routes as test_live_web.py
+#  Demo Application (Forth source) — same routes as live_web.py
 #  but uses the standard SERVE (no debug SRV-HANDLE redefinition) for
 #  maximum throughput during concurrent-connection testing.
 # ---------------------------------------------------------------------------
