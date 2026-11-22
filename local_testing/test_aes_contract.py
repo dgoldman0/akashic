@@ -21,10 +21,8 @@ PROFILE = "aes-contracts"
 IMAGE = Path("/tmp/akashic-aes-contracts.img")
 CONTRACT = LOCAL_TESTING / "aes-contract-test.f"
 SOURCE = LOCAL_TESTING.parent / "akashic" / "math" / "aes.f"
-NATIVE = (
-    LOCAL_TESTING.parent.parent / "megapad" / "emulator" / "accel"
-    / "mp64_crypto.h"
-)
+# MegaPad as the harness finds it (MEGAPAD_ROOT, else the sibling checkout)
+NATIVE = harness.MEGAPAD_ROOT / "emulator" / "accel" / "mp64_crypto.h"
 NATIVE_FINGERPRINT_PREFIX = b"mp64-aes-gcm-native-sha256:"
 
 AUTOEXEC = r"""\ autoexec.f - caller-owned native AES-GCM and AES-CBC contracts
@@ -270,6 +268,13 @@ def main() -> int:
         ext_mem_mib=128,
     )
     return 0 if ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

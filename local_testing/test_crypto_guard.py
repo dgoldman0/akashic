@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -17,6 +18,8 @@ from asm import assemble  # noqa: E402
 
 
 PROFILE_PREFIX = "sha-scoped-contracts"
+# The folder for the per-part images (pytest's temporary folder under a test)
+IMAGE_DIR = Path(tempfile.gettempdir())
 MATH = LOCAL_TESTING.parent / "akashic" / "math"
 SHA256 = MATH / "sha256.f"
 SHA512 = MATH / "sha512.f"
@@ -231,7 +234,7 @@ def main() -> int:
     )
     for part, contract_name, entrypoint, marker, context_label in selected_parts:
         profile = f"{PROFILE_PREFIX}-{part}"
-        image_path = Path(f"/tmp/akashic-{profile}.img")
+        image_path = IMAGE_DIR / f"akashic-{profile}.img"
         contract = LOCAL_TESTING / contract_name
         harness.PROFILES[profile] = harness.Profile(
             roots=(f"math/{part}.f",),
@@ -272,6 +275,13 @@ def main() -> int:
         ):
             return 1
     return 0
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

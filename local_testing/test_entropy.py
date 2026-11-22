@@ -99,5 +99,12 @@ def main() -> int:
     return 0 if ok else 1
 
 
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
