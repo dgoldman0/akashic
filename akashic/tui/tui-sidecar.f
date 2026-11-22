@@ -2,8 +2,8 @@
 \  akashic/tui/tui-sidecar.f — Shared TUI Sidecar Record
 \ =====================================================================
 \
-\  Unified sidecar (per-element screen descriptor) used by both
-\  dom-tui.f and uidl-tui.f.  Provides the record layout, field
+\  Unified sidecar (per-element screen descriptor) used by
+\  uidl-tui.f.  Provides the record layout, field
 \  accessors, style pack/unpack, flag helpers, TRBL pack/unpack,
 \  and basic paint primitives.
 \
@@ -30,10 +30,10 @@ REQUIRE draw.f
 \  +24  w          width (character cells)
 \  +32  h          height (character cells)
 \  +40  style      packed style (see §3)
-\  +48  aux1       DOM: node backptr    / UIDL: widget-struct ptr
-\  +56  aux2       DOM: draw-xt         / UIDL: padding (packed TRBL)
-\  +64  aux3       DOM: userdata        / UIDL: offsets (4×16-bit signed)
-\  +72  aux4       (reserved / DOM)     / UIDL: margin (packed TRBL)
+\  +48  aux1       UIDL: widget-struct ptr
+\  +56  aux2       UIDL: padding (packed TRBL)
+\  +64  aux3       UIDL: offsets (4×16-bit signed)
+\  +72  aux4       UIDL: margin (packed TRBL)
 \  +80  aux5       reserved
 \  +88  aux6       reserved
 

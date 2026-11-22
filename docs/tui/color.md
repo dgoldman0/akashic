@@ -32,7 +32,7 @@ REQUIRE tui/color.f
 
 | Principle | Implementation |
 |-----------|---------------|
-| **Shared module** | Used by both `dom-tui.f` and `uidl-tui.f` — extracted to avoid duplication. |
+| **Shared module** | Used by `uidl-tui.f`, kept apart so any renderer can resolve colours the same way. |
 | **Pure computation** | No allocation, no I/O, no global state beyond scratch variables. |
 | **Terminal-compatible** | Palette expansion exactly matches MegaPad's `VirtualTerminal`: its base 16 colours, the xterm cube, and the xterm grayscale ramp. |
 | **CSS-aware** | Accepts `#RRGGBB` / `#RGB` hex colours, all 148 CSS named colours, and raw integer palette indices (0-255). |
@@ -187,7 +187,6 @@ cell CELL-FG@ TUI-PALETTE>RGBA  \ opaque RGBA for the neutral label record
 ## See Also
 
 - [css.md](../css/css.md) — CSS parser (`CSS-PARSE-HEX-COLOR`, `CSS-COLOR-FIND`)
-- [dom-tui.md](dom-tui.md) — DOM-to-TUI backend (historically defined the resolver)
 - [uidl-tui.md](uidl-tui.md) — UIDL TUI backend (uses color.f for `style=` resolution)
 - [cell.md](cell.md) — Character cell encoding (FG/BG are 8-bit palette indices)
 - [draw.md](draw.md) — Draw engine (`DRW-STYLE!` consumes palette indices)

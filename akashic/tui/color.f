@@ -1,8 +1,8 @@
 \ color.f — xterm-256 Palette Color Conversion
 \
 \ Shared TUI color utilities: maps 24-bit RGB to the nearest xterm-256
-\ palette index and expands an index to packed 0xRRGGBBAA.  Used by both
-\ dom-tui.f and uidl-tui.f.
+\ palette index and expands an index to packed 0xRRGGBBAA.  Used by
+\ uidl-tui.f.
 \
 \ Strategy:
 \   1. Try the 6×6×6 color cube (indices 16–231).
