@@ -20,7 +20,9 @@
 \    restore — fully non-destructive.  CHAIN-APPEND applies txs for
 \    real.  Both applies go through state.f's _ST-APPLY-VERIFIED, which
 \    leaves out the signature check BLK-VERIFY has made, so an append
-\    verifies each signature once.
+\    verifies each signature once.  The producer's BLK-FINALIZE takes
+\    its state root from the same kind of tentative apply, so a block
+\    it finalizes reaches CHAIN-APPEND with the state it was built on.
 \
 \  Consensus proof validation:
 \    Delegated via _BLK-CON-CHECK-XT callback variable.
@@ -33,7 +35,8 @@
 \   BLK-SET-TIME     ( t blk -- )             set timestamp
 \   BLK-SET-PROOF    ( addr len blk -- )      set consensus proof
 \   BLK-ADD-TX       ( tx blk -- flag )       append tx (fail if full)
-\   BLK-FINALIZE     ( blk -- )               compute tx root + state root
+\   BLK-FINALIZE     ( blk -- )               compute tx root + state root,
+\                                             leaving the state as it was
 \   BLK-HASH         ( blk hash -- )          SHA3-256 of CBOR header
 \   BLK-VERIFY       ( blk prev-hash -- flag) full non-destructive validation
 \   BLK-ENCODE       ( blk buf max -- len )   serialize full block to CBOR
@@ -239,36 +242,57 @@ VARIABLE _BLK-CTR-BLK
     _BLK-TX-TREE MERKLE-ROOT _BLK-CTR-BLK @ _BLK-TXROOT 32 CMOVE ;
 
 \ =====================================================================
-\  10. BLK-FINALIZE — compute tx root + state root (for block producer)
+\  10. State snapshot — the tentative applies' undo buffer
 \ =====================================================================
-\  Called by the block producer after adding all txs.
-\  1. Compute tx Merkle root.
-\  2. Apply all txs to global state.
-\  3. Compute state Merkle root.
-\  4. Store both roots in the block header.
-\
-\  Note: this MUTATES global state — it's for the producer path.
-\  Validators use BLK-VERIFY (non-destructive) followed by
-\  CHAIN-APPEND (which re-applies).
+\  BLK-FINALIZE and BLK-VERIFY each apply a block's transactions to the
+\  state only to read the root the state would have, then give the
+\  state back.  Neither runs inside the other, so they share one
+\  ST-SNAPSHOT-SIZE buffer in XMEM, taken the first time either needs it.
+
+VARIABLE _BLK-SNAP-PTR
+0 _BLK-SNAP-PTR !
+: _BLK-SNAP  ( -- addr )
+    _BLK-SNAP-PTR @ ?DUP IF EXIT THEN
+    ST-SNAPSHOT-SIZE XMEM-ALLOT DUP _BLK-SNAP-PTR ! ;
+
+\ =====================================================================
+\  11. BLK-FINALIZE — compute tx root + state root (for block producer)
+\ =====================================================================
+\  Called by the block producer after adding all txs.  The state root
+\  a block carries is the root the state has once CHAIN-APPEND applies
+\  the block, so BLK-FINALIZE applies the transactions tentatively, as
+\  BLK-VERIFY does, and gives the state back.  CHAIN-APPEND stays the
+\  single mutation point for state: the producer's own block reaches it
+\  with the state it was built on, and CHAIN-APPEND verifies and applies
+\  it like any other.
+\  1. Snapshot the state.
+\  2. Apply the txs.  The first that fails ends the block there, so the
+\     block keeps the transactions before it (P22).
+\  3. Compute the state Merkle root, then restore the state.
+\  4. Compute the tx Merkle root over the transactions the block kept.
+\  Both roots go into the block header.
 
 VARIABLE _BLK-FIN-BLK
 
 : BLK-FINALIZE  ( blk -- )
     _BLK-FIN-BLK !
-    \ 1. Compute tx Merkle root
-    _BLK-FIN-BLK @ _BLK-COMPUTE-TX-ROOT
-    \ 2. Apply txs to state — truncate block on first failure (P22)
+    \ 1. Snapshot the state
+    _BLK-SNAP ST-SNAPSHOT
+    \ 2. Apply txs tentatively — truncate block on first failure (P22)
     _BLK-FIN-BLK @ BLK-TX-COUNT@ 0 ?DO
         I _BLK-FIN-BLK @ BLK-TX@ ST-APPLY-TX 0= IF
             I _BLK-FIN-BLK @ _BLK-TXCNT !   \ truncate to valid prefix
             LEAVE
         THEN
     LOOP
-    \ 3. Compute and store state root
-    ST-ROOT DROP _BLK-FIN-BLK @ _BLK-SROOT 32 CMOVE ;
+    \ 3. Compute and store state root, then give the state back
+    ST-ROOT DROP _BLK-FIN-BLK @ _BLK-SROOT 32 CMOVE
+    _BLK-SNAP ST-RESTORE
+    \ 4. Compute tx Merkle root over the kept transactions
+    _BLK-FIN-BLK @ _BLK-COMPUTE-TX-ROOT ;
 
 \ =====================================================================
-\  11. BLK-HASH — SHA3-256 of CBOR-encoded header
+\  12. BLK-HASH — SHA3-256 of CBOR-encoded header
 \ =====================================================================
 \
 \  We CBOR-encode the header fields into a scratch buffer, then
@@ -344,7 +368,7 @@ CREATE _BLK-EH-CURSORS  CBOR-CURSORS-SIZE ALLOT  \ the caller's CBOR cursors
     ROT SHA3-256-HASH ;               \ SHA3-256(cbuf, len) -> hash
 
 \ =====================================================================
-\  12. BLK-ENCODE — full block CBOR serialization
+\  13. BLK-ENCODE — full block CBOR serialization
 \ =====================================================================
 \
 \  Outer structure: CBOR array of 2 items:
@@ -405,7 +429,7 @@ CREATE _BLK-E-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
     _BLK-E-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
-\  13. BLK-DECODE — full block CBOR deserialization
+\  14. BLK-DECODE — full block CBOR deserialization
 \ =====================================================================
 \
 \  Expects: CBOR array of 2 = [ header-map, txs-array ]
@@ -532,7 +556,7 @@ VARIABLE _BLK-D-NBUF                         \ how many are allocated
     _BLK-D-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
-\  14. Consensus proof callback
+\  15. Consensus proof callback
 \ =====================================================================
 \  Default: always accept.  consensus.f will overwrite this XT.
 
@@ -541,7 +565,7 @@ VARIABLE _BLK-CON-CHECK-XT
 ' _BLK-CON-TRUE _BLK-CON-CHECK-XT !
 
 \ =====================================================================
-\  15. BLK-VERIFY — full non-destructive block validation
+\  16. BLK-VERIFY — full non-destructive block validation
 \ =====================================================================
 \
 \  Checks:
@@ -557,11 +581,6 @@ VARIABLE _BLK-CON-CHECK-XT
 \  The tentative apply of check 7 skips the signatures check 4 verified.
 \  Returns -1 (TRUE) if valid, 0 (FALSE) if invalid.
 
-VARIABLE _BLK-V-SNAP-PTR                       \ XMEM snapshot buffer (lazy)
-0 _BLK-V-SNAP-PTR !
-: _BLK-V-SNAP  ( -- addr )
-    _BLK-V-SNAP-PTR @ ?DUP IF EXIT THEN
-    ST-SNAPSHOT-SIZE XMEM-ALLOT DUP _BLK-V-SNAP-PTR ! ;
 CREATE _BLK-V-HASH   32 ALLOT                  \ scratch for hashes
 CREATE _BLK-V-ROOT   32 ALLOT                  \ computed state root
 CREATE _BLK-V-TXROOT 32 ALLOT                  \ computed tx root
@@ -641,18 +660,18 @@ CREATE _BLK-DN-B 32 ALLOT
     THEN
 
     \ 6. State root check — snapshot, apply txs, compare, restore
-    _BLK-V-SNAP ST-SNAPSHOT
+    _BLK-SNAP ST-SNAPSHOT
     \ Apply all txs tentatively; step 3 has verified their signatures
     _BLK-V-BLK @ BLK-TX-COUNT@ 0 ?DO
         I _BLK-V-BLK @ BLK-TX@ _ST-APPLY-VERIFIED 0= IF
             \ Tx failed — restore and reject
-            _BLK-V-SNAP ST-RESTORE
+            _BLK-SNAP ST-RESTORE
             0 UNLOOP EXIT
         THEN
     LOOP
     \ Compute state root and compare
     ST-ROOT DROP _BLK-V-ROOT 32 CMOVE
-    _BLK-V-SNAP ST-RESTORE               \ restore original state
+    _BLK-SNAP ST-RESTORE                 \ restore original state
     _BLK-V-BLK @ _BLK-SROOT _BLK-V-ROOT SHA3-256-COMPARE
     0= IF 0 EXIT THEN
 
@@ -663,7 +682,7 @@ CREATE _BLK-DN-B 32 ALLOT
     -1 ;
 
 \ =====================================================================
-\  16. BLK-PRINT — debug dump
+\  17. BLK-PRINT — debug dump
 \ =====================================================================
 
 : BLK-PRINT  ( blk -- )
@@ -677,7 +696,7 @@ CREATE _BLK-DN-B 32 ALLOT
     ." }" CR ;
 
 \ =====================================================================
-\  17. Chain storage — circular buffer of block headers
+\  18. Chain storage — circular buffer of block headers
 \ =====================================================================
 \
 \  We store the last CHAIN-HISTORY (64) block headers.
@@ -693,7 +712,7 @@ CREATE _CH-HEAD-HASH  32 ALLOT   \ hash of chain tip
     CHAIN-HISTORY MOD BLK-HDR-SIZE * _CH-RING + ;
 
 \ =====================================================================
-\  18. CHAIN-INIT — initialize chain with genesis block
+\  19. CHAIN-INIT — initialize chain with genesis block
 \ =====================================================================
 \
 \  Genesis block: height 0, all-zero prev_hash, empty txs.
@@ -726,7 +745,7 @@ CREATE _CH-ZERO-HASH  32 ALLOT
     _CH-GENESIS _CH-HEAD-HASH BLK-HASH ;
 
 \ =====================================================================
-\  19. Chain accessors
+\  20. Chain accessors
 \ =====================================================================
 
 : CHAIN-HEIGHT  ( -- n )  _CH-HEIGHT @ ;
@@ -743,7 +762,7 @@ CREATE _CH-ZERO-HASH  32 ALLOT
     _CH-SLOT ;
 
 \ =====================================================================
-\  20. CHAIN-APPEND — validate and append block to chain
+\  21. CHAIN-APPEND — validate and append block to chain
 \ =====================================================================
 \
 \  Single mutation point for state.  Steps:
@@ -791,7 +810,7 @@ VARIABLE _CH-APP-BLK
     -1 ;
 
 \ =====================================================================
-\  21. Concurrency guard
+\  22. Concurrency guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]

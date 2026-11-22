@@ -31,7 +31,7 @@ management for the Akashic ledger, built on Megapad-64.
 | **Pointer-based body** | Tx pointer array stores addresses of external `TX-BUF-SIZE` buffers; tx data is not inline |
 | **Ring-buffer chain** | Only the last `CHAIN-HISTORY` (64) headers are retained; older blocks require re-fetch |
 | **Single mutation point** | `CHAIN-APPEND` is the only path that permanently mutates global state |
-| **Non-destructive verify** | `BLK-VERIFY` uses `ST-SNAPSHOT` / `ST-RESTORE` to tentatively apply, check, then rollback |
+| **Non-destructive verify and finalize** | `BLK-VERIFY` and `BLK-FINALIZE` use `ST-SNAPSHOT` / `ST-RESTORE` to tentatively apply, read the state root, then roll back |
 | **Delegated consensus** | Callback variable `_BLK-CON-CHECK-XT` defaults to always-true; `consensus.f` patches it |
 | **DAG-CBOR encoding** | Both `BLK-HASH` and `BLK-ENCODE` use DAG-CBOR canonical key ordering |
 | **Concurrency-safe** | All mutating public words wrapped with `WITH-GUARD` |
@@ -146,14 +146,20 @@ BLK-FINALIZE  ( blk -- )
 ```
 
 Block producer finalization path:
-1. Compute the Merkle root of all transaction hashes → `tx_root`
-2. Apply transactions to global state via `ST-APPLY-TX`; on the first
+1. Snapshot the state with `ST-SNAPSHOT`
+2. Apply the transactions tentatively via `ST-APPLY-TX`; on the first
    failure, truncate `tx_count` to the valid prefix and stop (P22)
-3. Compute the state Merkle root via `ST-ROOT` → `state_root`
+3. Compute the state Merkle root via `ST-ROOT` → `state_root`, then give
+   the state back with `ST-RESTORE`
+4. Compute the Merkle root of the kept transactions' hashes → `tx_root`
 
-**Mutates global state.**  Only the block producer should call this.
-Failing transactions are silently dropped — the block contains only the
-leading run of valid transactions.
+**Leaves the state as it was.**  `CHAIN-APPEND` is the single mutation
+point for state: the producer finalizes its block, seals it, and
+appends it, and `CHAIN-APPEND` verifies and applies it as it would a
+block from a peer.  Failing transactions are silently dropped — the
+block contains only the leading run of valid transactions, and its
+`tx_root` covers exactly those.  `BLK-FINALIZE` and `BLK-VERIFY` share
+one `ST-SNAPSHOT-SIZE` buffer in XMEM, taken on first use.
 
 ---
 
@@ -343,7 +349,7 @@ of prev_hash, state_root, and tx_root in hex.
 | `BLK-SET-TIME` | `( t blk -- )` | Set timestamp |
 | `BLK-SET-PROOF` | `( addr len blk -- )` | Set proof data |
 | `BLK-ADD-TX` | `( tx blk -- flag )` | Append tx pointer |
-| `BLK-FINALIZE` | `( blk -- )` | Compute roots, apply state |
+| `BLK-FINALIZE` | `( blk -- )` | Compute tx and state roots, state unchanged |
 | `BLK-HASH` | `( blk hash -- )` | SHA3-256 of header CBOR |
 | `BLK-ENCODE` | `( blk buf max -- len )` | Serialize full block |
 | `BLK-DECODE` | `( buf len blk -- flag )` | Deserialize full block |
@@ -378,8 +384,11 @@ CHAIN-HEIGHT 1+ my-blk BLK-SET-HEIGHT
 tx1 my-blk BLK-ADD-TX DROP
 tx2 my-blk BLK-ADD-TX DROP
 
-\ Finalize (computes roots, applies state)
+\ Finalize (computes roots; the state stays as it was)
 my-blk BLK-FINALIZE
+
+\ Append: verify, then apply the transactions to the state
+my-blk CHAIN-APPEND  ( -- flag )
 ```
 
 ### Append to Chain
