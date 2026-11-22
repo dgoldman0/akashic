@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -16,8 +17,10 @@ import akashic_tui as harness  # noqa: E402
 
 STRUCTURAL_PROFILE = "library-query-l12-contracts"
 EXECUTION_PROFILE = "library-query-l12-execution-contracts"
-STRUCTURAL_IMAGE = Path("/tmp/akashic-library-query-l12-contracts-v2.img")
-EXECUTION_IMAGE = Path("/tmp/akashic-library-query-l12-execution-contracts.img")
+# The folder for the images (pytest's temporary folder under a test)
+IMAGE_DIR = Path(tempfile.gettempdir())
+STRUCTURAL_IMAGE_NAME = "akashic-library-query-l12-contracts-v2.img"
+EXECUTION_IMAGE_NAME = "akashic-library-query-l12-execution-contracts.img"
 STRUCTURAL_CONTRACT = LOCAL_TESTING / "lib-query-l12-test.f"
 EXECUTION_CONTRACT = LOCAL_TESTING / "lib-query-exec-l12.f"
 
@@ -47,6 +50,10 @@ def run_profile(
     timeout: float,
 ) -> bool:
     harness.PROFILES[profile_name] = harness.Profile(
+        # The fixture's RAM volume takes a 64 MiB arena.  KDOS gives half
+        # the machine's extended memory to the dictionary, so a 128 MiB
+        # machine leaves about 62 MiB for everything else.
+        default_ext_mem_mib=256,
         roots=(
             "persistence/store.f",
             "tui/applets/library/persistence-adapter.f",
@@ -88,12 +95,15 @@ def run_profile(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=float, default=360.0)
+    # Wall-clock guard for each profile; the step budgets bound the runs.
+    # On 2026-11-22 the execution contracts took about 620 s on this
+    # machine and the structural ones about 20 s.
+    parser.add_argument("--timeout", type=float, default=1200.0)
     args = parser.parse_args()
 
     structural_ok = run_profile(
         STRUCTURAL_PROFILE,
-        STRUCTURAL_IMAGE,
+        IMAGE_DIR / STRUCTURAL_IMAGE_NAME,
         STRUCTURAL_CONTRACT,
         STRUCTURAL_AUTOEXEC,
         "LIBRARY QUERY L12 PASS",
@@ -102,7 +112,7 @@ def main() -> int:
     )
     execution_ok = run_profile(
         EXECUTION_PROFILE,
-        EXECUTION_IMAGE,
+        IMAGE_DIR / EXECUTION_IMAGE_NAME,
         EXECUTION_CONTRACT,
         EXECUTION_AUTOEXEC,
         "LIBRARY QUERY L12 EXEC PASS",
@@ -110,6 +120,13 @@ def main() -> int:
         args.timeout,
     )
     return 0 if structural_ok and execution_ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

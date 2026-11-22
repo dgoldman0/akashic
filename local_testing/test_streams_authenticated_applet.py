@@ -522,5 +522,19 @@ def main() -> int:
     return _run_vertical(args.timeout)
 
 
+def test_static_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The source contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--static-only")
+
+
+def test_vertical(tmp_path: Path, monkeypatch) -> None:
+    """The staged applet vertical as a test."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--vertical")
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

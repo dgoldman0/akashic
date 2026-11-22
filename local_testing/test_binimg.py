@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-binimg Phase 1 (Core Saver), Phase 2 (Core Loader),
 Phase 3 (Imports), and Phase 4 (Module System Integration).
 
@@ -36,7 +19,7 @@ Phase 4 tests PROVIDED integration (module registration on load),
 entry-point support (IMG-ENTRY / IMG-SAVE-EXEC / IMG-LOAD-EXEC),
 and XMEM loading.
 """
-import os, sys, struct, time, tempfile
+import os, re, sys, struct, time, tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -49,6 +32,7 @@ sys.path.insert(0, EMU_DIR)
 
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import KDOS_DIAGNOSTICS, program_output
 
 BIOS_PATH  = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH  = os.path.join(EMU_DIR, "kdos.f")
@@ -341,17 +325,20 @@ def main():
     # Feed KDOS
     kdos_payload = "\n".join(kdos_lines) + "\n"
     steps = feed_and_run(sys_obj, kdos_payload, max_steps=800_000_000)
-    boot_text = uart_text(buf)
     elapsed = time.time() - t0
     print(f"[*] KDOS booted. {steps:,} steps in {elapsed:.1f}s")
 
-    # Check for errors
-    errors = [l for l in boot_text.split('\n')
-              if '?' in l and 'not found' in l.lower()]
+    # A KDOS diagnostic during the boot or the library's load fails the
+    # suite, through the shared list the snapshot suites check.  KDOS echoes
+    # the source it is fed, string literals included, so only what it
+    # printed besides the echo is checked.
+    boot_text = program_output(uart_text(buf), kdos_lines)
+    errors = [item for item in KDOS_DIAGNOSTICS if item in boot_text]
     if errors:
-        print("[!] Boot errors:")
-        for e in errors:
-            print(f"    {e}")
+        print(f"[!] KDOS boot diagnostics: {', '.join(errors)}")
+        print("ABORTING.")
+        os.unlink(img_path)
+        return 1
 
     # Userland first, as a boot loads its modules: the library then compiles
     # into extended memory.  Loaded before it, the library ran the kernel
@@ -365,12 +352,11 @@ def main():
     binimg_lines = load_forth_lines(BINIMG_PATH)
     binimg_payload = "\n".join(uint_range_lines + binimg_lines) + "\n"
     steps = feed_and_run(sys_obj, binimg_payload)
-    binimg_text = uart_text(buf)
     elapsed_total = time.time() - t0
     print(f"[*] binimg.f loaded. {steps:,} steps ({elapsed_total:.1f}s total)")
 
-    # Print ALL output during load for debugging
-    binimg_text = uart_text(buf)
+    # Print what the load printed, for debugging
+    binimg_text = program_output(uart_text(buf), uint_range_lines + binimg_lines)
     if binimg_text.strip():
         print("    Load output:")
         for line in binimg_text.strip().split('\n'):
@@ -378,16 +364,12 @@ def main():
             if ll:
                 print(f"      {ll}")
 
-    # Check for actual Forth "? not found" errors (not string literals)
-    errors = [l for l in binimg_text.split('\n')
-              if '? not found' in l.lower() or '? ' in l and 'not found' in l.lower()]
+    errors = [item for item in KDOS_DIAGNOSTICS if item in binimg_text]
     if errors:
-        print("[!] binimg.f errors:")
-        for e in errors:
-            print(f"    {e}")
+        print(f"[!] binimg.f load diagnostics: {', '.join(errors)}")
         print("ABORTING.")
         os.unlink(img_path)
-        return
+        return 1
 
     # ── 4. Run the save test ─────────────────────────────────────────
     # Compile a small test module between IMG-MARK and IMG-SAVE:
@@ -447,7 +429,7 @@ def main():
     if not m64_data:
         print("    FAIL: output file is empty (0 used bytes)")
         os.unlink(img_path)
-        return
+        return 1
 
     print(f"    File size: {len(m64_data)} bytes")
 
@@ -455,7 +437,7 @@ def main():
     if hdr is None:
         print(f"    FAIL: bad header (first 8 bytes: {m64_data[:8].hex()})")
         os.unlink(img_path)
-        return
+        return 1
 
     print(f"    Header OK: magic=MF64, version={hdr['version']}")
     print(f"    Segment size: {hdr['seg_size']} bytes")
@@ -469,12 +451,16 @@ def main():
     passed = 0
     failed = 0
 
-    # Test: magic & version
-    if hdr['version'] == 1:
-        print("    PASS: version = 1")
+    # Test: magic & version.  The saver writes binimg.f's current format
+    # version, _IMG-VERSION, and the loader still accepts version 1.
+    with open(BINIMG_PATH) as f:
+        expected_version = int(re.search(
+            r"^(\d+)\s+CONSTANT\s+_IMG-VERSION\s*$", f.read(), re.M).group(1))
+    if hdr['version'] == expected_version:
+        print(f"    PASS: version = {expected_version}")
         passed += 1
     else:
-        print(f"    FAIL: version = {hdr['version']}, expected 1")
+        print(f"    FAIL: version = {hdr['version']}, expected {expected_version}")
         failed += 1
 
     # Test: segment size > 0
@@ -1252,8 +1238,13 @@ def main():
     if os.path.exists(img_path):
         os.unlink(img_path)
     print("\nDone.")
-    sys.exit(1 if total_failed > 0 else 0)
+    return 1 if total_failed > 0 else 0
+
+
+def test_suite() -> None:
+    """The suite as a test, so the test selection tool runs it."""
+    assert main() == 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
