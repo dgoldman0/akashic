@@ -483,6 +483,11 @@ VARIABLE _ST-TX-EXT-XT
 \ =====================================================================
 \  17. ST-APPLY-TX — validate and apply transaction to state
 \ =====================================================================
+\  ST-APPLY-TX verifies the signature and hands the transaction to
+\  _ST-APPLY-VERIFIED, which makes every other check and applies it.
+\  block.f calls _ST-APPLY-VERIFIED itself for a block's transactions,
+\  whose signatures BLK-VERIFY has verified, so an append verifies each
+\  signature once.
 
 VARIABLE _ST-AT-TX
 VARIABLE _ST-AT-S-IDX
@@ -492,12 +497,12 @@ VARIABLE _ST-AT-SELF
 VARIABLE _ST-AT-R-NEW
 VARIABLE _ST-AT-RBAL
 
-: ST-APPLY-TX  ( tx -- flag )
+\ _ST-APPLY-VERIFIED ( tx -- flag )
+\   Everything ST-APPLY-TX checks and applies after the signature, for a
+\   transaction whose signature the caller has verified with TX-VERIFY.
+: _ST-APPLY-VERIFIED  ( tx -- flag )
     _ST-AT-TX !
     0 _ST-AT-R-NEW !
-
-    \ 1. Verify signature
-    _ST-AT-TX @ TX-VERIFY 0= IF 0 EXIT THEN
 
     \ 2. Hash sender pubkey -> address
     _ST-AT-TX @ TX-FROM@ ED25519-KEY-LEN _ST-HASH-A SHA3-256-HASH
@@ -576,6 +581,11 @@ VARIABLE _ST-AT-RBAL
 
     -1 _ST-DIRTY !
     -1 ;
+
+: ST-APPLY-TX  ( tx -- flag )
+    \ 1. Verify signature
+    DUP TX-VERIFY 0= IF DROP 0 EXIT THEN
+    _ST-APPLY-VERIFIED ;
 
 \ =====================================================================
 \  18. ST-PRINT — debug dump
@@ -675,6 +685,7 @@ GUARD _st-guard
 ' ST-STAKED@        CONSTANT _st-stk-xt
 ' ST-UNSTAKE-H@     CONSTANT _st-ush-xt
 ' ST-APPLY-TX       CONSTANT _st-apply-xt
+' _ST-APPLY-VERIFIED CONSTANT _st-apply-verified-xt
 ' ST-VERIFY-TX      CONSTANT _st-verify-xt
 ' ST-ROOT           CONSTANT _st-root-xt
 ' ST-PROVE          CONSTANT _st-prove-xt
@@ -693,6 +704,9 @@ GUARD _st-guard
 : ST-STAKED@        _st-stk-xt    _st-guard WITH-GUARD ;
 : ST-UNSTAKE-H@     _st-ush-xt    _st-guard WITH-GUARD ;
 : ST-APPLY-TX       _st-apply-xt   _st-guard WITH-GUARD ;
+\ block.f applies verified transactions through _ST-APPLY-VERIFIED, which
+\ changes the state as ST-APPLY-TX does, so it takes the same guard.
+: _ST-APPLY-VERIFIED _st-apply-verified-xt _st-guard WITH-GUARD ;
 : ST-VERIFY-TX      _st-verify-xt  _st-guard WITH-GUARD ;
 : ST-ROOT           _st-root-xt    _st-guard WITH-GUARD ;
 : ST-PROVE          _st-prove-xt   _st-guard WITH-GUARD ;

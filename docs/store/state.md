@@ -193,6 +193,12 @@ Validate and apply a transaction to the world state:
 
 Returns TRUE on success, FALSE on any validation failure (no state change).
 
+Steps 2 to 8 form the internal word `_ST-APPLY-VERIFIED ( tx -- flag )`,
+which `ST-APPLY-TX` calls after the signature check.  block.f calls it
+directly for a block's transactions, whose signatures `BLK-VERIFY` has
+verified, so appending a block verifies each signature once.  It takes
+the state guard as `ST-APPLY-TX` does.
+
 ### ST-VERIFY-TX
 
 ```forth

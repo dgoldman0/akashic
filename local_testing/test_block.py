@@ -16,7 +16,7 @@ Tests:
   - CHAIN-APPEND (validate and apply)
   - CHAIN-HEIGHT / CHAIN-HEAD / CHAIN-BLOCK@
 """
-import os, sys, time
+import hashlib, os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -207,29 +207,37 @@ TV3_SEED = "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
 TV3_PUB  = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"
 
 
-def _keygen_preamble():
-    """Create three keypairs, address buffers, initialize state."""
-    lines = create_hex_buf('_SEED1', TV1_SEED) + [
-        'CREATE _PUB1 32 ALLOT',
-        'CREATE _PRIV1 64 ALLOT',
-        '_SEED1 _PUB1 _PRIV1 ED25519-KEYGEN',
-        'CREATE _ADDR1 32 ALLOT',
-        '_PUB1 _ADDR1 ST-ADDR-FROM-KEY',
-    ] + create_hex_buf('_SEED2', TV2_SEED) + [
-        'CREATE _PUB2 32 ALLOT',
-        'CREATE _PRIV2 64 ALLOT',
-        '_SEED2 _PUB2 _PRIV2 ED25519-KEYGEN',
-        'CREATE _ADDR2 32 ALLOT',
-        '_PUB2 _ADDR2 ST-ADDR-FROM-KEY',
-    ] + create_hex_buf('_SEED3', TV3_SEED) + [
-        'CREATE _PUB3 32 ALLOT',
-        'CREATE _PRIV3 64 ALLOT',
-        '_SEED3 _PUB3 _PRIV3 ED25519-KEYGEN',
-        'CREATE _ADDR3 32 ALLOT',
-        '_PUB3 _ADDR3 ST-ADDR-FROM-KEY',
-        'ST-INIT',
-    ]
-    return lines
+def _ed25519_private(seed_hex):
+    """The 64 bytes ED25519-KEYGEN writes as a seed's private key: SHA-512
+    of the seed, its first half clamped into the secret scalar (RFC 8032
+    section 5.1.5), its second half kept as the signing prefix."""
+    digest = bytearray(hashlib.sha512(bytes.fromhex(seed_hex)).digest())
+    digest[0] &= 0xF8
+    digest[31] &= 0x3F
+    digest[31] |= 0x40
+    return digest.hex()
+
+
+def _key_pair(n, seed_hex, pub_hex):
+    """Key pair n from an RFC 8032 vector, and the address of its public key."""
+    return (create_hex_buf(f'_PUB{n}', pub_hex)
+            + create_hex_buf(f'_PRIV{n}', _ed25519_private(seed_hex))
+            + [f'CREATE _ADDR{n} 32 ALLOT', f'_PUB{n} _ADDR{n} ST-ADDR-FROM-KEY'])
+
+
+def _key_preamble():
+    """Three key pairs and their addresses, then the state initialized.
+
+    The pairs are RFC 8032's vectors 1 to 3, written as ED25519-KEYGEN
+    writes them rather than derived by it: test_ed25519 checks that
+    derivation, and signing with it, on these same vectors. A derivation
+    costs about 54M emulator steps, which the two-block case cannot spare
+    within its budget.
+    """
+    return (_key_pair(1, TV1_SEED, TV1_PUB)
+            + _key_pair(2, TV2_SEED, TV2_PUB)
+            + _key_pair(3, TV3_SEED, TV3_PUB)
+            + ['ST-INIT'])
 
 
 def _make_tx_lines(tx_var, sender_pub, sender_priv, recip_pub, amount, nonce):
@@ -247,7 +255,7 @@ def _make_tx_lines(tx_var, sender_pub, sender_priv, recip_pub, amount, nonce):
 
 def _blk_preamble():
     """Keygen + state init + create block buffer."""
-    return _keygen_preamble() + [
+    return _key_preamble() + [
         'CREATE _BK BLK-STRUCT-SIZE ALLOT',
         '_BK BLK-INIT',
     ]
@@ -255,7 +263,7 @@ def _blk_preamble():
 
 def _funded_state():
     """Keygen + state init with account1 having 10000 balance."""
-    return _keygen_preamble() + [
+    return _key_preamble() + [
         '_ADDR1 10000 ST-CREATE DROP',
     ]
 
@@ -490,7 +498,7 @@ def test_hash():
 def test_snapshot_restore():
     print("\n=== ST-SNAPSHOT / ST-RESTORE ===")
     # Basic: snapshot, mutate, restore, check original value
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
         '_SNAP ST-SNAPSHOT',
@@ -500,7 +508,7 @@ def test_snapshot_restore():
     ]
     check("count=2 before restore", lines, "2")
 
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
         '_SNAP ST-SNAPSHOT',
@@ -511,7 +519,7 @@ def test_snapshot_restore():
     check("count=1 after restore", lines2, "1")
 
     # Balance preserved after restore
-    lines3 = _keygen_preamble() + [
+    lines3 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
         '_SNAP ST-SNAPSHOT',
@@ -521,7 +529,7 @@ def test_snapshot_restore():
     ]
     check("balance after tx is 500", lines3, "500")
 
-    lines4 = _keygen_preamble() + [
+    lines4 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
         '_SNAP ST-SNAPSHOT',
@@ -737,28 +745,28 @@ def test_encode_decode():
 
 def test_chain_init():
     print("\n=== CHAIN-INIT ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         'CHAIN-INIT',
         'CHAIN-HEIGHT .',
     ]
     check("genesis height is 0", lines, "0")
 
     # Chain head exists
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         'CHAIN-INIT',
         'CHAIN-HEAD 0<> IF ." HEADOK" ELSE ." HEADNIL" THEN',
     ]
     check("chain head is non-null", lines2, "HEADOK")
 
     # Block at height 0 exists
-    lines3 = _keygen_preamble() + [
+    lines3 = _key_preamble() + [
         'CHAIN-INIT',
         '0 CHAIN-BLOCK@ 0<> IF ." B0OK" ELSE ." B0NIL" THEN',
     ]
     check("block@0 exists", lines3, "B0OK")
 
     # Block at height 1 doesn't exist yet
-    lines4 = _keygen_preamble() + [
+    lines4 = _key_preamble() + [
         'CHAIN-INIT',
         '1 CHAIN-BLOCK@ 0= IF ." B1NIL" ELSE ." B1OK" THEN',
     ]
@@ -892,7 +900,7 @@ def test_chain_two_blocks():
 def test_empty_block():
     """A block with zero transactions should still work."""
     print("\n=== Empty block ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         'CHAIN-INIT',
         'CREATE _GH 32 ALLOT',
         'CHAIN-HEAD _GH BLK-HASH',

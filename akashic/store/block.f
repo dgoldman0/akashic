@@ -15,9 +15,12 @@
 \    CHAIN-APPEND is the single mutation point for state.
 \
 \  Validation:
-\    BLK-VERIFY uses ST-SNAPSHOT / ST-RESTORE to apply txs
-\    tentatively, verify state root, then restore — fully
-\    non-destructive.  CHAIN-APPEND applies txs for real.
+\    BLK-VERIFY verifies every signature, then uses ST-SNAPSHOT /
+\    ST-RESTORE to apply txs tentatively, verify state root, then
+\    restore — fully non-destructive.  CHAIN-APPEND applies txs for
+\    real.  Both applies go through state.f's _ST-APPLY-VERIFIED, which
+\    leaves out the signature check BLK-VERIFY has made, so an append
+\    verifies each signature once.
 \
 \  Consensus proof validation:
 \    Delegated via _BLK-CON-CHECK-XT callback variable.
@@ -532,6 +535,7 @@ VARIABLE _BLK-CON-CHECK-XT
 \    7. State root matches (snapshot, apply, compare, restore)
 \    8. Consensus proof valid (via callback)
 \
+\  The tentative apply of check 7 skips the signatures check 4 verified.
 \  Returns -1 (TRUE) if valid, 0 (FALSE) if invalid.
 
 VARIABLE _BLK-V-SNAP-PTR                       \ XMEM snapshot buffer (lazy)
@@ -619,9 +623,9 @@ CREATE _BLK-DN-B 32 ALLOT
 
     \ 6. State root check — snapshot, apply txs, compare, restore
     _BLK-V-SNAP ST-SNAPSHOT
-    \ Apply all txs tentatively
+    \ Apply all txs tentatively; step 3 has verified their signatures
     _BLK-V-BLK @ BLK-TX-COUNT@ 0 ?DO
-        I _BLK-V-BLK @ BLK-TX@ ST-APPLY-TX 0= IF
+        I _BLK-V-BLK @ BLK-TX@ _ST-APPLY-VERIFIED 0= IF
             \ Tx failed — restore and reject
             _BLK-V-SNAP ST-RESTORE
             0 UNLOOP EXIT
@@ -724,8 +728,10 @@ CREATE _CH-ZERO-HASH  32 ALLOT
 \ =====================================================================
 \
 \  Single mutation point for state.  Steps:
-\    1. Validate block via BLK-VERIFY (non-destructive).
-\    2. Apply all txs to global state (permanent).
+\    1. Validate block via BLK-VERIFY (non-destructive), which verifies
+\       every signature.
+\    2. Apply all txs to global state (permanent), without verifying
+\       the signatures again.
 \    3. Copy header into ring buffer.
 \    4. Update chain height and head hash.
 
@@ -743,9 +749,10 @@ VARIABLE _CH-APP-BLK
     _CH-APP-BLK @ _CH-HEAD-HASH BLK-VERIFY
     0= IF 0 EXIT THEN
 
-    \ Apply txs to state — truncate on first failure (A02)
+    \ Apply txs to state — truncate on first failure (A02).  BLK-VERIFY
+    \ has verified their signatures.
     _CH-APP-BLK @ BLK-TX-COUNT@ 0 ?DO
-        I _CH-APP-BLK @ BLK-TX@ ST-APPLY-TX 0= IF
+        I _CH-APP-BLK @ BLK-TX@ _ST-APPLY-VERIFIED 0= IF
             I _CH-APP-BLK @ _BLK-TXCNT !   \ truncate to valid prefix
             LEAVE
         THEN

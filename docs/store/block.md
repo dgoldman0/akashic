@@ -224,7 +224,10 @@ Full, non-destructive block validation:
 5. Transaction Merkle root matches `tx_root`; a block that fails keeps
    the `tx_root` it claimed
 6. State root matches — uses `ST-SNAPSHOT` / `ST-RESTORE` to
-   tentatively apply transactions, compare `ST-ROOT`, then roll back
+   tentatively apply transactions, compare `ST-ROOT`, then roll back.
+   The tentative apply goes through state.f's `_ST-APPLY-VERIFIED`,
+   which makes every check of `ST-APPLY-TX` except the signature step 3
+   has verified.
 7. Consensus proof passes `_BLK-CON-CHECK-XT` callback
 
 Returns `TRUE` if valid, `FALSE` otherwise, and nothing else.
@@ -291,8 +294,9 @@ CHAIN-APPEND  ( blk -- flag )
 The **single mutation point** for the chain and global state:
 1. Check that `height = chain_height + 1`
 2. Run `BLK-VERIFY` against the current head hash
-3. Apply transactions permanently via `ST-APPLY-TX`; on the first
-   failure, truncate `tx_count` to the valid prefix (A02)
+3. Apply transactions permanently via `_ST-APPLY-VERIFIED`, since
+   `BLK-VERIFY` has verified their signatures; on the first failure,
+   truncate `tx_count` to the valid prefix (A02)
 4. Copy the header into the ring buffer
 5. Update height and head hash
 
