@@ -32,7 +32,7 @@ from . import effects as E
 from .effects import (Effect, Slot, effect_shape, parse_effect, parse_holds,
                       parse_kind_declaration)
 from .source import LineCursor, lines, parse_number, wrap
-from .vocabulary import BASE_DECLARATIONS, bios_words
+from .vocabulary import BASE_MODULES, base_module_paths, bios_words
 
 _ident_counter = itertools.count(1)
 _span_counter = itertools.count(1)
@@ -191,8 +191,10 @@ class Word:
     # A data word's declared content: what its cell, value or field holds.
     holds: Slot | None = field(default=None, repr=False)
     # A kind declared with ( kind: NAME BASE ), kept in the dictionary under
-    # a key no Forth token can spell, so REQUIRE closures carry it.
+    # a key no Forth token can spell, so REQUIRE closures carry it.  A named
+    # effect, ( kind: NAME xt( effect ) ), refines xt and keeps its effect.
     kind_parent: str | None = field(default=None, repr=False)
+    kind_effect: Effect | None = field(default=None, repr=False)
     problems: list = field(default_factory=list, repr=False)
     declared_count: int = field(default=0, repr=False)
 
@@ -272,7 +274,10 @@ class Checker:
         self.strict = strict
         # Every kind declared anywhere, for comparing kinds that flow between
         # modules; resolving a name in a declaration uses the dictionary.
+        # Named effects are kept apart, since no value takes one as its kind:
+        # a token of a named effect is an xt carrying that effect.
         self.all_kinds: dict[str, str] = {}
+        self.all_effects: dict[str, Effect] = {}
         self.words: dict[str, Word] = {}
         self.records: list[Record] = []
         self.findings: list[Finding] = []
@@ -289,13 +294,17 @@ class Checker:
         self.require: Callable[[str, str], None] | None = None
         self.unknown_conditions = 0
         self.top_undefined: dict[str, int] = {}
-        # "\ NAME ( effect )" lines, which KDOS writes above a definition.
-        self.preceding: dict[str, str] = {}
+        # "\ NAME ( effect )" lines, which KDOS writes above a definition, by
+        # module and name: such a line describes the word its own file
+        # defines, never a word of the same name in another module.
+        self.preceding: dict[tuple[str, str], str] = {}
         self.inlining: list[Word] = []
         # Data words declared with ( holds: KIND ), as (group, word).
         self.typed_slots: list[tuple[str, Word]] = []
-        # Kinds declared with ( kind: NAME BASE ), as (group, name).
+        # Kinds declared with ( kind: NAME BASE ), and effects named with
+        # ( kind: NAME xt( effect ) ), as (group, name).
         self.declared_kinds: list[tuple[str, str]] = []
+        self.named_effects: list[tuple[str, str]] = []
         # When a list, each analyzed step appends (line, op, word, depths).
         self.trace: list | None = None
         self.defined_here: dict[str, Word] | None = None
@@ -318,57 +327,72 @@ class Checker:
             if name in PRIMS:
                 word.prim = name
             self.words[name] = word
-        self._declare_base_kinds("bios")
 
-    def load_base(self, megapad_root: Path, modules: tuple[str, ...]) -> None:
-        """Load KDOS and system modules; their words take their comments' effects."""
+    def load_base(self, megapad_root: Path, modules: tuple[str, ...] = BASE_MODULES) -> None:
+        """Load KDOS and system modules; their words take their comments' effects.
+
+        ``uroko.f`` among them declares the kinds of the BIOS and KDOS words
+        with ``EFFECT`` lines, which the checker applies as it reads them.
+        """
         self.group = "base"
-        for module in modules:
-            path = megapad_root / module
+        for module, path in zip(modules, base_module_paths(megapad_root, modules)):
             self.load_text(path.read_text(encoding="utf-8", errors="replace"), module)
-        self._declare_base_kinds("base")
         self.group = "library"
 
-    def _declare_base_kinds(self, origin: str) -> None:
-        """Give base words the kinds the toolchain declares for them.
+    def declare_effect(self, name: str, text: str, closed: bool) -> None:
+        """``EFFECT NAME ( effect )``: the effect, with kinds, of a word defined
+        before, as MegaPad's ``uroko.f`` declares the base words'.
 
-        The base vocabulary's comments and tables name cells informally, so
-        the kinds of its words are declared in the toolchain
-        (``vocabulary.BASE_DECLARATIONS``), each with the shape its given
-        effect already has.
+        The declaration keeps the shape of the word's given effect; one that
+        changes it, names no word or is malformed is reported and not used.
         """
-        for name, text in BASE_DECLARATIONS.items():
-            word = self.words.get(name)
-            if word is None or word.origin != origin:
-                continue
-            parsed = parse_effect(text[1:-1].strip(), self.resolve_kind)
-            given = word.signature or word.declared
-            effect = parsed.effect
-            if effect is None or parsed.problems:
-                raise ValueError(f"base declaration of {name} is malformed: {parsed.problems}")
-            if given is not None and not given.variable and effect_shape(given) != effect_shape(effect):
-                raise ValueError(f"base declaration of {name} changes its effect {given.shape()}")
-            word.declared = effect
-            word.declared_text = text[1:-1].strip()
-            if word.prim is None or word.prim not in PRIM_HANDLERS:
-                word.signature = effect
-                word.signature_source = "given"
+        problems = [] if closed else ["the declaration's ( has no ) on its line"]
+        target = self.lookup(name)
+        if target is None:
+            self.declaration_problem(f"EFFECT names {name}, which no word defines", name)
+            return
+        parsed = parse_effect(text, self.resolve_kind, self.kind_parent)
+        problems += parsed.problems
+        effect = parsed.effect
+        if effect is None or effect.variable:
+            problems.append(f"EFFECT {name} ( {text.strip()} ) is not a fixed effect")
+        for problem in problems:
+            self.declaration_problem(problem, name)
+        if problems:
+            return
+        given = target.signature or target.declared
+        if given is not None and not given.variable and effect_shape(given) != effect_shape(effect):
+            self.declaration_problem(
+                f"EFFECT {name} ( {effect.shape()} ) changes its effect ( {given.shape()} )", name)
+            return
+        target.declared = effect
+        target.declared_text = text.strip()
+        if target.prim is None or target.prim not in PRIM_HANDLERS:
+            target.signature = effect
+            target.signature_source = "given"
 
     # Kinds
 
-    def resolve_kind(self, name: str) -> str | None:
-        """The kind a declaration's name stands for, if this module sees it."""
+    def resolve_kind(self, name: str) -> str | Effect | None:
+        """The kind a declaration's name stands for, if this module sees it,
+        or the effect a named effect stands for."""
         lowered = name.lower()
         builtin = E.BUILTIN_KINDS.get(lowered)
         if builtin is not None:
             return builtin
         entry = self.words.get(KIND_KEY + lowered.upper())
-        return entry.name if entry is not None else None
+        if entry is None:
+            return None
+        return entry.kind_effect if entry.kind_effect is not None else entry.name
 
     def kind_parent(self, kind: str) -> str | None:
+        """The kind ``kind`` refines: a built-in's, a declared kind's base, or
+        the same form of a parametric kind's parameter's parent."""
         if kind in E.BUILTIN_PARENTS:
             return E.BUILTIN_PARENTS[kind]
-        return self.all_kinds.get(kind)
+        if kind in self.all_kinds:
+            return self.all_kinds[kind]
+        return E.parametric_parent(kind, self.kind_parent)
 
     def compatible(self, value_kind: str, param_kind: str) -> str | None:
         return E.compatible(value_kind, param_kind, self.kind_parent)
@@ -383,19 +407,40 @@ class Checker:
             kind = self.kind_parent(kind)
         return False
 
-    def declare_kind(self, name: str, parent: str) -> str | None:
-        """Add a kind; a problem when the name already means another kind."""
+    def declare_kind(self, name: str, parent: str | Effect) -> str | None:
+        """Add a kind, or name an effect when ``parent`` is one; a problem
+        when the name already means another kind or another effect."""
         key = KIND_KEY + name.upper()
+        effect = parent if isinstance(parent, Effect) else None
         existing = self.words.get(key)
-        if existing is not None and existing.kind_parent != parent:
-            return f"kind: {name} already refines {existing.kind_parent}"
-        known = self.all_kinds.get(name)
-        if known is not None and known != parent:
-            return f"kind: {name} refines {known} elsewhere"
+        if existing is not None:
+            if existing.kind_effect is not None and effect is None:
+                return f"kind: {name} already names an effect"
+            if effect is not None and existing.kind_effect is None:
+                return f"kind: {name} already refines {existing.kind_parent}"
+            if effect is None and existing.kind_parent != parent:
+                return f"kind: {name} already refines {existing.kind_parent}"
+            if effect is not None and E.effect_key(effect) != E.effect_key(existing.kind_effect):
+                return f"kind: {name} already names another effect"
+        if effect is not None:
+            known_effect = self.all_effects.get(name)
+            if name in self.all_kinds or (known_effect is not None
+                                          and E.effect_key(known_effect) != E.effect_key(effect)):
+                return f"kind: {name} means another kind elsewhere"
+        else:
+            known = self.all_kinds.get(name)
+            if name in self.all_effects:
+                return f"kind: {name} names an effect elsewhere"
+            if known is not None and known != parent:
+                return f"kind: {name} refines {known} elsewhere"
         entry = Word(name, self.module, self.line, self._origin(), kind="kind")
-        entry.kind_parent = parent
+        entry.kind_parent = E.XT if effect is not None else parent
+        entry.kind_effect = effect
         self.define_entry(key, entry)
-        self.all_kinds[name] = parent
+        if effect is not None:
+            self.all_effects[name] = effect
+        else:
+            self.all_kinds[name] = parent
         return None
 
     def define_entry(self, key: str, word: Word) -> None:
@@ -509,7 +554,7 @@ class Checker:
             return
         comment = cursor.paren()
         if "--" in comment.split():
-            self.preceding[name.upper()] = comment
+            self.preceding[(self.module, name.upper())] = comment
 
     def _skip_scan(self, cursor: LineCursor) -> None:
         """Skip a false [IF] branch as BIOS does: raw tokens, no comments."""
@@ -612,7 +657,7 @@ class Checker:
             cursor.pos = saved
             return None
         text, closed = cursor.paren_closed()
-        held, problems, declaration = parse_holds(text, self.resolve_kind)
+        held, problems, declaration = parse_holds(text, self.resolve_kind, self.kind_parent)
         if not declaration:
             cursor.pos = saved
             return None
@@ -685,7 +730,7 @@ class Checker:
         pending.items.append(("call", word, line))
 
     def _set_declared(self, word: Word, text: str) -> None:
-        parsed = parse_effect(text, self.resolve_kind)
+        parsed = parse_effect(text, self.resolve_kind, self.kind_parent)
         word.declared_text = text.strip()
         word.declared = parsed.effect
         word.declared_reason = parsed.reason
@@ -704,7 +749,7 @@ class Checker:
         word.end_line = self.line
         self.pending = pending.outer
         if word.declared_text is None and word.declared_reason is None:
-            preceding = self.preceding.get(word.name.upper())
+            preceding = self.preceding.get((word.module, word.name.upper()))
             if preceding is not None:
                 self._set_declared(word, preceding)
                 word.declared_reason = "comment on a preceding line"
@@ -803,7 +848,7 @@ class Checker:
             # address it receives on top.
             declared = None
             if does_comment is not None:
-                parsed = parse_effect(does_comment, self.resolve_kind).effect
+                parsed = parse_effect(does_comment, self.resolve_kind, self.kind_parent).effect
                 if parsed is not None and not parsed.variable and parsed.inputs:
                     declared = Effect(parsed.inputs[:-1], parsed.alts, parsed.parses,
                                       False, parsed.text)
@@ -1099,7 +1144,7 @@ class Analysis:
             elif op == "to":
                 for state in current:
                     value = self.pop(state)
-                    if value.kind == E.REF:
+                    if self.checker.refines(value.kind, E.REF):
                         self.note("managed rule", "ref kept in a VALUE by TO")
                     if arg is not None and arg.holds is not None:
                         self.check_held(value, arg.holds, f"TO {arg.name}")
@@ -2003,7 +2048,7 @@ def _fetch(kind: str, cell: bool = False):
     """A read; ``@`` of a typed slot gives what the slot's declaration holds."""
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         address = analysis.pop(state)
-        if address.kind == E.HANDLE:
+        if analysis.checker.refines(address.kind, E.HANDLE):
             analysis.note("managed rule", f"{word.name} reads through a handle")
         else:
             analysis.check_kind(address, Slot("addr", E.ADDR), word)
@@ -2022,14 +2067,15 @@ def _store(cells: int, cell: bool = False):
     def handler(analysis: Analysis, state: State, word: Word) -> list[State]:
         address = analysis.pop(state)
         values = [analysis.pop(state) for _ in range(cells)]
-        if address.kind == E.REF:
+        refines = analysis.checker.refines
+        if refines(address.kind, E.REF):
             analysis.note("managed rule", f"{word.name} writes a managed object directly")
-        elif address.kind == E.HANDLE:
+        elif refines(address.kind, E.HANDLE):
             analysis.note("managed rule", f"{word.name} writes through a handle")
         else:
             analysis.check_kind(address, Slot("addr", E.ADDR), word)
         for value in values:
-            if value.kind == E.REF:
+            if refines(value.kind, E.REF):
                 analysis.note("managed rule", f"{word.name} keeps a ref in plain memory")
         if cell and address.holds is not None:
             analysis.check_held(values[0], address.holds, f"! into {address.origin}")
@@ -2131,7 +2177,7 @@ def _swap_relations(value: Value, result: Value) -> Value:
 
 def _comma(analysis: Analysis, state: State, word: Word) -> list[State]:
     value = analysis.pop(state)
-    if value.kind == E.REF:
+    if analysis.checker.refines(value.kind, E.REF):
         analysis.note("managed rule", f"{word.name} keeps a ref in the dictionary")
     return [state]
 
@@ -2321,7 +2367,8 @@ def _top_abortquote(checker: Checker, cursor: LineCursor, word: Word) -> None:
 
 def _top_paren(checker: Checker, cursor: LineCursor, word: Word) -> None:
     text, closed = cursor.paren_closed()
-    declared, problems, declaration = parse_kind_declaration(text, checker.resolve_kind)
+    declared, problems, declaration = parse_kind_declaration(text, checker.resolve_kind,
+                                                             checker.kind_parent)
     if not declaration:
         return
     if not closed:
@@ -2333,6 +2380,8 @@ def _top_paren(checker: Checker, cursor: LineCursor, word: Word) -> None:
         problem = checker.declare_kind(name, parent)
         if problem is not None:
             checker.declaration_problem(problem, "(kind)")
+        elif isinstance(parent, Effect):
+            checker.named_effects.append((checker.group, name))
         else:
             checker.declared_kinds.append((checker.group, name))
 
@@ -2345,6 +2394,25 @@ def _top_require(checker: Checker, cursor: LineCursor, word: Word) -> None:
 
 def _top_skip_name(checker: Checker, cursor: LineCursor, word: Word) -> None:
     cursor.token()
+
+
+def _top_effect(checker: Checker, cursor: LineCursor, word: Word) -> None:
+    """``EFFECT NAME ( effect )``, the declaring word of MegaPad's ``uroko.f``.
+
+    On the machine EFFECT parses the name and the interpreter skips the
+    comment after it; the checker reads that comment as the word's effect.
+    """
+    name = cursor.token()
+    if name is None:
+        checker.declaration_problem("EFFECT takes a word's name and its effect", word.name)
+        return
+    saved = cursor.pos
+    if cursor.token() != "(":
+        cursor.pos = saved
+        checker.declaration_problem(f"EFFECT {name} has no effect after its name", name)
+        return
+    text, closed = cursor.paren_closed()
+    checker.declare_effect(name, text, closed)
 
 
 def _top_defined(defined: bool):
@@ -2450,6 +2518,7 @@ TOP_HANDLERS: dict[str, Callable] = {
     "REQUIRE": _top_require,
     "PROVIDED": _top_skip_name,
     "FSLOAD": _top_skip_name,
+    "EFFECT": _top_effect,
     "[DEFINED]": _top_defined(True),
     "[UNDEFINED]": _top_defined(False),
     "[IF]": _top_if,
@@ -2463,8 +2532,9 @@ TOP_HANDLERS: dict[str, Callable] = {
     ";": _top_semicolon,
 }
 
-# KDOS defines these at Forth level; the top-level handlers model them.
-BASE_TOP = {"DEFER", "IS", "REQUIRE", "PROVIDED", "MARKER"}
+# KDOS, and uroko.f for EFFECT, define these at Forth level; the top-level
+# handlers model them.
+BASE_TOP = {"DEFER", "IS", "REQUIRE", "PROVIDED", "MARKER", "EFFECT"}
 
 
 _TOP_WORD = Word("(top level)", "", 0, "source")

@@ -154,9 +154,11 @@ measurement runs.
 
 Unknown tokens remain the largest cause: 526 of the 583 run a cell read
 from memory, and 25 run the token `_VFS-XT` picks from a driver's table by
-operation, whose effects differ by operation. The 15 undocumented BIOS
-words are `_RELOC-COUNT`, `_RELOC-ACTIVE`, `N-FULL`, `HBW-BASE` and the
-terminal-size words, which the dictionary's tables omit.
+operation, whose effects differ by operation. The 15 definitions that
+call an undocumented BIOS word call nine of them, which the dictionary's
+tables omit: `_RELOC-COUNT`, `_RELOC-ACTIVE`, `N-FULL`, `HBW-BASE` and the
+terminal-size words `COLS`, `ROWS`, `TERMSIZE`, `RESIZED?` and
+`RESIZE-REQUEST`.
 
 ## Kinds from declarations alone
 

@@ -2,25 +2,23 @@
 
 The BIOS dictionary itself, every name with its IMMEDIATE flag, is read from
 the entries in ``bios.asm``.  Effects come from the word tables in
-``docs/BIOS-DICTIONARY.md``.  KDOS and MegaPad's other system modules are
-read afterwards as Forth source, and their words take the effects their
-stack comments declare (``checker.Checker.load_base``).
+``docs/BIOS-DICTIONARY.md``, and a BIOS word the tables omit has no effect:
+a definition that calls one is reported as calling a word of unknown
+effect.  KDOS and MegaPad's other system modules are read afterwards as
+Forth source, and their words take the effects their stack comments declare
+(``checker.Checker.load_base``).
 
-Four standard words that the dictionary document does not tabulate get their
-ANS effects here, since Akashic calls them often: ``2!``, ``2@``, ``ON`` and
-``CMOVE>``.  Every other undocumented BIOS word has no effect, and a
-definition that calls one is reported as calling a word of unknown effect.
-
-The document and KDOS's comments name cells informally, and the checker
-reads no kind from a name, so the kinds of the base words that take or
-return addresses, spans, characters and flags are declared here in Uroko's
-form (``BASE_DECLARATIONS``).  Each keeps the shape of its given effect;
-the checker refuses one that does not.  The primitives with exact rules,
-such as ``@``, ``!`` and the comparisons, carry their kinds in the checker.
+The tables and KDOS's comments name cells informally, and the checker reads
+no kind from a name.  MegaPad's ``uroko.f`` declares the kinds of the base
+words in Uroko's form, one ``EFFECT NAME ( effect )`` line to a word, and
+the checker reads it after KDOS as KDOS loads it.  The primitives with exact
+rules, such as ``@``, ``!`` and the comparisons, carry their kinds in the
+checker.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,37 +27,39 @@ _ENTRY_FLAGS_RE = re.compile(r"\s*\.db\s+(0x[0-9A-Fa-f]+|\d+)")
 _ENTRY_NAME_RE = re.compile(r'\s*\.ascii\s+"(.*)"\s*(;.*)?$')
 _TABLE_WORD_RE = re.compile(r"`(.+?)`\Z")
 
-ANS_SUPPLEMENT = {
-    "2!": "( x1 x2 addr -- )",
-    "2@": "( addr -- x1 x2 )",
-    "ON": "( addr -- )",
-    "CMOVE>": "( src dst u -- )",
-}
+# MegaPad's modules that make the base vocabulary, in the order an image
+# loads them: KDOS, Uroko's declarations of the BIOS and KDOS words, then
+# the system modules that compile with those declarations in place.
+BASE_MODULES = ("kdos.f", "uroko.f", "networking.f", "rich-terminal.f", "tools.f",
+                "graphics.f")
 
-BASE_DECLARATIONS = {
-    # BIOS
-    "FILL": "( a: addr u: u c: char -- )",
-    "MOVE": "( src: addr dst: addr u: u -- )",
-    "CMOVE": "( src: addr dst: addr u: u -- )",
-    "CMOVE>": "( src: addr dst: addr u: u -- )",
-    "COMPARE": "( s1: span s2: span -- n: n )",
-    "TYPE": "( s: span -- )",
-    "ACCEPT": "( buf: span -- n: u )",
-    "COUNT": "( a: addr -- s: span )",
-    "SOURCE": "( -- s: span )",
-    "HERE": "( -- a: addr )",
-    "ALLOT": "( n: n -- )",
-    "OFF": "( a: addr -- )",
-    "ON": "( a: addr -- )",
-    "2@": "( a: addr -- x1 x2 )",
-    "EMIT": "( c: char -- )",
-    "KEY": "( -- c: char )",
-    "WITHIN": "( n: n lo: n hi: n -- f: flag )",
-    # KDOS
-    "ALLOCATE": "( u: u -- a: addr ior: n )",
-    "FREE": "( a: addr -- )",
-    "RESIZE": "( a1: addr u: u -- a2: addr ior: n )",
-}
+
+def megapad_root(akashic_root: Path | None = None) -> Path:
+    """The MegaPad checkout: ``MEGAPAD_ROOT``, else the one beside Akashic.
+
+    A workspace links its checkouts side by side, so the MegaPad beside the
+    Akashic checkout as it was reached comes first, then the one beside the
+    folder a link to it resolves to.
+    """
+    configured = os.environ.get("MEGAPAD_ROOT")
+    if configured:
+        return Path(configured)
+    here = akashic_root or Path(__file__).absolute().parents[2]
+    for candidate in (here.parent / "megapad", here.resolve().parent / "megapad"):
+        if (candidate / "kdos.f").is_file():
+            return candidate
+    return here.parent / "megapad"
+
+
+def base_module_paths(megapad: Path, modules: tuple[str, ...] = BASE_MODULES) -> list[Path]:
+    """The base modules' files, or an error naming the first one missing."""
+    paths = [megapad / module for module in modules]
+    for path in paths:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path} is missing: the checker needs a MegaPad checkout that has it "
+                "(set MEGAPAD_ROOT)")
+    return paths
 
 
 @dataclass(frozen=True)
@@ -91,8 +91,7 @@ def bios_words(megapad_root: Path) -> dict[str, BiosWord]:
     effects = documented_effects(megapad_root / "docs" / "BIOS-DICTIONARY.md")
     words = {}
     for name, flags in flags_by_name.items():
-        text = effects.get(name) or ANS_SUPPLEMENT.get(name)
-        words[name] = BiosWord(name, bool(flags & 0x80), text)
+        words[name] = BiosWord(name, bool(flags & 0x80), effects.get(name))
     return words
 
 

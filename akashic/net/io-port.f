@@ -19,27 +19,31 @@ PROVIDED akashic-net-io-port
 3 CONSTANT NIO-OPEN-STATE-FAILED
 4 CONSTANT NIO-OPEN-STATE-CANCELLED
 
-\ A port record holds the adapter's context cell and its callbacks.  Each
-\ callback field declares, in Uroko's form, the effect of the token it
-\ holds; the context is whatever cell the adapter chose.
-( kind: nio-port record )
+\ A port is a struct holding the adapter's context cell and its callbacks.
+\ Each callback field declares, in Uroko's form, the effect of the token it
+\ holds, by one of the effects named below; the context is whatever cell
+\ the adapter chose.
+( kind: nio-port struct )
 ( kind: nio-status n )
+( kind: nio-io xt( buf: span context -- count: u status: nio-status ) )
+( kind: nio-step xt( context -- status: nio-status ) )
+( kind: nio-hook xt( context -- ) )
  0 CONSTANT _NIO-CONTEXT
- 8 CONSTANT _NIO-RECV-XT  ( holds: xt( buf: span context -- count: u status: nio-status ) )
-16 CONSTANT _NIO-SEND-XT  ( holds: xt( buf: span context -- count: u status: nio-status ) )
-24 CONSTANT _NIO-POLL-XT  ( holds: xt( context -- ) )
-32 CONSTANT _NIO-CLOSE-XT ( holds: xt( context -- ) )
-40 CONSTANT _NIO-OPEN-XT  ( holds: xt( context -- status: nio-status ) )
-48 CONSTANT _NIO-OPEN-START-XT ( holds: xt( context -- status: nio-status ) )
-56 CONSTANT _NIO-OPEN-POLL-XT  ( holds: xt( context -- status: nio-status ) )
-64 CONSTANT _NIO-CANCEL-XT     ( holds: xt( context -- ) )
+ 8 CONSTANT _NIO-RECV-XT  ( holds: nio-io )
+16 CONSTANT _NIO-SEND-XT  ( holds: nio-io )
+24 CONSTANT _NIO-POLL-XT  ( holds: nio-hook )
+32 CONSTANT _NIO-CLOSE-XT ( holds: nio-hook )
+40 CONSTANT _NIO-OPEN-XT  ( holds: nio-step )
+48 CONSTANT _NIO-OPEN-START-XT ( holds: nio-step )
+56 CONSTANT _NIO-OPEN-POLL-XT  ( holds: nio-step )
+64 CONSTANT _NIO-CANCEL-XT     ( holds: nio-hook )
 72 CONSTANT _NIO-OPEN-STATE
 80 CONSTANT _NIO-OPEN-STATUS
  88 CONSTANT _NIO-CLEANUP-FLAGS
  96 CONSTANT _NIO-CANCEL-ERROR
 104 CONSTANT _NIO-CLOSE-ERROR
-112 CONSTANT _NIO-CLOSE-START-XT ( holds: xt( context -- status: nio-status ) )
-120 CONSTANT _NIO-CLOSE-POLL-XT  ( holds: xt( context -- status: nio-status ) )
+112 CONSTANT _NIO-CLOSE-START-XT ( holds: nio-step )
+120 CONSTANT _NIO-CLOSE-POLL-XT  ( holds: nio-step )
 128 CONSTANT _NIO-CLOSE-STATE
 136 CONSTANT _NIO-CLOSE-STATUS
 144 CONSTANT NET-IO-PORT-SIZE

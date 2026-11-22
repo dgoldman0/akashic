@@ -1,6 +1,6 @@
 # The checker core of Uroko
 
-Status: prototype, 2026-11-20. This note describes host tooling that runs
+Status: prototype, 2026-11-21. This note describes host tooling that runs
 and is measured. The checker that ships runs on the machine instead,
 written in Forth in MegaPad's `uroko.f` module, checking each definition as
 it closes (decided 2026-11-20); this prototype settles its rules and
@@ -46,14 +46,14 @@ covers the machine models, not the toolchain.
 |------|-------|
 | `toolchain/language/source.py` | KDOS's reading rules: tokens, comments, strings, numbers |
 | `toolchain/language/effects.py` | Kinds, effects, and the reading of declarations in stack comments |
-| `toolchain/language/vocabulary.py` | The BIOS dictionary, its documented effects, and the declared kinds of base words |
+| `toolchain/language/vocabulary.py` | The BIOS dictionary, its documented effects, and where MegaPad's base modules are found |
 | `toolchain/language/checker.py` | The dictionary, the outer interpreter, and the abstract interpretation of each definition |
 | `toolchain/language/measure.py` | The measurement over Akashic's Forth, its strict run, and a sampler for reviewing a category by hand |
 
 `local_testing/test_language_checker.py` runs small programs against the
-real BIOS and KDOS vocabulary in about five seconds. The measurement runs
-from the Akashic checkout, with `MEGAPAD_ROOT` naming the MegaPad checkout
-when it is not beside Akashic:
+real BIOS and KDOS vocabulary, with `uroko.f`'s declarations, in about
+eight seconds. The measurement runs from the Akashic checkout, with
+`MEGAPAD_ROOT` naming the MegaPad checkout when it is not beside Akashic:
 
 ```
 python3 -m toolchain.language.measure --json report.json
@@ -65,6 +65,20 @@ python3 -m toolchain.language.measure --groups library --sample "EXECUTE of an u
 The first two run the ordinary and the strict analysis, about 15 seconds
 each for the library; `--placement` writes the definitions that qualify for
 LM1, one per line, and `--no-strict` skips the strict run.
+
+`local_testing/test_language_checker_ratchet.py` is the findings ratchet.
+It runs the checker over the plain library, with `GUARDED` undefined, in
+about 15 seconds, and compares its counts with the baseline in
+`local_testing/language_checker_counts.json`: the findings by type, the
+inferred effects that mismatch their comments, and the definitions not
+inferred, in all and by cause. A count that grows fails the test as a
+regression. A count that falls fails it too, until the baseline records
+the gain, so the baseline changes in the same commit as the change that
+moves it, and this command writes it:
+
+```
+python3 -m toolchain.language.measure --groups library --no-strict --ratchet local_testing/language_checker_counts.json
+```
 
 ## Reading source as KDOS does
 
@@ -105,6 +119,8 @@ An item without a kind is a plain cell, and the checker reads no kind from
 a name: `addr` and `flag` written alone are names of plain cells. The
 source stays plain Forth, since KDOS's `(` skips the whole comment.
 
+The kinds of plain data describe cells that code manages by hand:
+
 | Kind | Stands for |
 |------|------------|
 | `cell` | Any cell; the same as an item without a kind |
@@ -112,18 +128,44 @@ source stays plain Forth, since KDOS's `(` skips the whole comment.
 | `flag`, `char` | A truth value, a character |
 | `addr` | An address of plain memory |
 | `span` | Two cells, an address and a length, that bound one piece of memory the caller provides |
+| `struct` | A record in plain memory: the address of its fields; every struct kind refines it |
 | `xt`, `xt( effect )` | An execution token, with or without the effect it runs |
-| `ref`, `handle` | Managed data, the two kinds of release plan Part 9d |
 | `task` | Work whose result comes later |
-| `record` | The kind every record kind refines; a record is an address of its fields |
+
+The kinds of managed data describe objects in LM1's tagged format that a
+collector manages, which release plan Part 9d and MegaPad's
+`docs/managed-data.md` specify:
+
+| Kind | Stands for |
+|------|------------|
+| `tagged` | Any word in LM1's format: a fixnum, nil, t, a character or a reference |
+| `ref` | A reference to an object, valid only inside the window in which it was read |
+| `record` | A reference to a collected record; every record kind refines it |
+| `string`, `vector`, `bytes` | A reference to a string, whose bytes are UTF-8, to a vector of tagged words, or to a bytevector |
+| `list`, `list( k )` | Nil, or a reference to a cons cell; the second form says that the elements are of kind k |
+| `handle`, `handle( k )` | A handle, which code keeps past a window; the second form names an object of kind k |
+
+`struct` refines `addr`. `record`, `string`, `vector` and `bytes` refine
+`ref`, and `ref` and `list` refine `tagged`. A parametric kind refines the
+same form of what its parameter refines, so `list( concept )` refines
+`list( record )`, then `list( ref )`, which is the plain `list`;
+`handle( k )` refines `handle( j )` the same way, down to the plain `handle`.
+A list holds tagged words, so its elements are of a kind that rests on
+`tagged`, or flags or characters; a handle names an object, so its kind is
+a reference kind or a list. A handle is neither a reference nor an address,
+and the checker keeps the three apart.
 
 A source file adds kinds with a comment of its own:
-`( kind: nio-port record )` declares a record kind, and
+`( kind: nio-port struct )` declares a struct kind,
+`( kind: concept record )` a kind of collected record,
+`( kind: path list( string ) )` a kind of list, and
 `( kind: nio-status n )` a kind of number. A named kind mixes freely with
-the kinds it refines, so a record serves as an address and an address may
-stand where a record is expected, and the checker reports one named kind
-standing for another when neither refines the other, as two records or two
-kinds of status do.
+the kinds it refines, so a struct serves as an address and an address may
+stand where a struct is expected. The checker reports one named kind
+standing for another when neither refines the other, as two structs or two
+kinds of status do, and reports two kinds of object that differ, such as a
+string where a record is expected or a `list( topic )` where a
+`list( concept )` is.
 
 A token's effect is a nested comment, which KDOS's counting of parentheses
 skips with the rest: `each: xt( item: addr -- keep: flag )`. An item
@@ -135,7 +177,7 @@ Data words declare what they hold with that label right after their name:
 | `VARIABLE HOOK ( holds: xt( c: char -- ) )` | HOOK's cell holds a token of that effect |
 | `CREATE OPS ( holds: xt( n -- n ) )` | Every cell of the table holds one; an address computed from OPS by adding a number stays in the table |
 | `0 VALUE CB ( holds: xt( -- ) )` | CB pushes such a token, and `TO CB` must store one |
-| `8 CONSTANT _P-SEND ( holds: xt( ... ) )` | A field offset: added to a record's address it gives the address of a cell holding the token |
+| `8 CONSTANT _P-SEND ( holds: xt( ... ) )` | A field offset: added to a struct's address it gives the address of a cell holding the token |
 | `_STATE CMP-CELL: _ON-CLOSE ( holds: xt( ... ) )` | The child of a defining word that pushes one address, such as Akashic's CMP-FIELD: and CMP-CELL:, declares what that address holds |
 | `: P.SEND ( p: port -- holds: xt( ... ) )` | A colon definition returns the address of such a cell |
 
@@ -143,36 +185,74 @@ Because a field offset carries its declaration, an accessor written as
 `: NIO.RECV-XT ( port -- a ) _NIO-RECV-XT + ;` needs none of its own: the
 checker infers that it returns the address of a cell holding the token.
 
-Two conventions of Akashic's comments carry over. A bar inside a name says
-which values one cell may take, as `port|0: nio-port` for a port or zero,
-while a bar at a token's edge separates alternatives. An output span named
-like an input span with a prime, as `/STRING ( s: span n -- s': span )`
-writes, is part of that span.
+A module names an effect once and then uses the name wherever a kind may
+stand. The NIO port's receive and send callbacks share one:
+
+```forth
+( kind: nio-io xt( buf: span context -- count: u status: nio-status ) )
+ 8 CONSTANT _NIO-RECV-XT  ( holds: nio-io )
+16 CONSTANT _NIO-SEND-XT  ( holds: nio-io )
+```
+
+A named effect stands for its effect, so a token of any word with that
+effect may fill a slot that names it, and `( kind: nio-recv nio-io )` gives
+the same effect a second name. A name keeps one effect wherever it is
+declared. Since KDOS's `(` ends with its line, a slot that spells out a
+long effect makes a long line, and naming the effect keeps the slot's line
+short and states the shared contract in one place.
+
+Two spellings of item names are Uroko syntax, taken from Akashic's
+comments. A bar inside a name lists the values one cell may take:
+`port|0: nio-port` is one cell holding a port or zero, and the checker
+gives the cell the kind `nio-port`, since zero serves as a null address of
+any kind. A bar standing alone, or at a token's edge as in `0 |xt 1`,
+separates alternatives instead. A prime after an output span's name makes
+it part of the input span of that name: `/STRING ( s: span n -- s': span )`
+returns the end of the span it was given, so the checker counts the
+address and the length it returns as parts of the caller's span `s`.
 
 Malformed declarations are findings: an unknown kind, a label with no kind
-after it, an `xt(` without its `)`, a `holds:` with text after its kind, a
-kind that refines an unknown kind, and a declaration whose `(` finds no `)`
-on its line. The last matters to KDOS as well, since an unclosed comment
-runs to the end of its line and hides any code after it there.
+after it, an `xt(`, `list(` or `handle(` without its `)`, a list of plain
+data or a handle of something other than an object, a `holds:` with text
+after its kind, a kind that refines an unknown kind, a name declared again
+as another kind or another effect, a named effect that is not fixed, and a
+declaration whose `(` finds no `)` on its line. The last matters to KDOS as
+well, since an unclosed comment runs to the end of its line and hides any
+code after it there.
 
 ## The base vocabulary
 
 The BIOS dictionary comes from `bios.asm` itself: every entry's name and
 IMMEDIATE flag. The effects come from the word tables of MegaPad's
 `docs/BIOS-DICTIONARY.md`, in either of their forms: most tables number
-their words in a first column, and the newer ones start with the word.
-Four standard words the tables omit, `2!`, `2@`, `ON` and `CMOVE>`, take
-their ANS effects. KDOS and MegaPad's other system modules,
-`networking.f`, `rich-terminal.f`, `tools.f` and `graphics.f`, are then
-read as Forth, and each of their words takes the effect its stack comment
-declares.
+their words in a first column, and the newer ones start with the word. A
+BIOS word the tables omit has no effect, and a definition that calls one
+fails to infer. KDOS is then read as Forth, and each of its words takes the
+effect its stack comment declares.
 
-Those tables and comments name cells informally, so the kinds of the base
-words that take or return addresses, spans, characters and flags are
-declared in `vocabulary.py` in Uroko's form, such as
-`COMPARE ( s1: span s2: span -- n: n )` and
-`ALLOCATE ( u: u -- a: addr ior: n )`. Each keeps the shape of its given
-effect, and the checker refuses one whose shape differs.
+Those tables and comments name cells informally, so MegaPad's `uroko.f`, a
+system module loaded after KDOS, declares the kinds of the base words in
+Uroko's form, one word to a line:
+
+```forth
+EFFECT COMPARE   ( s1: span s2: span -- n: n )
+EFFECT ALLOCATE  ( u: u -- a: addr ior: n )
+EFFECT HBW-BASE  ( -- a: addr )
+```
+
+On the machine, `EFFECT` parses the name and records nothing yet, and KDOS's
+`(` skips the effect as a comment, so the module loads wherever KDOS runs.
+The checker reads the same lines: it gives the named word the declared
+effect and kinds, and reports a declaration that names no word, is
+malformed, or changes the shape of the word's effect in the tables or in
+KDOS's comment. Uroko's checker on the machine will give `EFFECT` a body
+that records each effect for the word it names, so that one file serves
+both checkers. The checker reads MegaPad's other system modules,
+`networking.f`, `rich-terminal.f`, `tools.f` and `graphics.f`, after
+`uroko.f`, so they compile with its declarations in place, and their words
+take their comments' effects. The checker finds MegaPad through
+`MEGAPAD_ROOT`, or as the checkout beside Akashic's, and stops with an
+error when that checkout has no `uroko.f`.
 
 Some words have meanings that no effect can state, and the checker gives
 them exact rules: the shuffles, `PICK` and `ROLL` with a constant depth,
@@ -238,7 +318,7 @@ name, takes the effect the comment declares.
 
 Callers see the inferred effect, with the comment's names and kinds where
 the two line up; a declared kind replaces an inferred one it refines, as a
-record kind refines the address a field accessor computes. When a
+struct kind refines the address a field accessor computes. When a
 definition cannot be inferred, callers use its comment, unless the
 definition runs an execution token it cannot follow, since a comment such
 as `( xt: xt -- )` says nothing of what that token takes.
@@ -281,11 +361,12 @@ Flags and numbers mix freely, since Forth tests any nonzero cell, and an
 address may serve as a flag. The reports fall into classes: an execution
 token used as data or data used as one, a flag used as an address, an
 address used as a number or a number used as an address, two named kinds
-that differ, a task mixed with other data, and a managed kind meeting plain
-data. A token stored into a typed slot, passed as a typed input, bound to a
-deferred word by IS or returned as a declared token is compared with the
-declared effect, by its inputs and output depths and the kinds of its
-inputs, and a difference is reported.
+that differ, two kinds of object that differ, a task mixed with other data,
+a managed kind meeting plain data, and a handle mixed with anything that is
+not a handle. A token stored into a typed slot, passed as a typed input,
+bound to a deferred word by IS or returned as a declared token is compared
+with the declared effect, by its inputs and output depths and the kinds of
+its inputs, and a difference is reported.
 
 A declared span must receive the address and the length of one span. A call
 that pairs one span's address with another's length is reported, unless the
@@ -297,10 +378,13 @@ of one string is compared with another string's length. A word declared
 `( a u -- a u' )` does, returns a part of the span it was given.
 
 For managed data the checker enforces what Part 9d's rules say in terms of
-kinds: a `ref` may be read through directly (rule 1) but not written to
-with `!` (rule 2), and it may not be kept in plain memory, a VALUE or the
-dictionary (rule 4); a `handle` is not an address. The rules about windows
-need words that open and close them, which do not exist yet.
+kinds: a reference, of `ref` or any kind that refines it, may be read
+through directly (rule 1) but not written to with `!` (rule 2), and it may
+not be kept in plain memory, a VALUE or the dictionary (rule 4); a `handle`
+is not an address. The checks of windows and handles that
+fantasy-engine `dev/ideas/language.md` lists under "The rules as the
+checker enforces them" need the `OBJ-` words that open and close windows
+and make and release handles, which do not exist yet.
 
 ## Strict placement
 
@@ -347,18 +431,32 @@ token-running helpers infer and let the checker compare all 24 callback
 stores in the library with the declarations. The evidence notes list the
 figures, the defects and where the checker misleads.
 
+After the rounds that fixed those defects, and with the base words' kinds
+now read from `uroko.f` and the BIOS words the dictionary lacked now
+catalogued, the checker infers 43,272 of 44,471 library definitions (97.3
+percent), and the strict run infers 36,908, of which 36,611 (82.3 percent)
+qualify for LM1. The findings ratchet's baseline holds the counts from
+which later changes are measured.
+
 ## What is not built
 
 - Syntax beyond declarations. Words, records, quotations and tasks are
   still written as Forth.
 - A compiler, placement on engines, a machine description, tasks, and any
   backend for LM1.
-- Windows and handles. The checker knows the kinds `ref` and `handle` and
-  three of Part 9d's rules; inserting windows and handles needs the words
-  that open, close, make and release them.
-- Records as objects. A record kind names an address of a plain-memory
-  record; a collected record, as the sketch's `concept` is, needs the
-  object side of Part 9d.
+- Windows and handles. The checker knows the kinds of objects and handles
+  and three of Part 9d's rules; the eight checks of windows and handles,
+  and inserting them, need the words that open, close, make and release
+  them.
+- Records as objects. A record kind such as the sketch's `concept` is
+  declared and checked as a kind, but `RECORD`, which would define its
+  fields and the check that narrows a reference to it, waits on the object
+  side of Part 9d.
+- Narrowing objects. A kind still mixes with the kinds it refines in both
+  directions, so a `tagged` word or a `ref` may stand where a `concept` is
+  expected, as an address may stand for a struct. Rule 7 of the checks of
+  windows and handles makes that narrowing pass through `OBJ>REF` or a
+  kind's check.
 - Kinds through loops. Each loop body runs once, plus the repeats of a
   counted loop, so a kind that changes on a later pass is not followed.
 - Offsets within spans. A length shortened by arithmetic loses its span, so
@@ -377,11 +475,13 @@ figures, the defects and where the checker misleads.
 
 **How kinds are written.** Declared kinds work as decided: a declaration
 sits where Forth programmers already read effects, KDOS skips it, and the
-checker reports a malformed one. The pilot shows the cost of the one-line
-rule: KDOS's `(` ends with its line, so a field holding a token with a long
-effect makes a long line, up to 104 characters in the pilot. Field offsets
-are the natural place for a record's declarations in Akashic's Forth, since
-every accessor and inline use inherits them.
+checker reports a malformed one. KDOS's `(` ends with its line, so a field
+holding a token with a long effect made a long line, up to 104 characters
+in the second round's pilot. Named effects remove that cost: with the
+callbacks' effects named once, the pilot's two modules have no line longer
+than 85 characters, and callbacks that share a contract share its name.
+Field offsets are the natural place for a struct's declarations in
+Akashic's Forth, since every accessor and inline use inherits them.
 
 **Spans are two cells.** Following value identity keeps a span whole
 through any shuffle, and the checker reports a call that pairs one span's

@@ -1,13 +1,13 @@
 """The checker core of Uroko, on small Forth programs.
 
 The checker lives in ``toolchain/language``; ``docs/language/checker.md``
-describes it.  Each test loads MegaPad's BIOS dictionary and KDOS as the
-base vocabulary, as the measurement does, then a few definitions.
+describes it.  Each test loads MegaPad's BIOS dictionary, KDOS and
+``uroko.f``, which declares the base words' kinds, as the measurement does,
+then a few definitions.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -21,8 +21,9 @@ from toolchain.language.checker import Checker  # noqa: E402
 from toolchain.language.effects import parse_effect, parse_holds  # noqa: E402
 from toolchain.language.measure import effect_text, placement  # noqa: E402
 from toolchain.language.source import LineCursor, parse_number  # noqa: E402
+from toolchain.language.vocabulary import megapad_root  # noqa: E402
 
-MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT") or AKASHIC_ROOT.parent / "megapad")
+MEGAPAD_ROOT = megapad_root(Path(__file__).absolute().parents[1])
 
 
 @pytest.fixture(scope="module")
@@ -35,7 +36,7 @@ def base_checker_state():
 def check(megapad: Path, source: str, strict: bool = False) -> Checker:
     checker = Checker(strict=strict)
     checker.load_bios(megapad)
-    checker.load_base(megapad, ("kdos.f",))
+    checker.load_base(megapad, ("kdos.f", "uroko.f"))
     checker.group = "library"
     checker.load_text(source, "test.f")
     return checker
@@ -254,6 +255,19 @@ def test_names_ignore_case_and_a_definition_can_name_itself(base_checker_state):
     assert later.hides_older and later.self_named
 
 
+def test_a_comment_on_a_preceding_line_describes_its_own_modules_word(base_checker_state):
+    checker = check(base_checker_state, (
+        "\\ PAIR ( -- a b )\n"
+        ": PAIR  1 2 ;\n"
+    ))
+    # Another module's PAIR, guarded or not, is a word of its own.
+    checker.load_text(": PAIR  3 ;\n", "other.f")
+    first, second = [r for r in checker.records if r.word.name == "PAIR"]
+    assert first.word.declared_reason == "comment on a preceding line"
+    assert first.comparison == "match"
+    assert second.comparison == "no comment"
+
+
 def test_tick_inside_a_definition_parses_when_the_word_runs(base_checker_state):
     checker = check(base_checker_state, (
         "VARIABLE HOOK\n"
@@ -280,10 +294,10 @@ def test_kind_span_and_managed_findings(base_checker_state):
     assert findings(checker, "UNDECLARED") == []
 
 
-def test_kind_declarations_add_records_and_kinds_of_number(base_checker_state):
+def test_kind_declarations_add_structs_and_kinds_of_number(base_checker_state):
     checker = check(base_checker_state, (
-        "( kind: port record )\n"
-        "( kind: widget record )\n"
+        "( kind: port struct )\n"
+        "( kind: widget struct )\n"
         "( kind: port-status n )\n"
         ": PORT-USE  ( p: port -- s: port-status )  @ ;\n"
         ": FROM-ADDRESS  ( a: addr -- s: port-status )  PORT-USE ;\n"
@@ -292,11 +306,95 @@ def test_kind_declarations_add_records_and_kinds_of_number(base_checker_state):
         ": STATUS-AS-COUNT  ( p: port -- n: u )  PORT-USE ;\n"
         "( kind: blob gadget )\n"
     ))
-    assert findings(checker, "FROM-ADDRESS") == []  # an address may stand for a record
+    assert findings(checker, "FROM-ADDRESS") == []  # an address may stand for a struct
     assert any(f.startswith("kind: named kinds differ: widget") for f in findings(checker, "FROM-WIDGET"))
     assert any(f.startswith("kind: number used as an address") for f in findings(checker, "FROM-NUMBER"))
     assert findings(checker, "STATUS-AS-COUNT") == []  # a kind of n mixes with numbers
     assert "declaration: kind: blob refines an unknown kind 'gadget'" in all_findings(checker)
+
+
+def test_object_kinds_refine_ref_and_tagged_and_keep_apart_from_plain_data(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: concept record )\n"
+        "( kind: port struct )\n"
+        ": NAME@  ( r: ref -- t: tagged )  @ ;\n"
+        ": CONCEPT-NAME  ( c: concept -- t: tagged )  NAME@ ;\n"
+        ": STRING-NAME  ( s: string -- t: tagged )  NAME@ ;\n"
+        ": OPEN  ( p: port -- )  DROP ;\n"
+        ": OPEN-CONCEPT  ( c: concept -- )  OPEN ;\n"
+        ": TAGGED-AS-REF  ( t: tagged -- )  NAME@ DROP ;\n"
+        ": COUNT-AS-TAGGED  ( n: u -- t: tagged )  NAME@ ;\n"
+        ": SHOW  ( r: record -- )  DROP ;\n"
+        ": SHOW-STRING  ( s: string -- )  SHOW ;\n"
+        ": HANDLE-AS-ADDRESS  ( h: handle -- x )  @ ;\n"
+        ": HANDLE-AS-REF  ( h: handle -- t: tagged )  NAME@ ;\n"
+        "VARIABLE SLOT\n"
+        ": KEEP-CONCEPT  ( c: concept -- )  SLOT ! ;\n"
+        ": WRITE-CONCEPT  ( x c: concept -- )  ! ;\n"
+    ))
+    # Part 9d's rules hold for every kind that refines ref.
+    assert findings(checker, "KEEP-CONCEPT") == ["managed rule: ! keeps a ref in plain memory"]
+    assert findings(checker, "WRITE-CONCEPT") == [
+        "managed rule: ! writes a managed object directly"]
+    # A record kind is a record, a record a reference: both read directly.
+    assert findings(checker, "CONCEPT-NAME") == []
+    assert findings(checker, "STRING-NAME") == []
+    # A struct is plain memory managed by hand, and a record is not one.
+    assert any(f.startswith("kind: managed kind crosses plain data: concept")
+               for f in findings(checker, "OPEN-CONCEPT"))
+    # Only a reference is read as an address; a tagged word may be a fixnum.
+    assert findings(checker, "TAGGED-AS-REF") == []  # a tagged word may stand for a ref
+    assert any(f.startswith("kind: managed kind crosses plain data: u")
+               for f in findings(checker, "COUNT-AS-TAGGED"))
+    assert any(f.startswith("kind: object kinds differ: string")
+               for f in findings(checker, "SHOW-STRING"))
+    assert findings(checker, "HANDLE-AS-ADDRESS") == ["managed rule: @ reads through a handle"]
+    assert any(f.startswith("kind: handle mixed with other data")
+               for f in findings(checker, "HANDLE-AS-REF"))
+
+
+def test_lists_and_handles_take_the_kind_of_what_they_hold(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: concept record )\n"
+        "( kind: topic record )\n"
+        "( kind: path list( string ) )\n"
+        ": LINKS  ( c: concept -- l: list( concept ) )  @ ;\n"
+        ": WALK  ( l: list( record ) -- )  DROP ;\n"
+        ": WALK-LINKS  ( c: concept -- )  LINKS WALK ;\n"
+        ": TOPICS  ( l: list( topic ) -- )  DROP ;\n"
+        ": TOPIC-LINKS  ( c: concept -- )  LINKS TOPICS ;\n"
+        ": ANY-LIST  ( l: list -- )  DROP ;\n"
+        ": PATH-LIST  ( p: path -- )  ANY-LIST ;\n"
+        "VARIABLE SHOWN ( holds: handle( concept ) )\n"
+        ": KEEP  ( h: handle( record ) -- )  DROP ;\n"
+        ": KEEP-SHOWN  ( -- )  SHOWN @ KEEP ;\n"
+        ": KEEP-TOPIC  ( h: handle( topic ) -- )  DROP ;\n"
+        ": SHOWN-TOPIC  ( -- )  SHOWN @ KEEP-TOPIC ;\n"
+    ))
+    # list( concept ) refines list( record ), as a concept is a record.
+    assert findings(checker, "WALK-LINKS") == []
+    assert any(f.startswith("kind: object kinds differ: list(concept)")
+               for f in findings(checker, "TOPIC-LINKS"))
+    assert findings(checker, "PATH-LIST") == []
+    assert findings(checker, "KEEP-SHOWN") == []
+    assert any(f.startswith("kind: object kinds differ: handle(concept)")
+               for f in findings(checker, "SHOWN-TOPIC"))
+    assert checker.kind_parent("list(concept)") == "list(record)"
+    assert checker.kind_parent("list(ref)") == E.LIST
+    assert checker.kind_parent("handle(record)") == E.HANDLE
+
+
+def test_parametric_kinds_are_checked_where_they_are_declared():
+    assert parse_effect(" l: list( tagged ) -- ").effect.inputs[0].kind == E.LIST
+    assert parse_effect(" h: handle( ref ) -- ").effect.inputs[0].kind == E.HANDLE
+    assert parse_effect(" l: list( flag ) -- ").effect.inputs[0].kind == "list(flag)"
+    assert parse_effect(" l: list( u ) -- ").problems == [
+        "l: a list holds tagged words, and u is plain data"]
+    assert parse_effect(" h: handle( tagged ) -- ").problems == [
+        "h: a handle names an object, and tagged is not a kind of object"]
+    assert parse_effect(" l: list( span ) -- ").problems == [
+        "l: list( span ) names two cells, not one"]
+    assert parse_effect(" l: list( string -- ").problems == ["list( has no closing )"]
 
 
 def test_malformed_declarations_in_source_are_findings(base_checker_state):
@@ -335,9 +433,9 @@ def test_a_typed_variable_gives_the_token_it_holds_an_effect(base_checker_state)
     assert record(checker, "UNTYPED").failure.category == "EXECUTE of an unknown xt"
 
 
-def test_record_fields_and_tables_declare_what_they_hold(base_checker_state):
+def test_struct_fields_and_tables_declare_what_they_hold(base_checker_state):
     checker = check(base_checker_state, (
-        "( kind: port record )\n"
+        "( kind: port struct )\n"
         " 0 CONSTANT _P-CONTEXT\n"
         " 8 CONSTANT _P-SEND ( holds: xt( buf: span context -- count: u ) )\n"
         ": P.SEND  ( p: port -- a )  _P-SEND + ;\n"
@@ -353,6 +451,57 @@ def test_record_fields_and_tables_declare_what_they_hold(base_checker_state):
     assert record(checker, "OP").comparison == "match"
     accessor = checker.lookup("P.SEND").signature.alts[0][0]
     assert accessor.holds is not None and accessor.holds.effect.shape() == "3 -- 1"
+
+
+def test_a_named_effect_is_declared_once_and_shared_by_its_slots(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: port struct )\n"
+        "( kind: status n )\n"
+        "( kind: port-io xt( buf: span context -- count: u s: status ) )\n"
+        "( kind: port-recv port-io )\n"
+        " 8 CONSTANT _P-RECV ( holds: port-io )\n"
+        "16 CONSTANT _P-SEND ( holds: port-io )\n"
+        ": PORT-RECV  ( buf: span p: port -- count: u s: status )\n"
+        "    DUP @ SWAP _P-RECV + @ EXECUTE ;\n"
+        ": PORT-SEND  ( buf: span p: port -- count: u s: status )\n"
+        "    DUP @ SWAP _P-SEND + @ EXECUTE ;\n"
+        ": GOOD-IO  ( buf: span context -- count: u s: status )  DROP NIP 0 ;\n"
+        ": WRONG-IO  ( buf: span context -- count: u )  DROP NIP ;\n"
+        ": INSTALL  ( p: port -- )  ['] GOOD-IO SWAP _P-RECV + ! ;\n"
+        ": BAD-INSTALL  ( p: port -- )  ['] WRONG-IO SWAP _P-SEND + ! ;\n"
+        ": WITH-IO  ( buf: span context io: port-recv -- count: u s: status )  EXECUTE ;\n"
+        ": USE-IO  ( buf: span context -- count: u s: status )  ['] GOOD-IO WITH-IO ;\n"
+    ))
+    assert record(checker, "PORT-RECV").comparison == "match"
+    assert record(checker, "PORT-SEND").comparison == "match"
+    assert findings(checker, "INSTALL") == []
+    assert record(checker, "INSTALL").typed_stores_checked == 1
+    assert any(f.startswith("token effect: WRONG-IO ( 3 -- 1 ) stored by ! into")
+               for f in findings(checker, "BAD-INSTALL"))
+    # A second name for an effect, and a named effect as a typed input.
+    assert record(checker, "WITH-IO").comparison == "match"
+    assert not record(checker, "WITH-IO").word.higher_order
+    assert record(checker, "USE-IO").comparison == "match" and findings(checker, "USE-IO") == []
+    assert {name for group, name in checker.named_effects} == {"port-io", "port-recv"}
+
+
+def test_named_effects_are_checked_where_they_are_declared(base_checker_state):
+    checker = check(base_checker_state, (
+        "( kind: hook xt( c: char -- ) )\n"
+        "( kind: hook xt( c: char -- ) )\n"
+        "( kind: hook xt( -- ) )\n"
+        "( kind: hook struct )\n"
+        "( kind: grab xt( i*x -- j*x ) )\n"
+        "( kind: hooks list( hook ) )\n"
+        "( kind: plain xt )\n"
+    ))
+    assert all_findings(checker) == [
+        "declaration: kind: hook already names another effect",
+        "declaration: kind: hook already names an effect",
+        "declaration: kind: grab names an effect that is not fixed",
+        "declaration: kind: hooks: list( xt ): an execution token is plain data",
+        "declaration: kind: plain cannot refine xt",
+    ]
 
 
 def test_children_of_defining_words_take_holds_declarations(base_checker_state):
@@ -438,7 +587,30 @@ def test_a_prefix_checked_against_a_longer_span_is_part_of_it(base_checker_state
     assert findings(checker, "COMMON") == []
 
 
+def test_a_bar_inside_a_label_names_the_values_its_cell_may_take(base_checker_state):
+    effect = parse_effect(" r: addr -- port|0: nio-port status: n ").effect
+    assert [s.name for s in effect.alts[0]] == ["port|0", "status"]
+    assert len(effect.alts) == 1  # one cell, not two alternatives
+    checker = check(base_checker_state, (
+        "( kind: port struct )\n"
+        "( kind: other struct )\n"
+        ": ADOPT  ( r: addr -- port|0: port status: n )  @ 0 ;\n"
+        ": USE-PORT  ( p: port -- )  DROP ;\n"
+        ": USE-OTHER  ( o: other -- )  DROP ;\n"
+        ": ADOPTED  ( r: addr -- )  ADOPT DROP ?DUP IF USE-PORT THEN ;\n"
+        ": CONFUSED  ( r: addr -- )  ADOPT DROP ?DUP IF USE-OTHER THEN ;\n"
+    ))
+    # The cell is a port when it is not zero.
+    assert record(checker, "ADOPT").comparison == "match"
+    assert findings(checker, "ADOPTED") == []
+    assert any(f.startswith("kind: named kinds differ: port")
+               for f in findings(checker, "CONFUSED"))
+
+
 def test_a_primed_output_span_is_part_of_the_input_span(base_checker_state):
+    effect = parse_effect(" s: span n -- s': span ").effect
+    assert [s.part_of for s in effect.alts[0]] == [0, 0]
+    assert parse_effect(" s: span -- t: span ").effect.alts[0][0].part_of is None
     checker = check(base_checker_state, (
         ": SKIP1  ( s: span -- s': span )  1- SWAP 1+ SWAP ;\n"
         ": REST  ( s: span -- )  SKIP1 TYPE ;\n"
@@ -496,8 +668,69 @@ def test_bios_effects_come_from_both_forms_of_the_dictionary_tables(base_checker
     assert checker.lookup("CALLER-SPAN-STATUS").signature.shape() == "2 -- 1"
 
 
+def test_megapad_is_found_beside_akashic_as_a_workspace_links_them(tmp_path, monkeypatch):
+    # A workspace links checkouts that live elsewhere side by side.
+    checkouts = tmp_path / "checkouts"
+    (checkouts / "akashic").mkdir(parents=True)
+    (checkouts / "megapad").mkdir()
+    (checkouts / "megapad" / "kdos.f").write_text("")
+    workspace = tmp_path / "workspace"
+    (workspace / "megapad").mkdir(parents=True)
+    (workspace / "megapad" / "kdos.f").write_text("")
+    (workspace / "akashic").symlink_to(checkouts / "akashic")
+    monkeypatch.delenv("MEGAPAD_ROOT", raising=False)
+    assert megapad_root(workspace / "akashic") == workspace / "megapad"
+    # Without a MegaPad in the workspace, the one beside the link's target.
+    (workspace / "megapad" / "kdos.f").unlink()
+    assert megapad_root(workspace / "akashic") == checkouts / "megapad"
+    monkeypatch.setenv("MEGAPAD_ROOT", str(tmp_path / "chosen"))
+    assert megapad_root(workspace / "akashic") == tmp_path / "chosen"
+
+
 def test_kdos_catch_and_throw_keep_their_exact_meaning(base_checker_state):
     checker = check(base_checker_state, "")
     assert checker.lookup("CATCH").prim == "CATCH"
     assert checker.lookup("THROW").prim == "THROW"
     assert len([r for r in checker.records if r.group == "base"]) > 800
+
+
+# The base words' declarations in MegaPad's uroko.f
+
+
+def test_uroko_declares_the_base_words_kinds(base_checker_state):
+    checker = Checker()
+    checker.load_bios(base_checker_state)
+    checker.load_base(base_checker_state)  # every base module, as the measurement loads them
+    assert [f.detail for f in checker.findings if f.module == "uroko.f"] == []
+    compare = checker.lookup("COMPARE").signature
+    assert [s.role for s in compare.inputs] == ["a", "u", "a", "u"]
+    assert [s.kind for s in checker.lookup("ALLOCATE").signature.alts[0]] == [E.ADDR, E.NUMBER]
+    assert checker.lookup("FREE").declared_text == "a: addr --"
+    # Words the dictionary's tables catalogue, with their kinds.
+    assert checker.lookup("TERMSIZE").signature.shape() == "0 -- 2"
+    assert checker.lookup("HBW-BASE").signature.alts[0][0].kind == E.ADDR
+    assert checker.lookup("_RELOC-COUNT").signature.alts[0][0].holds.kind == E.COUNT
+    assert checker.lookup("2@").signature.shape() == "1 -- 2"
+
+
+def test_effect_declares_a_words_kinds_and_keeps_its_shape(base_checker_state):
+    checker = check(base_checker_state, (
+        ": PAIR  ( a b -- c )  + ;\n"
+        "EFFECT PAIR ( a: addr n: n -- a': addr )\n"
+        "EFFECT PAIR ( a -- b )\n"
+        "EFFECT NOWHERE ( -- )\n"
+        "EFFECT PAIR\n"
+        "EFFECT PAIR ( a: blob n -- c )\n"
+        ": SCREEN-AREA  ( -- n )  TERMSIZE * ;\n"
+        ": HBW-END  ( -- a )  HBW-BASE HBW-SIZE + ;\n"
+    ))
+    assert [s.kind for s in checker.lookup("PAIR").signature.inputs] == [E.ADDR, E.NUMBER]
+    assert all_findings(checker) == [
+        "declaration: EFFECT PAIR ( 1 -- 1 ) changes its effect ( 2 -- 1 )",
+        "declaration: EFFECT names NOWHERE, which no word defines",
+        "declaration: EFFECT PAIR has no effect after its name",
+        "declaration: a: names an unknown kind 'blob'",
+    ]
+    # Words whose effects the dictionary lacked before now infer.
+    assert record(checker, "SCREEN-AREA").comparison == "match"
+    assert record(checker, "HBW-END").word.inferred.alts[0][0].kind == E.ADDR

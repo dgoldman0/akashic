@@ -5,8 +5,8 @@ Run from the Akashic checkout::
     python3 -m toolchain.language.measure --json report.json
     python3 -m toolchain.language.measure --groups library --placement lm1.txt
 
-The run loads MegaPad's BIOS dictionary, KDOS and the system modules as the
-base vocabulary, then every library file under ``akashic/`` in sorted order,
+The run loads MegaPad's BIOS dictionary, KDOS, ``uroko.f`` and the system
+modules as the base vocabulary, then every library file under ``akashic/`` in sorted order,
 following each REQUIRE where it appears, then the Forth test drivers and
 examples.  It reports how many colon definitions have an inferred effect,
 how those compare with their stack comments, why the rest could not be
@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import collections
 import json
-import os
 import re
 import subprocess
 import sys
@@ -32,8 +31,8 @@ from pathlib import Path
 
 from .checker import Checker, Record, Word
 from .effects import Effect
+from .vocabulary import BASE_MODULES, megapad_root
 
-BASE_MODULES = ("kdos.f", "networking.f", "rich-terminal.f", "tools.f", "graphics.f")
 PROPAGATED = "calls a word whose effect is unknown"
 
 # Comments such as "( eight-values -- )" count cells in words, so they
@@ -263,6 +262,8 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
                                           if w.holds is not None and w.holds.effect is not None),
         "kinds declared": sum(1 for kind_group, _ in checker.declared_kinds
                               if kind_group == group),
+        "effects named": sum(1 for effect_group, _ in checker.named_effects
+                             if effect_group == group),
         "calls through a declared token effect": sum(r.declared_tokens for r in records),
         "such calls by source": dict(sum((collections.Counter(r.declared_token_sources)
                                           for r in records), collections.Counter())),
@@ -297,6 +298,44 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
             for r in self_named[:examples * 4]
         ],
         "redefinitions that call their own name (count)": len(self_named),
+    }
+
+
+def ratchet_counts(checker: Checker, group: str = "library") -> dict[str, int]:
+    """The counts the findings ratchet holds for one group.
+
+    They are the definitions not inferred, in all and by the category of
+    their own failure, with those that fail through a callee counted
+    together; the inferred effects that mismatch their comments; and the
+    findings, by the types the measurement reports.  None of them should
+    grow, and each fall is recorded, so the baseline keeps every gain.
+    """
+    part = summarize(checker, group, 0)
+    counts = {
+        "not inferred": part["failed"],
+        "mismatch": part["comparison of inferred effects"].get("mismatch", 0),
+    }
+    for category, number in part["failure categories"].items():
+        counts[f"not inferred: {category}"] = number
+    propagated = sum(part["propagated failures by root cause"].values())
+    if propagated:
+        counts["not inferred: through a callee that fails"] = propagated
+    for kind, number in part["findings"].items():
+        counts[f"finding: {kind}"] = number
+    return dict(sorted(counts.items()))
+
+
+def ratchet_baseline(checker: Checker, megapad: Path, group: str = "library") -> dict:
+    """The ratchet's baseline file: the counts, with what they were measured on."""
+    part = summarize(checker, group, 0)
+    revision = subprocess.run(["git", "-C", str(megapad), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    return {
+        "measured": f"Akashic's {group} group, with GUARDED undefined, on MegaPad "
+                    f"{revision or 'of unknown revision'}",
+        "definitions": part["definitions"],
+        "inferred": part["inferred"],
+        "counts": ratchet_counts(checker, group),
     }
 
 
@@ -423,11 +462,9 @@ def _where(record: Record, line: int | None, detail: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    here = Path(__file__).resolve().parents[2]
-    configured = os.environ.get("MEGAPAD_ROOT")
+    here = Path(__file__).absolute().parents[2]
     parser.add_argument("--akashic", type=Path, default=here)
-    parser.add_argument("--megapad", type=Path,
-                        default=Path(configured) if configured else here.parent / "megapad",
+    parser.add_argument("--megapad", type=Path, default=megapad_root(here),
                         help="MegaPad checkout (default: MEGAPAD_ROOT, else beside Akashic)")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--examples", type=int, default=6)
@@ -443,10 +480,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--placement", type=Path,
                         help="write the definitions that qualify for LM1, one per line")
     parser.add_argument("--no-strict", action="store_true", help="skip the strict run")
+    parser.add_argument("--ratchet", type=Path, metavar="BASELINE",
+                        help="write the findings ratchet's baseline of the plain library's counts")
     args = parser.parse_args(argv)
     defines = ["-1 CONSTANT GUARDED"] if args.guarded else []
     started = time.monotonic()
     groups = args.groups.split(",")
+    if args.ratchet and (args.guarded or "library" not in groups):
+        parser.error("--ratchet measures the plain library: include it and leave out --guarded")
     if args.sample:
         checker = build(args.akashic, args.megapad, defines, groups, strict=args.strict)
         print(sample(checker, args.akashic, groups[0], args.sample, args.count, args.seed))
@@ -479,6 +520,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(report, indent=1, default=str))
+    if args.ratchet:
+        args.ratchet.write_text(
+            json.dumps(ratchet_baseline(checker, args.megapad), indent=1) + "\n")
     for group in groups:
         part = report[group]
         print(f"{group}: {part['definitions']} definitions, {part['inferred']} inferred "
