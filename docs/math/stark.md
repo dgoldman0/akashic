@@ -4,7 +4,7 @@
 **Prefix:** `STARK-`
 **Depends on:** `sha3.f`, `ntt.f`, `baby-bear.f`, `merkle.f`, `stark-air.f`
 **Provided:** `akashic-stark`
-**Tests:** 42/42 (32 regression + 10 multi-column)
+**Tests:** 43/43 (32 regression + 11 multi-column)
 
 ## Overview
 
@@ -29,7 +29,7 @@ constraints with multi-column traces.
 | **Fiat-Shamir** | Hash-based transcript: absorb combined root, per-boundary challenges |
 | **Quotient** | Combined transition + boundary quotients with per-boundary random scaling |
 | **FRI** | 8 rounds of coefficient-space folding ($256 \to 1$), each round committed |
-| **Verifier** | Exhaustive: rebuilds all Merkle trees, checks all AIR constraints, replays FRI |
+| **Verifier** | Exhaustive: rebuilds all Merkle trees, checks each AIR constraint at every row, replays FRI |
 | **Variables over return stack** | All loop state uses `VARIABLE` — `>R`/`R@` inside `DO..LOOP` is unsafe |
 | **Not re-entrant** | Shared buffers, Merkle trees, and MMIO devices |
 
@@ -56,12 +56,23 @@ constraints with multi-column traces.
 1. Rebuild per-column Merkle commitments, compare each root
 2. Re-derive combined trace root, compare
 3. Re-derive Fiat-Shamir challenges (per-boundary)
-4. NTT each column's coefficients to evaluation form, check all AIR transitions and boundaries
+4. NTT each column's coefficients to evaluation form, check every boundary, and check each transition constraint on its own at every row with `AIR-CHECK-TRANS`
 5. Rebuild quotient Merkle commitment, compare root
 6. Replay all 8 FRI rounds: re-hash, re-fold, compare byte-for-byte
 7. Verify FRI final constant
 
 Returns `TRUE` (-1) if all checks pass, `FALSE` (0) otherwise.
+
+The proof holds every column's coefficients, so the verifier rebuilds
+the whole trace and checks the constraints on it directly; that check
+carries the soundness.  The commitments, quotient and FRI rounds are
+checked for consistency with each other, and the quotient is not
+checked against the trace.  Each transition constraint is checked on
+its own because residuals of different constraints can cancel in their
+sum (see `stark-air.md`).  Transitions are checked on rows 0 to
+255 − `AIR-MAX-OFF` for every constraint, so a constraint whose offsets
+are smaller than the AIR's largest leaves its last rows unchecked: in
+the two-column example below, col1[255].
 
 ## API Reference
 
@@ -214,9 +225,12 @@ STARK-VERIFY IF ." Valid" ELSE ." Invalid" THEN
 
 ## Tamper Detection
 
-The verifier detects any of the following modifications after proving:
+The verifier rejects a proof of a trace that breaks a boundary or a
+transition constraint on any column, even though the prover commits to
+that trace consistently, and even when the residuals of two constraints
+cancel in their sum.  It also detects any of the following
+modifications after proving:
 
-- Trace value changes on any column (`STARK-TRACE!` after `STARK-PROVE`)
 - Coefficient corruption (`_SK-TCOEFFS`, `_SK-QCOEFF`)
 - Per-column Merkle root tampering (`_SK-TROOTS`)
 - Combined trace root tampering (`_SK-TROOT`)
@@ -224,6 +238,10 @@ The verifier detects any of the following modifications after proving:
 - FRI buffer corruption (`_SK-FRI-BUF`)
 - FRI final value changes (`_SK-FRI-FINAL`)
 - Wrong boundary values in the AIR descriptor (any column)
+
+The trace buffer that `STARK-TRACE!` writes is the prover's input, not
+part of the proof.  Changing it after `STARK-PROVE` leaves a valid proof
+of the trace that was proved, and the verifier accepts it.
 
 ## Quick Reference
 

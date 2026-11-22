@@ -4,7 +4,7 @@
 **Prefix:** `AIR-`
 **Depends on:** `baby-bear.f`
 **Provided:** `akashic-stark-air`
-**Tests:** 28/28
+**Tests:** 33/33
 
 ## Overview
 
@@ -84,6 +84,7 @@ Boundary entries (8 bytes each):
 | Word | Stack | Description |
 |------|-------|-------------|
 | `AIR-EVAL-TRANS` | `( air cols row -- residual )` | Sum of constraint residuals at row |
+| `AIR-CHECK-TRANS` | `( air cols row -- flag )` | TRUE if every transition constraint holds at row |
 | `AIR-CHECK-BOUND` | `( air cols -- flag )` | TRUE if all boundaries match |
 
 ## Trace Access Convention
@@ -145,8 +146,8 @@ AIR-END CONSTANT DBL-AIR
 ```forth
 \ Check all transition rows
 254 0 DO
-  FIB-AIR cols I AIR-EVAL-TRANS
-  0 <> IF ." BAD ROW " I . THEN
+  FIB-AIR cols I AIR-CHECK-TRANS
+  0= IF ." BAD ROW " I . THEN
 LOOP
 
 \ Check boundary values
@@ -166,7 +167,17 @@ total = sum of all residual_j  (mod q)
 ```
 
 Returns 0 when all constraints are satisfied.  A nonzero return
-means at least one constraint is violated.
+means at least one constraint is violated.  The converse fails once an
+AIR has two transition constraints: their residuals can cancel, so a
+sum of 0 does not show that the row satisfies the AIR.  In a
+two-column AIR with `col0[i+2] = col0[i] + col0[i+1]` and
+`col1[i+1] = col1[i] + col0[i]`, a trace with col0 = 1 and
+col1[i] = 2i has residuals -1 and +1 at every row, which sum to 0.
+
+`AIR-CHECK-TRANS` checks each constraint's residual on its own and
+returns TRUE only when all are zero.  A verifier checks rows with it;
+the sum serves the prover, which divides it by the zerofier to build
+the quotient.
 
 ## Quick Reference
 
@@ -179,5 +190,6 @@ AIR-END ( -- air )
 AIR-N-COLS ( air -- n )    AIR-N-TRANS ( air -- n )
 AIR-N-BOUND ( air -- n )   AIR-MAX-OFF ( air -- n )
 AIR-EVAL-TRANS ( air cols row -- residual )
+AIR-CHECK-TRANS ( air cols row -- flag )
 AIR-CHECK-BOUND ( air cols -- flag )
 ```

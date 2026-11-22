@@ -509,6 +509,12 @@ VARIABLE _SK-BCOL
 \ =====================================================================
 \  STARK-VERIFY — exhaustive (multi-column)
 \ =====================================================================
+\  The proof holds every column's coefficients, so the verifier
+\  rebuilds the whole trace and checks each constraint on it; that
+\  check carries the soundness.  The commitments, quotient and FRI
+\  rounds are checked for consistency with each other.  The trace
+\  buffer STARK-TRACE! writes is the prover's input, not part of the
+\  proof, and the verifier never reads it.
 
 VARIABLE _SK-V-OK
 
@@ -585,11 +591,12 @@ VARIABLE _SK-V-OK
     _SK-AIR @ _SK-COLS AIR-CHECK-BOUND
     0= IF _SK-V-FAIL THEN
 
-    \ 6. Check AIR transitions
+    \ 6. Check each AIR transition constraint on its own at every row;
+    \    the residuals' sum can be zero while two constraints fail
     _SK-AIR @ AIR-MAX-OFF _SK-MAXOFF !
     256 _SK-MAXOFF @ - 0 DO
-        _SK-AIR @ _SK-COLS I AIR-EVAL-TRANS
-        0 <> IF _SK-V-FAIL THEN
+        _SK-AIR @ _SK-COLS I AIR-CHECK-TRANS
+        0= IF _SK-V-FAIL THEN
     LOOP
 
     \ 7. Verify quotient Merkle commitment
