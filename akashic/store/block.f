@@ -40,6 +40,7 @@
 \   BLK-HASH         ( blk hash -- )          SHA3-256 of CBOR header
 \   BLK-VERIFY       ( blk prev-hash -- flag) full non-destructive validation
 \   BLK-ENCODE       ( blk buf max -- len )   serialize full block to CBOR
+\   BLK-ENCODED-SIZE ( blk -- n )             bytes BLK-ENCODE writes for blk
 \   BLK-DECODE       ( buf len blk -- flag )  deserialize full block from CBOR
 \   BLK-HEIGHT@      ( blk -- n )             read height
 \   BLK-TX-COUNT@    ( blk -- n )             read tx count
@@ -378,18 +379,21 @@ CREATE _BLK-EH-CURSORS  CBOR-CURSORS-SIZE ALLOT  \ the caller's CBOR cursors
 \  We encode into the caller-provided buffer.  TX-ENCODE keeps this
 \  encoding's cursors while it writes each transaction to the scratch
 \  buffer, and BLK-ENCODE keeps its own caller's.
+\
+\  BLK-ENCODED-SIZE runs the same encoding into a buffer of 0 bytes,
+\  where the encoder counts every byte it cannot store, and so gives the
+\  exact size BLK-ENCODE needs: a caller sizes its buffer from the
+\  block instead of guessing a largest block.
 
 VARIABLE _BLK-E-BLK
-VARIABLE _BLK-E-DST
-VARIABLE _BLK-E-MAX
 CREATE _BLK-TX-SCRATCH  16384 ALLOT
 CREATE _BLK-E-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
 
-: BLK-ENCODE  ( blk buf max -- len )
-    _BLK-E-MAX ! _BLK-E-DST ! _BLK-E-BLK !
-    _BLK-E-CURSORS CBOR-SAVE
-
-    _BLK-E-DST @ _BLK-E-MAX @ CBOR-RESET
+\ _BLK-ENCODE-ITEMS ( blk -- )
+\   The block's items, written with the encoder's current cursor: the
+\   encoding BLK-ENCODE and BLK-ENCODED-SIZE share.
+: _BLK-ENCODE-ITEMS  ( blk -- )
+    _BLK-E-BLK !
 
     2 CBOR-ARRAY                          \ [ header, txs ]
 
@@ -423,9 +427,22 @@ CREATE _BLK-E-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
         I _BLK-E-BLK @ BLK-TX@ _BLK-TX-SCRATCH 16384 TX-ENCODE
         \ Encode the tx CBOR as a nested byte string
         _BLK-TX-SCRATCH SWAP CBOR-BSTR
-    LOOP
+    LOOP ;
 
+: BLK-ENCODE  ( blk buf max -- len )
+    _BLK-E-CURSORS CBOR-SAVE
+    CBOR-RESET
+    _BLK-ENCODE-ITEMS
     CBOR-OK? IF CBOR-RESULT NIP ELSE 0 THEN   \ -- len, 0 when it did not fit
+    _BLK-E-CURSORS CBOR-RESTORE ;
+
+\ BLK-ENCODED-SIZE ( blk -- n )
+\   The number of bytes BLK-ENCODE writes for blk.
+: BLK-ENCODED-SIZE  ( blk -- n )
+    _BLK-E-CURSORS CBOR-SAVE
+    0 0 CBOR-RESET
+    _BLK-ENCODE-ITEMS
+    CBOR-SIZE
     _BLK-E-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
@@ -827,6 +844,7 @@ GUARD _blk-guard
 ' BLK-HASH          CONSTANT _blk-hash-xt
 ' BLK-VERIFY        CONSTANT _blk-ver-xt
 ' BLK-ENCODE        CONSTANT _blk-enc-xt
+' BLK-ENCODED-SIZE  CONSTANT _blk-enc-size-xt
 ' BLK-DECODE        CONSTANT _blk-dec-xt
 ' CHAIN-INIT        CONSTANT _ch-init-xt
 ' CHAIN-APPEND      CONSTANT _ch-app-xt
@@ -841,6 +859,7 @@ GUARD _blk-guard
 : BLK-HASH          _blk-hash-xt  _blk-guard WITH-GUARD ;
 : BLK-VERIFY        _blk-ver-xt   _blk-guard WITH-GUARD ;
 : BLK-ENCODE        _blk-enc-xt   _blk-guard WITH-GUARD ;
+: BLK-ENCODED-SIZE  _blk-enc-size-xt _blk-guard WITH-GUARD ;
 : BLK-DECODE        _blk-dec-xt   _blk-guard WITH-GUARD ;
 : CHAIN-INIT        _ch-init-xt   _blk-guard WITH-GUARD ;
 : CHAIN-APPEND      _ch-app-xt    _blk-guard WITH-GUARD ;

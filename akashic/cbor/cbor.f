@@ -34,7 +34,7 @@ PROVIDED akashic-cbor
 
 VARIABLE _CB-DST       \ output buffer address
 VARIABLE _CB-MAX       \ output buffer capacity
-VARIABLE _CB-POS       \ current write position
+VARIABLE _CB-POS       \ bytes encoded, those past the capacity included
 VARIABLE _CB-OVF       \ overflow flag (TRUE if bytes dropped)
 
 \ CBOR-RESET ( dst max -- )
@@ -43,11 +43,13 @@ VARIABLE _CB-OVF       \ overflow flag (TRUE if bytes dropped)
     _CB-MAX ! _CB-DST ! 0 _CB-POS ! 0 _CB-OVF ! ;
 
 \ _CB-EMIT ( byte -- )  Write one byte.
+\   A byte past the buffer's capacity is dropped and still counted, so
+\   CBOR-SIZE reports the size an encoding needs whether or not it fit.
 : _CB-EMIT  ( byte -- )
     _CB-POS @ _CB-MAX @ < IF
         _CB-DST @ _CB-POS @ + C!
-        1 _CB-POS +!
-    ELSE DROP -1 _CB-OVF ! THEN ;
+    ELSE DROP -1 _CB-OVF ! THEN
+    1 _CB-POS +! ;
 
 \ CBOR-OK? ( -- flag )  TRUE if no bytes were dropped during encoding.
 : CBOR-OK?  ( -- flag )  _CB-OVF @ 0= ;
@@ -152,8 +154,14 @@ VARIABLE _CB-MT   \ stash major type
 : CBOR-NULL  ( -- )  246 _CB-EMIT ;
 
 \ CBOR-RESULT ( -- addr len )  Return encoded bytes.
+\   After an overflow, len is the capacity: the bytes that fit.
 : CBOR-RESULT  ( -- addr len )
-    _CB-DST @ _CB-POS @ ;
+    _CB-DST @ _CB-POS @ _CB-MAX @ MIN ;
+
+\ CBOR-SIZE ( -- n )  Bytes the encoding has produced so far, those that
+\   did not fit included.  Encoding an item into a buffer of 0 bytes
+\   measures the buffer it needs: 0 0 CBOR-RESET, encode, CBOR-SIZE.
+: CBOR-SIZE  ( -- n )  _CB-POS @ ;
 
 \ =====================================================================
 \  Decoder State
@@ -372,6 +380,7 @@ GUARD _cbor-guard
 ' CBOR-FALSE      CONSTANT _cbor-false-xt
 ' CBOR-NULL       CONSTANT _cbor-null-xt
 ' CBOR-RESULT     CONSTANT _cbor-result-xt
+' CBOR-SIZE       CONSTANT _cbor-size-xt
 ' CBOR-PARSE      CONSTANT _cbor-parse-xt
 ' CBOR-TYPE       CONSTANT _cbor-type-xt
 ' CBOR-DONE?      CONSTANT _cbor-done-q-xt
@@ -400,6 +409,7 @@ GUARD _cbor-guard
 : CBOR-FALSE      _cbor-false-xt _cbor-guard WITH-GUARD ;
 : CBOR-NULL       _cbor-null-xt _cbor-guard WITH-GUARD ;
 : CBOR-RESULT     _cbor-result-xt _cbor-guard WITH-GUARD ;
+: CBOR-SIZE       _cbor-size-xt _cbor-guard WITH-GUARD ;
 : CBOR-PARSE      _cbor-parse-xt _cbor-guard WITH-GUARD ;
 : CBOR-TYPE       _cbor-type-xt _cbor-guard WITH-GUARD ;
 : CBOR-DONE?      _cbor-done-q-xt _cbor-guard WITH-GUARD ;

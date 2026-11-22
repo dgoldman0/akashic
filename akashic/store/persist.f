@@ -16,11 +16,23 @@
 \
 \  Known KDOS limitations:
 \   - MP64FS contiguous allocation; files cannot be resized
-\   - MKFILE pre-allocates a fixed sector count — over-allocate
+\   - MKFILE pre-allocates a fixed sector count — over-allocate.  A
+\     record the file cannot hold is refused whole (FWRITE writes
+\     nothing past a file's sectors).
 \   - FD pool is 16 slots (persist needs at most 2)
-\   - FREAD/FWRITE operate via DMA (whole sectors) — use _PST-BUF
-\     as scratch for small reads
 \   - No concurrent access control; serialized via WITH-GUARD
+\
+\  Record buffer:
+\   A block's encoding, a block read back and a state snapshot each
+\   pass through one scratch buffer whole.  It comes from the heap (XMEM
+\   when present) the first time a record needs it and is kept, growing
+\   only when a record needs more: to twice its size, or to the record's
+\   size when that is more.  BLK-ENCODED-SIZE gives a block's size, the
+\   state's page count gives a snapshot's, and a record read back is
+\   bounded by the file that holds it.  KDOS's XMEM heap never joins
+\   free blocks, so a buffer freed and taken again at each record's
+\   size would leave a hole of every size behind; growth by doubling
+\   leaves one hole per doubling, smaller together than the buffer.
 \
 \  When the akashic higher-level filesystem libraries are built
 \  (see ROADMAP_filesystem.md), this module should be rewritten
@@ -47,11 +59,6 @@ PROVIDED akashic-persist
 \ =====================================================================
 \  1. Constants & configurable sizing
 \ =====================================================================
-
-\ [FIX D06] Raised from 16384 to 262144 (256 KB) — 16 KB truncated
-\ full blocks (256 txs × ~8 KB = ~2 MB CBOR).  256 KB covers
-\ realistic blocks (up to ~30 txs).  Streaming encode needed for max.
-262144 CONSTANT _PST-ENC-SZ
 
 \ [FIX P31] Sector counts are now VARIABLEs — configurable via
 \ PST-SET-CAPACITY before PST-INIT.  Defaults match previous constants.
@@ -85,10 +92,29 @@ VARIABLE _PST-OK                       \ TRUE if init succeeded
 0 _PST-COUNT !
 0 _PST-OK !
 
-CREATE _PST-BUF _PST-ENC-SZ ALLOT     \ temp encode/decode/DMA scratch
+\ The record buffer (see the header): address and size, 0 until a
+\ record needs it.
+VARIABLE _PST-BUF-PTR
+VARIABLE _PST-BUF-SZ
+0 _PST-BUF-PTR !
+0 _PST-BUF-SZ !
 
-\ Separate 8-byte cell for length prefix I/O — cannot use _PST-BUF+ENC_SZ
-\ because that would clobber _PST-IDX (allocated immediately after).
+: _PST-BUF  ( -- addr )  _PST-BUF-PTR @ ;
+
+\ _PST-ROOM ( n -- flag )
+\   Make the record buffer hold at least n bytes.  FALSE when the heap
+\   cannot give the larger buffer; the buffer it has stays.
+: _PST-ROOM  ( n -- flag )
+    DUP _PST-BUF-SZ @ <= IF DROP -1 EXIT THEN
+    _PST-BUF-SZ @ 2* MAX                  ( size )
+    DUP ALLOCATE IF 2DROP 0 EXIT THEN     ( size addr )
+    _PST-BUF FREE                         \ 0 FREE does nothing
+    _PST-BUF-PTR !  _PST-BUF-SZ !  -1 ;
+
+\ The 8-byte cell for length prefixes, the state file's height and size
+\ marker, and the block walk's reads.  FREAD and FWRITE move partial
+\ sectors through KDOS's own sector scratch, so a read or write of 8
+\ bytes touches only these 8.
 CREATE _PST-LEN-IO  8 ALLOT
 
 \ [FIX B07] Offset index — 16384 × 8 bytes = 128 KB
@@ -252,10 +278,10 @@ _PST-BUILD-NAMES
         \ Record offset of this entry in index
         _PST-CHAIN-FD @ F.CURSOR
         OVER 8 * _PST-IDX + !         \ _PST-IDX[count] = cursor
-        \ Read 8 bytes (length cell) into scratch buffer
-        _PST-BUF 8 _PST-CHAIN-FD @ FREAD
+        \ Read the 8-byte length cell
+        _PST-LEN-IO 8 _PST-CHAIN-FD @ FREAD
         8 < IF EXIT THEN               \ short read = end of data
-        _PST-BUF @                     ( count len )
+        _PST-LEN-IO @                  ( count len )
         DUP 0= IF DROP EXIT THEN      \ zero-length = end
         \ Skip past the block data
         _PST-CHAIN-FD @ F.CURSOR +
@@ -289,13 +315,29 @@ _PST-BUILD-NAMES
 \  6. PST-SAVE-BLOCK — encode block, append to chain.dat
 \ =====================================================================
 
+\ _PST-ENCODE ( blk -- len )
+\   Encode blk into the record buffer, which grows to the block's
+\   encoded size when the block does not fit.  0 when the heap cannot
+\   hold the block.  An encoding pass costs about as much as the block
+\   is long, so the buffer is tried first, and the block is measured
+\   only when it does not fit or no buffer exists yet.
+: _PST-ENCODE  ( blk -- len )
+    _PST-BUF-SZ @ IF
+        DUP _PST-BUF _PST-BUF-SZ @ BLK-ENCODE ?DUP IF NIP EXIT THEN
+    THEN
+    DUP BLK-ENCODED-SIZE _PST-ROOM 0= IF DROP 0 EXIT THEN
+    _PST-BUF _PST-BUF-SZ @ BLK-ENCODE ;
+
 : PST-SAVE-BLOCK  ( blk -- flag )
     _PST-OK @ 0= IF DROP 0 EXIT THEN
     \ [FIX B07] Check index capacity
     _PST-COUNT @ _PST-IDX-MAX >= IF DROP 0 EXIT THEN
-    \ Encode block to temp buffer
-    _PST-BUF _PST-ENC-SZ BLK-ENCODE   ( len )
+    \ Encode block into the record buffer
+    _PST-ENCODE                       ( len )
     DUP 0= IF DROP 0 EXIT THEN
+    \ The length prefix and the block must fit in the chain file
+    DUP 8 + _PST-CHAIN-FD @ FSIZE +
+    _PST-CHAIN-FD @ F.MAX SECTOR * > IF DROP 0 EXIT THEN
     \ Seek to end of chain file
     _PST-CHAIN-FD @ FSIZE
     _PST-CHAIN-FD @ FSEEK
@@ -317,25 +359,31 @@ _PST-BUILD-NAMES
 \  7. PST-LOAD-BLOCK — read block N from chain.dat, decode into blk
 \ =====================================================================
 \  [FIX B07] O(1) via _PST-IDX offset array (was O(n) walk).
+\  The record's length must keep it within the file; the record buffer
+\  grows to that length.
+
+VARIABLE _PST-LB-BLK
+VARIABLE _PST-LB-LEN
 
 : PST-LOAD-BLOCK  ( idx blk -- flag )
-    SWAP                               ( blk idx )
-    DUP _PST-COUNT @ >= IF 2DROP 0 EXIT THEN
-    _PST-OK @ 0= IF 2DROP 0 EXIT THEN
+    _PST-LB-BLK !
+    DUP _PST-COUNT @ U< 0= IF DROP 0 EXIT THEN   \ negative or past the end
+    _PST-OK @ 0= IF DROP 0 EXIT THEN
     \ Seek directly to the block via index
-    DUP 8 * _PST-IDX + @              ( blk idx offset )
-    _PST-CHAIN-FD @ FSEEK
-    DROP                               ( blk )
+    8 * _PST-IDX + @                   ( offset )
+    DUP _PST-CHAIN-FD @ FSEEK
     \ Read length
-    _PST-BUF 8 _PST-CHAIN-FD @ FREAD DROP
-    _PST-BUF @                         ( blk len )
-    DUP 0= IF 2DROP 0 EXIT THEN
-    DUP _PST-ENC-SZ > IF 2DROP 0 EXIT THEN   \ [FIX D06] guard
+    _PST-LEN-IO 8 _PST-CHAIN-FD @ FREAD 8 < IF DROP 0 EXIT THEN
+    _PST-LEN-IO @ _PST-LB-LEN !
+    _PST-LB-LEN @ 1 < IF DROP 0 EXIT THEN      \ empty or corrupt length
+    _PST-CHAIN-FD @ FSIZE SWAP - 8 -           ( bytes after the prefix )
+    _PST-LB-LEN @ < IF 0 EXIT THEN             \ runs past the file's end
+    _PST-LB-LEN @ _PST-ROOM 0= IF 0 EXIT THEN
     \ Read block data
-    DUP >R
-    _PST-BUF SWAP _PST-CHAIN-FD @ FREAD DROP
+    _PST-BUF _PST-LB-LEN @ _PST-CHAIN-FD @ FREAD
+    _PST-LB-LEN @ <> IF 0 EXIT THEN
     \ Decode
-    _PST-BUF R> ROT BLK-DECODE ;      ( flag )
+    _PST-BUF _PST-LB-LEN @ _PST-LB-BLK @ BLK-DECODE ;
 
 \ =====================================================================
 \  8. PST-BLOCK-COUNT / PST-CLEAR
@@ -347,8 +395,8 @@ _PST-BUILD-NAMES
     _PST-OK @ 0= IF EXIT THEN
     \ Rewind chain file and write a zero-length marker
     _PST-CHAIN-FD @ FREWIND
-    0 _PST-BUF !
-    _PST-BUF 8 _PST-CHAIN-FD @ FWRITE
+    0 _PST-LEN-IO !
+    _PST-LEN-IO 8 _PST-CHAIN-FD @ FWRITE
     _PST-CHAIN-FD @ FFLUSH
     0 _PST-COUNT ! ;
 
@@ -358,34 +406,36 @@ _PST-BUILD-NAMES
 \  Layout in state.snap:
 \    [actual_snap bytes]  — ST-SNAPSHOT (header + pgdir + pages)
 \    [8 bytes]            — chain height
+\    [8 bytes]            — actual_snap, the size marker
 \  ST-SNAPSHOT-SIZE is the worst-case (all 256 pages = ~4.7 MB).
-\  We compute the actual size to avoid writing past _PST-BUF and
-\  overflowing the disk file.
+\  PST-SAVE-STATE writes the actual size, and the record buffer grows
+\  to it.
 
-\ Compute actual snapshot size: 16 + MAX_PAGES*8 + used_pages*PAGE_BYTES.
+\ The bytes ST-SNAPSHOT writes: 16 + MAX_PAGES*8 + allocated pages *
+\ PAGE_BYTES.  ST-SNAPSHOT copies every page the state has allocated,
+\ which _ST-PGCNT counts, and the record buffer is sized to exactly this.
 VARIABLE _PST-SS
 : _PST-SNAP-ACTUAL  ( -- n )
     16 _ST-MAX-PAGES CELLS +
-    ST-COUNT DUP 0> IF
-        ST-PAGE-ENTRIES 1- + ST-PAGE-ENTRIES / _ST-PAGE-BYTES *
-    ELSE DROP 0
-    THEN + ;
+    _ST-PGCNT @ _ST-PAGE-BYTES * + ;
 
 : PST-SAVE-STATE  ( -- flag )
     _PST-OK @ 0= IF 0 EXIT THEN
-    _PST-SNAP-ACTUAL DUP _PST-ENC-SZ > IF DROP 0 EXIT THEN
-    _PST-SS !
+    _PST-SNAP-ACTUAL _PST-SS !
+    \ The snapshot, the height and the marker must fit in the file
+    _PST-SS @ 16 +  _PST-STATE-FD @ F.MAX SECTOR * > IF 0 EXIT THEN
+    _PST-SS @ _PST-ROOM 0= IF 0 EXIT THEN
     _PST-STATE-FD @ FREWIND
-    \ Snapshot state into scratch buffer
+    \ Snapshot state into the record buffer
     _PST-BUF ST-SNAPSHOT
     \ Write actual snapshot data (not worst-case size)
     _PST-BUF _PST-SS @ _PST-STATE-FD @ FWRITE
     \ Write chain height
-    CHAIN-HEIGHT _PST-BUF !
-    _PST-BUF 8 _PST-STATE-FD @ FWRITE
+    CHAIN-HEIGHT _PST-LEN-IO !
+    _PST-LEN-IO 8 _PST-STATE-FD @ FWRITE
     \ Write total length marker so LOAD knows how much to read
-    _PST-SS @ _PST-BUF !
-    _PST-BUF 8 _PST-STATE-FD @ FWRITE
+    _PST-SS @ _PST-LEN-IO !
+    _PST-LEN-IO 8 _PST-STATE-FD @ FWRITE
     _PST-STATE-FD @ FFLUSH
     -1 ;
 
@@ -393,15 +443,17 @@ VARIABLE _PST-SS
     _PST-OK @ 0= IF 0 EXIT THEN
     _PST-STATE-FD @ FSIZE 0= IF 0 EXIT THEN
     _PST-STATE-FD @ FREWIND
-    \ Compute expected snapshot size from current ST-COUNT
-    \ (must match what was saved — rewritten after restore)
     \ Read the snapshot-size marker from end: seek to end - 8
     _PST-STATE-FD @ FSIZE 8 - DUP 0< IF DROP 0 EXIT THEN
     _PST-STATE-FD @ FSEEK
-    _PST-BUF 8 _PST-STATE-FD @ FREAD 8 < IF 0 EXIT THEN
-    _PST-BUF @ _PST-SS !
-    _PST-SS @ _PST-ENC-SZ > IF 0 EXIT THEN
-    _PST-SS @ 0= IF 0 EXIT THEN
+    _PST-LEN-IO 8 _PST-STATE-FD @ FREAD 8 < IF 0 EXIT THEN
+    _PST-LEN-IO @ _PST-SS !
+    \ A snapshot is at most ST-SNAPSHOT-SIZE, and it lies in the file
+    \ before the height and the marker
+    _PST-SS @ 1 < IF 0 EXIT THEN
+    _PST-SS @ ST-SNAPSHOT-SIZE > IF 0 EXIT THEN
+    _PST-STATE-FD @ FSIZE 16 - _PST-SS @ < IF 0 EXIT THEN
+    _PST-SS @ _PST-ROOM 0= IF 0 EXIT THEN
     \ Now read from start: snapshot + height
     _PST-STATE-FD @ FREWIND
     _PST-BUF _PST-SS @ _PST-STATE-FD @ FREAD

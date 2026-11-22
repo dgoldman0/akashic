@@ -1,7 +1,7 @@
 {
- "measured": "Akashic's library group, with GUARDED undefined, on MegaPad 1d91b2c69b4d43265e6397a208cf050c44578882",
- "definitions": 44481,
- "inferred": 43282,
+ "measured": "Akashic's library group, with GUARDED undefined, on MegaPad d1f0ea17fdb9be0cee0711550ca95c3c119ea912",
+ "definitions": 44487,
+ "inferred": 43288,
  "counts": {
   "finding: return stack: I reads a cell parked by >R, not a loop index": 3,
   "finding: return stack: R> takes a DO loop's control cells": 1,

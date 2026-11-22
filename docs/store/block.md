@@ -196,6 +196,19 @@ string via `TX-ENCODE`, which keeps this encoding's CBOR cursors.
 Returns the encoded length, or 0 when the block does not fit in `max`
 bytes.  `BLK-ENCODE` keeps its own caller's cursors too.
 
+### BLK-ENCODED-SIZE
+
+```forth
+BLK-ENCODED-SIZE  ( blk -- n )
+```
+
+Return the number of bytes `BLK-ENCODE` writes for the block, so a
+caller can size its buffer from the block.  It runs the same encoding
+into a buffer of 0 bytes, where the CBOR encoder counts each byte it
+drops (`CBOR-SIZE`), and keeps its caller's cursors.  It costs about
+what an encoding costs: each transaction is still encoded into the
+scratch buffer to learn its length.
+
 ### BLK-DECODE
 
 ```forth
@@ -352,6 +365,7 @@ of prev_hash, state_root, and tx_root in hex.
 | `BLK-FINALIZE` | `( blk -- )` | Compute tx and state roots, state unchanged |
 | `BLK-HASH` | `( blk hash -- )` | SHA3-256 of header CBOR |
 | `BLK-ENCODE` | `( blk buf max -- len )` | Serialize full block |
+| `BLK-ENCODED-SIZE` | `( blk -- n )` | Bytes `BLK-ENCODE` writes for the block |
 | `BLK-DECODE` | `( buf len blk -- flag )` | Deserialize full block |
 | `BLK-VERIFY` | `( blk prev-hash -- flag )` | Full validation |
 | `BLK-PRINT` | `( blk -- )` | Debug print |

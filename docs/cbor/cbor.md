@@ -94,7 +94,25 @@ CBOR-RESULT  ( -- addr len )
 ```
 
 Return the encoded bytes so far.  `addr` is the buffer start, `len`
-is the bytes written.
+is the bytes written; after an overflow, that is the buffer's capacity.
+
+### Size
+
+```forth
+CBOR-SIZE  ( -- n )
+```
+
+Return the bytes the encoding has produced so far, the bytes past the
+buffer's capacity included: the encoder counts each byte it drops.  An
+item encoded into a buffer of 0 bytes therefore measures the buffer it
+needs:
+
+```forth
+0 0 CBOR-RESET   ( encode the item )   CBOR-SIZE   \ → bytes needed
+```
+
+`BLK-ENCODED-SIZE` measures a block this way, and persist.f sizes its
+record buffer from that measure.
 
 ### Overflow Check
 
@@ -104,7 +122,8 @@ CBOR-OK?  ( -- flag )
 
 Return `TRUE` (-1) if no bytes were dropped during encoding.
 `FALSE` (0) if the output buffer overflowed and data was silently
-discarded.  Check after encoding to detect truncation.
+discarded.  Check after encoding to detect truncation; `CBOR-SIZE` then
+gives the capacity the encoding needed.
 
 ### Argument Encoding
 
@@ -250,6 +269,7 @@ Returns `-1` if valid, `0` if invalid.
 | `CBOR-FALSE` | `( -- )` | Encode false |
 | `CBOR-NULL` | `( -- )` | Encode null |
 | `CBOR-RESULT` | `( -- addr len )` | Get encoded bytes |
+| `CBOR-SIZE` | `( -- n )` | Bytes the encoding needs, those that did not fit included |
 | `CBOR-OK?` | `( -- flag )` | Check for overflow |
 
 ### Decoder
