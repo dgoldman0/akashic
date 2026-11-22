@@ -468,15 +468,41 @@ VARIABLE _ktiv-delete-attempts
         _ktiv-check 0= IF 0 EXIT THEN
     KDOSNET-OWNER@ 0= _ktiv-check ;
 
+64 CONSTANT _KTIV-SETTLE-POLL-LIMIT
+VARIABLE _ktiv-settle-polls
+
+\ Whether a connection TCB, any but a listener's, has yet to close
+: _ktiv-connection-tcb-live?  ( -- flag )
+    TCP-TCBS @ 0= IF 0 EXIT THEN
+    /TCP-MAX-CONN 0 DO
+        I TCB-N TCB.STATE @
+        DUP TCPS-CLOSED <> SWAP TCPS-LISTEN <> AND
+        IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ HCONN has retired TLS/socket authority after emitting its FIN, and the
+\ connection's TCB waits in LAST-ACK until the machine-wide TCP service
+\ consumes the peer's final ACK.  That ACK need not be queued when the
+\ first poll runs, so poll, each time as one separately serialized
+\ operation, until no connection TCB is live, within a bound.
+: _ktiv-settle-connection  ( -- flag )
+    0 _ktiv-settle-polls !
+    BEGIN
+        _ktiv-service-network-poll 0= IF 0 EXIT THEN
+        _ktiv-connection-tcb-live?
+    WHILE
+        1 _ktiv-settle-polls +!
+        _ktiv-settle-polls @ _KTIV-SETTLE-POLL-LIMIT <
+            _ktiv-check 0= IF 0 EXIT THEN
+    REPEAT
+    -1 ;
+
 : _ktiv-run-one  ( -- flag )
     _ktiv-select-result
     _ktiv-drive-accept 0= IF 0 EXIT THEN
     _ktiv-init-hconn 0= IF 0 EXIT THEN
     _ktiv-drive-hconn 0= IF 0 EXIT THEN
-    \ HCONN has retired TLS/socket authority after emitting its FIN.  Give
-    \ the machine-wide TCP service one separately serialized operation to
-    \ consume the peer's already-queued final ACK and settle LAST-ACK.
-    _ktiv-service-network-poll ;
+    _ktiv-settle-connection ;
 
 : _ktiv-prepare-second  ( -- flag )
     150 _ktiv-stage !
