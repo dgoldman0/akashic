@@ -269,8 +269,9 @@ def program_output(output: str, lines: list[str], *, keep_cr: bool = False) -> s
 
 # The BIOS prints these when a line fails: an undefined or missing name, a
 # compile-only word or a definition begun while compiling, a stack fault, a
-# full dictionary, EVALUATE nested too deep or fed too long a line, a branch
-# out of range, too many LEAVEs, a misplaced quotation end, or a CPU fault.
+# full dictionary, in Bank 0 or in KDOS's userland, EVALUATE nested too deep
+# or fed too long a line, a branch out of range, too many LEAVEs, a
+# misplaced quotation end, or a CPU fault.
 KDOS_DIAGNOSTICS = (
     "? (not found)",
     "name expected",
@@ -284,6 +285,8 @@ KDOS_DIAGNOSTICS = (
     "Stack overflow",
     "Return stack overflow",
     "Dictionary full",
+    "Userland dictionary full",
+    "userland dictionary full",
     "dictionary overflow",
     "EVALUATE depth limit exceeded",
     "EVALUATE input exceeds 255 bytes",

@@ -16,12 +16,11 @@ from forth_dependencies import dependency_order
 from forth_snapshot import KDOS_DIAGNOSTICS, SOURCE_ROOT
 
 
-# What KDOS prints when a module it loads from disk fails: a REQUIRE whose
-# file or directory is missing, and a userland dictionary that fills.
+# What KDOS prints when a module it loads from disk names a file or a
+# directory the disk lacks.
 DISK_LOAD_DIAGNOSTICS = (
     "Module not found",
     "Path component not found",
-    "Userland dictionary full",
 )
 
 
