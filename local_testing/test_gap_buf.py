@@ -20,12 +20,13 @@ sys.path.insert(0, str(MEGAPAD_ROOT))
 from asm import assemble  # noqa: E402
 from system import MegapadSystem  # noqa: E402
 
+sys.path.insert(0, str(AKASHIC_ROOT / "local_testing"))
+from forth_snapshot import module_source_lines  # noqa: E402
+
 
 BIOS_PATH = MEGAPAD_ROOT / "bios.asm"
 KDOS_PATH = MEGAPAD_ROOT / "kdos.f"
-UTF8_PATH = AKASHIC_ROOT / "akashic" / "text" / "utf8.f"
 GAP_PATH = AKASHIC_ROOT / "akashic" / "text" / "gap-buf.f"
-UNDO_PATH = AKASHIC_ROOT / "akashic" / "text" / "undo.f"
 
 _snapshot = None
 
@@ -98,9 +99,9 @@ def _build_snapshot():
     source = (
         _load_forth_lines(KDOS_PATH)
         + ["ENTER-USERLAND"]
-        + _load_forth_lines(UTF8_PATH)
-        + _load_forth_lines(GAP_PATH)
-        + _load_forth_lines(UNDO_PATH)
+        # The modules and their REQUIRE closure, so the suite follows the
+        # dependencies they gain
+        + module_source_lines(("text/gap-buf.f", "text/undo.f"))
     )
     system = MegapadSystem(ram_size=1 << 20, ext_mem_size=16 << 20)
     output = _capture_uart(system)
