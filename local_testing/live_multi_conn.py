@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Live multi-connection stress test — Akashic web server over TAP.
+"""Manual live multi-connection check of the Akashic web server over TAP.
+
+A tool, not a test unit: it needs a TAP device that only a person can
+create, so its name keeps the test tool from collecting it.  Without the
+device every test skipped, so the tool ran it at every run and never
+counted it as passing.
 
 Boots the Akashic web framework server, then verifies it can handle
 multiple simultaneous TCP connections.  This exercises the KDOS TCP
@@ -36,8 +41,8 @@ Prerequisites
 Running
 -------
     cd local_testing
-    python test_live_multi_conn.py                    # standalone
-    python -m pytest test_live_multi_conn.py -v       # via pytest
+    python live_multi_conn.py                         # standalone
+    python -m pytest live_multi_conn.py -v            # via pytest
     python -m pytest test_live_multi_conn.py -v -k concurrent  # subset
 """
 from __future__ import annotations

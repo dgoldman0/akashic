@@ -1,7 +1,7 @@
 local_testing/*
 # Major / integration tests exposed to git
 !local_testing/live_web.py
-!local_testing/test_live_multi_conn.py
+!local_testing/live_multi_conn.py
 !local_testing/test_consensus.py
 !local_testing/test_consensus_5b.py
 !local_testing/test_gossip.py
