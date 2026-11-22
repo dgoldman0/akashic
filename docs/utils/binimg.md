@@ -61,7 +61,7 @@ output capacity IMG-BUILD-INTO    \ leaves used ior
 IMG-DISCARD THROW
 ```
 
-`IMG-MARK` reserves relocation storage, records `LATEST`, and starts tracking the segment at the subsequent `HERE`. The relocation capacity is 1024 entries in the kernel dictionary and 8192 in userland. Image construction also caps external-reference sites at 1024 and named imports at 1024; repeated calls to the same imported word still consume separate external-reference sites. At least one dictionary word must be compiled after the mark.
+`IMG-MARK` reserves relocation storage, records `LATEST`, and starts tracking the segment at the subsequent `HERE`. The relocation capacity is 1024 entries in the kernel dictionary and 8192 in userland. `IMG-MARK` hands that capacity to the BIOS in `_RELOC-CAP`, so the BIOS fills the buffer and writes nothing past it; a segment that compiles more address-carrying immediates than the buffer holds keeps its code intact, and `IMG-BUFFER-MAX` reports `IMG-E-CAPACITY`. Image construction also caps external-reference sites at 1024 and named imports at 1024; repeated calls to the same imported word still consume separate external-reference sites. At least one dictionary word must be compiled after the mark.
 
 Calling `IMG-MARK` again without first calling `IMG-DISCARD` preserves the historical behavior: the previous marked region is left committed in the live dictionary and a new build starts. Code that wants rollback must pair every mark with a successful discard.
 

@@ -192,6 +192,7 @@ VARIABLE _img-import-entry
     HERE _img-reloc-buf !
     _img-reloc-cap @ 8 * ALLOT
     _img-reloc-buf @ _RELOC-BUF !
+    _img-reloc-cap @ _RELOC-CAP !
     0 _RELOC-COUNT !
     1 _RELOC-ACTIVE !
     HERE _img-mark-base !
