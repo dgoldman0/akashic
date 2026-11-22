@@ -26,7 +26,7 @@ Tests:
   - Empty block → 0 entries, roots equal
   - Multi-tx block → correct entry count
 """
-import os, sys, time
+import hashlib, os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -235,37 +235,43 @@ TV3_SEED = "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
 TV3_PUB  = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"
 
 
-def _keygen_preamble():
-    """Create three keypairs, address buffers, and initialize state + witness."""
-    lines = create_hex_buf('_SEED1', TV1_SEED) + [
-        'CREATE _PUB1 32 ALLOT',
-        'CREATE _PRIV1 64 ALLOT',
-        '_SEED1 _PUB1 _PRIV1 ED25519-KEYGEN',
-        'CREATE _ADDR1 32 ALLOT',
-        '_PUB1 _ADDR1 ST-ADDR-FROM-KEY',
-    ] + create_hex_buf('_SEED2', TV2_SEED) + [
-        'CREATE _PUB2 32 ALLOT',
-        'CREATE _PRIV2 64 ALLOT',
-        '_SEED2 _PUB2 _PRIV2 ED25519-KEYGEN',
-        'CREATE _ADDR2 32 ALLOT',
-        '_PUB2 _ADDR2 ST-ADDR-FROM-KEY',
-    ] + create_hex_buf('_SEED3', TV3_SEED) + [
-        'CREATE _PUB3 32 ALLOT',
-        'CREATE _PRIV3 64 ALLOT',
-        '_SEED3 _PUB3 _PRIV3 ED25519-KEYGEN',
-        'CREATE _ADDR3 32 ALLOT',
-        '_PUB3 _ADDR3 ST-ADDR-FROM-KEY',
-        # Init state + witness
-        'ST-INIT DROP',
-        'WIT-INIT DROP',
-    ]
-    return lines
+def _ed25519_private(seed_hex):
+    """The 64 bytes ED25519-KEYGEN writes as a seed's private key: SHA-512
+    of the seed, its first half clamped into the secret scalar (RFC 8032
+    section 5.1.5), its second half kept as the signing prefix."""
+    digest = bytearray(hashlib.sha512(bytes.fromhex(seed_hex)).digest())
+    digest[0] &= 0xF8
+    digest[31] &= 0x3F
+    digest[31] |= 0x40
+    return digest.hex()
+
+
+def _key_pair(n, seed_hex, pub_hex):
+    """Key pair n from an RFC 8032 vector, and the address of its public key."""
+    return (create_hex_buf(f'_PUB{n}', pub_hex)
+            + create_hex_buf(f'_PRIV{n}', _ed25519_private(seed_hex))
+            + [f'CREATE _ADDR{n} 32 ALLOT', f'_PUB{n} _ADDR{n} ST-ADDR-FROM-KEY'])
+
+
+def _key_preamble():
+    """Three key pairs and their addresses, then state and witness initialized.
+
+    The pairs are RFC 8032's vectors 1 to 3, written as ED25519-KEYGEN
+    writes them rather than derived by it: test_ed25519 checks that
+    derivation, and signing with it, on these same vectors. A derivation
+    costs about 54M emulator steps, which the multi-transaction case
+    cannot spare within its budget.
+    """
+    return (_key_pair(1, TV1_SEED, TV1_PUB)
+            + _key_pair(2, TV2_SEED, TV2_PUB)
+            + _key_pair(3, TV3_SEED, TV3_PUB)
+            + ['ST-INIT DROP', 'WIT-INIT DROP'])
 
 
 def _make_tx(sender_pub, sender_priv, recip_pub, amount, nonce, buf_name='_TXBUF'):
     """Return Forth lines that build, sign, and leave a tx buffer."""
     return [
-        f'CREATE {buf_name} {8296} ALLOT',
+        f'CREATE {buf_name} TX-BUF-SIZE ALLOT',
         f'{buf_name} TX-INIT',
         f'{sender_pub} {buf_name} TX-SET-FROM',
         f'{recip_pub} {buf_name} TX-SET-TO',
@@ -302,7 +308,7 @@ def test_init():
 def test_begin_captures_root():
     """WIT-BEGIN stores pre-root matching ST-ROOT."""
     print("\n=== WIT-BEGIN captures pre-root ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         # Create an account so root is non-trivial
         '_ADDR1 1000 ST-CREATE DROP',
         # Capture current root in RAM
@@ -320,7 +326,7 @@ def test_begin_captures_root():
 def test_end_captures_post_root():
     """WIT-END stores post-root matching ST-ROOT."""
     print("\n=== WIT-END captures post-root ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -339,7 +345,7 @@ def test_end_captures_post_root():
 def test_single_tx_entries():
     """One tx → 2 entries (sender + recipient)."""
     print("\n=== Single tx → 2 entries ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -353,7 +359,7 @@ def test_single_tx_pre_values():
     """Pre-balance/nonce match state before tx."""
     print("\n=== Single tx pre-values ===")
     # Sender had balance 1000, nonce 0 before tx
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -363,7 +369,7 @@ def test_single_tx_pre_values():
     ]
     check("sender pre-balance = 1000", lines, "1000")
 
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -378,7 +384,7 @@ def test_single_tx_post_values():
     """Post-balance/nonce match state after tx."""
     print("\n=== Single tx post-values ===")
     # After tx: sender balance = 1000 - 100 = 900, nonce = 1
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -388,7 +394,7 @@ def test_single_tx_post_values():
     ]
     check("sender post-balance = 900", lines, "900")
 
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -398,7 +404,7 @@ def test_single_tx_post_values():
     check("sender post-nonce = 1", lines2, "1")
 
     # Recipient post-balance = 100
-    lines3 = _keygen_preamble() + [
+    lines3 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -412,7 +418,7 @@ def test_single_tx_post_values():
 def test_created_flag():
     """New recipient has CREATED flag set."""
     print("\n=== CREATED flag ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -426,7 +432,7 @@ def test_created_flag():
 def test_existing_recipient_no_flag():
     """Pre-existing recipient has CREATED = 0."""
     print("\n=== Existing recipient no CREATED flag ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR2 500 ST-CREATE DROP',   # pre-create recipient
         'WIT-BEGIN',
@@ -440,7 +446,7 @@ def test_existing_recipient_no_flag():
 def test_self_transfer():
     """Self-transfer → 1 entry, nonce bumped, balance same."""
     print("\n=== Self-transfer ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB1', 100, 0) + [
@@ -449,7 +455,7 @@ def test_self_transfer():
     ]
     check("self-transfer → 1 entry", lines, "1")
 
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB1', 100, 0) + [
@@ -459,7 +465,7 @@ def test_self_transfer():
     ]
     check("self-transfer post-balance = 1000", lines2, "1000")
 
-    lines3 = _keygen_preamble() + [
+    lines3 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB1', 100, 0) + [
@@ -473,7 +479,7 @@ def test_self_transfer():
 def test_dedup():
     """2 txs from same sender → 1 sender entry."""
     print("\n=== Dedup ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0, '_TX1') + [
@@ -489,7 +495,7 @@ def test_dedup():
 def test_dedup_post_values():
     """After 2 txs, post-values reflect cumulative change."""
     print("\n=== Dedup post-values ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0, '_TX1') + [
@@ -501,7 +507,7 @@ def test_dedup_post_values():
     ]
     check("sender pre-balance still 1000", lines, "1000")
 
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0, '_TX1') + [
@@ -513,7 +519,7 @@ def test_dedup_post_values():
     ]
     check("sender post-balance = 700", lines2, "700")
 
-    lines3 = _keygen_preamble() + [
+    lines3 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0, '_TX1') + [
@@ -529,7 +535,7 @@ def test_dedup_post_values():
 def test_failed_tx():
     """Failed tx (bad nonce) → 0 entries."""
     print("\n=== Failed tx → 0 entries ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 99) + [  # bad nonce
@@ -542,7 +548,7 @@ def test_failed_tx():
 def test_mixed_success_failure():
     """1 good tx + 1 bad tx → only good tx's entries."""
     print("\n=== Mixed success/failure ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0, '_TX1') + [
@@ -557,7 +563,7 @@ def test_mixed_success_failure():
 def test_verify_honest():
     """WIT-VERIFY returns -1 for honest witness."""
     print("\n=== WIT-VERIFY honest ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -571,7 +577,7 @@ def test_verify_honest():
 def test_verify_tampered_post():
     """Tamper post-balance → WIT-VERIFY returns 0."""
     print("\n=== WIT-VERIFY tampered post-balance ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -592,7 +598,7 @@ def test_prove_returns_len():
     cannot hold an entry; both give 0 and FALSE.  A lone account's leaf is
     the root, so its proof holds no entries under a true flag."""
     print("\n=== WIT-PROVE length and flag ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR3 3000 ST-CREATE DROP',
         'WIT-BEGIN',
@@ -610,7 +616,7 @@ def test_prove_returns_len():
     check("entry counts and flags", lines,
           "sender=-1 1 created=0 0 small=0 0 left=0 ")
 
-    lone = _keygen_preamble() + [
+    lone = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
     ] + _make_tx('_PUB1', '_PRIV1', '_PUB2', 100, 0) + [
@@ -631,7 +637,7 @@ def test_prove_verify_round_trip():
     pre-state tree keeps under its address.  The same proof does not reach
     the post-state root, where the sender's entry has changed."""
     print("\n=== WIT-PROVE + ST-VERIFY-PROOF round-trip ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         '_ADDR3 3000 ST-CREATE DROP',
         'WIT-BEGIN',
@@ -656,7 +662,7 @@ def test_prove_verify_round_trip():
 def test_empty_block():
     """WIT-BEGIN + WIT-END, 0 entries, roots equal."""
     print("\n=== Empty block ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
         'WIT-END',
@@ -664,7 +670,7 @@ def test_empty_block():
     ]
     check("empty block → 0 entries", lines, "0")
 
-    lines2 = _keygen_preamble() + [
+    lines2 = _key_preamble() + [
         '_ADDR1 1000 ST-CREATE DROP',
         'WIT-BEGIN',
         'WIT-END',
@@ -678,7 +684,7 @@ def test_empty_block():
 def test_multi_tx_block():
     """4 txs touching multiple accounts → correct entry count."""
     print("\n=== Multi-tx block ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 5000 ST-CREATE DROP',
         '_ADDR2 3000 ST-CREATE DROP',
         'WIT-BEGIN',
@@ -700,7 +706,7 @@ def test_multi_tx_block():
 def test_multi_tx_verify():
     """Multi-tx block passes WIT-VERIFY."""
     print("\n=== Multi-tx block verifies ===")
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 5000 ST-CREATE DROP',
         '_ADDR2 3000 ST-CREATE DROP',
         'WIT-BEGIN',
@@ -727,7 +733,7 @@ def test_overflow_flag():
     # then verify the next WIT-APPLY-TX returns 0.
     # Since we can't easily create 256 keypairs, we'll manually fill
     # _WIT-COUNT to near capacity and test a tx at the boundary.
-    lines = _keygen_preamble() + [
+    lines = _key_preamble() + [
         '_ADDR1 999999 ST-CREATE DROP',
         'WIT-BEGIN',
         # Manually set _WIT-COUNT to 511 (1 slot left)
