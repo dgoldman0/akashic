@@ -117,7 +117,7 @@ VARIABLE _GCVS-OUTER
     0<> ABORT" GCVS-NEW: alloc"          ( rgn desc )
     \ Fill widget header
     WDG-T-GAME-CANVAS OVER _WDG-O-TYPE      + !
-    SWAP OVER _WDG-O-REGION  + !         ( desc )  rgn stored
+    SWAP OVER _WDG-O-REGION  + !         ( desc )  \ rgn stored
     ['] _GCVS-DRAW  OVER _WDG-O-DRAW-XT   + !
     ['] _GCVS-HANDLE OVER _WDG-O-HANDLE-XT + !
     WDG-F-VISIBLE WDG-F-DIRTY OR
