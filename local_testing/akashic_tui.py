@@ -791,6 +791,30 @@ def _practice_head_snapshot(generation: int) -> bytes:
     return bytes(snapshot)
 
 
+def _forth_byte_buffer(name: str, value: str) -> str:
+    """Forth that holds VALUE's UTF-8 bytes in a buffer NAME, with their
+    count in the constant NAME-u."""
+
+    encoded = value.encode("utf-8")
+    lines = [f"CREATE {name}"]
+    for start in range(0, len(encoded), 24):
+        chunk = encoded[start : start + 24]
+        lines.append("  " + " ".join(f"{byte} C," for byte in chunk))
+    lines.append(f"{len(encoded)} CONSTANT {name}-u")
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class RecordsSeed:
+    """Records a Desk applet starts with, written at boot before Desk starts,
+    in the home where Desk keeps that applet's records (_DESK_RECORDS_SEED).
+    FORTH defines WORD, ( home -- ), which writes them in HOME through the
+    applet's own stores."""
+
+    forth: str
+    word: str
+
+
 # The Desktop profile composes Desk with these applets.  The same table gives
 # Desk with a single applet, for checking one applet's work on the optional
 # rich terminal before the full Desktop journey runs as regression.
@@ -807,6 +831,7 @@ class DeskApplet:
     tile: bool = True  # starts in a tile; otherwise a discoverable built-in
     note: str = ""  # comment above a built-in's registration
     setup: str = ""  # Forth run once its descriptor is filled, before Desk takes it
+    seeds: tuple[RecordsSeed, ...] = ()  # records it starts with, in its home
 
 
 DESK_APPLETS = (
@@ -939,6 +964,52 @@ def _with_practice_home_guard(autoexec: str) -> str:
     return autoexec.replace(
         _DESK_PRACTICE_PROVISION_HEAD, _DESK_PRACTICE_PROVISION_HOME_GUARD
     )
+
+
+# Records an applet starts with (RecordsSeed), seeded at boot where Desk will
+# keep them.  Desk activates the Practice over the default set when it starts,
+# and its stores keep each component's records in the home the activation
+# gives that component's stores (PACT-STORE-PLACES): a folder named by the
+# component's id under the records place in the shipping form, and the one
+# place of the linked form, which is the documents place too.  Desk binds the
+# Agent's conversation store, which loads the conversation at once, before
+# any applet or boot code runs again, so a seed writes before Desk starts.
+# The boot then activates the Practice it has just provisioned over the same
+# default set, asks the activation for the set of the stores of the component
+# an applet's descriptor names, runs the seed in that set's home, and frees
+# the set and the activation.  A seed names no place and no folder: the
+# activation decides both, as it does for Desk.
+_DESK_RECORDS_SEED = r"""\ Records an applet starts with, seeded where Desk keeps them.
+CREATE _boot-records-pact-raw PACT-SIZE 7 + ALLOT
+: _boot-records-pact  ( -- pact ) _boot-records-pact-raw 7 + -8 AND ;
+VARIABLE _boot-records-set
+\ Runs XT ( home -- ) in the home of the stores that keep the records of
+\ the component APP-DESC names, the home the activation gives Desk for them.
+: _boot-records-in  ( xt app-desc -- )
+    _boot-records-pact PACT-INIT
+    PLACES-DEFAULT _boot-records-pact PACT-ACTIVATE
+        PACT-S-OK <> ABORT" records: Practice activation failed"
+    APP.COMP-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _boot-records-pact PACT-STORE-PLACES
+    DUP 0= ABORT" records: no places for the applet's records"
+    DUP _boot-records-set !
+    PLSET-HOME DUP 0= ABORT" records: no home for the applet's records"
+    SWAP EXECUTE
+    _boot-records-set @ PLSET-FREE  0 _boot-records-set !
+    _boot-records-pact PACT-DEACTIVATE ;
+"""
+
+
+def _records_seed_lines(applet: DeskApplet) -> str:
+    """Forth that seeds APPLET's records (DeskApplet.seeds), each seed's word
+    run in the home of its records, once the applet's descriptor is filled."""
+
+    descriptor = f"_boot-{applet.name}-desc"
+    return "".join(
+        f"{seed.forth}' {seed.word} {descriptor} _boot-records-in\n"
+        for seed in applet.seeds
+    )
+
 
 _DESK_SANDBOX_POLICY = r"""\ The product Desktop offers the shared sandbox under this policy.  A run
 \ gets ten seconds and twenty milliseconds of each fifty-millisecond tick.
@@ -1075,8 +1146,9 @@ _DESK_AGENT_SOURCE_BOOT = (
 
 def desktop_autoexec(applets, *, rich: bool = False) -> str:
     """Desk's autoexec: load Desk and APPLETS, provision a blank Practice,
-    start each tile applet, register each built-in, then run Desk, either
-    in the ANSI terminal or as the optional rich terminal's session."""
+    seed the records an applet starts with in its home, start each tile
+    applet, register each built-in, then run Desk, either in the ANSI
+    terminal or as the optional rich terminal's session."""
 
     agent = any(applet.name == "agent" for applet in applets)
     parts = [
@@ -1093,6 +1165,8 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
     parts.append("\n" + _DESK_PRACTICE_PROVISION)
     if rich:
         parts.append('." [akashic boot] Practice ready" CR TX-FLUSH\n')
+    if any(applet.seeds for applet in applets):
+        parts.append("\n" + _DESK_RECORDS_SEED)
     blocks = []
     for applet in applets:
         descriptor = f"_boot-{applet.name}-desc"
@@ -1101,6 +1175,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
                 f"CREATE {descriptor} APP-DESC ALLOT\n"
                 f"{descriptor} {applet.entry}\n"
                 f"{applet.setup}"
+                f"{_records_seed_lines(applet)}"
                 f"{descriptor} DESK-QUEUE-LAUNCH\n"
             )
         else:
@@ -1109,6 +1184,7 @@ def desktop_autoexec(applets, *, rich: bool = False) -> str:
                 f"CREATE {descriptor} APP-DESC ALLOT\n"
                 f"{descriptor} {applet.entry}\n"
                 f"{applet.setup}"
+                f"{_records_seed_lines(applet)}"
                 f"{descriptor}\n"
                 "ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR\n"
                 "DESK-QUEUE-BUILTIN\n"
@@ -14741,6 +14817,28 @@ def desktop_apt1_shell_profile(
     )
 
 
+# The image's sample day: today, as the build's clock reads it in UTC.  The
+# sample daybook.md holds four records of it, and a profile whose applet
+# shows "today" from them starts its clock on that day
+# (Profile.sample_date_clock).
+_SAMPLE_DAY = datetime.now(timezone.utc).date()
+SAMPLE_DATE = _SAMPLE_DAY.isoformat()
+# Noon UTC on SAMPLE_DATE, in milliseconds since the Unix epoch.
+SAMPLE_CLOCK_MS = int(
+    datetime(
+        _SAMPLE_DAY.year, _SAMPLE_DAY.month, _SAMPLE_DAY.day, 12, tzinfo=timezone.utc
+    ).timestamp()
+    * 1000
+)
+DAYBOOK_SAMPLE = (
+    "# Daybook\n\n"
+    f"- {SAMPLE_DATE} 09:30 | Project review\n"
+    f"- [ ] {SAMPLE_DATE} | Plan the next release\n"
+    f"- [x] {SAMPLE_DATE} | Morning walk\n"
+    f"> {SAMPLE_DATE} | Keep the system small and legible\n"
+).encode()
+
+
 # Desk with Daybook, for Daybook's reminders in the CELL terminal.  The boot
 # creates two reminders through Daybook's own reminder owner, as a user's
 # creates would: a one-off due a minute and a half after the clock starts,
@@ -14750,22 +14848,21 @@ def desktop_apt1_shell_profile(
 DAYBOOK_REMINDER_TITLE = "Water the plants"
 DAYBOOK_REMINDER_DELAY_S = 90
 DAYBOOK_DAILY_TITLE = "Stretch"
-_DAYBOOK_REMINDER_SETUP_TEMPLATE = r"""\ Reminders made through Daybook's schedule owner.  A later boot of the same
-\ disk finds each create key already used, a conflict it leaves alone.
-CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
+_DAYBOOK_REMINDERS_SEED_TEMPLATE = r"""\ Reminders made through Daybook's schedule owner, in the
+\ service Desk opens over Daybook's home.  A later boot of the same disk finds
+\ each create key already used, a conflict it leaves alone.
+CREATE _boot-reminders-raw DBSVC-SIZE 7 + ALLOT
 CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
 CREATE _boot-key RID-SIZE ALLOT
 CREATE _boot-rid RID-SIZE ALLOT
-: _boot-reminders  ( -- owner ) _boot-reminders-raw 7 + -8 AND ;
+: _boot-reminders  ( -- service ) _boot-reminders-raw 7 + -8 AND ;
 : _boot-draft  ( -- draft ) _boot-draft-raw 7 + -8 AND ;
 \ Whether a create failed: made now, or on an earlier boot, is success.
 : _boot-made?  ( status -- failed? )
     DUP DBAO-S-CONFLICT = IF DROP 0 THEN ;
-: _boot-reminder  ( -- )
-    _boot-reminders DBAO-SIZE 0 FILL
-    PLACES-DEFAULT PLSET-HOME S" /daybook-automations.bin" _boot-reminders DBAO-INIT
-        ABORT" reminder owner init failed"
-    _boot-reminders DBAO-OPEN ABORT" reminder store open failed"
+: _boot-reminder  ( home -- )
+    _boot-reminders DBSVC-SIZE 0 FILL
+    _boot-reminders DBSVC-OPEN ABORT" reminder store open failed"
     _boot-draft DBAO-DRAFT-SIZE 0 FILL
     DBAS-ACTION-REMINDER _boot-draft DBAO-D.ACTION !
     DBREC-ONCE _boot-draft DBAO-D.RULE DBREC.FREQ !
@@ -14774,35 +14871,64 @@ CREATE _boot-rid RID-SIZE ALLOT
     S" {title}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
     S" UTC0" _boot-draft DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
     _boot-key RID-SIZE 7 FILL
-    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
-        _boot-made? ABORT" reminder create failed"
+    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBSVC-OWNER
+        DBAO-CREATE _boot-made? ABORT" reminder create failed"
     DBREC-DAILY _boot-draft DBAO-D.RULE DBREC.FREQ !
     DBSVC-NOW 1000 / DUP 86400 MOD - 86400 + 32400 +
         _boot-draft DBAO-D.RULE DBREC.START !
     S" {daily}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
     _boot-key RID-SIZE 8 FILL
-    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
-        _boot-made? ABORT" daily reminder create failed"
-    _boot-reminders DBAO-CLOSE DROP ;
-_boot-reminder
+    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBSVC-OWNER
+        DBAO-CREATE _boot-made? ABORT" daily reminder create failed"
+    _boot-reminders DBSVC-CLOSE ;
 """
 
 
-def daybook_reminder_setup(delay_s: int) -> str:
-    """The boot's reminders: the one-off DELAY_S seconds after the clock
-    reads at boot, and the daily one at 09:00 UTC from tomorrow."""
+def daybook_reminders_seed(delay_s: int) -> RecordsSeed:
+    """The boot's reminders, made in Daybook's home: the one-off DELAY_S
+    seconds after the clock reads at boot, and the daily one at 09:00 UTC
+    from tomorrow."""
 
-    return _DAYBOOK_REMINDER_SETUP_TEMPLATE.replace(
-        "{delay}", str(delay_s)
-    ).replace("{title}", DAYBOOK_REMINDER_TITLE).replace(
-        "{daily}", DAYBOOK_DAILY_TITLE
+    return RecordsSeed(
+        _DAYBOOK_REMINDERS_SEED_TEMPLATE.replace("{delay}", str(delay_s))
+        .replace("{title}", DAYBOOK_REMINDER_TITLE)
+        .replace("{daily}", DAYBOOK_DAILY_TITLE),
+        "_boot-reminder",
     )
+
+
+# Daybook's sample day as the document Daybook starts with: DAYBOOK_SAMPLE in
+# the file that Daybook's owner keeps in Daybook's home (SDOC-PATH$), written
+# as the owner writes it, through a checked replacement.  A home that holds
+# that file already keeps it.  The linked form's does: there Daybook's home
+# is the one place, and the image's sample daybook.md is Daybook's document.
+DAYBOOK_SAMPLE_DAY_SEED = RecordsSeed(
+    "\\ Daybook's sample day (akashic_tui.DAYBOOK_SAMPLE), as Daybook's\n"
+    "\\ document where its home holds none yet.\n"
+    + _forth_byte_buffer("_boot-day", DAYBOOK_SAMPLE.decode("utf-8"))
+    + r"""
+CREATE _boot-day-repl-raw VREPL-SIZE 7 + ALLOT
+: _boot-day-repl  ( -- replacement ) _boot-day-repl-raw 7 + -8 AND ;
+: _boot-day-kept?  ( home -- flag )
+    >R SDOC-PATH$ VFS-FF-READ R> PLACE-OPEN IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
+: _boot-sample-day  ( home -- )
+    DUP _boot-day-kept? IF DROP EXIT THEN
+    _boot-day-repl VREPL-SIZE 0 FILL
+    >R SDOC-PATH$ R> -1 _boot-day-repl PLACE-VREPL!
+        ABORT" sample day binding failed"
+    _boot-day _boot-day-u _boot-day-repl VREPL-REPLACE
+    DUP VREPL-S-OK <> SWAP VREPL-S-COMMITTED-CLEANUP <> AND
+        ABORT" sample day save failed"
+    _boot-day-repl VREPL-FINI DROP ;
+""",
+    "_boot-sample-day",
+)
 
 
 _DAYBOOK_REMINDER_APPLETS = (
     replace(
         desk_applet("daybook"),
-        setup=daybook_reminder_setup(DAYBOOK_REMINDER_DELAY_S),
+        seeds=(daybook_reminders_seed(DAYBOOK_REMINDER_DELAY_S),),
     ),
 )
 PROFILES["desktop-daybook-reminders"] = replace(
@@ -15069,18 +15195,29 @@ def build_form(
 # so its transcript is taller than its view.  Daybook alone starts with the
 # reminders the CELL reminders profile makes; on the rich terminal's real
 # clock the one-off fires two minutes after boot, once its journey's other
-# stages are done, and the journey requires its notice in the frame.
+# stages are done, and the journey requires its notice in the frame.  It
+# starts from the sample day as well, whose entries its agenda lists under
+# the journey's prompt.  The boot writes each of these records in the
+# applet's home, where Desk reads them in either form (RecordsSeed).
 DAYBOOK_APT1_REMINDER_DELAY_S = 120
 _DESKTOP_APT1_ALONE = {
     "daybook": (
         (replace(
             desk_applet("daybook"),
-            setup=daybook_reminder_setup(DAYBOOK_APT1_REMINDER_DELAY_S),
+            seeds=(
+                daybook_reminders_seed(DAYBOOK_APT1_REMINDER_DELAY_S),
+                DAYBOOK_SAMPLE_DAY_SEED,
+            ),
         ),),
         (),
     ),
     "agent": (
-        (replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),),
+        (replace(
+            desk_applet("agent"),
+            seeds=(
+                RecordsSeed(agent_transcript.forth_seed(), agent_transcript.SEED_WORD),
+            ),
+        ),),
         (),
     ),
     "streams": (
@@ -27227,23 +27364,6 @@ LARGE_SAMPLE = b"".join(
     for line in range(1, 49)
 )
 
-_SAMPLE_DAY = datetime.now(timezone.utc).date()
-SAMPLE_DATE = _SAMPLE_DAY.isoformat()
-# Noon UTC on SAMPLE_DATE, in milliseconds since the Unix epoch.
-SAMPLE_CLOCK_MS = int(
-    datetime(
-        _SAMPLE_DAY.year, _SAMPLE_DAY.month, _SAMPLE_DAY.day, 12, tzinfo=timezone.utc
-    ).timestamp()
-    * 1000
-)
-DAYBOOK_SAMPLE = (
-    "# Daybook\n\n"
-    f"- {SAMPLE_DATE} 09:30 | Project review\n"
-    f"- [ ] {SAMPLE_DATE} | Plan the next release\n"
-    f"- [x] {SAMPLE_DATE} | Morning walk\n"
-    f"> {SAMPLE_DATE} | Keep the system small and legible\n"
-).encode()
-
 GRID_SAMPLE = (
     "Item,Qty,Price,Total\n"
     '"Paper, A4",3,12,=B2*C2\n'
@@ -29028,16 +29148,6 @@ def _load_codex_auth_checkpoint(path: Path) -> dict[str, str | int]:
         raise RuntimeError("Invalid expires_ms in Codex auth checkpoint")
     result["expires_ms"] = expires_ms
     return result
-
-
-def _forth_byte_buffer(name: str, value: str) -> str:
-    encoded = value.encode("utf-8")
-    lines = [f"CREATE {name}"]
-    for start in range(0, len(encoded), 24):
-        chunk = encoded[start : start + 24]
-        lines.append("  " + " ".join(f"{byte} C," for byte in chunk))
-    lines.append(f"{len(encoded)} CONSTANT {name}-u")
-    return "\n".join(lines)
 
 
 def _with_codex_auth_checkpoint(autoexec: str, checkpoint: Path) -> str:

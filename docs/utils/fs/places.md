@@ -685,12 +685,23 @@ build by default, declares the user volume's places.
   The builder's default for the rich Desktop and Desk with one applet is
   now the shipping form with the user volume, and `--linked` builds the
   linked form (`local_testing/README.md`). In the shipping form the checks
-  of Desk with File Explorer, Pad, Streams, Sound Lab, Observatory and
-  Worlds, the small terminal, the photograph and the damaged picture pass.
-  Those of Desk with Daybook and Desk with the Agent fail there, as they do
-  on a build of main 75dfbc81 in that form, and pass in the linked form:
-  their boots seed the applet's records through the activation's home
-  rather than the applet's own folder (Open, below).
+  of Desk with File Explorer, Pad, Daybook, the Agent, Streams, Sound Lab,
+  Observatory and Worlds, the small terminal, the photograph and the damaged
+  picture pass. The Daybook and Agent checks start from records their boot
+  writes before Desk starts, Daybook's reminders and sample day and the
+  Agent's conversation. The boot activates the Practice over the default set
+  as Desk does and writes each in the home that activation gives the
+  applet's stores (`PACT-STORE-PLACES`), so the records lie in the applet's
+  folder under records in the shipping form and in the one place in the
+  linked form (`local_testing/test_desk_records_seed.py`). Both checks pass
+  in either form (2026-11-21, Akashic 2929838d; MegaPad 70e2f3dc for the
+  first run and a60fa472 for the rest): Desk with Daybook in 144 s in the
+  shipping form and 138 s linked, Desk with the Agent in 69 s and 60 s,
+  each with its build. After each shipping run `e2fsck` passed the user
+  volume and its journal was empty. The root of Records held only the
+  Practice head and a folder for each component whose records Desk keeps:
+  Daybook's reminders and document lay in `/records/org.akashic.daybook`,
+  and the Agent's conversation in `/records/org.akashic.agent`.
 
 ## Open
 
@@ -699,14 +710,6 @@ build by default, declares the user volume's places.
 - Explicit-parent VFS words in place of the current-directory bracket.
 - The user volume's two places, documents and records, are the layout for
   now and may change.
-- The boots of the Daybook and Agent checks seed their applet's records
-  through the activation's home, in the shipping form the records place's
-  root, while each applet reads the folder named by its id under it.
-  Daybook's check also expects the sample day that the linked form's
-  Daybook reads in its home, and which the shipping form keeps among the
-  documents. For both to pass in the shipping form, the seeds need the
-  applet's home (`PACT-STORE-PLACES`), and Daybook's sample a place among
-  its records.
 - The ext4 writer makes one journal transaction for each write call, about
   0.2 s on the user volume, so a Streams or Library commit of 12 pages takes
   2.9 s whatever the transaction size

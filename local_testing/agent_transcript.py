@@ -1,7 +1,8 @@
 """A long stored conversation, for the Agent alone on Desk.
 
 Desk with only the Agent starts from this conversation, saved at boot
-through the Agent's own conversation store as a restart would find it.  Its
+through the Agent's own conversation store as a restart would find it, in
+the Agent's home, where Desk binds that store (akashic_tui.RecordsSeed).  Its
 answer is taller than the transcript's view, so the physical journey can
 scroll the transcript by screen rows before it adds a reviewed exchange at
 the end.  The answer wraps a long paragraph, holds text beyond ASCII that
@@ -28,6 +29,8 @@ CARDS = (("YOU", QUESTION), ("AGENT", ANSWER))
 
 _BUFFER = 8192
 _PIECE = 72  # bytes of text in each S" of the seed
+# The word forth_seed() defines, ( home -- ).
+SEED_WORD = "_ags-seed"
 
 
 def _appends(text: str) -> list[str]:
@@ -51,8 +54,9 @@ def _appends(text: str) -> list[str]:
 
 
 def forth_seed() -> str:
-    """Forth that saves the conversation through the Agent's own store on
-    the current filesystem, where Desk's Agent loads it."""
+    """Forth that defines SEED_WORD, ( home -- ), which saves the
+    conversation through the Agent's own store in HOME, the Agent's home,
+    where Desk's Agent loads it."""
 
     for _header, text in CARDS:
         assert '"' not in text and len(text.encode()) < _BUFFER
@@ -62,6 +66,7 @@ def forth_seed() -> str:
         "VARIABLE _ags-u",
         "VARIABLE _ags-conv",
         "VARIABLE _ags-store",
+        "VARIABLE _ags-home",
         ": _ags,  ( addr len -- )",
         "    DUP >R _ags-text _ags-u @ + SWAP CMOVE R> _ags-u +! ;",
         ": _ags-nl  ( -- )  10 _ags-text _ags-u @ + C! 1 _ags-u +! ;",
@@ -74,18 +79,18 @@ def forth_seed() -> str:
         ": _ags-answer  ( -- )",
         *_appends(ANSWER),
         "    ;",
-        ": _ags-seed  ( -- )",
+        f": {SEED_WORD}  ( home -- )",
+        "    _ags-home !",
         '    ACONV-NEW 0<> ABORT" Agent seed conversation allocation failed"',
         "    _ags-conv ! 0 _ags-u !",
         "    _ags-question AROLE-USER _ags-message",
         "    _ags-answer AROLE-ASSISTANT _ags-message",
-        "    PLACES-DEFAULT PLSET-HOME AVFSSTORE-NEW",
+        "    _ags-home @ AVFSSTORE-NEW",
         '    DUP ACSTORE-S-OK <> ABORT" Agent seed store allocation failed"',
         "    DROP _ags-store !",
         "    _ags-conv @ _ags-store @ ACSTORE-SAVE",
         '    ACSTORE-S-OK <> ABORT" Agent seed save failed"',
         "    _ags-store @ ACSTORE-FREE",
         "    _ags-conv @ ACONV-FREE ;",
-        "_ags-seed",
         "",
     ])
