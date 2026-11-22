@@ -4,7 +4,7 @@
 **Prefix:** `AIR-`
 **Depends on:** `baby-bear.f`
 **Provided:** `akashic-stark-air`
-**Tests:** 33/33
+**Tests:** 39/39
 
 ## Overview
 
@@ -86,6 +86,13 @@ Boundary entries (8 bytes each):
 | `AIR-EVAL-TRANS` | `( air cols row -- residual )` | Sum of constraint residuals at row |
 | `AIR-CHECK-TRANS` | `( air cols row -- flag )` | TRUE if every transition constraint holds at row |
 | `AIR-CHECK-BOUND` | `( air cols -- flag )` | TRUE if all boundaries match |
+| `AIR-FITS?` | `( air ncols rows -- flag )` | TRUE if the descriptor names `ncols` columns and reads only inside `ncols` × `rows` |
+
+The builder checks no column index, offset or boundary row, and the
+evaluators read whatever `cols` holds for a column.  `AIR-FITS?` lets a
+caller refuse a descriptor that would read past its trace: every operand
+and boundary column must be below `ncols`, every offset and boundary row
+below `rows`, and the header's column count must equal `ncols`.
 
 ## Trace Access Convention
 
@@ -192,4 +199,5 @@ AIR-N-BOUND ( air -- n )   AIR-MAX-OFF ( air -- n )
 AIR-EVAL-TRANS ( air cols row -- residual )
 AIR-CHECK-TRANS ( air cols row -- flag )
 AIR-CHECK-BOUND ( air cols -- flag )
+AIR-FITS? ( air ncols rows -- flag )
 ```

@@ -514,7 +514,8 @@ VARIABLE _SK-BCOL
 \  check carries the soundness.  The commitments, quotient and FRI
 \  rounds are checked for consistency with each other.  The trace
 \  buffer STARK-TRACE! writes is the prover's input, not part of the
-\  proof, and the verifier never reads it.
+\  proof, and the verifier never reads it.  An AIR that names a column
+\  the proof does not commit, or a row past the trace, is refused.
 
 VARIABLE _SK-V-OK
 
@@ -570,6 +571,10 @@ VARIABLE _SK-V-OK
 
 : STARK-VERIFY  ( -- flag )
     -1 _SK-V-OK !
+
+    \ 0. The AIR may read only the columns the proof commits; a column
+    \    past them would come from a stale _SK-COLS cell
+    _SK-AIR @ _SK-NCOLS @ 256 AIR-FITS? 0= IF 0 EXIT THEN
 
     \ 1. Verify per-column Merkle commitments
     _SK-VERIFY-PER-COL

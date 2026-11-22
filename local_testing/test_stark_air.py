@@ -4,7 +4,8 @@
 Tests AIR builder (AIR-BEGIN/TRANS/BOUNDARY/END), query words
 (AIR-N-COLS/N-TRANS/N-BOUND/MAX-OFF), transition evaluation
 (AIR-EVAL-TRANS), the per-constraint transition check (AIR-CHECK-TRANS),
-and boundary checking (AIR-CHECK-BOUND).
+boundary checking (AIR-CHECK-BOUND), and whether a descriptor reads only
+inside a given trace (AIR-FITS?).
 
 Depends on baby-bear.f for BB+ BB- BB* BB-W32! BB-W32@.
 """
@@ -419,6 +420,36 @@ def test_check_trans():
           'V=0 ')
     check("cancelling residuals check = FALSE",
           cancel + ['." V=" _X-AIR _xcols 7 AIR-CHECK-TRANS .'],
+          'V=0 ')
+
+def test_fits():
+    """AIR-FITS? holds only for a trace the descriptor reads inside."""
+    print("\n=== AIR-FITS? ===")
+    check("fib fits 1 column of 256 rows",
+          FIB_SETUP + ['." V=" _FIB-AIR 1 256 AIR-FITS? .'],
+          'V=-1 ')
+    check("fib does not fit 2 columns",
+          FIB_SETUP + ['." V=" _FIB-AIR 2 256 AIR-FITS? .'],
+          'V=0 ')
+    check("2col fits 2 columns of 256 rows",
+          TWOCOL_SETUP + ['." V=" _2C-AIR 2 256 AIR-FITS? .'],
+          'V=-1 ')
+    check("2col does not fit 1 column",
+          TWOCOL_SETUP + ['." V=" _2C-AIR 1 256 AIR-FITS? .'],
+          'V=0 ')
+    # A one-column descriptor whose constraint reads column 1
+    check("constraint past the columns",
+          ['1 AIR-BEGIN',
+           '  AIR-ADD 0 0  1 0  0 1  AIR-TRANS',
+           'AIR-END CONSTANT _W-AIR',
+           '." V=" _W-AIR 1 256 AIR-FITS? .'],
+          'V=0 ')
+    # A boundary at row 300 of a 256-row trace
+    check("boundary past the rows",
+          ['1 AIR-BEGIN',
+           '  0 300 7 AIR-BOUNDARY',
+           'AIR-END CONSTANT _R-AIR',
+           '." V=" _R-AIR 1 256 AIR-FITS? .'],
           'V=0 ')
 
 def test_all_rows_fib():

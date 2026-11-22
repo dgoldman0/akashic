@@ -767,6 +767,27 @@ def test_2col_cancelling_residuals_reject():
     check_fn("2col-cancelling-residuals", lines, pred,
              "expected VERIFY-FALSE with a residual sum of 0 at row 7")
 
+def test_air_wider_than_proof_reject():
+    """An AIR that names a column the proof does not commit is rejected
+
+    After an honest two-column proof, _SK-COLS still points column 1 at that
+    proof's evaluations.  A proof that commits column 0 alone, verified
+    against the two-column AIR, would have its second column checked on that
+    stale data; the verifier refuses an AIR wider than the proof instead.
+    """
+    lines = TWO_COL_INIT + [
+        'STARK-PROVE STARK-VERIFY',
+        'IF .\" TWO-COL-TRUE\" ELSE .\" TWO-COL-FALSE\" THEN CR',
+        '1 STARK-SET-COLS',
+        '_fill-2col',
+        'STARK-PROVE STARK-VERIFY',
+        'IF .\" ONE-COL-TRUE\" ELSE .\" ONE-COL-FALSE\" THEN CR',
+    ]
+    def pred(out):
+        return 'TWO-COL-TRUE' in out and 'ONE-COL-FALSE' in out
+    check_fn("air-wider-than-proof", lines, pred,
+             "expected TWO-COL-TRUE, then ONE-COL-FALSE")
+
 def test_2col_wrong_col1_boundary():
     """Wrong boundary on col1 → reject"""
     lines = [

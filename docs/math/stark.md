@@ -4,7 +4,7 @@
 **Prefix:** `STARK-`
 **Depends on:** `sha3.f`, `ntt.f`, `baby-bear.f`, `merkle.f`, `stark-air.f`
 **Provided:** `akashic-stark`
-**Tests:** 43/43 (32 regression + 11 multi-column)
+**Tests:** 44/44 (32 regression + 12 multi-column)
 
 ## Overview
 
@@ -53,6 +53,8 @@ constraints with multi-column traces.
 
 ### Verifier (`STARK-VERIFY`)
 
+0. Refuse an AIR that names a column the proof does not commit, or a row
+   past the 256-row trace (`AIR-FITS?` with the active column count)
 1. Rebuild per-column Merkle commitments, compare each root
 2. Re-derive combined trace root, compare
 3. Re-derive Fiat-Shamir challenges (per-boundary)
@@ -228,8 +230,10 @@ STARK-VERIFY IF ." Valid" ELSE ." Invalid" THEN
 The verifier rejects a proof of a trace that breaks a boundary or a
 transition constraint on any column, even though the prover commits to
 that trace consistently, and even when the residuals of two constraints
-cancel in their sum.  It also detects any of the following
-modifications after proving:
+cancel in their sum.  It rejects an AIR wider than the proof, whose extra
+column would otherwise be read from evaluations a previous verification
+left in `_SK-COLS`.  It also detects any of the following modifications
+after proving:
 
 - Coefficient corruption (`_SK-TCOEFFS`, `_SK-QCOEFF`)
 - Per-column Merkle root tampering (`_SK-TROOTS`)
