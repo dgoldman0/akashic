@@ -42,6 +42,7 @@ REQUIRE ../store/tx.f
 | **Deterministic hashing** | `TX-HASH` serialises unsigned fields to DAG-CBOR (canonical key ordering), then SHA3-256 hashes the result |
 | **CBOR wire format** | `TX-ENCODE` / `TX-DECODE` use DAG-CBOR for compact, standards-based serialisation |
 | **Not reentrant** | Module-level VARIABLEs are used for scratch state.  One encode/decode/sign at a time |
+| **Nestable CBOR** | `TX-HASH`, `TX-ENCODE` and `TX-DECODE` keep their caller's CBOR cursors (`CBOR-SAVE` / `CBOR-RESTORE`), so they run inside another encoding or decoding, as `BLK-ENCODE` and `BLK-DECODE` call them |
 
 ---
 
@@ -212,7 +213,8 @@ key order:
 8. `"chain_id"` (uint)
 9. `"valid_until"` (uint)
 
-Writes 32 bytes to `hash`.
+Writes 32 bytes to `hash`.  The encoding keeps its caller's CBOR
+cursors, so `TX-HASH` can run in the middle of another encoding.
 
 ---
 
@@ -285,7 +287,8 @@ TX-ENCODE  ( tx buf max -- len )
 
 Serialise the transaction to DAG-CBOR into `buf` (up to `max` bytes).
 Returns the number of bytes written.  Returns 0 if the buffer is too
-small.
+small.  It keeps its caller's CBOR cursors, so a caller can encode a
+transaction in the middle of its own encoding, as `BLK-ENCODE` does.
 
 The CBOR map contains up to 12 keys in DAG-CBOR canonical order
 (shorter keys first, then lexicographic within the same length).
@@ -318,7 +321,8 @@ Deserialize CBOR bytes into a transaction buffer.  Calls `TX-INIT` on
 unexpected data.
 
 **All 12 keys must be present** (10 for unsigned transactions).
-Unknown keys are silently skipped.
+Unknown keys are silently skipped.  It keeps its caller's CBOR
+cursors, so `BLK-DECODE` carries on after each transaction it decodes.
 
 ---
 

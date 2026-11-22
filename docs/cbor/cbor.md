@@ -21,6 +21,7 @@ multiple times.
 - [Major Types](#major-types)
 - [Encoding](#encoding)
 - [Decoding](#decoding)
+- [Nesting](#nesting)
 - [DAG-CBOR Extension](#dag-cbor-extension)
 - [Quick Reference](#quick-reference)
 - [Cookbook](#cookbook)
@@ -34,6 +35,7 @@ multiple times.
 |---|---|
 | **Buffer-based** | Encoder writes to a caller-provided `(dst max)` buffer. Decoder reads from a caller-provided `(addr len)` buffer. |
 | **No heap** | All state in `VARIABLE`s — no dynamic allocation. |
+| **Nestable** | A word that encodes or decodes a whole item of its own saves and restores both cursors, so it can run inside another user's encoding or decoding. |
 | **Zero-copy decode** | `CBOR-NEXT-BSTR` / `CBOR-NEXT-TSTR` return pointers into the input buffer. |
 | **Big-endian wire** | Multi-byte integers emitted/read in network byte order per RFC 8949. |
 | **Integer-only** | No IEEE 754 float support. Simple values limited to true, false, null. |
@@ -159,6 +161,43 @@ and tagged items.  Handles recursive structures.
 
 ---
 
+## Nesting
+
+```forth
+CBOR-CURSORS-SIZE  ( -- n )      \ bytes one save takes
+CBOR-SAVE          ( addr -- )   \ copy both cursors to addr
+CBOR-RESTORE       ( addr -- )   \ make the cursors saved at addr current
+```
+
+The encoder keeps one cursor (buffer, capacity, write position and
+overflow flag) and the decoder keeps one (input, end and read
+position).  A word that encodes or decodes a whole item of its own
+can be called between another user's CBOR calls: `BLK-ENCODE` calls
+`TX-ENCODE` for each transaction, `BLK-DECODE` calls `TX-DECODE`, and
+gossip's status message calls `BLK-HASH` between its array header and
+the hash.  Such a word saves both cursors into `CBOR-CURSORS-SIZE`
+bytes of its own storage before it starts and restores them when it is
+done, so its caller's encoding or decoding carries on where it was and
+the caller needs no knowledge of the CBOR work inside.  Each save lives
+in the saving word's storage, so words nest as deeply as that storage
+allows; a word that could run inside itself would need storage for
+each level.
+
+The restore also brings back the caller's overflow flag, so a nested
+word reports its own overflow in its result, as `TX-ENCODE` and
+`BLK-ENCODE` return 0 when their item does not fit.
+
+```forth
+CREATE _ITEM-CURSORS  CBOR-CURSORS-SIZE ALLOT
+: ITEM-ENCODE  ( buf max -- len )
+    _ITEM-CURSORS CBOR-SAVE
+    CBOR-RESET  1 CBOR-ARRAY  42 CBOR-UINT
+    CBOR-OK? IF CBOR-RESULT NIP ELSE 0 THEN
+    _ITEM-CURSORS CBOR-RESTORE ;
+```
+
+---
+
 ## DAG-CBOR Extension
 
 DAG-CBOR is a restricted CBOR subset used by IPLD and the AT Protocol.
@@ -229,6 +268,14 @@ Returns `-1` if valid, `0` if invalid.
 | `CBOR-NEXT-TAG` | `( -- n )` | Read tag number |
 | `CBOR-NEXT-BOOL` | `( -- flag )` | Read boolean |
 | `CBOR-SKIP` | `( -- )` | Skip one item |
+
+### Nesting
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `CBOR-CURSORS-SIZE` | `( -- n )` | Bytes one save takes |
+| `CBOR-SAVE` | `( addr -- )` | Save both cursors at addr |
+| `CBOR-RESTORE` | `( addr -- )` | Restore the cursors saved at addr |
 
 ### DAG-CBOR
 
@@ -302,6 +349,10 @@ Encoder variables prefixed `_CB-`:
 Decoder variables prefixed `_CB-`:
 - `_CB-SRC` / `_CB-END` / `_CB-PTR` — input buffer state
 - `_CB-SKIP-N` — recursion counter for `CBOR-SKIP`
+
+`CBOR-SAVE` and `CBOR-RESTORE` copy `_CB-DST`, `_CB-MAX`, `_CB-POS`,
+`_CB-OVF`, `_CB-SRC`, `_CB-END` and `_CB-PTR`; `_CB-MT` and
+`_CB-SKIP-N` hold scratch within one call.
 
 DAG-CBOR variables prefixed `_DCB-`:
 - `_DCB-CID-LEN` — scratch for CID encoding

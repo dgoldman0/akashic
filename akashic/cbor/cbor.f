@@ -4,6 +4,10 @@
 \ arrays, maps, booleans, null, semantic tags.
 \ No floating point.  Integer-only.
 \
+\ A word that encodes or decodes a whole item of its own saves and
+\ restores the cursors with CBOR-SAVE and CBOR-RESTORE, so any CBOR
+\ user can call it between its own CBOR calls (see Nesting below).
+\
 \ Prefix: CBOR-   (public API)
 \         _CB-    (internal helpers)
 \
@@ -312,6 +316,44 @@ VARIABLE _CB-SKIP-N
     THEN
     _CB-GET DROP ;              \ unknown — skip initial byte
 
+\ =====================================================================
+\  Nesting — Saving and Restoring the Cursors
+\ =====================================================================
+\
+\ The encoder keeps one cursor (its buffer, capacity, write position and
+\ overflow flag) and the decoder keeps one (its input, end and read
+\ position).  A word that encodes or decodes a whole item of its own,
+\ such as a transaction inside a block or a block's hash inside a
+\ message, may run between another user's CBOR calls.  It saves both
+\ cursors before it starts and restores them when it is done, so the
+\ caller's encoding or decoding carries on where it was.  Each save
+\ goes in CBOR-CURSORS-SIZE bytes that the saving word provides, so
+\ words nest as deeply as their own storage allows.
+
+7 CELLS CONSTANT CBOR-CURSORS-SIZE
+
+\ CBOR-SAVE ( addr -- )
+\   Copy both cursors into the CBOR-CURSORS-SIZE bytes at addr.
+: CBOR-SAVE  ( addr -- )
+    _CB-DST @ OVER !  CELL+
+    _CB-MAX @ OVER !  CELL+
+    _CB-POS @ OVER !  CELL+
+    _CB-OVF @ OVER !  CELL+
+    _CB-SRC @ OVER !  CELL+
+    _CB-END @ OVER !  CELL+
+    _CB-PTR @ SWAP ! ;
+
+\ CBOR-RESTORE ( addr -- )
+\   Make the cursors CBOR-SAVE copied to addr the current ones.
+: CBOR-RESTORE  ( addr -- )
+    DUP @ _CB-DST !  CELL+
+    DUP @ _CB-MAX !  CELL+
+    DUP @ _CB-POS !  CELL+
+    DUP @ _CB-OVF !  CELL+
+    DUP @ _CB-SRC !  CELL+
+    DUP @ _CB-END !  CELL+
+    @ _CB-PTR ! ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -342,6 +384,8 @@ GUARD _cbor-guard
 ' CBOR-NEXT-TAG   CONSTANT _cbor-next-tag-xt
 ' CBOR-NEXT-BOOL  CONSTANT _cbor-next-bool-xt
 ' CBOR-SKIP       CONSTANT _cbor-skip-xt
+' CBOR-SAVE       CONSTANT _cbor-save-xt
+' CBOR-RESTORE    CONSTANT _cbor-restore-xt
 
 : CBOR-RESET      _cbor-reset-xt _cbor-guard WITH-GUARD ;
 : CBOR-OK?        _cbor-ok-q-xt _cbor-guard WITH-GUARD ;
@@ -368,4 +412,6 @@ GUARD _cbor-guard
 : CBOR-NEXT-TAG   _cbor-next-tag-xt _cbor-guard WITH-GUARD ;
 : CBOR-NEXT-BOOL  _cbor-next-bool-xt _cbor-guard WITH-GUARD ;
 : CBOR-SKIP       _cbor-skip-xt _cbor-guard WITH-GUARD ;
+: CBOR-SAVE       _cbor-save-xt _cbor-guard WITH-GUARD ;
+: CBOR-RESTORE    _cbor-restore-xt _cbor-guard WITH-GUARD ;
 [THEN] [THEN]

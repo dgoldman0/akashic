@@ -254,8 +254,10 @@ CREATE _TXK-VU      11 C, 118 C,  97 C, 108 C, 105 C, 100 C,  95 C, 117 C, 110 C
 \ =====================================================================
 
 VARIABLE _TX-ENC-TX
+CREATE _TX-EU-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
 
 : _TX-ENCODE-UNSIGNED  ( tx buf max -- len )
+    _TX-EU-CURSORS CBOR-SAVE
     CBOR-RESET
     _TX-ENC-TX !                         \ save tx* in variable
 
@@ -299,8 +301,8 @@ VARIABLE _TX-ENC-TX
     _TX-ENC-TX @ TX-VALID-UNTIL@  CBOR-UINT
 
     \ ── P11: check CBOR overflow ──
-    CBOR-OK? 0= IF 0 EXIT THEN
-    CBOR-RESULT NIP ;                    \ -- len
+    CBOR-OK? IF CBOR-RESULT NIP ELSE 0 THEN   \ -- len
+    _TX-EU-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
 \  10. TX-HASH — SHA3-256 of unsigned CBOR encoding
@@ -469,8 +471,10 @@ VARIABLE _TX-HYB-TX
 \ =====================================================================
 
 VARIABLE _TX-E-TX
+CREATE _TX-E-CURSORS  CBOR-CURSORS-SIZE ALLOT    \ the caller's CBOR cursors
 
 : TX-ENCODE  ( tx buf max -- len )
+    _TX-E-CURSORS CBOR-SAVE
     CBOR-RESET
     _TX-E-TX !                           \ save tx (buf/max already in CBOR state)
 
@@ -552,7 +556,8 @@ VARIABLE _TX-E-TX
     _TXK-VU _TXK> CBOR-TSTR
     _TX-E-TX @ TX-VALID-UNTIL@  CBOR-UINT
 
-    CBOR-RESULT NIP ;                    \ -- len
+    CBOR-OK? IF CBOR-RESULT NIP ELSE 0 THEN   \ -- len, 0 when it did not fit
+    _TX-E-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
 \  17. TX-DECODE — deserialize from CBOR
@@ -561,7 +566,8 @@ VARIABLE _TX-E-TX
 \  Parse a CBOR map and populate a transaction buffer.
 \  Returns -1 (TRUE) on success, 0 (FALSE) on parse error.
 \  Strategy: iterate map keys, match against known strings,
-\  populate the corresponding tx field.
+\  populate the corresponding tx field.  TX-DECODE keeps its caller's
+\  CBOR cursors, so BLK-DECODE carries on after each transaction.
 
 VARIABLE _TX-D-TX
 VARIABLE _TX-D-PAIRS
@@ -570,6 +576,7 @@ VARIABLE _TX-D-KA
 VARIABLE _TX-D-KL
 VARIABLE _TX-D-VA
 VARIABLE _TX-D-VL
+CREATE _TX-D-CURSORS  CBOR-CURSORS-SIZE ALLOT    \ the caller's CBOR cursors
 
 \ Helper: compare two byte sequences ( a1 l1 a2 l2 -- flag )
 : _TX-STREQ  ( a1 l1 a2 l2 -- flag )
@@ -581,7 +588,8 @@ VARIABLE _TX-D-VL
     LOOP
     2DROP -1 ;
 
-: TX-DECODE  ( buf len tx -- flag )
+\ _TX-DECODE-MAP ( buf len tx -- flag )  the decoding TX-DECODE brackets
+: _TX-DECODE-MAP  ( buf len tx -- flag )
     _TX-D-TX !
     _TX-D-TX @ TX-INIT
 
@@ -653,6 +661,11 @@ VARIABLE _TX-D-VL
     LOOP
 
     -1 ;                                 \ success
+
+: TX-DECODE  ( buf len tx -- flag )
+    _TX-D-CURSORS CBOR-SAVE
+    _TX-DECODE-MAP
+    _TX-D-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
 \  18. TX-HASH= — compare two transaction hashes

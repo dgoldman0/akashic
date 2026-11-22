@@ -1026,34 +1026,20 @@ def test_decode_reuses_buffers():
     dictionary, so the dictionary grew with every block decoded.  A
     second decode of the same block must leave HERE and the heap where
     they were, and hand back the same buffer holding the same
-    transaction.
-
-    The block's CBOR is written here, header map and one encoded
-    transaction, rather than by BLK-ENCODE: TX-ENCODE resets the CBOR
-    encoder BLK-ENCODE is writing with, so BLK-ENCODE cannot encode a
-    block that holds a transaction (test_decode_txs_b06)."""
+    transaction."""
     print("\n=== BLK-DECODE buffers ===")
     lines = _funded_blk() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
-        'CREATE _TXE 16384 ALLOT  _TX1 _TXE 16384 TX-ENCODE CONSTANT _TXE-LEN',
-        'CREATE _EBUF 16384 ALLOT  VARIABLE _ELEN',
-        ': _ENC _EBUF 16384 CBOR-RESET  2 CBOR-ARRAY  7 CBOR-MAP',
-        '  S" proof" CBOR-TSTR  _BK BLK-PROOF@ CBOR-BSTR',
-        '  S" height" CBOR-TSTR  1 CBOR-UINT',
-        '  S" tx_root" CBOR-TSTR  _BK BLK-TX-ROOT@ 32 CBOR-BSTR',
-        '  S" version" CBOR-TSTR  1 CBOR-UINT',
-        '  S" prev_hash" CBOR-TSTR  _BK BLK-PREV-HASH@ 32 CBOR-BSTR',
-        '  S" timestamp" CBOR-TSTR  1700000000 CBOR-UINT',
-        '  S" state_root" CBOR-TSTR  _BK BLK-STATE-ROOT@ 32 CBOR-BSTR',
-        '  1 CBOR-ARRAY  _TXE _TXE-LEN CBOR-BSTR',
-        '  CBOR-RESULT NIP _ELEN ! ; _ENC',
+        '_TX1 _BK BLK-ADD-TX DROP',
+        'CREATE _EBUF 16384 ALLOT',
+        '_BK _EBUF 16384 BLK-ENCODE CONSTANT _ELEN',
         'CREATE _BK2 BLK-STRUCT-SIZE ALLOT',
         'VARIABLE _T1  VARIABLE _H0  VARIABLE _X1',
         ': _T HERE _H0 !',
-        '  _EBUF _ELEN @ _BK2 BLK-DECODE ." first=" .',
+        '  _EBUF _ELEN _BK2 BLK-DECODE ." first=" .',
         '  0 _BK2 BLK-TX@ _T1 !  XMEM-HERE @ _X1 !',
-        '  _EBUF _ELEN @ _BK2 BLK-DECODE ." second=" .',
+        '  _EBUF _ELEN _BK2 BLK-DECODE ." second=" .',
         '  ." count=" _BK2 BLK-TX-COUNT@ .',
         '  ." same=" 0 _BK2 BLK-TX@ _T1 @ = .',
         '  ." here=" HERE _H0 @ - .',
@@ -1063,6 +1049,62 @@ def test_decode_reuses_buffers():
     check("a second decode reuses the first's buffer", lines,
           "first=-1 second=-1 count=1 same=-1 here=0 heap=0 amount=100 ")
 
+
+def test_encode_decode_two_txs():
+    """BLK-ENCODE and BLK-DECODE carry every transaction of a block.
+
+    TX-ENCODE reset the CBOR encoder BLK-ENCODE was writing with, and
+    TX-DECODE left the decoder at the end of the first transaction, so a
+    block lost its transactions on the way out and its second one on the
+    way in.  Each keeps its caller's CBOR cursors now.  A decoded
+    transaction must encode to the bytes its original encodes to, which
+    covers every field TX-ENCODE writes, the signature among them."""
+    print("\n=== BLK-ENCODE / BLK-DECODE two transactions ===")
+    lines = _funded_blk() + _make_tx_lines(
+        '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
+    ) + _make_tx_lines(
+        '_TX2', '_PUB1', '_PRIV1', '_PUB3', 250, 1
+    ) + [
+        '_TX1 _BK BLK-ADD-TX DROP  _TX2 _BK BLK-ADD-TX DROP',
+        '7 _BK BLK-SET-HEIGHT  1700000000 _BK BLK-SET-TIME',
+        'CREATE _EBUF 65536 ALLOT',
+        '_BK _EBUF 65536 BLK-ENCODE CONSTANT _ELEN',
+        'CREATE _BK2 BLK-STRUCT-SIZE ALLOT',
+        'CREATE _ENA 16384 ALLOT  CREATE _ENB 16384 ALLOT',
+        # _SAME: TRUE when two transactions encode to the same bytes.
+        ': _SAME  ( tx1 tx2 -- flag )',
+        '  _ENB 16384 TX-ENCODE >R  _ENA 16384 TX-ENCODE R>',
+        '  OVER <> IF DROP 0 EXIT THEN',
+        '  -1 SWAP 0 ?DO _ENA I + C@ _ENB I + C@ <> IF DROP 0 LEAVE THEN LOOP ;',
+        ': _T _EBUF _ELEN _BK2 BLK-DECODE ." dec=" .',
+        '  ." count=" _BK2 BLK-TX-COUNT@ .  ." height=" _BK2 BLK-HEIGHT@ .',
+        '  ." tx0=" 0 _BK2 BLK-TX@ _TX1 _SAME .',
+        '  ." tx1=" 1 _BK2 BLK-TX@ _TX2 _SAME . ; _T',
+    ]
+    check("both transactions round-trip", lines,
+          "dec=-1 count=2 height=7 tx0=-1 tx1=-1 ")
+
+
+def test_encode_reports_overflow():
+    """TX-ENCODE and BLK-ENCODE return 0 when their item does not fit.
+
+    Each keeps its caller's CBOR cursors, the overflow flag among them, so
+    the length it returns is its only report of its own overflow, and the
+    caller's encoding goes on unharmed."""
+    print("\n=== TX-ENCODE / BLK-ENCODE overflow ===")
+    lines = _funded_blk() + [
+        'CREATE _TX1 TX-BUF-SIZE ALLOT  _TX1 TX-INIT',
+        '_PUB1 _TX1 TX-SET-FROM  _PUB2 _TX1 TX-SET-TO  100 _TX1 TX-SET-AMOUNT',
+        '_TX1 _BK BLK-ADD-TX DROP',
+        'CREATE _SMALL 64 ALLOT  CREATE _OUT 64 ALLOT',
+        ': _T _OUT 64 CBOR-RESET  1 CBOR-ARRAY',
+        '  _TX1 _SMALL 64 TX-ENCODE ." tx=" .',
+        '  _BK _SMALL 64 BLK-ENCODE ." blk=" .',
+        '  7 CBOR-UINT  ." ok=" CBOR-OK? .  ." len=" CBOR-RESULT NIP .',
+        '  ." bytes=" _OUT C@ . _OUT 1+ C@ . ; _T',
+    ]
+    check("an item too big reports 0 and spares its caller", lines,
+          "tx=0 blk=0 ok=-1 len=2 bytes=129 7 ")
 
 def test_chain_history_b09():
     """B09: CHAIN-HISTORY raised to 256."""

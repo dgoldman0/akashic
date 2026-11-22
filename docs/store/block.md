@@ -166,7 +166,9 @@ BLK-HASH  ( blk hash -- )
 ```
 
 CBOR-encode the 7 header fields in DAG-CBOR canonical key order, then
-SHA3-256 the result into the 32-byte `hash` buffer.
+SHA3-256 the result into the 32-byte `hash` buffer.  The encoding keeps
+its caller's CBOR cursors, so `BLK-HASH` can run in the middle of
+another encoding, as gossip's status message calls it.
 
 Key order (shorter first, then lexicographic):
 `proof`(5) < `height`(6) < `tx_root`(7) < `version`(7) < `prev_hash`(9) <
@@ -184,7 +186,9 @@ BLK-ENCODE  ( blk buf max -- len )
 
 Serialize the full block to CBOR.  Outer structure is a 2-element array
 `[header-map, txs-array]`.  Each tx is encoded as a nested CBOR byte
-string via `TX-ENCODE`.  Returns encoded length.
+string via `TX-ENCODE`, which keeps this encoding's CBOR cursors.
+Returns the encoded length, or 0 when the block does not fit in `max`
+bytes.  `BLK-ENCODE` keeps its own caller's cursors too.
 
 ### BLK-DECODE
 
@@ -195,8 +199,11 @@ BLK-DECODE  ( buf len blk -- flag )
 Deserialize a full block from CBOR.  Decodes the 7 header fields from
 the map, validates the version byte (must equal `_BLK-VERSION`, currently
 1), then decodes all transaction bodies with `TX-DECODE` and adds them
-with `BLK-ADD-TX`.  Returns `TRUE` on success, `FALSE` on parse or
-version error, or when the heap cannot hold a transaction buffer.
+with `BLK-ADD-TX`; `TX-DECODE` keeps this decoding's CBOR cursors, so
+each transaction follows the one before it.  Returns `TRUE` on
+success, `FALSE` on parse or version error, or when the heap cannot
+hold a transaction buffer.  `BLK-DECODE` keeps its own caller's
+cursors too.
 
 The transactions go in block.f's decode buffers, one `TX-BUF-SIZE`
 buffer each.  A buffer comes from the heap the first time a block needs

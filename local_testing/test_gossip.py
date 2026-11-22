@@ -569,6 +569,34 @@ def test_seen_cap_constant():
     check("_GSP-SEEN-CAP=1024", ['_GSP-SEEN-CAP . CR'], "1024")
 
 
+def test_send_status_encodes_head():
+    """GSP-SEND-STATUS sends the chain head's hash and its height.
+
+    The message's encoding calls BLK-HASH between its array header and
+    the hash, and BLK-HASH encodes the head with the same CBOR encoder.
+    BLK-HASH keeps its caller's cursors, so the message holds both items;
+    before, the hash and the height went to BLK-HASH's own buffer."""
+    print("\n=== GSP-SEND-STATUS ===")
+    lines = [
+        'ST-INIT DROP',
+        'MP-INIT',
+        'GSP-INIT',
+        'CHAIN-INIT',
+        'CREATE _H 32 ALLOT  CHAIN-HEAD _H BLK-HASH',
+        # Peer 0 is not connected, so the message is built and not sent.
+        '0 GSP-SEND-STATUS',
+        ': _SAME32  ( addr -- flag )',
+        '  -1 32 0 ?DO OVER I + C@ _H I + C@ <> IF DROP 0 LEAVE THEN LOOP NIP ;',
+        ': _T ." tag=" _GSP-SBUF C@ .',
+        '  _GSP-SBUF 1+ _GSP-SND-LEN @ 1- CBOR-PARSE DROP',
+        '  ." n=" CBOR-NEXT-ARRAY .',
+        '  CBOR-NEXT-BSTR ." hlen=" . ." hash=" _SAME32 .',
+        '  ." height=" CBOR-NEXT-UINT .  ." end=" CBOR-DONE? . ; _T',
+    ]
+    check("status carries the head's hash and height", lines,
+          "tag=6 n=2 hlen=32 hash=-1 height=0 end=-1 ")
+
+
 # ── GSP-POLL over the scripted transport ──
 
 def _status_message(name, height):

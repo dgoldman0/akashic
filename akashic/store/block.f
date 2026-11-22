@@ -294,9 +294,13 @@ CREATE _BK-STATEROOT 10 C, 115 C, 116 C,  97 C, 116 C, 101 C,  95 C, 114 C, 111 
 
 \ _BLK-ENCODE-HEADER ( blk -- len )
 \   CBOR-encode block header into _BLK-CBUF.  Returns encoded length.
+\   It keeps its caller's CBOR cursors, so BLK-HASH can run in the
+\   middle of another encoding, as gossip's status message does.
 VARIABLE _BLK-EH-BLK
+CREATE _BLK-EH-CURSORS  CBOR-CURSORS-SIZE ALLOT  \ the caller's CBOR cursors
 
 : _BLK-ENCODE-HEADER  ( blk -- len )
+    _BLK-EH-CURSORS CBOR-SAVE
     _BLK-EH-BLK !
     _BLK-CBUF _BLK-CBUF-SZ CBOR-RESET
 
@@ -331,7 +335,8 @@ VARIABLE _BLK-EH-BLK
     _BK-STATEROOT _BK> CBOR-TSTR
     _BLK-EH-BLK @ _BLK-SROOT 32 CBOR-BSTR
 
-    CBOR-RESULT NIP ;
+    CBOR-RESULT NIP
+    _BLK-EH-CURSORS CBOR-RESTORE ;
 
 : BLK-HASH  ( blk hash -- )
     SWAP _BLK-ENCODE-HEADER           \ -- hash len
@@ -346,15 +351,19 @@ VARIABLE _BLK-EH-BLK
 \    [0] = header (CBOR map, 7 fields)
 \    [1] = txs    (CBOR array, each tx encoded inline via TX-ENCODE)
 \
-\  We encode into the caller-provided buffer.
+\  We encode into the caller-provided buffer.  TX-ENCODE keeps this
+\  encoding's cursors while it writes each transaction to the scratch
+\  buffer, and BLK-ENCODE keeps its own caller's.
 
 VARIABLE _BLK-E-BLK
 VARIABLE _BLK-E-DST
 VARIABLE _BLK-E-MAX
 CREATE _BLK-TX-SCRATCH  16384 ALLOT
+CREATE _BLK-E-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
 
 : BLK-ENCODE  ( blk buf max -- len )
     _BLK-E-MAX ! _BLK-E-DST ! _BLK-E-BLK !
+    _BLK-E-CURSORS CBOR-SAVE
 
     _BLK-E-DST @ _BLK-E-MAX @ CBOR-RESET
 
@@ -392,7 +401,8 @@ CREATE _BLK-TX-SCRATCH  16384 ALLOT
         _BLK-TX-SCRATCH SWAP CBOR-BSTR
     LOOP
 
-    CBOR-RESULT NIP ;
+    CBOR-OK? IF CBOR-RESULT NIP ELSE 0 THEN   \ -- len, 0 when it did not fit
+    _BLK-E-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
 \  13. BLK-DECODE — full block CBOR deserialization
@@ -408,13 +418,16 @@ CREATE _BLK-TX-SCRATCH  16384 ALLOT
 \  by every later BLK-DECODE, so a decoded block's transactions stay
 \  valid until the next BLK-DECODE.  BLK-MAX-TXS bounds their number, as
 \  it bounds a block's.  Returns -1 on success, 0 on failure, including
-\  a heap that cannot hold another buffer.
+\  a heap that cannot hold another buffer.  TX-DECODE keeps this
+\  decoding's cursors, so the next transaction follows the last, and
+\  BLK-DECODE keeps its own caller's.
 
 VARIABLE _BLK-D-BLK
 VARIABLE _BLK-D-PAIRS
 VARIABLE _BLK-D-KA
 VARIABLE _BLK-D-KL
 VARIABLE _BLK-D-TX
+CREATE _BLK-D-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
 
 CREATE _BLK-D-BUFS BLK-MAX-TXS CELLS ALLOT  \ the decode buffers
 VARIABLE _BLK-D-NBUF                         \ how many are allocated
@@ -438,7 +451,8 @@ VARIABLE _BLK-D-NBUF                         \ how many are allocated
     LOOP
     2DROP -1 ;
 
-: BLK-DECODE  ( buf len blk -- flag )
+\ _BLK-DECODE-ITEMS ( buf len blk -- flag )  the decoding BLK-DECODE brackets
+: _BLK-DECODE-ITEMS  ( buf len blk -- flag )
     _BLK-D-BLK !
     _BLK-D-BLK @ BLK-INIT
 
@@ -511,6 +525,11 @@ VARIABLE _BLK-D-NBUF                         \ how many are allocated
         0= IF 0 UNLOOP EXIT THEN      \ block full
     LOOP
     -1 ;
+
+: BLK-DECODE  ( buf len blk -- flag )
+    _BLK-D-CURSORS CBOR-SAVE
+    _BLK-DECODE-ITEMS
+    _BLK-D-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================
 \  14. Consensus proof callback
