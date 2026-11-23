@@ -501,11 +501,11 @@ design section.
 |---|---:|---:|---|
 | Hand lamp, radius 4, and hiding the last reveal | 0.33 M | 3.3 ms | measured on an open 24×12 board after stage 1 |
 | A lamp relit or guttering (that turn only) | 0.3–0.7 M | 3–7 ms | measured 0.32 M for radius 4 and 0.63 M for radius 6 |
-| Distance field over 288 tiles | 0.1–0.3 M | 1–3 ms | estimate |
+| Distance field over 288 tiles | 1.2 M | 12 ms | measured after stage 2: 24×12 with shelves, three sources |
 | Six inkmites' trees, machines and steps | about 0.1 M | 1 ms | measured 4,372 for a tree and 4,727 for a machine |
 | Board rebuild, validation and CELL draw | 6.86 M | 69 ms | measured |
 | Rich frame | 3–8 M | 30–80 ms | estimate |
-| **Turn** | **10–16 M** | **0.10–0.16 s** | |
+| **Turn** | **11–17 M** | **0.11–0.17 s** | |
 
 Fit: Folio Watch belongs in the Workshop (Part 7) as a worked example of the
 game library, beside the sliding-tile solver: its sources join the shipped
