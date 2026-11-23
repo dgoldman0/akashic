@@ -194,35 +194,55 @@ def build_snapshot():
 #  run_forth — restore snapshot with a fresh disk image per invocation
 # =====================================================================
 
+def _run_session(disk_path, lines, max_steps):
+    """Restore the snapshot on a new machine whose disk is DISK_PATH, run
+    Forth lines, and save the disk back to its file."""
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    sys_obj = MegapadSystem(ram_size=1024*1024,
+                            storage_image=disk_path,
+                            ext_mem_size=EXT_MEM_SIZE)
+    buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
+    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
+    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
+    restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
+    payload = "\n".join(lines) + "\nBYE\n"
+    _run_input(sys_obj, payload.encode(), max_steps, buf)
+    sys_obj.save_storage_images()
+    return uart_text(buf)
+
+
+# A line of its own in a program that run_forth runs ends one session there
+# and starts the rest on a new machine with the same disk, as a node that
+# restarts: nothing in memory survives, the files on disk do.
+RESTART = "\\ ---- restart ----"
+
+
 def run_forth(lines, max_steps=200_000_000):
-    """Restore snapshot, attach a fresh formatted disk, run Forth lines."""
+    """Restore snapshot, attach a fresh formatted disk, run Forth lines,
+    each part between RESTART lines on a machine of its own."""
     if _snapshot is None:
         build_snapshot()
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
 
     # Write a fresh copy of the base disk image to a temp file
     fd, disk_path = tempfile.mkstemp(suffix=".img", prefix="pst_run_")
     os.write(fd, _base_disk)
     os.close(fd)
 
+    sessions = [[]]
+    for line in lines:
+        if line == RESTART:
+            sessions.append([])
+        else:
+            sessions[-1].append(line)
     try:
-        sys_obj = MegapadSystem(ram_size=1024*1024,
-                                storage_image=disk_path,
-                                ext_mem_size=EXT_MEM_SIZE)
-        buf = capture_uart(sys_obj)
-        sys_obj.load_binary(0, bios_code)
-        sys_obj.boot()
-        for _ in range(5_000_000):
-            if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-                break
-            sys_obj.run_batch(10_000)
-        sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-        sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-        restore_cpu_state(sys_obj.cpu, cpu_state)
-        buf.clear()
-        payload = "\n".join(lines) + "\nBYE\n"
-        _run_input(sys_obj, payload.encode(), max_steps, buf)
-        return uart_text(buf)
+        return "".join(_run_session(disk_path, part, max_steps) for part in sessions)
     finally:
         try:
             os.unlink(disk_path)
@@ -570,7 +590,7 @@ def test_full_chain_file_refuses_block():
 def test_large_state_round_trip():
     """A state snapshot larger than 256 KB saves and loads back.
 
-    3,585 accounts fill 15 pages of 256, a snapshot of 278,544 bytes.  The
+    3,585 accounts fill 15 pages of 256, a snapshot of 276,496 bytes.  The
     addresses count up, so each account goes at the end of the table."""
     print("\n── State over 256 KB ──\n")
     lines = [
@@ -581,7 +601,7 @@ def test_large_state_round_trip():
         ': _ACCTS  ( n -- )  0 ?DO I _ADDR!  _AD I 1+ ST-CREATE DROP LOOP ;',
         ': _T 16 600 PST-SET-CAPACITY PST-INIT DROP',
         '  3585 _ACCTS  ." count=" ST-COUNT .',
-        '  ." snap=" _PST-SNAP-ACTUAL DUP .  262144 > ." over=" .',
+        '  ." snap=" ST-SNAPSHOT-BYTES DUP .  262144 > ." over=" .',
         '  ." save=" PST-SAVE-STATE .',
         '  ST-INIT DROP  ." wiped=" ST-COUNT .',
         '  ." load=" PST-LOAD-STATE .  ." count2=" ST-COUNT .',
@@ -589,9 +609,89 @@ def test_large_state_round_trip():
         '  3584 _ADDR! ." last=" _AD ST-BALANCE@ . ; _T',
     ]
     check("a 15-page state round-trips", lines,
-          "count=3585 snap=278544 over=-1 save=-1 wiped=0 load=-1 "
+          "count=3585 snap=276496 over=-1 save=-1 wiped=0 load=-1 "
           "count2=3585 first=1 last=3585 ",
           max_steps=600_000_000)
+
+
+# Accounts for the state cases: _ADDR! puts i big-endian in the last 8
+# bytes of _AD, and _ACCTS creates accounts 0 to n-1, account i holding
+# i + 1.
+_ACCOUNTS = [
+    'CREATE _AD 32 ALLOT',
+    ': _ADDR!  ( i -- )  _AD 32 0 FILL',
+    '  8 0 DO DUP 255 AND _AD 31 I - + C!  8 RSHIFT LOOP DROP ;',
+    ': _ACCTS  ( n -- )  0 ?DO I _ADDR!  _AD I 1+ ST-CREATE DROP LOOP ;',
+]
+
+
+def test_state_loads_after_a_restart():
+    """A state saved before a restart loads into pages of the new session.
+
+    The snapshot held the page directory's XMEM addresses, which the
+    loading session copied the pages back into: memory it did not own,
+    here the record buffer the load had just taken, so the next save
+    wrote the snapshot over the pages it was reading.  The snapshot holds
+    the pages by position now, and the load allocates them."""
+    print("\n── State after a restart ──\n")
+    lines = _ACCOUNTS + [
+        f': _T {_PST_PREAMBLE}',
+        '  300 _ACCTS  ." saved=" PST-SAVE-STATE .  PST-CLOSE ; _T',
+        RESTART,
+    ] + _ACCOUNTS + [
+        f': _T {_PST_PREAMBLE}',
+        '  ." load=" PST-LOAD-STATE .  ." count=" ST-COUNT .',
+        '  ." resaved=" PST-SAVE-STATE .',
+        '  0 _ADDR! ." first=" _AD ST-BALANCE@ .',
+        '  257 _ADDR! ." page1=" _AD ST-BALANCE@ .',
+        '  299 _ADDR! ." last=" _AD ST-BALANCE@ . ; _T',
+    ]
+    check("the state survives a restart and a second save", lines,
+          "load=-1 count=300 resaved=-1 first=1 page1=258 last=300 ",
+          max_steps=400_000_000)
+
+
+def test_clear_then_save_survives_reopen():
+    """Blocks saved after PST-CLEAR are there when the log is opened again.
+
+    PST-CLEAR wrote a zero length at the start of the chain file and left
+    the file's size, so the next block went after the old ones and the
+    walk at PST-INIT stopped at the zero.  The file is emptied now."""
+    print("\n── PST-CLEAR, then a save ──\n")
+    check("the block saved after a clear is found again",
+          ['CREATE _BL BLK-STRUCT-SIZE ALLOT',
+           f': _T {_PST_PREAMBLE}',
+           '  CHAIN-HEAD PST-SAVE-BLOCK DROP  CHAIN-HEAD PST-SAVE-BLOCK DROP',
+           '  PST-CLEAR  ." size=" _PST-CHAIN-FD @ FSIZE .',
+           '  ." saved=" CHAIN-HEAD PST-SAVE-BLOCK .',
+           '  PST-CLOSE PST-INIT DROP  ." count=" PST-BLOCK-COUNT .',
+           '  ." load=" 0 _BL PST-LOAD-BLOCK . ; _T'],
+          "size=0 saved=-1 count=1 load=-1 ")
+
+
+def test_smaller_state_cuts_the_file():
+    """A smaller snapshot than the last leaves nothing of the larger one.
+
+    PST-SAVE-STATE wrote from the start of the file and left its size, so
+    the larger snapshot's tail, height and size marker stayed after the
+    new one, and PST-LOAD-STATE read the old marker.  The file ends after
+    the new snapshot's marker now."""
+    print("\n── A smaller state after a larger ──\n")
+    lines = _ACCOUNTS + [
+        'VARIABLE _BIG',
+        f': _T {_PST_PREAMBLE}',
+        '  300 _ACCTS  PST-SAVE-STATE DROP  _PST-STATE-FD @ FSIZE _BIG !',
+        '  ST-DESTROY ST-INIT DROP  10 _ACCTS',
+        '  ." save=" PST-SAVE-STATE .',
+        '  ." cut=" _PST-STATE-FD @ FSIZE _BIG @ < .',
+        '  ." fits=" _PST-STATE-FD @ FSIZE  ST-SNAPSHOT-BYTES 16 + = .',
+        '  ST-DESTROY ST-INIT DROP',
+        '  ." load=" PST-LOAD-STATE .  ." count=" ST-COUNT .',
+        '  9 _ADDR! ." last=" _AD ST-BALANCE@ . ; _T',
+    ]
+    check("the state file holds the smaller snapshot alone", lines,
+          "save=-1 cut=-1 fits=-1 load=-1 count=10 last=10 ",
+          max_steps=400_000_000)
 
 
 # =====================================================================

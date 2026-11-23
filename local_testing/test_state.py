@@ -705,6 +705,83 @@ def test_staking():
     ]
     check("unstake before lock rejected", lines6, "EARLY-REJECTED")
 
+# ── Snapshot / restore ──
+
+# Accounts and memory for the snapshot cases: _ADDR! puts i big-endian in
+# the last 8 bytes of _AD, _ACCTS creates accounts 0 to n-1, account i
+# holding i + 1, _USED is the XMEM the heap holds, XMEM-HERE less the bytes
+# on its free list, and _SN a snapshot buffer.
+_SNAPSHOT_LINES = [
+    'CREATE _AD 32 ALLOT',
+    ': _ADDR!  ( i -- )  _AD 32 0 FILL',
+    '  8 0 DO DUP 255 AND _AD 31 I - + C!  8 RSHIFT LOOP DROP ;',
+    ': _ACCTS  ( n -- )  0 ?DO I _ADDR!  _AD I 1+ ST-CREATE DROP LOOP ;',
+    ': _XFL  ( -- n )  0 XMEM-FL @ BEGIN ?DUP WHILE DUP @ ROT + SWAP 8 + @ REPEAT ;',
+    ': _USED  ( -- n )  XMEM-HERE @ _XFL - ;',
+    'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
+    'ST-INIT DROP',
+]
+
+
+def test_restore_keeps_a_new_page():
+    """Undoing an account that opened a page keeps the page.
+
+    The 257th account opens the state's second page.  ST-RESTORE put
+    back the snapshot's page directory, which lacked that page, so its
+    18 KB were lost to the heap, and the next account to open it took
+    another 18 KB.  A page stays with the state now, and the second
+    257th account reuses it."""
+    check("the second account to open page 1 takes no memory",
+          _SNAPSHOT_LINES + [
+              'VARIABLE _U1',
+              ': _T  256 _ACCTS  _SN ST-SNAPSHOT',
+              '  256 _ADDR! _AD 999 ST-CREATE DROP  _USED _U1 !',
+              '  _SN ST-RESTORE ." count=" ST-COUNT .',
+              '  256 _ADDR! _AD 999 ST-CREATE DROP  ." grew=" _USED _U1 @ - .',
+              '  _SN ST-RESTORE ." again=" ST-COUNT .',
+              '  256 _ADDR! ." gone=" _AD ST-BALANCE@ .',
+              '  255 _ADDR! ." kept=" _AD ST-BALANCE@ . ; _T',
+          ], "count=256 grew=0 again=256 gone=0 kept=256 ")
+
+
+def test_restore_into_new_pages():
+    """A snapshot restores into a state that never had its pages.
+
+    The snapshot held the page directory's XMEM addresses and ST-RESTORE
+    copied the pages back into them, so a state destroyed after the
+    snapshot was taken wrote its accounts into memory it had freed, here
+    the two blocks another owner took from the heap in the meantime.  The
+    snapshot holds the pages by position now, and the restore allocates
+    the state pages of its own, leaving the other owner's blocks alone."""
+    check("the restored state takes memory of its own",
+          _SNAPSHOT_LINES + [
+              ': _MARKED?  ( a -- f )  -1 SWAP 18432 0 DO',
+              '  DUP I + C@ 165 <> IF NIP 0 SWAP LEAVE THEN LOOP DROP ;',
+              'VARIABLE _O1  VARIABLE _O2',
+              ': _T  300 _ACCTS  _SN ST-SNAPSHOT  ST-DESTROY  ST-INIT DROP',
+              # Another owner takes the blocks the two pages held
+              '  18432 XMEM-ALLOT _O1 !  _O1 @ 18432 165 FILL',
+              '  18432 XMEM-ALLOT _O2 !  _O2 @ 18432 165 FILL',
+              '  _SN ST-RESTORE  ." count=" ST-COUNT .',
+              '  ." owners=" _O1 @ _MARKED? . _O2 @ _MARKED? .',
+              '  0 _ADDR! ." first=" _AD ST-BALANCE@ .',
+              '  299 _ADDR! ." last=" _AD ST-BALANCE@ . ; _T',
+          ], "count=300 owners=-1 -1 first=1 last=300 ")
+
+
+def test_snapshot_size_and_header():
+    """A snapshot is its header and the pages its accounts fill, and
+    ST-SNAPSHOT-LEN refuses a header no snapshot has."""
+    check("snapshot sizes",
+          _SNAPSHOT_LINES + [
+              ': _T  ." empty=" ST-SNAPSHOT-BYTES .',
+              '  300 _ACCTS  _SN ST-SNAPSHOT',
+              '  ." bytes=" ST-SNAPSHOT-BYTES .  ." len=" _SN ST-SNAPSHOT-LEN .',
+              '  3 _SN 8 + !  ." pages=" _SN ST-SNAPSHOT-LEN .',
+              '  70000 _SN !  ." accounts=" _SN ST-SNAPSHOT-LEN .',
+              '  ." size=" ST-SNAPSHOT-SIZE . ; _T',
+          ], "empty=16 bytes=36880 len=36880 pages=0 accounts=0 size=4718608 ")
+
 # ── Main ──
 
 if __name__ == "__main__":

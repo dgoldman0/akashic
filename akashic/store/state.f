@@ -45,8 +45,10 @@
 \   ST-COUNT         ( -- n )                 number of active accounts
 \   ST-ENTRY         ( idx -- addr )          raw entry by global index
 \   ST-PRINT         ( -- )                   debug dump
-\   ST-SNAPSHOT      ( dst -- )               copy directory+pages+count
+\   ST-SNAPSHOT      ( dst -- )               copy the accounts by page
 \   ST-RESTORE       ( src -- )               restore from snapshot
+\   ST-SNAPSHOT-BYTES ( -- n )                bytes ST-SNAPSHOT writes now
+\   ST-SNAPSHOT-LEN  ( src -- n )             a snapshot's bytes, 0 if none
 \
 \  Constants:
 \   ST-MAX-ACCOUNTS  ( -- n )         _ST-MAX-PAGES × 256
@@ -104,9 +106,6 @@ CREATE _ST-PGDIR _ST-MAX-PAGES CELLS ALLOT
 \ Number of active accounts (global count across all pages)
 VARIABLE _ST-COUNT
 
-\ Number of allocated pages (for snapshot/destroy efficiency)
-VARIABLE _ST-PGCNT
-
 \ SMT tree descriptor (64 bytes)
 CREATE _ST-SMT 64 ALLOT
 
@@ -139,8 +138,7 @@ CREATE _ST-LEAF    32 ALLOT       \ SMT value scratch (hash of entry)
     _ST-PAGE-BYTES XMEM-ALLOT
     DUP 0= IF NIP EXIT THEN             \ XMEM exhausted
     DUP ROT _ST-PG!
-    DUP _ST-PAGE-BYTES 0 FILL
-    _ST-PGCNT @ 1+ _ST-PGCNT ! ;
+    DUP _ST-PAGE-BYTES 0 FILL ;
 
 \ _ST-PG-ENSURE ( pg# -- addr | 0 )
 \   Return page base, allocating if needed.
@@ -291,7 +289,6 @@ VARIABLE _st-rb-ok  \ P13: error propagation flag
 : ST-INIT  ( -- flag )
     _ST-PGDIR _ST-MAX-PAGES CELLS 0 FILL
     0 _ST-COUNT !
-    0 _ST-PGCNT !
     -1 _ST-DIRTY !
     _ST-SMT SMT-INIT ;
 
@@ -306,8 +303,7 @@ VARIABLE _st-destr-i   \ loop variable for destroy
         THEN
     LOOP
     _ST-SMT SMT-DESTROY
-    0 _ST-COUNT !
-    0 _ST-PGCNT ! ;
+    0 _ST-COUNT ! ;
 
 \ =====================================================================
 \  10. ST-LOOKUP — find account by address
@@ -602,56 +598,73 @@ VARIABLE _ST-AT-RBAL
     LOOP ;
 
 \ =====================================================================
-\  19. ST-SNAPSHOT / ST-RESTORE — paged snapshot
+\  19. ST-SNAPSHOT / ST-RESTORE — the accounts by page
 \ =====================================================================
-\  Layout in snapshot buffer (XMEM):
-\    +0:  8 bytes — _ST-COUNT value
-\    +8:  8 bytes — _ST-PGCNT value
-\    +16: _ST-MAX-PAGES × 8 — page directory copy
-\    +16+dir: for each page slot 0.._ST-MAX-PAGES-1:
-\      if allocated → _ST-PAGE-BYTES of page data
-\      if not allocated → skipped
+\  A snapshot holds the accounts and nothing of where they lie in memory,
+\  so it restores into any state, in the session that took it or in a
+\  later one that loads it from disk:
+\    +0:  8 bytes — the account count
+\    +8:  8 bytes — n, the pages the accounts fill: count / 256, rounded up
+\    +16: n × _ST-PAGE-BYTES — pages 0 to n-1, in order
+\  ST-SNAPSHOT-SIZE is the largest, every page full: 16 + _ST-MAX-PAGES
+\  × _ST-PAGE-BYTES, 4,718,608 bytes at 256 pages.  ST-SNAPSHOT-BYTES is
+\  the present state's.
 \
-\  Fixed max size (scales with _ST-MAX-PAGES):
-\    16 + _ST-MAX-PAGES×8 + _ST-MAX-PAGES×_ST-PAGE-BYTES
-\  Current value (256 pages): 4,718,736 bytes (~4.5 MB).
+\  A page, once allocated, stays with the state until ST-DESTROY.  A
+\  restore to fewer accounts keeps the pages past them for the state to
+\  grow into again, so undoing a block that added a page loses nothing,
+\  and a restore allocates only pages the state has never had, as when
+\  it loads a snapshot another session saved.
 
-16 _ST-MAX-PAGES CELLS + _ST-MAX-PAGES _ST-PAGE-BYTES * + CONSTANT ST-SNAPSHOT-SIZE
+16 _ST-MAX-PAGES _ST-PAGE-BYTES * + CONSTANT ST-SNAPSHOT-SIZE
+
+\ _ST-PAGES-FOR ( count -- n )  The pages count accounts fill.
+: _ST-PAGES-FOR  ( count -- n )
+    ST-PAGE-ENTRIES 1- + 8 RSHIFT ;
+
+\ ST-SNAPSHOT-BYTES ( -- n )  The bytes ST-SNAPSHOT writes now.
+: ST-SNAPSHOT-BYTES  ( -- n )
+    _ST-COUNT @ _ST-PAGES-FOR _ST-PAGE-BYTES * 16 + ;
+
+\ ST-SNAPSHOT-LEN ( src -- n )
+\   The bytes the snapshot at src holds, by its header, or 0 when the
+\   header is no snapshot's: more accounts than the state can hold, or a
+\   page count that is not its accounts'.
+: ST-SNAPSHOT-LEN  ( src -- n )
+    DUP @ ST-MAX-ACCOUNTS U> IF DROP 0 EXIT THEN
+    DUP @ _ST-PAGES-FOR                ( src n )
+    SWAP 8 + @ OVER <> IF DROP 0 EXIT THEN
+    _ST-PAGE-BYTES * 16 + ;
 
 VARIABLE _st-snap-ptr
+VARIABLE _st-snap-n
 
 : ST-SNAPSHOT  ( dst -- )
     _st-snap-ptr !
-    \ Write count + pgcnt
     _ST-COUNT @ _st-snap-ptr @ !
-    _ST-PGCNT @ _st-snap-ptr @ 8 + !
-    \ Copy page directory
-    _ST-PGDIR _st-snap-ptr @ 16 + _ST-MAX-PAGES CELLS CMOVE
-    \ Copy each allocated page
-    _st-snap-ptr @ 16 _ST-MAX-PAGES CELLS + +  _st-snap-ptr !
-    _ST-MAX-PAGES 0 ?DO
-        I _ST-PG@ ?DUP IF
-            _st-snap-ptr @ _ST-PAGE-BYTES CMOVE
-            _st-snap-ptr @ _ST-PAGE-BYTES + _st-snap-ptr !
-        THEN
+    _ST-COUNT @ _ST-PAGES-FOR _st-snap-n !
+    _st-snap-n @ _st-snap-ptr @ 8 + !
+    _st-snap-n @ 0 ?DO
+        I _ST-PG@
+        _st-snap-ptr @ 16 + I _ST-PAGE-BYTES * +
+        _ST-PAGE-BYTES CMOVE
     LOOP ;
 
+\ ST-RESTORE ( src -- )
+\   Make the accounts the snapshot's.  Each page the snapshot fills is
+\   the state's own, allocated if the state lacks it, and the pages past
+\   them stay as they are.  A snapshot from outside the session, as
+\   PST-LOAD-STATE reads one, is checked with ST-SNAPSHOT-LEN first.
 : ST-RESTORE  ( src -- )
     _st-snap-ptr !
-    -1 _ST-DIRTY !                    \ the tree no longer describes the state
-    \ Restore count + pgcnt
+    _st-snap-ptr @ 8 + @ _st-snap-n !
+    _st-snap-n @ 0 ?DO
+        _st-snap-ptr @ 16 + I _ST-PAGE-BYTES * +
+        I _ST-PG-ENSURE
+        _ST-PAGE-BYTES CMOVE
+    LOOP
     _st-snap-ptr @ @ _ST-COUNT !
-    _st-snap-ptr @ 8 + @ _ST-PGCNT !
-    \ Restore page directory
-    _st-snap-ptr @ 16 + _ST-PGDIR _ST-MAX-PAGES CELLS CMOVE
-    \ Restore each allocated page
-    _st-snap-ptr @ 16 _ST-MAX-PAGES CELLS + +  _st-snap-ptr !
-    _ST-MAX-PAGES 0 ?DO
-        I _ST-PG@ ?DUP IF
-            _st-snap-ptr @ SWAP _ST-PAGE-BYTES CMOVE
-            _st-snap-ptr @ _ST-PAGE-BYTES + _st-snap-ptr !
-        THEN
-    LOOP ;
+    -1 _ST-DIRTY ! ;                  \ the tree no longer describes the state
 
 \ =====================================================================
 \  20. ST-PROVE / ST-VERIFY-PROOF

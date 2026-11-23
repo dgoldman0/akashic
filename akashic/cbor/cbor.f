@@ -79,9 +79,13 @@ VARIABLE _CB-OVF       \ overflow flag (TRUE if bytes dropped)
 
 \ _CB-EMITCPY ( addr len -- )  Copy bytes to output.
 : _CB-EMITCPY  ( addr len -- )
-    0 ?DO
-        DUP I + C@ _CB-EMIT
-    LOOP DROP ;
+    \ The part that fits moves whole; the rest is dropped and counted, as
+    \ _CB-EMIT drops and counts each byte past the capacity.
+    _CB-MAX @ _CB-POS @ - 0 MAX  OVER MIN      ( addr len fit )
+    ROT OVER                                   ( len fit addr fit )
+    _CB-DST @ _CB-POS @ +  SWAP CMOVE          ( len fit )
+    OVER < IF -1 _CB-OVF ! THEN                ( len )
+    _CB-POS +! ;
 
 \ =====================================================================
 \  Encoder — Argument Encoding

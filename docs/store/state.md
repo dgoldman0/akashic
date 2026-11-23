@@ -286,9 +286,13 @@ Concurrency-safe (wrapped with `WITH-GUARD`).
 ST-SNAPSHOT  ( dst -- )
 ```
 
-Copy the full paged account table + count to a buffer.
-Total size: ST-SNAPSHOT-SIZE (scales with `_ST-MAX-PAGES`;
-currently 4,718,736 bytes at 256 pages).
+Copy the accounts to a buffer: an 8-byte account count, an 8-byte
+count *n* of the pages they fill (the count divided by 256, rounded
+up), then pages 0 to *n*−1 in order, 18,432 bytes each.  The snapshot
+names pages by position and holds no memory address, so it restores
+into the state that took it or into another session's, as
+`PST-LOAD-STATE` restores one from disk.  `ST-SNAPSHOT-BYTES` gives its
+size.
 
 ### ST-RESTORE
 
@@ -296,9 +300,19 @@ currently 4,718,736 bytes at 256 pages).
 ST-RESTORE  ( src -- )
 ```
 
-Restore the account table + count from a previously saved snapshot.
-Used by `BLK-VERIFY` for non-destructive block validation (apply
-transactions tentatively, check state root, then restore).
+Make the accounts and count the snapshot's.  Each page the snapshot
+fills is copied into the state's page at the same position, which is
+allocated when the state has never had it.  A page stays with the
+state until `ST-DESTROY`: a restore to fewer accounts keeps the pages
+past them, which no reader reaches past the count, for the state to
+grow into again.  Undoing a block that added a page therefore loses
+no memory, and a restore in the session that took the snapshot
+allocates nothing.
+
+`BLK-VERIFY` and `BLK-FINALIZE` restore after applying a block's
+transactions tentatively and reading the state root, the witness
+builder restores around its proofs, and `PST-LOAD-STATE` restores a
+snapshot read from disk once `ST-SNAPSHOT-LEN` accepts its header.
 
 ### ST-SNAPSHOT-SIZE
 
@@ -306,7 +320,28 @@ transactions tentatively, check state root, then restore).
 ST-SNAPSHOT-SIZE  ( -- n )
 ```
 
-Size of a snapshot buffer in bytes.
+The largest snapshot, every page full: 16 + 256 × 18,432 = 4,718,608
+bytes.  A buffer of this size holds any state's snapshot.
+
+### ST-SNAPSHOT-BYTES
+
+```forth
+ST-SNAPSHOT-BYTES  ( -- n )
+```
+
+The bytes `ST-SNAPSHOT` writes for the present state: 16 + 18,432 per
+page its accounts fill.
+
+### ST-SNAPSHOT-LEN
+
+```forth
+ST-SNAPSHOT-LEN  ( src -- n )
+```
+
+The bytes the snapshot at *src* holds, read from its header, or 0 when
+the header is no snapshot's: an account count above
+`ST-MAX-ACCOUNTS`, or a page count other than the one its account
+count fills.
 
 ---
 
@@ -319,7 +354,7 @@ Size of a snapshot buffer in bytes.
 | `ST-PAGE-ENTRIES` | 256 | Accounts per page (STARK trace aligned) |
 | `ST-ENTRY-SIZE` | 72 | Bytes per account entry |
 | `ST-ADDR-LEN` | 32 | Account address length (SHA3-256 hash) |
-| `ST-SNAPSHOT-SIZE` | 4,718,736 | Snapshot buffer size (at 256 pages) |
+| `ST-SNAPSHOT-SIZE` | 4,718,608 | Largest snapshot (at 256 pages) |
 
 ---
 
@@ -367,3 +402,5 @@ ST-ROOT DROP                \ -> 32-byte root address (drop flag)
 | `ST-VERIFY-PROOF` | `( key leaf proof len root -- flag )` | Verify inclusion proof |
 | `ST-SNAPSHOT` | `( dst -- )` | Save state to buffer |
 | `ST-RESTORE` | `( src -- )` | Restore state from buffer |
+| `ST-SNAPSHOT-BYTES` | `( -- n )` | Size of the present state's snapshot |
+| `ST-SNAPSHOT-LEN` | `( src -- n )` | Size a snapshot's header gives, 0 if invalid |

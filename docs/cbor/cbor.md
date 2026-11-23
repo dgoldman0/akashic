@@ -87,6 +87,11 @@ Containers (`CBOR-ARRAY`, `CBOR-MAP`) only write the header.  The
 caller must encode exactly `n` items (or `2*n` for maps) after the
 header.
 
+A byte or text string's contents move into the buffer with one `CMOVE`
+of the part that fits; the rest is dropped and counted, as every byte
+past the capacity is, so `CBOR-SIZE` and `CBOR-OK?` report the string
+whether or not it fit.
+
 ### Result
 
 ```forth

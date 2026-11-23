@@ -103,17 +103,38 @@ Execute one iteration of the main loop (useful for testing).
 
 ## Block Production
 
-Production is disabled by default.  When enabled and the node is
-synced (`SYNC-IDLE`):
+Production is disabled by default.  When enabled, the node is synced
+(`SYNC-IDLE`) and its wall clock is set (`DT-CLOCK-VALID?`):
 
-1. Drain up to `BLK-MAX-TXS` transactions from the mempool
+1. Drain up to `BLK-MAX-TXS` transactions from the mempool, into a
+   block stamped with the wall time
 2. Finalize the block (compute the tx and state Merkle roots; the state
-   is left as it was)
+   is left as it was).  The block ends before the first transaction the
+   state refuses (P22).
 3. Seal with consensus proof (`CON-SEAL`)
 4. Append to chain via `CHAIN-APPEND`, which verifies the block and
    applies its transactions to the state
-5. Persist to block log, broadcast to peers, and release the drained
-   mempool slots
+5. Persist to block log and broadcast to peers.  The transaction the
+   block was cut at is dropped, and those drained after it go back to
+   the mempool (`MP-RETURN`).  When the chain refuses the block, every
+   drained transaction goes back.  The slots no block or pool holds are
+   then released.
+
+The transaction a block was cut at is dropped rather than given back.
+Given back, it would drain ahead of the transactions after it again
+and cut every later block at the same place.  Passing over it inside
+`BLK-FINALIZE`, so that the transactions after it join the same block,
+would change the rule that a produced block ends at the first
+transaction the state refuses (P22).  Under that rule the transactions
+after it wait one block, since they go back to the pool for the next.
+
+Production waits for the clock.  Until the clock is set it names no
+instant: a block stamped from it is refused while it reads 0 and dated
+1970 after that.  Stamping the block with its parent's time plus a
+second was not chosen, since that time would be made up, and a block's
+timestamp is the wall time it was produced at (P34).  A node whose
+clock is not set therefore produces nothing, and its pool keeps its
+transactions until the clock is set.
 
 ### NODE-ENABLE-PRODUCE
 
