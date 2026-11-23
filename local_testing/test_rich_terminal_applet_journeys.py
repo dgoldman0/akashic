@@ -48,6 +48,7 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal_applet_journeys import (
+    SandboxJourney,
     AGENT_LONG_CHANGES,
     AGENT_LONG_EXCHANGE,
     AGENT_LONG_LAST,
@@ -1544,6 +1545,49 @@ def test_agent_alone_refuses_a_desk_prompt_that_is_not_modal_for_all_of_desk() -
     for stage in (AgentAloneJourney.ENDED, AgentAloneJourney.PROMPT):
         with pytest.raises(PhysicalDesktopAcceptanceError, match="lost focus"):
             journey_at(stage).after_present(offer, 9, opened, sender)
+
+
+def _sandbox_status(*steps: int) -> dict:
+    return {"cores": [{"core": core, "state": "idle", "semantic_steps": count}
+                      for core, count in enumerate(steps)]}
+
+
+def _sandbox_measured(journey: SandboxJourney, name: str, before, after) -> bool:
+    """Measure the run NAME between two statuses, the second polled after
+    its answer."""
+
+    journey.observe_status(_sandbox_status(*before))
+    journey._cores_at_request = journey._cores
+    journey._polls_at_answer = journey._polls
+    if journey._measure(name):
+        raise AssertionError("a run was measured before a status after its answer")
+    journey.observe_status(_sandbox_status(*after))
+    return journey._measure(name)
+
+
+def test_the_sandbox_journey_requires_its_jobs_on_a_worker_core() -> None:
+    # On one core every job runs on core 0, which nothing refuses.
+    alone = SandboxJourney(("Agent",))
+    assert _sandbox_measured(alone, "short", (100,), (900,))
+    assert _sandbox_measured(alone, "long", (900,), (9_000,))
+    assert _sandbox_measured(alone, "probe", (9_000,), (9_500,))
+
+    # On four cores Probe's job and the long run's own work show on a
+    # worker; core 0's steps are recorded whatever they are.
+    journey = SandboxJourney(("Agent",))
+    assert _sandbox_measured(journey, "short", (100, 0, 0, 0), (900, 50, 0, 0))
+    assert _sandbox_measured(journey, "long", (900, 50, 0, 0), (9_000, 3_050, 0, 0))
+    assert journey.evidence["long_run"]["busiest_worker"] == 1
+    assert journey.evidence["long_run"]["extra_steps_by_core"][1] == 2_950
+    assert _sandbox_measured(journey, "probe", (9_000, 3_050, 0, 0), (9_500, 3_100, 0, 0))
+    assert journey.evidence["rises"]["probe"] == {0: 500, 1: 50, 2: 0, 3: 0}
+
+    refused = SandboxJourney(("Agent",))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="ran on no worker core"):
+        _sandbox_measured(refused, "probe", (100, 0, 0, 0), (900, 0, 0, 0))
+    assert _sandbox_measured(refused, "short", (100, 0, 0, 0), (900, 50, 0, 0))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="did not move its work"):
+        _sandbox_measured(refused, "long", (900, 50, 0, 0), (90_000, 100, 0, 0))
 
 
 def test_every_single_applet_profile_has_a_journey() -> None:
