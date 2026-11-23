@@ -21,6 +21,7 @@
 \    CMAP-SOLID?     ( cmap col row -- flag )   Is tile non-passable?
 \    CMAP-W          ( cmap -- w )              Get width
 \    CMAP-H          ( cmap -- h )              Get height
+\    CMAP-DATA       ( cmap -- addr )           Tile bytes, row by row
 \
 \  Public API — Geometric Primitives:
 \    PT-IN-RECT?     ( px py rx ry rw rh -- flag )
@@ -70,6 +71,12 @@ PROVIDED akashic-game-2d-collide
 
 : CMAP-W  ( cmap -- w )  _CMAP-O-W + @ ;
 : CMAP-H  ( cmap -- h )  _CMAP-O-H + @ ;
+
+\ CMAP-DATA ( cmap -- addr )
+\   The tile bytes, width × height of them, row by row; the byte of tile
+\   (col,row) is at addr + row × width + col.  The address stays the same
+\   for the map's life.
+: CMAP-DATA  ( cmap -- addr )  _CMAP-O-DATA + @ ;
 
 \ _CMAP-ADDR ( cmap col row -- addr )
 \   Byte address = data + row * width + col.

@@ -2,7 +2,10 @@
 """Test suite for Phase 7: fsm.f + btree.f + fog.f
 
 Runs Forth test code through the Megapad-64 emulator and validates
-correctness by parsing structured UART output.
+correctness by parsing structured UART output.  Behaviour trees and the fog
+of war are also checked against the host models in game_models.py, and a
+host test checks that the shadowcast oracle is symmetric and that the map's
+edge darkens nothing inside it.
 """
 import os, sys, tempfile, re
 
@@ -23,8 +26,10 @@ from forth_disk import MEMORY_LOG, kdos_diagnostics, module_disk_files  # noqa: 
 import game_models  # noqa: E402
 
 # Behaviour trees the suite runs against the host model: the fixed nested
-# shapes and seeded random trees.
+# shapes and seeded random trees.  Fog maps the suite reveals against the
+# host shadowcast: the probe's two maps and seeded random ones.
 BT_TREES = game_models.bt_trees()
+FOG_MAPS = game_models.fog_maps()
 
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
@@ -471,62 +476,36 @@ MLOG-REPEATS 0 T-ASSERT
 
 ." --- fog.f ---" CR
 
-\ 10x10 map.  Walls at specific positions for testing.
-\ Wall layout:
+\ 10x10 map with a wall across (3,3) to (5,3), the probe's first map:
 \   ..........
 \   ..........
 \   ..........
-\   ...###....    row 3, cols 3-5
+\   ...###....
 \   ..........
-\   ..........
-\   ..........
-\   ..........
-\   ..........
-\   ..........
-
 VARIABLE _TFG-FOG
-CREATE _TFG-WALLS 100 ALLOT     \ 10x10 = 100 bytes, 1=wall
+10 10 CMAP-NEW CONSTANT _TFG-MAP
+_TFG-MAP 3 3 1 CMAP-SET  _TFG-MAP 4 3 1 CMAP-SET  _TFG-MAP 5 3 1 CMAP-SET
 
-: _TFG-INIT-WALLS
-    _TFG-WALLS 100 0 FILL
-    1 _TFG-WALLS 33 + C!    \ (3,3)
-    1 _TFG-WALLS 34 + C!    \ (4,3)
-    1 _TFG-WALLS 35 + C! ;  \ (5,3)
-
-_TFG-INIT-WALLS
-
-\ Blocked callback: check if (x,y) is a wall
-VARIABLE _TFG-BLK-X
-VARIABLE _TFG-BLK-Y
-: _TFG-IS-BLOCKED  ( x y -- flag )
-    _TFG-BLK-Y ! _TFG-BLK-X !
-    _TFG-BLK-X @ 0< IF 0 EXIT THEN
-    _TFG-BLK-Y @ 0< IF 0 EXIT THEN
-    _TFG-BLK-X @ 10 >= IF 0 EXIT THEN
-    _TFG-BLK-Y @ 10 >= IF 0 EXIT THEN
-    _TFG-WALLS _TFG-BLK-Y @ 10 * _TFG-BLK-X @ + + C@ 0<> ;
-
-\ --- Test: FOG-NEW ---
 S" fog:new-nonzero" T-NAME
-10 10 ' _TFG-IS-BLOCKED FOG-NEW DUP _TFG-FOG ! 0<> T-TRUE
+10 10 FOG-NEW DUP _TFG-FOG ! 0<> T-TRUE
+_TFG-FOG @ _TFG-MAP FOG-BLOCK-MAP!
 
-\ --- Test: initial state is UNSEEN ---
+S" fog:size" T-NAME
+_TFG-FOG @ FOG-W _TFG-FOG @ FOG-H * 100 T-ASSERT
+
 S" fog:initial-unseen-0-0" T-NAME
 _TFG-FOG @ 0 0 FOG-STATE 0 T-ASSERT
 
 S" fog:initial-unseen-5-5" T-NAME
 _TFG-FOG @ 5 5 FOG-STATE 0 T-ASSERT
 
-\ --- Test: out-of-bounds returns 0 (UNSEEN) ---
 S" fog:oob-returns-unseen" T-NAME
 _TFG-FOG @ -1 0 FOG-STATE 0 T-ASSERT
 
 S" fog:oob-returns-unseen2" T-NAME
 _TFG-FOG @ 10 10 FOG-STATE 0 T-ASSERT
 
-\ --- Test: FOG-REVEAL at centre (1,1) radius 3 ---
 S" fog:reveal-centre-visible" T-NAME
-_TFG-FOG @ FOG-HIDE-ALL
 _TFG-FOG @ 1 1 3 FOG-REVEAL
 _TFG-FOG @ 1 1 FOG-STATE 2 T-ASSERT
 
@@ -536,14 +515,12 @@ _TFG-FOG @ 2 1 FOG-STATE 2 T-ASSERT
 S" fog:reveal-adjacent-visible2" T-NAME
 _TFG-FOG @ 1 2 FOG-STATE 2 T-ASSERT
 
-S" fog:reveal-origin-visible" T-NAME
+S" fog:reveal-corner-visible" T-NAME
 _TFG-FOG @ 0 0 FOG-STATE 2 T-ASSERT
 
-\ Far-away tile should still be unseen
 S" fog:far-tile-unseen" T-NAME
 _TFG-FOG @ 9 9 FOG-STATE 0 T-ASSERT
 
-\ --- Test: FOG-HIDE-ALL demotes VISIBLE to REMEMBERED ---
 S" fog:hide-all-demotes" T-NAME
 _TFG-FOG @ FOG-HIDE-ALL
 _TFG-FOG @ 1 1 FOG-STATE 1 T-ASSERT
@@ -551,41 +528,76 @@ _TFG-FOG @ 1 1 FOG-STATE 1 T-ASSERT
 S" fog:hide-all-remembered" T-NAME
 _TFG-FOG @ 0 0 FOG-STATE 1 T-ASSERT
 
-\ Tile that was never seen stays UNSEEN
 S" fog:hide-all-unseen-stays" T-NAME
 _TFG-FOG @ 9 9 FOG-STATE 0 T-ASSERT
 
-\ --- Test: Reveal again — remembered becomes visible ---
 S" fog:re-reveal-visible" T-NAME
 _TFG-FOG @ 1 1 3 FOG-REVEAL
 _TFG-FOG @ 1 1 FOG-STATE 2 T-ASSERT
 
-\ --- Test: Wall blocks LOS ---
-\ Reveal from (1,3) with radius 8.  Wall at (3,3)-(5,3) should block
-\ tiles directly behind it (e.g. (4,4) on the other side).
-\ Tile (1,3) itself visible, wall tiles visible, but tiles far behind wall not.
-S" fog:wall-itself-visible" T-NAME
+\ From (1,3) with radius 8 the wall hides the tiles behind it.
 _TFG-FOG @ FOG-HIDE-ALL
 _TFG-FOG @ 1 3 8 FOG-REVEAL
-_TFG-FOG @ 3 3 FOG-STATE 2 T-ASSERT   \ wall tile itself is visible
+
+S" fog:wall-itself-visible" T-NAME
+_TFG-FOG @ 3 3 FOG-STATE 2 T-ASSERT
+
+S" fog:beside-wall-visible" T-NAME
+_TFG-FOG @ 2 3 FOG-STATE 2 T-ASSERT
 
 S" fog:behind-wall-blocked" T-NAME
-\ Axis-aligned tiles behind the wall may leak through depending on
-\ octant boundary handling.  Check a tile at a diagonal offset behind
-\ the wall: (5,5) is behind the wall from (1,3) at an angle.
-\ With no wall at y=5, it should be visible.  Instead, verify that the
-\ shadowcast does mark wall tiles themselves (already tested above)
-\ and just verify the reveal didn't crash.
--1 T-TRUE
+_TFG-FOG @ 6 3 FOG-STATE 2 <>  _TFG-FOG @ 8 3 FOG-STATE 2 <> AND T-TRUE
 
-\ --- Test: Tiles beside wall still visible ---
-S" fog:beside-wall-visible" T-NAME
-_TFG-FOG @ 2 3 FOG-STATE 2 T-ASSERT   \ just before wall
+S" fog:past-the-wall-visible" T-NAME
+_TFG-FOG @ 6 5 FOG-STATE 2 T-ASSERT
 
-\ --- Test: FOG-FREE ---
-S" fog:free-no-crash" T-NAME
-_TFG-FOG @ FOG-FREE -1 T-TRUE
+\ Reveals between hides light one layer; a hide demotes all of them.
+S" fog:second-source-adds" T-NAME
+_TFG-FOG @ 8 8 2 FOG-REVEAL
+_TFG-FOG @ 8 8 FOG-STATE 2 =  _TFG-FOG @ 2 3 FOG-STATE 2 = AND T-TRUE
 
+S" fog:hide-demotes-both-sources" T-NAME
+_TFG-FOG @ FOG-HIDE-ALL
+_TFG-FOG @ 8 8 FOG-STATE 1 =  _TFG-FOG @ 2 3 FOG-STATE 1 = AND T-TRUE
+
+S" fog:reset-forgets" T-NAME
+_TFG-FOG @ FOG-RESET
+_TFG-FOG @ 2 3 FOG-STATE 0 T-ASSERT
+
+\ One wall at (2,2): from (0,0) the open tiles beside it stay in view and
+\ the tiles behind it fall in its shadow.
+10 10 CMAP-NEW CONSTANT _TFG-MAP2
+_TFG-MAP2 2 2 1 CMAP-SET
+10 10 FOG-NEW CONSTANT _TFG-FOG2
+_TFG-FOG2 _TFG-MAP2 FOG-BLOCK-MAP!
+_TFG-FOG2 0 0 8 FOG-REVEAL
+
+S" fog:one-wall-open-tiles-visible" T-NAME
+_TFG-FOG2 5 1 FOG-STATE 2 =  _TFG-FOG2 3 0 FOG-STATE 2 = AND
+_TFG-FOG2 0 5 FOG-STATE 2 = AND T-TRUE
+
+S" fog:one-wall-shadow" T-NAME
+_TFG-FOG2 3 3 FOG-STATE 2 <>  _TFG-FOG2 4 4 FOG-STATE 2 <> AND T-TRUE
+
+\ The same map through a token with a context cell sees the same tiles.
+: _TFG-TOKEN  ( x y ctx -- flag )  -ROT CMAP-SOLID? ;
+S" fog:token-source-agrees" T-NAME
+10 10 FOG-NEW CONSTANT _TFG-FOG3
+_TFG-FOG3 ' _TFG-TOKEN _TFG-MAP2 FOG-BLOCK-XT!
+_TFG-FOG3 0 0 8 FOG-REVEAL
+: _TFG-SAME?  ( -- flag )
+    -1  10 0 DO 10 0 DO
+        _TFG-FOG2 I J FOG-STATE _TFG-FOG3 I J FOG-STATE <> IF DROP 0 THEN
+    LOOP LOOP ;
+_TFG-SAME? T-TRUE
+
+S" fog:free-each-block-once" T-NAME
+-1 MLOG-HOLD  MLOG-START
+_TFG-FOG @ FOG-FREE  _TFG-FOG2 FOG-FREE  _TFG-FOG3 FOG-FREE
+MLOG-STOP  0 MLOG-HOLD
+MLOG-REPEATS 0 T-ASSERT
+
+""" + game_models.fog_forth(FOG_MAPS) + r"""
 \ =====================================================================
 \  §4 — Summary
 \ =====================================================================
@@ -722,6 +734,15 @@ def main():
         if problems:
             fatal = True
 
+        # The fog's layers against the host shadowcast
+        problems = game_models.fog_check(text, FOG_MAPS)
+        print(f"  Fog: {len(FOG_MAPS)} maps against the host shadowcast, "
+              f"{len(problems)} differences")
+        for problem in problems[:20]:
+            print(f"  \u2717 {problem}")
+        if problems:
+            fatal = True
+
         if "ALL-TESTS-PASSED" in text and not fatal:
             print("\n[\u2713] ALL TESTS PASSED")
             rc = 0
@@ -742,6 +763,33 @@ def main():
 def test_suite() -> None:
     """The suite as a test, so the test selection tool runs it."""
     assert main() == 0
+
+
+def test_shadowcast_oracle_is_symmetric_and_edge_blind() -> None:
+    """The oracle's own properties, on small seeded maps.
+
+    A floor tile sees another exactly when the other sees it, within the
+    radius, and treating the outside of the map as open ground lights the
+    same tiles inside it as treating it as walls.
+    """
+    import random
+
+    rng = random.Random(7)
+    for _ in range(40):
+        width, height = rng.randint(3, 10), rng.randint(3, 8)
+        density = rng.choice([0.1, 0.25, 0.4])
+        walls = {(x, y) for y in range(height) for x in range(width)
+                 if rng.random() < density}
+        floors = [(x, y) for y in range(height) for x in range(width)
+                  if (x, y) not in walls]
+        radius = rng.randint(1, 10)
+        seen = {tile: game_models.shadowcast(width, height, walls, *tile, radius)
+                for tile in floors}
+        for a in floors:
+            assert seen[a] == game_models.shadowcast(
+                width, height, walls, *a, radius, edge_blocks=False)
+            for b in floors:
+                assert (b in seen[a]) == (a in seen[b]), (a, b)
 
 
 if __name__ == "__main__":

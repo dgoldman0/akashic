@@ -11,11 +11,21 @@ over several ticks and frees it inside a memory log, and ``bt_check``
 compares the transcript with the model.  A leaf's status is a function of
 its id, the entity and the tick, which the Forth passes as BT-RUN's ecs
 argument, so the model knows what every leaf returns.
+
+Fog of war: ``shadowcast`` is symmetric shadowcasting with exact rational
+slopes, after Albert Ford's description of the algorithm, limited to a
+radius, with every tile beyond the map's edge blocking sight and never
+lit.  ``fog_maps`` makes the fixed maps of the plan's probe and seeded
+random maps, ``fog_forth`` emits Forth that reveals three viewers into one
+fog on each map, two before a hide and one after, and prints the layer
+after each, and ``fog_check`` compares the layers with the oracle.
 """
 
 from __future__ import annotations
 
+import math
 import random
+from fractions import Fraction
 from dataclasses import dataclass, field
 
 SUCCESS, FAILURE, RUNNING = 0, 1, 2
@@ -317,3 +327,197 @@ def bt_check(text: str, trees: list[BtNode], ticks: int = 12) -> list[str]:
             problems.append(f"tree {number}: stack depth {depth} after the trial")
     return problems
 
+
+
+# ── Fog of war ───────────────────────────────────────────────────
+
+_HALF = Fraction(1, 2)
+
+
+def shadowcast(width: int, height: int, walls: set[tuple[int, int]],
+               ox: int, oy: int, radius: int,
+               edge_blocks: bool = True) -> set[tuple[int, int]]:
+    """The tiles a viewer at (OX, OY) sees within RADIUS.
+
+    A floor tile is seen when its centre lies within a row's slopes, a
+    wall when any part of it does, and either only within the radius.
+    With EDGE_BLOCKS false the map's outside is open ground, which must
+    see the same tiles inside the map.
+    """
+    seen: set[tuple[int, int]] = set()
+    if not (0 <= ox < width and 0 <= oy < height):
+        return seen
+
+    def inside(x: int, y: int) -> bool:
+        return 0 <= x < width and 0 <= y < height
+
+    def blocks(x: int, y: int) -> bool:
+        return (x, y) in walls if inside(x, y) else edge_blocks
+
+    seen.add((ox, oy))
+    if radius <= 0:
+        return seen
+    for quadrant in range(4):
+        def tile(depth: int, col: int) -> tuple[int, int]:
+            return [(ox + col, oy - depth), (ox + depth, oy + col),
+                    (ox + col, oy + depth), (ox - depth, oy + col)][quadrant]
+
+        def scan(depth: int, start: Fraction, end: Fraction) -> None:
+            previous = None
+            first = math.floor(depth * start + _HALF)
+            last = math.ceil(depth * end - _HALF)
+            for col in range(first, last + 1):
+                x, y = tile(depth, col)
+                wall = blocks(x, y)
+                if wall or depth * start <= col <= depth * end:
+                    if depth * depth + col * col <= radius * radius and inside(x, y):
+                        seen.add((x, y))
+                if previous is True and not wall:
+                    start = Fraction(2 * col - 1, 2 * depth)
+                if previous is False and wall and depth < radius:
+                    scan(depth + 1, start, Fraction(2 * col - 1, 2 * depth))
+                previous = wall
+            if previous is False and depth < radius:
+                scan(depth + 1, start, end)
+
+        scan(1, Fraction(-1), Fraction(1))
+    return seen
+
+
+@dataclass
+class FogMap:
+    width: int
+    height: int
+    walls: set[tuple[int, int]]
+    viewers: list[tuple[int, int, int]]     # x y radius, three of them
+    token: bool = False                     # blocking source: a token
+
+
+def _fog_floor(rng: random.Random, fmap: "FogMap") -> tuple[int, int]:
+    floors = [(x, y) for y in range(fmap.height) for x in range(fmap.width)
+              if (x, y) not in fmap.walls]
+    edges = [p for p in floors if p[0] in (0, fmap.width - 1)
+             or p[1] in (0, fmap.height - 1)]
+    pool = edges if edges and rng.random() < 0.3 else floors
+    return rng.choice(pool)
+
+
+def fog_maps(seed: int = 20261123, count: int = 30) -> list[FogMap]:
+    """The probe's two maps, then COUNT seeded random maps."""
+    maps = [
+        FogMap(10, 10, {(3, 3), (4, 3), (5, 3)}, [(1, 3, 8), (8, 8, 4), (1, 1, 8)]),
+        FogMap(10, 10, {(2, 2)}, [(0, 0, 8), (9, 9, 3), (5, 5, 10)], token=True),
+    ]
+    rng = random.Random(seed)
+    for number in range(count):
+        width, height = rng.randint(4, 24), rng.randint(4, 12)
+        density = rng.choice([0.0, 0.1, 0.2, 0.3, 0.45])
+        walls = {(x, y) for y in range(height) for x in range(width)
+                 if rng.random() < density}
+        if len(walls) == width * height:
+            walls.discard((0, 0))
+        fmap = FogMap(width, height, walls, [], token=number % 4 == 3)
+        fmap.viewers = [(*_fog_floor(rng, fmap), rng.randint(0, 12))
+                        for _ in range(3)]
+        maps.append(fmap)
+    return maps
+
+
+FOG_FORTH_SUPPORT = r"""
+\ ── Fog against the host oracle ────────────────────────────────
+VARIABLE _FGT-FOG  VARIABLE _FGT-MAP
+: _FGT-BEGIN  ( w h -- )  2DUP CMAP-NEW _FGT-MAP !  FOG-NEW _FGT-FOG ! ;
+: _FGT-ROW!  ( addr u y -- )
+    SWAP 0 ?DO
+        OVER I + C@ [CHAR] # = IF _FGT-MAP @ I 2 PICK 1 CMAP-SET THEN
+    LOOP 2DROP ;
+: _FGT-TOKEN  ( x y ctx -- flag )  -ROT CMAP-SOLID? ;
+: _FGT-USE-MAP  ( -- )  _FGT-FOG @ _FGT-MAP @ FOG-BLOCK-MAP! ;
+: _FGT-USE-TOKEN  ( -- )  _FGT-FOG @ ['] _FGT-TOKEN _FGT-MAP @ FOG-BLOCK-XT! ;
+: _FGT-END  ( -- )  _FGT-FOG @ FOG-FREE  _FGT-MAP @ CMAP-FREE ;
+: _FGT-ROW.  ( fog y -- )
+    OVER FOG-W 0 ?DO OVER I 2 PICK FOG-STATE [CHAR] 0 + EMIT LOOP 2DROP ;
+: _FGT-GRID.  ( id step -- )
+    ." FOGG: " SWAP . . CR
+    _FGT-FOG @ FOG-H 0 ?DO ." FR: " _FGT-FOG @ I _FGT-ROW. CR LOOP ;
+: _FGT-SEE  ( x y radius -- )  >R >R >R _FGT-FOG @ R> R> R> FOG-REVEAL ;
+DEPTH CONSTANT _FGT-DEPTH0
+"""
+
+
+def fog_forth(maps: list[FogMap]) -> str:
+    """Forth that reveals each map's viewers: two, a hide, then one."""
+    lines = [FOG_FORTH_SUPPORT]
+    for number, fmap in enumerate(maps):
+        lines += ["-1 MLOG-HOLD  MLOG-START",
+                  f"{fmap.width} {fmap.height} _FGT-BEGIN"]
+        for y in range(fmap.height):
+            row = "".join("#" if (x, y) in fmap.walls else "."
+                          for x in range(fmap.width))
+            lines.append(f'S" {row}" {y} _FGT-ROW!')
+        lines.append("_FGT-USE-TOKEN" if fmap.token else "_FGT-USE-MAP")
+        (x1, y1, r1), (x2, y2, r2), (x3, y3, r3) = fmap.viewers
+        lines += [
+            "_FGT-FOG @ FOG-RESET",
+            f"{x1} {y1} {r1} _FGT-SEE  {number} 0 _FGT-GRID.",
+            f"{x2} {y2} {r2} _FGT-SEE  {number} 1 _FGT-GRID.",
+            f"_FGT-FOG @ FOG-HIDE-ALL  {x3} {y3} {r3} _FGT-SEE  {number} 2 _FGT-GRID.",
+            "_FGT-END",
+            "MLOG-STOP  0 MLOG-HOLD",
+            f'." FOGM: " {number} . MLOG-BALANCED? . DEPTH _FGT-DEPTH0 - . CR',
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def fog_layers(fmap: FogMap) -> list[list[str]]:
+    """The oracle's layer after each of a map's three steps, row by row."""
+    (x1, y1, r1), (x2, y2, r2), (x3, y3, r3) = fmap.viewers
+    first = shadowcast(fmap.width, fmap.height, fmap.walls, x1, y1, r1)
+    second = shadowcast(fmap.width, fmap.height, fmap.walls, x2, y2, r2)
+    third = shadowcast(fmap.width, fmap.height, fmap.walls, x3, y3, r3)
+
+    def layer(visible: set, remembered: set) -> list[str]:
+        return ["".join("2" if (x, y) in visible else
+                        "1" if (x, y) in remembered else "0"
+                        for x in range(fmap.width))
+                for y in range(fmap.height)]
+
+    return [layer(first, set()), layer(first | second, set()),
+            layer(third, first | second)]
+
+
+def fog_check(text: str, maps: list[FogMap]) -> list[str]:
+    """Differences between the transcript's layers and the oracle's."""
+    problems: list[str] = []
+    grids: dict[tuple[int, int], list[str]] = {}
+    memory: dict[int, tuple[int, int]] = {}
+    current = None
+    for line in text.splitlines():
+        try:
+            if line.startswith("FOGG: "):
+                number, step = (int(x) for x in line[6:].split())
+                current = grids.setdefault((number, step), [])
+            elif line.startswith("FR: ") and current is not None:
+                current.append(line[4:].strip())
+            elif line.startswith("FOGM: "):
+                number, balanced, depth = (int(x) for x in line[6:].split())
+                memory[number] = (balanced, depth)
+                current = None
+        except ValueError:
+            problems.append(f"unreadable line: {line!r}")
+    for number, fmap in enumerate(maps):
+        for step, want in enumerate(fog_layers(fmap)):
+            got = grids.get((number, step))
+            if got != want:
+                where = "no layer"
+                if got:
+                    rows = [y for y, (a, b) in enumerate(zip(got, want)) if a != b]
+                    where = f"rows {rows[:4]}: got {got[rows[0]] if rows else got} " \
+                            f"oracle {want[rows[0]] if rows else want}"
+                problems.append(f"map {number} step {step}: {where}")
+        balanced, depth = memory.get(number, (0, -1))
+        if balanced != -1:
+            problems.append(f"map {number}: the memory log does not balance")
+        if depth != 0:
+            problems.append(f"map {number}: stack depth {depth} after the trial")
+    return problems

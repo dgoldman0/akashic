@@ -94,6 +94,17 @@ my-cmap 0 CMAP-FILL   \ make everything passable
 
 Return the map's width and height.
 
+#### CMAP-DATA
+
+```
+( cmap -- addr )
+```
+
+Return the address of the tile bytes, width × height of them, row by
+row: the byte of tile (col, row) is at `addr + row × width + col`. The
+address stays the same for the map's life, so a reader such as the fog of
+war can keep it and read tiles directly.
+
 ---
 
 ### Queries
@@ -203,6 +214,7 @@ Offset  Size  Field
 | `CMAP-FILL` | `( cmap val -- )` | Fill all tiles |
 | `CMAP-W` | `( cmap -- w )` | Map width |
 | `CMAP-H` | `( cmap -- h )` | Map height |
+| `CMAP-DATA` | `( cmap -- addr )` | Tile bytes, row by row |
 | `PT-IN-RECT?` | `( px py rx ry rw rh -- flag )` | Point in rect? |
 | `AABB-OVERLAP?` | `( x1 y1 w1 h1 x2 y2 w2 h2 -- flag )` | AABB overlap? |
 | `SPR-CMAP-BLOCKED?` | `( spr dx dy cmap -- flag )` | Movement blocked? |
