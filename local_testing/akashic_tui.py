@@ -29276,7 +29276,7 @@ def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
 
     from shared.storage import STORAGE_UNIT_TABLE
     from simulator.image_bootstrap import prepare_image_bootstrap
-    from simulator.platform import create_one_core_address_space
+    from simulator.platform import create_address_space
     from simulator.runtime import MegaForthRuntime
     from simulator.server import _CANONICAL_HBW_MIB
     from simulator.storage import HostedStorageService
@@ -29295,7 +29295,7 @@ def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
         )
         for unit, unit_path in zip(STORAGE_UNIT_TABLE, paths, strict=True)
     }
-    memory = create_one_core_address_space(
+    memory = create_address_space(
         bank0_size=DEFAULT_RAM_KIB << 10,
         external_size=profile.default_ext_mem_mib << 20,
         vram_size=DEFAULT_VRAM_MIB << 20,

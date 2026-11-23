@@ -19,7 +19,7 @@ from PIL import Image
 
 from forth_dependencies import dependency_order
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 FILE_BYTES = 2 << 20
@@ -141,7 +141,7 @@ def expected_rgba(depth, colour, pixels, palette=None, trns=None) -> bytes:
 class Decoder:
     def __init__(self):
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=32 << 20, hbw_size=1 << 20),
+            memory=create_address_space(external_size=32 << 20, hbw_size=1 << 20),
             execution_backend="native",
         )
         self.runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

@@ -4571,12 +4571,12 @@ def simulator_sources(
 def simulator_machine(extra: tuple[tuple[str, bytes], ...] = ()):
     """A simulator machine holding what the emulator's ext4 snapshot holds,
     and EXTRA, on the same memory and with the same boot disk."""
-    from simulator.platform import create_one_core_address_space
+    from simulator.platform import create_address_space
     from simulator.runtime import MegaForthRuntime
     from simulator.storage import HostedStorageService
 
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(
+        memory=create_address_space(
             external_size=fat_harness.VFS_EXT_MEM_SIZE,
             hbw_size=EMULATOR_HBW_SIZE,
         ),

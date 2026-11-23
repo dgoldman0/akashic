@@ -17,7 +17,7 @@ import pytest
 from forth_dependencies import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from diskutil import FTYPE_TEXT, MP64FS
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 
@@ -41,7 +41,7 @@ def _runtime(settings: bytes | None, *, boot_disk: bytes | None = None) -> MegaF
     composition does."""
 
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=128 << 20),
+        memory=create_address_space(external_size=128 << 20),
         execution_backend="native",
         storage=None if boot_disk is None else HostedStorageService(boot_disk),
         settings_storage=(

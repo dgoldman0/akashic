@@ -15,7 +15,7 @@ import pytest
 
 from forth_dependencies import dependency_order
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 BUFFER = 3 << 20
@@ -24,7 +24,7 @@ BUFFER = 3 << 20
 @pytest.fixture(scope="module")
 def runtime():
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=16 << 20, hbw_size=1 << 20),
+        memory=create_address_space(external_size=16 << 20, hbw_size=1 << 20),
         execution_backend="native",
     )
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

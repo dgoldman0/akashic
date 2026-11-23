@@ -3,13 +3,13 @@
 import json
 
 import akashic_tui as packaging
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 
 def test_complete_desk_cold_source_setup_fits_selected_external_memory():
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(
+        memory=create_address_space(
             external_size=packaging.DESKTOP_APT1_EXT_MEM_MIB << 20,
             hbw_size=1 << 20,
         ),

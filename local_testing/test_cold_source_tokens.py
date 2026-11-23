@@ -18,7 +18,7 @@ from pathlib import Path
 from diskutil import FTYPE_DATA, MP64FS
 
 import akashic_tui
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 from test_textarea import MEGAPAD_ROOT
@@ -44,7 +44,7 @@ class Machine:
         for name, data in files.items():
             fs.inject_file(name, data, ftype=FTYPE_DATA)
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=128 << 20),
+            memory=create_address_space(external_size=128 << 20),
             execution_backend="native",
             storage=HostedStorageService(bytes(fs.img)),
         )

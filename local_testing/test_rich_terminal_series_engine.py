@@ -17,7 +17,7 @@ from test_rich_terminal_status_provider import ProviderHarness, RetainedFeature
 from test_rich_terminal_status_static import MASK, RICH, SOURCE, _clean, _word
 from simulator.runtime import MegaForthRuntime
 from simulator.memory import EXTERNAL_BASE
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from tests.simulator.test_kdos_exceptions import _load_exceptions
 from rich_terminal.retained_wire import RetainedMessageType
 
@@ -46,7 +46,7 @@ class SeriesProvider(ProviderHarness):
         with patch.object(cf, "_fixture_source", return_value=fixture), patch.object(
             cf, "_load_exceptions", side_effect=lambda: _load_exceptions(
                 MegaForthRuntime(execution_backend=backend,
-                                 memory=create_one_core_address_space(external_size=1 << 20))),
+                                 memory=create_address_space(external_size=1 << 20))),
         ):
             cf._FeedHarness.__init__(self, cf.SOURCE.read_bytes(), cols=20)
         self.runtime.evaluate((

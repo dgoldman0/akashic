@@ -10,13 +10,13 @@ from test_uidl_collection_snapshot import (
     COLOR_ABI_STUBS, COLOR_STUBS_BEFORE, MEGAPAD_ROOT, SOURCE_PATHS,
     STYLE_ABI_STUBS, _load_forth_lines,
 )
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 
 def run_status_forth(lines: list[str], max_steps: int = 20_000_000) -> str:
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=128 << 20),
+        memory=create_address_space(external_size=128 << 20),
         execution_backend="native",
     )
     runtime.evaluate((MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")

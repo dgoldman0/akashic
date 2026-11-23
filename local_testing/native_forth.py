@@ -29,7 +29,7 @@ MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT", PROJECT_ROOT / "megapad"))
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from simulator.errors import SimulatorError  # noqa: E402
-from simulator.platform import create_one_core_address_space  # noqa: E402
+from simulator.platform import create_address_space  # noqa: E402
 from simulator.runtime import MegaForthRuntime  # noqa: E402
 from simulator.stacks import StackError  # noqa: E402
 
@@ -126,7 +126,7 @@ class NativeForth:
         """Return a fresh machine with KDOS, the closure and the prelude."""
 
         runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(
+            memory=create_address_space(
                 external_size=self.external_size, hbw_size=1 << 20,
             ),
             execution_backend="native",

@@ -22,7 +22,7 @@ import pytest
 import test_vfs_module_source as module_source
 from forth_dependencies import dependency_order
 from test_textarea import MEGAPAD_ROOT
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 
@@ -66,7 +66,7 @@ class Machine:
             else HostedStorageService(volume, write_protected=True)
         )
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=128 << 20),
+            memory=create_address_space(external_size=128 << 20),
             execution_backend="native",
             storage=self.boot,
             system_storage=self.volume,

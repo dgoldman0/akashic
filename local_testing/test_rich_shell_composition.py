@@ -120,11 +120,11 @@ def test_shell_selection_rejects_overflow_instead_of_shrinking_existing_quotas(c
 @pytest.mark.parametrize('shell_enabled', [False, True])
 def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation(shell_enabled):
     """Exercise real constructors, with only INSTALL refusal injected by the test."""
-    from simulator.platform import create_one_core_address_space
+    from simulator.platform import create_address_space
     from simulator.runtime import MegaForthRuntime
 
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(
+        memory=create_address_space(
             external_size=packaging.DESKTOP_APT1_EXT_MEM_MIB << 20,
             hbw_size=1 << 20,
         ), execution_backend="native",
