@@ -19,7 +19,12 @@ from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
 sys.path.insert(0, SCRIPT_DIR)
-from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+from forth_disk import MEMORY_LOG, kdos_diagnostics, module_disk_files  # noqa: E402
+import game_models  # noqa: E402
+
+# Behaviour trees the suite runs against the host model: the fixed nested
+# shapes and seeded random trees.
+BT_TREES = game_models.bt_trees()
 
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
@@ -103,6 +108,7 @@ CREATE _T-NAMEBUF 80 ALLOT
 \ ── Load modules ─────────────────────────────────────────────
 
 REQUIRE tui/screen.f
+""" + MEMORY_LOG + r"""
 REQUIRE game/ai/fsm.f
 REQUIRE game/ai/btree.f
 REQUIRE game/2d/fog.f
@@ -273,28 +279,28 @@ VARIABLE _TB-CALL-COUNT  0 _TB-CALL-COUNT !
 \ --- Test: BT-ACTION ---
 S" bt:action-success" T-NAME
 ' _TB-ACT-OK BT-ACTION
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
 BT-FREE
 
 S" bt:action-failure" T-NAME
 ' _TB-ACT-FAIL BT-ACTION
-DUP 0 0 BT-RUN BT-FAILURE T-ASSERT
+DUP 0 0 0 BT-RUN BT-FAILURE T-ASSERT
 BT-FREE
 
 S" bt:action-running" T-NAME
 ' _TB-ACT-RUN BT-ACTION
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT
+DUP 0 0 0 BT-RUN BT-RUNNING T-ASSERT
 BT-FREE
 
 \ --- Test: BT-CONDITION ---
 S" bt:condition-true-is-success" T-NAME
 ' _TB-COND-T BT-CONDITION
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
 BT-FREE
 
 S" bt:condition-false-is-failure" T-NAME
 ' _TB-COND-F BT-CONDITION
-DUP 0 0 BT-RUN BT-FAILURE T-ASSERT
+DUP 0 0 0 BT-RUN BT-FAILURE T-ASSERT
 BT-FREE
 
 \ --- Test: BT-SEQUENCE (all succeed) ---
@@ -304,7 +310,7 @@ CREATE _TB-SEQ-OK 3 CELLS ALLOT
 ' _TB-ACT-OK BT-ACTION _TB-SEQ-OK 8 + !
 ' _TB-ACT-OK BT-ACTION _TB-SEQ-OK 16 + !
 _TB-SEQ-OK 3 BT-SEQUENCE
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
 BT-FREE
 
 \ --- Test: BT-SEQUENCE (second fails) ---
@@ -313,7 +319,7 @@ CREATE _TB-SEQ-F2 2 CELLS ALLOT
 ' _TB-ACT-OK BT-ACTION _TB-SEQ-F2 !
 ' _TB-ACT-FAIL BT-ACTION _TB-SEQ-F2 8 + !
 _TB-SEQ-F2 2 BT-SEQUENCE
-DUP 0 0 BT-RUN BT-FAILURE T-ASSERT
+DUP 0 0 0 BT-RUN BT-FAILURE T-ASSERT
 BT-FREE
 
 \ --- Test: BT-SELECTOR (first succeeds) ---
@@ -322,7 +328,7 @@ CREATE _TB-SEL-1 2 CELLS ALLOT
 ' _TB-ACT-OK BT-ACTION _TB-SEL-1 !
 ' _TB-ACT-FAIL BT-ACTION _TB-SEL-1 8 + !
 _TB-SEL-1 2 BT-SELECTOR
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
 BT-FREE
 
 \ --- Test: BT-SELECTOR (first fails, second succeeds) ---
@@ -331,7 +337,7 @@ CREATE _TB-SEL-2 2 CELLS ALLOT
 ' _TB-ACT-FAIL BT-ACTION _TB-SEL-2 !
 ' _TB-ACT-OK BT-ACTION _TB-SEL-2 8 + !
 _TB-SEL-2 2 BT-SELECTOR
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
 BT-FREE
 
 \ --- Test: BT-SELECTOR (all fail) ---
@@ -340,34 +346,39 @@ CREATE _TB-SEL-AF 2 CELLS ALLOT
 ' _TB-ACT-FAIL BT-ACTION _TB-SEL-AF !
 ' _TB-ACT-FAIL BT-ACTION _TB-SEL-AF 8 + !
 _TB-SEL-AF 2 BT-SELECTOR
-DUP 0 0 BT-RUN BT-FAILURE T-ASSERT
+DUP 0 0 0 BT-RUN BT-FAILURE T-ASSERT
 BT-FREE
 
 \ --- Test: BT-INVERT ---
 S" bt:invert-success-to-failure" T-NAME
 ' _TB-ACT-OK BT-ACTION BT-INVERT
-DUP 0 0 BT-RUN BT-FAILURE T-ASSERT
+DUP 0 0 0 BT-RUN BT-FAILURE T-ASSERT
 BT-FREE
 
 S" bt:invert-failure-to-success" T-NAME
 ' _TB-ACT-FAIL BT-ACTION BT-INVERT
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
 BT-FREE
 
 S" bt:invert-running-passthrough" T-NAME
 ' _TB-ACT-RUN BT-ACTION BT-INVERT
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT
+DUP 0 0 0 BT-RUN BT-RUNNING T-ASSERT
 BT-FREE
 
 \ --- Test: BT-REPEAT ---
+\ A repeat or a cooldown keeps its counts in the entity's state block.
+4 CELLS ALLOCATE DROP CONSTANT _TB-ST
+_TB-ST 4 CELLS 0 FILL
+S" bt:repeat-state-cells" T-NAME
+' _TB-ACT-COUNT BT-ACTION 3 BT-REPEAT
+DUP BT-STATE-CELLS 1 T-ASSERT
 S" bt:repeat-3-times" T-NAME
 0 _TB-CALL-COUNT !
-' _TB-ACT-COUNT BT-ACTION 3 BT-REPEAT
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT       \ run 1/3
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT       \ run 2/3
+DUP _TB-ST 0 0 BT-RUN BT-RUNNING T-ASSERT       \ run 1/3
+DUP _TB-ST 0 0 BT-RUN BT-RUNNING T-ASSERT       \ run 2/3
 
 S" bt:repeat-completes-at-3" T-NAME
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT       \ run 3/3 → done
+DUP _TB-ST 0 0 BT-RUN BT-SUCCESS T-ASSERT       \ run 3/3 → done
 
 S" bt:repeat-called-3" T-NAME
 _TB-CALL-COUNT @ 3 T-ASSERT
@@ -375,30 +386,34 @@ BT-FREE
 
 \ --- Test: BT-REPEAT with n=0 (infinite) ---
 S" bt:repeat-infinite" T-NAME
+_TB-ST 4 CELLS 0 FILL
 0 _TB-CALL-COUNT !
 ' _TB-ACT-COUNT BT-ACTION 0 BT-REPEAT
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT
-DUP 0 0 BT-RUN BT-RUNNING T-ASSERT
+DUP _TB-ST 0 0 BT-RUN BT-RUNNING T-ASSERT
+DUP _TB-ST 0 0 BT-RUN BT-RUNNING T-ASSERT
+DUP _TB-ST 0 0 BT-RUN BT-RUNNING T-ASSERT
 
 S" bt:repeat-inf-count-3" T-NAME
 _TB-CALL-COUNT @ 3 T-ASSERT
 BT-FREE
 
 \ --- Test: BT-COOLDOWN ---
+S" bt:cooldown-state-cells" T-NAME
+_TB-ST 4 CELLS 0 FILL
+' _TB-ACT-COUNT BT-ACTION 2 BT-COOLDOWN
+DUP BT-STATE-CELLS 2 T-ASSERT
 S" bt:cooldown-first-runs" T-NAME
 0 _TB-CALL-COUNT !
-' _TB-ACT-COUNT BT-ACTION 2 BT-COOLDOWN
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ runs child
+DUP _TB-ST 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ runs child
 
 S" bt:cooldown-skip-1" T-NAME
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ cooldown tick 1, returns last
+DUP _TB-ST 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ cooldown tick 1, returns last
 
 S" bt:cooldown-skip-2" T-NAME
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ cooldown tick 2, returns last
+DUP _TB-ST 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ cooldown tick 2, returns last
 
 S" bt:cooldown-resumes" T-NAME
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ runs child again
+DUP _TB-ST 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ runs child again
 
 S" bt:cooldown-call-count" T-NAME
 _TB-CALL-COUNT @ 2 T-ASSERT          \ only 2 actual child calls
@@ -411,7 +426,7 @@ CREATE _TB-PAR-1 3 CELLS ALLOT
 ' _TB-ACT-FAIL BT-ACTION _TB-PAR-1 8 + !
 ' _TB-ACT-OK BT-ACTION _TB-PAR-1 16 + !
 _TB-PAR-1 3 2 BT-PARALLEL             \ 3 children, threshold=2
-DUP 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ 2/3 succeed >= threshold
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT   \ 2/3 succeed >= threshold
 BT-FREE
 
 S" bt:parallel-threshold-not-met" T-NAME
@@ -420,9 +435,36 @@ CREATE _TB-PAR-2 3 CELLS ALLOT
 ' _TB-ACT-FAIL BT-ACTION _TB-PAR-2 8 + !
 ' _TB-ACT-FAIL BT-ACTION _TB-PAR-2 16 + !
 _TB-PAR-2 3 2 BT-PARALLEL             \ 3 children, threshold=2
-DUP 0 0 BT-RUN BT-FAILURE T-ASSERT   \ 2 fail > (3-2) → failure
+DUP 0 0 0 BT-RUN BT-FAILURE T-ASSERT   \ 2 fail > (3-2) → failure
 BT-FREE
 
+\ --- Test: composites nest ---
+\ A sequence of a selector and two counting actions: the selector fails
+\ its first child and succeeds with its second, and both actions run.
+VARIABLE _TB-NX  0 _TB-NX !
+VARIABLE _TB-NY  0 _TB-NY !
+: _TB-ACT-X  ( eid ecs -- status )  2DROP 1 _TB-NX +! BT-SUCCESS ;
+: _TB-ACT-Y  ( eid ecs -- status )  2DROP 1 _TB-NY +! BT-SUCCESS ;
+CREATE _TB-NSEL 2 CELLS ALLOT
+' _TB-ACT-FAIL BT-ACTION _TB-NSEL !
+' _TB-ACT-OK BT-ACTION _TB-NSEL 8 + !
+CREATE _TB-NSEQ 3 CELLS ALLOT
+_TB-NSEL 2 BT-SELECTOR _TB-NSEQ !
+' _TB-ACT-X BT-ACTION _TB-NSEQ 8 + !
+' _TB-ACT-Y BT-ACTION _TB-NSEQ 16 + !
+S" bt:nested-sequence-succeeds" T-NAME
+_TB-NSEQ 3 BT-SEQUENCE
+DUP 0 0 0 BT-RUN BT-SUCCESS T-ASSERT
+S" bt:nested-sequence-runs-both-actions" T-NAME
+_TB-NX @ 1 = _TB-NY @ 1 = AND T-TRUE
+\ The sequence and the selector, their two arrays, and four leaves
+-1 MLOG-HOLD  MLOG-START  BT-FREE  MLOG-STOP  0 MLOG-HOLD
+S" bt:nested-free-count" T-NAME
+MLOG-FREES 8 T-ASSERT
+S" bt:nested-free-no-repeats" T-NAME
+MLOG-REPEATS 0 T-ASSERT
+
+""" + game_models.bt_forth(BT_TREES) + r"""
 \ =====================================================================
 \  §3 — Fog of War tests
 \ =====================================================================
@@ -670,6 +712,15 @@ def main():
         n_failed = int(m_failed.group(1)) if m_failed else -1
 
         print(f"  Total: {n_passed} passed, {n_failed} failed")
+
+        # The behaviour trees' trials against the host model
+        problems = game_models.bt_check(text, BT_TREES)
+        print(f"  Behaviour trees: {len(BT_TREES)} trees against the host "
+              f"model, {len(problems)} differences")
+        for problem in problems[:20]:
+            print(f"  \u2717 {problem}")
+        if problems:
+            fatal = True
 
         if "ALL-TESTS-PASSED" in text and not fatal:
             print("\n[\u2713] ALL TESTS PASSED")

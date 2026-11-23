@@ -228,6 +228,7 @@ local_testing/*
 !local_testing/generate_unicode_text_tables.py
 !local_testing/forth_snapshot.py
 !local_testing/forth_disk.py
+!local_testing/game_models.py
 !local_testing/qoi_codec.py
 !local_testing/test_qoi.py
 !local_testing/test_media.py

@@ -6,36 +6,59 @@
 \  Each node is a small heap-allocated descriptor that returns one of
 \  three statuses when run: SUCCESS, FAILURE, or RUNNING.
 \
+\  One tree serves any number of entities.  What a node remembers
+\  between runs, a repeat's count of completions and a cooldown's
+\  countdown and last result, lives in the entity's state block: a
+\  block of BT-STATE-CELLS cells, zeroed before the entity's first
+\  run.  Each subtree owns a fixed run of cells in the block, in the
+\  order the nodes appear depth first, so a tree's size and every
+\  node's place in the block are settled when the tree is built.  An
+\  entity can keep its block in a component of that many cells, which
+\  ECS-ATTACH zeroes.  A tree without repeats or cooldowns needs no
+\  block, and runs with a state of 0.
+\
+\  BT-RUN keeps its loop state on the stacks, so composites nest to
+\  any depth and an action may run another tree.  A node belongs to
+\  one parent, since freeing the parent frees it.
+\
 \  Node types:
 \    BT-NODE-ACTION    — leaf: calls xt ( eid ecs -- status )
 \    BT-NODE-CONDITION — leaf: calls xt ( eid ecs -- flag ),
 \                        returns SUCCESS if true, FAILURE if false
-\    BT-NODE-SEQUENCE  — runs children L→R; fails on first failure
-\    BT-NODE-SELECTOR  — runs children L→R; succeeds on first success
+\    BT-NODE-SEQUENCE  — runs children L→R; the first status other
+\                        than SUCCESS is its own, else SUCCESS
+\    BT-NODE-SELECTOR  — runs children L→R; the first status other
+\                        than FAILURE is its own, else FAILURE
 \    BT-NODE-PARALLEL  — runs all children; succeeds when threshold
 \                        succeed, fails when too many fail
 \    BT-NODE-INVERT   — decorator: flips SUCCESS ↔ FAILURE
 \    BT-NODE-REPEAT   — decorator: repeats child n times (0=forever)
-\    BT-NODE-COOLDOWN — decorator: runs child only once per N ticks
+\    BT-NODE-COOLDOWN — decorator: after the child finishes, returns
+\                       its result for N runs without running it
 \
 \  Node Descriptor (40 bytes, 5 cells):
 \    +0   type        Node type constant
-\    +8   data1       Type-specific (xt, children-addr, child, ...)
-\    +16  data2       Type-specific (count, threshold, n, ...)
-\    +24  data3       Type-specific (cooldown counter, ...)
-\    +32  data4       Type-specific (repeat counter, ...)
+\    +8   data1       xt (leaf), children array (composite), child
+\    +16  data2       count (composite), n (repeat), ticks (cooldown)
+\    +24  data3       threshold (parallel)
+\    +32  cells       State cells of the subtree, its own and below
+\
+\  State cells a node owns, before its child's:
+\    REPEAT    1   completions so far
+\    COOLDOWN  2   runs left to skip, the result it returns meanwhile
 \
 \  Public API:
-\    BT-ACTION    ( xt -- node )
-\    BT-CONDITION ( xt -- node )
-\    BT-SEQUENCE  ( children count -- node )
-\    BT-SELECTOR  ( children count -- node )
-\    BT-PARALLEL  ( children count threshold -- node )
-\    BT-INVERT    ( child -- node )
-\    BT-REPEAT    ( child n -- node )
-\    BT-COOLDOWN  ( child ticks -- node )
-\    BT-RUN       ( node eid ecs -- status )
-\    BT-FREE      ( node -- )
+\    BT-ACTION       ( xt -- node )
+\    BT-CONDITION    ( xt -- node )
+\    BT-SEQUENCE     ( children count -- node )
+\    BT-SELECTOR     ( children count -- node )
+\    BT-PARALLEL     ( children count threshold -- node )
+\    BT-INVERT       ( child -- node )
+\    BT-REPEAT       ( child n -- node )
+\    BT-COOLDOWN     ( child ticks -- node )
+\    BT-STATE-CELLS  ( root -- n )
+\    BT-RUN          ( node state eid ecs -- status )
+\    BT-FREE         ( node -- )
 \
 \  Status constants:
 \    BT-SUCCESS  BT-FAILURE  BT-RUNNING
@@ -65,305 +88,239 @@ PROVIDED akashic-game-ai-btree
 6 CONSTANT BT-NODE-REPEAT
 7 CONSTANT BT-NODE-COOLDOWN
 
+( kind: bt-leaf xt( eid ecs -- result ) )
+
 \ Node descriptor offsets (40 bytes)
 0  CONSTANT _BT-O-TYPE
 8  CONSTANT _BT-O-D1
+8  CONSTANT _BT-O-LEAF  ( holds: bt-leaf )
 16 CONSTANT _BT-O-D2
 24 CONSTANT _BT-O-D3
-32 CONSTANT _BT-O-D4
+32 CONSTANT _BT-O-CELLS
 40 CONSTANT _BT-NODE-SZ
 
+: _BT-COMPOSITE?  ( type -- flag )
+    BT-NODE-SEQUENCE BT-NODE-INVERT WITHIN ;
+
+: _BT-DECORATOR?  ( type -- flag )
+    BT-NODE-INVERT BT-NODE-COOLDOWN 1+ WITHIN ;
+
 \ =====================================================================
-\  §2 — Node Allocation Helper
+\  §2 — Node Allocation Helpers
 \ =====================================================================
 
 : _BT-ALLOC  ( type -- node )
     _BT-NODE-SZ ALLOCATE
     0<> ABORT" BT: node alloc"
     DUP _BT-NODE-SZ 0 FILL
-    SWAP OVER _BT-O-TYPE + ! ;
+    TUCK _BT-O-TYPE + ! ;
+
+: _BT-CELLS  ( node -- n )
+    _BT-O-CELLS + @ ;
+
+\ Copy a children array into a block of the composite's own, so the
+\ caller's array (e.g. a CREATE'd table) can be reused, and total the
+\ children's state cells.  A composite of no children needs no block.
+: _BT-COPY-CHILDREN  ( children count -- buf cells )
+    DUP 0= IF 2DROP 0 0 EXIT THEN
+    DUP CELLS ALLOCATE
+    0<> ABORT" BT: children alloc"           ( children count buf )
+    2DUP 2>R SWAP CELLS CMOVE 2R>             ( count buf )
+    0 ROT 0 ?DO                               ( buf cells )
+        OVER I CELLS + @ _BT-CELLS +
+    LOOP ;
 
 \ =====================================================================
 \  §3 — Leaf Nodes
 \ =====================================================================
 
-\ BT-ACTION ( xt -- node )     xt: ( eid ecs -- status )
 : BT-ACTION  ( xt -- node )
     BT-NODE-ACTION _BT-ALLOC
-    SWAP OVER _BT-O-D1 + ! ;
+    TUCK _BT-O-LEAF + ! ;
 
-\ BT-CONDITION ( xt -- node )  xt: ( eid ecs -- flag )
 : BT-CONDITION  ( xt -- node )
     BT-NODE-CONDITION _BT-ALLOC
-    SWAP OVER _BT-O-D1 + ! ;
+    TUCK _BT-O-LEAF + ! ;
 
 \ =====================================================================
 \  §4 — Composite Nodes
 \ =====================================================================
 \
-\  Children are passed as an address of an array of node pointers.
-\  The composite copies the array into its own allocation so the
-\  caller's array (e.g. CREATE'd table) can be reused.
+\  Children are passed as an address of an array of node pointers,
+\  which the composite copies.
 
-VARIABLE _BT-CC-ADDR
-VARIABLE _BT-CC-CNT
-VARIABLE _BT-CC-DST
+: _BT-COMPOSITE  ( children count type -- node )
+    >R DUP >R _BT-COPY-CHILDREN R> R> _BT-ALLOC   ( buf cells count node )
+    TUCK _BT-O-D2 + !
+    TUCK _BT-O-CELLS + !
+    TUCK _BT-O-D1 + ! ;
 
-\ Copy children array into freshly allocated buffer.
-: _BT-COPY-CHILDREN  ( children count -- buf )
-    _BT-CC-CNT ! _BT-CC-ADDR !
-    _BT-CC-CNT @ 8 * ALLOCATE
-    0<> ABORT" BT: children alloc"
-    _BT-CC-DST !
-    _BT-CC-ADDR @ _BT-CC-DST @ _BT-CC-CNT @ 8 * CMOVE
-    _BT-CC-DST @ ;
-
-\ BT-SEQUENCE ( children count -- node )
 : BT-SEQUENCE  ( children count -- node )
-    SWAP OVER _BT-COPY-CHILDREN       ( count buf )
-    BT-NODE-SEQUENCE _BT-ALLOC        ( count buf node )
-    SWAP OVER _BT-O-D1 + !            \ children buf
-    SWAP OVER _BT-O-D2 + ! ;          \ count
+    BT-NODE-SEQUENCE _BT-COMPOSITE ;
 
-\ BT-SELECTOR ( children count -- node )
 : BT-SELECTOR  ( children count -- node )
-    SWAP OVER _BT-COPY-CHILDREN       ( count buf )
-    BT-NODE-SELECTOR _BT-ALLOC        ( count buf node )
-    SWAP OVER _BT-O-D1 + !
-    SWAP OVER _BT-O-D2 + ! ;
+    BT-NODE-SELECTOR _BT-COMPOSITE ;
 
 \ BT-PARALLEL ( children count threshold -- node )
 \   Runs all children each tick.  Succeeds when >= threshold succeed,
 \   fails when > (count-threshold) fail.
-VARIABLE _BT-PAR-THR
 : BT-PARALLEL  ( children count threshold -- node )
-    _BT-PAR-THR !
-    SWAP OVER _BT-COPY-CHILDREN       ( count buf )
-    BT-NODE-PARALLEL _BT-ALLOC        ( count buf node )
-    SWAP OVER _BT-O-D1 + !
-    SWAP OVER _BT-O-D2 + !
-    _BT-PAR-THR @ OVER _BT-O-D3 + ! ;
+    >R BT-NODE-PARALLEL _BT-COMPOSITE
+    R> OVER _BT-O-D3 + ! ;
 
 \ =====================================================================
 \  §5 — Decorator Nodes
 \ =====================================================================
 
-\ BT-INVERT ( child -- node )
+\ A decorator over child, owning own state cells before the child's.
+: _BT-DECORATOR  ( child arg own type -- node )
+    _BT-ALLOC >R                              ( child arg own  R: node )
+    2 PICK _BT-CELLS + R@ _BT-O-CELLS + !
+    R@ _BT-O-D2 + !
+    R@ _BT-O-D1 + !
+    R> ;
+
 : BT-INVERT  ( child -- node )
-    BT-NODE-INVERT _BT-ALLOC
-    SWAP OVER _BT-O-D1 + ! ;
+    0 0 BT-NODE-INVERT _BT-DECORATOR ;
 
 \ BT-REPEAT ( child n -- node )
 \   Repeat child n times.  If n=0, repeat forever.
-\   Returns SUCCESS after n completions, RUNNING while repeating.
+\   Returns SUCCESS after n completions, RUNNING while repeating, and
+\   FAILURE, starting the count again, when the child fails.
 : BT-REPEAT  ( child n -- node )
-    BT-NODE-REPEAT _BT-ALLOC          ( child n node )
-    SWAP OVER _BT-O-D2 + !            \ n (limit)
-    SWAP OVER _BT-O-D1 + !            \ child
-    0 OVER _BT-O-D3 + ! ;             \ counter = 0
+    1 BT-NODE-REPEAT _BT-DECORATOR ;
 
 \ BT-COOLDOWN ( child ticks -- node )
-\   After child returns SUCCESS or FAILURE, skip child for `ticks`
-\   ticks, returning the last result.  D3 = countdown, D4 = last result.
+\   After the child returns SUCCESS or FAILURE, return that result for
+\   the next `ticks` runs without running the child.
 : BT-COOLDOWN  ( child ticks -- node )
-    BT-NODE-COOLDOWN _BT-ALLOC        ( child ticks node )
-    SWAP OVER _BT-O-D2 + !            \ ticks (cooldown period)
-    SWAP OVER _BT-O-D1 + !            \ child
-    0 OVER _BT-O-D3 + !               \ countdown = 0 (ready)
-    BT-FAILURE OVER _BT-O-D4 + ! ;    \ last result
+    2 BT-NODE-COOLDOWN _BT-DECORATOR ;
+
+\ BT-STATE-CELLS ( root -- n )
+\   The cells of state one entity needs to run the tree.
+: BT-STATE-CELLS  ( root -- n )
+    _BT-CELLS ;
 
 \ =====================================================================
 \  §6 — Execution: BT-RUN
 \ =====================================================================
 \
-\  Recursive dispatch by node type.  Uses VARIABLEs for local state
-\  to avoid >R inside loops.
+\  Each node type has a runner ( node state eid ecs -- status ), where
+\  state addresses the node's own run of cells in the entity's block.
+\  Composites run their children through _BT-RUN, which BT-RUN fills
+\  once it is defined, so the recursion stays on the stacks.
 
-VARIABLE _BT-R-NODE
-VARIABLE _BT-R-EID
-VARIABLE _BT-R-ECS
-VARIABLE _BT-R-TYPE
-VARIABLE _BT-R-I
-VARIABLE _BT-R-CNT
-VARIABLE _BT-R-CHLDR
-VARIABLE _BT-R-SUCC
-VARIABLE _BT-R-FAIL
-VARIABLE _BT-R-RESULT
-VARIABLE _BT-R-SELF
+DEFER _BT-RUN  ( node state eid ecs -- status )
 
-: BT-RUN  ( node eid ecs -- status )
-    _BT-R-ECS ! _BT-R-EID ! _BT-R-NODE !
-    _BT-R-NODE @ _BT-O-TYPE + @ _BT-R-TYPE !
+: _BT-RUN-ACTION  ( node state eid ecs -- status )
+    2SWAP DROP _BT-O-LEAF + @ EXECUTE ;
 
-    \ --- ACTION ---
-    _BT-R-TYPE @ BT-NODE-ACTION = IF
-        _BT-R-EID @ _BT-R-ECS @
-        _BT-R-NODE @ _BT-O-D1 + @ EXECUTE EXIT
-    THEN
+: _BT-RUN-CONDITION  ( node state eid ecs -- status )
+    2SWAP DROP _BT-O-LEAF + @ EXECUTE
+    IF BT-SUCCESS ELSE BT-FAILURE THEN ;
 
-    \ --- CONDITION ---
-    _BT-R-TYPE @ BT-NODE-CONDITION = IF
-        _BT-R-EID @ _BT-R-ECS @
-        _BT-R-NODE @ _BT-O-D1 + @ EXECUTE
-        IF BT-SUCCESS ELSE BT-FAILURE THEN EXIT
-    THEN
+\ _BT-RUN-SCAN ( node state eid ecs go -- status )
+\   Run the children in order while each returns go; the first other
+\   status is the composite's, and go is its status when all return go.
+\   Each child's cells follow its elder siblings' in the block.
+: _BT-RUN-SCAN  ( node state eid ecs go -- status )
+    -ROT 2>R -ROT                             ( go node state  R: eid ecs )
+    SWAP DUP _BT-O-D1 + @ SWAP _BT-O-D2 + @   ( go state children n )
+    BEGIN DUP 0> WHILE
+        OVER @ 3 PICK 2R@ _BT-RUN              ( go state children n status )
+        DUP 5 PICK <> IF
+            >R 2DROP 2DROP R> 2R> 2DROP EXIT
+        THEN DROP
+        1- >R DUP @ _BT-CELLS CELLS ROT + SWAP CELL+ R>
+    REPEAT
+    2DROP DROP 2R> 2DROP ;
 
-    \ --- SEQUENCE ---
-    _BT-R-TYPE @ BT-NODE-SEQUENCE = IF
-        _BT-R-NODE @ _BT-O-D1 + @ _BT-R-CHLDR !
-        _BT-R-NODE @ _BT-O-D2 + @ _BT-R-CNT !
-        0 _BT-R-I !
-        BEGIN _BT-R-I @ _BT-R-CNT @ < WHILE
-            _BT-R-CHLDR @ _BT-R-I @ 8 * + @
-            _BT-R-EID @ _BT-R-ECS @ RECURSE
-            DUP BT-SUCCESS <> IF EXIT THEN
-            DROP
-            1 _BT-R-I +!
-        REPEAT
-        BT-SUCCESS EXIT
-    THEN
+: _BT-RUN-SEQUENCE  ( node state eid ecs -- status )
+    BT-SUCCESS _BT-RUN-SCAN ;
 
-    \ --- SELECTOR ---
-    _BT-R-TYPE @ BT-NODE-SELECTOR = IF
-        _BT-R-NODE @ _BT-O-D1 + @ _BT-R-CHLDR !
-        _BT-R-NODE @ _BT-O-D2 + @ _BT-R-CNT !
-        0 _BT-R-I !
-        BEGIN _BT-R-I @ _BT-R-CNT @ < WHILE
-            _BT-R-CHLDR @ _BT-R-I @ 8 * + @
-            _BT-R-EID @ _BT-R-ECS @ RECURSE
-            DUP BT-FAILURE <> IF EXIT THEN
-            DROP
-            1 _BT-R-I +!
-        REPEAT
-        BT-FAILURE EXIT
-    THEN
+: _BT-RUN-SELECTOR  ( node state eid ecs -- status )
+    BT-FAILURE _BT-RUN-SCAN ;
 
-    \ --- PARALLEL ---
-    _BT-R-TYPE @ BT-NODE-PARALLEL = IF
-        _BT-R-NODE @ _BT-R-SELF !
-        _BT-R-NODE @ _BT-O-D1 + @ _BT-R-CHLDR !
-        _BT-R-NODE @ _BT-O-D2 + @ _BT-R-CNT !
-        0 _BT-R-SUCC !  0 _BT-R-FAIL !
-        0 _BT-R-I !
-        BEGIN _BT-R-I @ _BT-R-CNT @ < WHILE
-            _BT-R-CHLDR @ _BT-R-I @ 8 * + @
-            _BT-R-EID @ _BT-R-ECS @ RECURSE
-            DUP BT-SUCCESS = IF 1 _BT-R-SUCC +! THEN
-            BT-FAILURE = IF 1 _BT-R-FAIL +! THEN
-            1 _BT-R-I +!
-        REPEAT
-        _BT-R-SUCC @ _BT-R-SELF @ _BT-O-D3 + @ >= IF
-            BT-SUCCESS EXIT
-        THEN
-        _BT-R-FAIL @ _BT-R-CNT @ _BT-R-SELF @ _BT-O-D3 + @ - > IF
-            BT-FAILURE EXIT
-        THEN
-        BT-RUNNING EXIT
-    THEN
-
-    \ --- INVERT ---
-    _BT-R-TYPE @ BT-NODE-INVERT = IF
-        _BT-R-NODE @ _BT-O-D1 + @
-        _BT-R-EID @ _BT-R-ECS @ RECURSE
-        DUP BT-SUCCESS = IF DROP BT-FAILURE EXIT THEN
-        DUP BT-FAILURE = IF DROP BT-SUCCESS EXIT THEN
-        EXIT  \ RUNNING passes through
-    THEN
-
-    \ --- REPEAT ---
-    _BT-R-TYPE @ BT-NODE-REPEAT = IF
-        _BT-R-NODE @ _BT-R-SELF !
-        _BT-R-SELF @ _BT-O-D1 + @
-        _BT-R-EID @ _BT-R-ECS @ RECURSE
+\ _BT-RUN-PARALLEL ( node state eid ecs -- status )
+\   Run every child, counting successes and failures, then judge.
+: _BT-RUN-PARALLEL  ( node state eid ecs -- status )
+    2>R OVER _BT-O-D1 + @ 2 PICK _BT-O-D2 + @ 0 0
+    BEGIN 2 PICK 0> WHILE                     ( node state children n succ fail )
+        3 PICK @ 5 PICK 2R@ _BT-RUN
         DUP BT-SUCCESS = IF
-            DROP
-            _BT-R-SELF @ _BT-O-D3 + DUP @ 1+ SWAP !
-            \ Check if limit reached
-            _BT-R-SELF @ _BT-O-D2 + @ DUP 0= IF
-                DROP BT-RUNNING EXIT   \ n=0 → infinite
-            THEN
-            _BT-R-SELF @ _BT-O-D3 + @ <= IF
-                0 _BT-R-SELF @ _BT-O-D3 + !  \ reset counter
-                BT-SUCCESS EXIT
-            THEN
-            BT-RUNNING EXIT
+            DROP SWAP 1+ SWAP
+        ELSE
+            BT-FAILURE = IF 1+ THEN
         THEN
-        DUP BT-FAILURE = IF
-            0 _BT-R-SELF @ _BT-O-D3 + !  \ reset counter on failure
-        THEN
-        EXIT  \ pass through FAILURE or RUNNING
-    THEN
+        2>R 1- >R DUP @ _BT-CELLS CELLS ROT + SWAP CELL+ R> 2R>
+    REPEAT
+    2R> 2DROP
+    >R >R 2DROP DROP R> R>                    ( node succ fail )
+    ROT DUP _BT-O-D3 + @ SWAP _BT-O-D2 + @ OVER -   ( succ fail thr allowed )
+    >R ROT SWAP >= IF DROP R> DROP BT-SUCCESS EXIT THEN
+    R> > IF BT-FAILURE ELSE BT-RUNNING THEN ;
 
-    \ --- COOLDOWN ---
-    _BT-R-TYPE @ BT-NODE-COOLDOWN = IF
-        _BT-R-NODE @ _BT-R-SELF !
-        _BT-R-SELF @ _BT-O-D3 + @ 0> IF
-            \ In cooldown period — decrement and return last result
-            _BT-R-SELF @ _BT-O-D3 + DUP @ 1- SWAP !
-            _BT-R-SELF @ _BT-O-D4 + @ EXIT
-        THEN
-        \ Run child
-        _BT-R-SELF @ _BT-O-D1 + @
-        _BT-R-EID @ _BT-R-ECS @ RECURSE
-        DUP BT-RUNNING <> IF
-            \ Start cooldown
-            DUP _BT-R-SELF @ _BT-O-D4 + !   \ save result
-            _BT-R-SELF @ _BT-O-D2 + @
-            _BT-R-SELF @ _BT-O-D3 + !        \ set countdown
-        THEN
-        EXIT
-    THEN
+: _BT-RUN-INVERT  ( node state eid ecs -- status )
+    2>R SWAP _BT-O-D1 + @ SWAP 2R> _BT-RUN
+    DUP BT-SUCCESS = IF DROP BT-FAILURE EXIT THEN
+    DUP BT-FAILURE = IF DROP BT-SUCCESS THEN ;
 
-    \ Unknown type
-    BT-FAILURE ;
+\ _BT-RUN-REPEAT: the node's cell counts the child's successes.
+: _BT-RUN-REPEAT  ( node state eid ecs -- status )
+    2>R OVER _BT-O-D1 + @ OVER CELL+ 2R> _BT-RUN   ( node state status )
+    DUP BT-SUCCESS = IF
+        DROP SWAP _BT-O-D2 + @                    ( state n )
+        DUP 0= IF 2DROP BT-RUNNING EXIT THEN
+        OVER @ 1+ TUCK <= IF                      ( state done )
+            DROP 0 SWAP ! BT-SUCCESS EXIT
+        THEN
+        SWAP ! BT-RUNNING EXIT
+    THEN
+    DUP BT-FAILURE = IF 0 2 PICK ! THEN
+    NIP NIP ;
+
+\ _BT-RUN-COOLDOWN: the node's cells hold the runs left to skip and the
+\ result returned meanwhile.
+: _BT-RUN-COOLDOWN  ( node state eid ecs -- status )
+    2 PICK @ 0> IF
+        2DROP NIP DUP @ 1- OVER ! CELL+ @ EXIT
+    THEN
+    2>R OVER _BT-O-D1 + @ OVER 2 CELLS + 2R> _BT-RUN   ( node state status )
+    DUP BT-RUNNING = IF NIP NIP EXIT THEN
+    DUP 2 PICK CELL+ !
+    ROT _BT-O-D2 + @ ROT ! ;
+
+: BT-RUN  ( node state eid ecs -- status )
+    3 PICK _BT-O-TYPE + @
+    CASE
+        BT-NODE-ACTION    OF _BT-RUN-ACTION    ENDOF
+        BT-NODE-CONDITION OF _BT-RUN-CONDITION ENDOF
+        BT-NODE-SEQUENCE  OF _BT-RUN-SEQUENCE  ENDOF
+        BT-NODE-SELECTOR  OF _BT-RUN-SELECTOR  ENDOF
+        BT-NODE-PARALLEL  OF _BT-RUN-PARALLEL  ENDOF
+        BT-NODE-INVERT    OF _BT-RUN-INVERT    ENDOF
+        BT-NODE-REPEAT    OF _BT-RUN-REPEAT    ENDOF
+        BT-NODE-COOLDOWN  OF _BT-RUN-COOLDOWN  ENDOF
+        >R 2DROP 2DROP BT-FAILURE R>
+    ENDCASE ;
+
+' BT-RUN IS _BT-RUN
 
 \ =====================================================================
 \  §7 — Destructor: BT-FREE
 \ =====================================================================
 \
-\  Recursively free a node and all its children/child.
-
-VARIABLE _BT-F-NODE
-VARIABLE _BT-F-TYPE
-VARIABLE _BT-F-I
-VARIABLE _BT-F-CNT
-VARIABLE _BT-F-CHLDR
-VARIABLE _BT-F-SELF
+\  Free a node, its children array and every node below it, each once.
 
 : BT-FREE  ( node -- )
-    _BT-F-NODE !
-    _BT-F-NODE @ 0= IF EXIT THEN
-    _BT-F-NODE @ _BT-O-TYPE + @ _BT-F-TYPE !
-
-    \ Composite: free children array and each child node
-    _BT-F-TYPE @ BT-NODE-SEQUENCE =
-    _BT-F-TYPE @ BT-NODE-SELECTOR = OR
-    _BT-F-TYPE @ BT-NODE-PARALLEL = OR IF
-        _BT-F-NODE @ _BT-F-SELF !
-        _BT-F-NODE @ _BT-O-D1 + @ _BT-F-CHLDR !
-        _BT-F-NODE @ _BT-O-D2 + @ _BT-F-CNT !
-        0 _BT-F-I !
-        BEGIN _BT-F-I @ _BT-F-CNT @ < WHILE
-            _BT-F-CHLDR @ _BT-F-I @ 8 * + @ RECURSE
-            1 _BT-F-I +!
-        REPEAT
-        _BT-F-CHLDR @ FREE
-        _BT-F-SELF @ FREE
-        EXIT
+    ?DUP 0= IF EXIT THEN
+    DUP _BT-O-TYPE + @ DUP _BT-COMPOSITE? IF
+        DROP DUP _BT-O-D1 + @ OVER _BT-O-D2 + @   ( node children n )
+        0 ?DO DUP I CELLS + @ RECURSE LOOP
+        FREE FREE EXIT
     THEN
-
-    \ Decorators: free child then self
-    _BT-F-TYPE @ BT-NODE-INVERT =
-    _BT-F-TYPE @ BT-NODE-REPEAT = OR
-    _BT-F-TYPE @ BT-NODE-COOLDOWN = OR IF
-        _BT-F-NODE @ _BT-F-SELF !
-        _BT-F-NODE @ _BT-O-D1 + @ RECURSE
-        _BT-F-SELF @ FREE
-        EXIT
-    THEN
-
-    \ Leaf or unknown: just free self
-    _BT-F-NODE @ FREE ;
+    _BT-DECORATOR? IF DUP _BT-O-D1 + @ RECURSE THEN
+    FREE ;
 
 \ =====================================================================
 \  §8 — Concurrency Guards
