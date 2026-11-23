@@ -4042,6 +4042,301 @@ class ObservatoryJourney(_AppletJourney):
         return self._done("observatory-rerun-kept-plot", offer)
 
 
+
+# Desk with the Agent and Probe sharing the sandbox (akashic_tui's
+# desktop-apt1-sandbox).  The Agent's scripted provider installs module inc
+# revision 1 when asked SANDBOX_INSTALL_REQUEST, behind its review.  Probe,
+# a second consumer, answers each request with one line in its tile: I
+# invokes inc on 41, A asks for a grant, and Desk's access prompt, Module
+# access, offers Refuse and then Allow.
+SANDBOX_AGENT_FOCUS_MARKER = AGENT_ALONE_FOCUS_MARKER
+SANDBOX_PROBE_FOCUS_MARKER = "[2:Probe*]"
+SANDBOX_INSTALL_REQUEST = "sandbox install"
+SANDBOX_INSTALL_TOOL = "org.akashic.sandbox/install"
+# The install's result, the transcript's last card once it has run.
+SANDBOX_INSTALL_RESULT = '{"ok":true,"result":null,"error":null}'
+SANDBOX_ACCESS_TITLE = "Module access"
+SANDBOX_ACCESS_QUESTION = "org.test.applet asks to use inc revision 1"
+PROBE_NONE = "reply none"
+PROBE_REFUSED = "reply access not-granted"
+PROBE_ALLOWED = "reply ok"
+PROBE_SERVED = "reply ok 42"
+
+
+def _tile_lines(projection, bounds) -> tuple[str, ...]:
+    """The text of the rows inside BOUNDS, each cut to its columns and
+    stripped."""
+
+    left, top, right, bottom = bounds
+    return tuple(line[left:right].strip()
+                 for line in projection.lines[top:bottom])
+
+
+def _probe_reply(lines: tuple[str, ...]) -> str | None:
+    """Probe's one line, from its "reply" to the end of the text on its
+    row, or None while its tile shows none."""
+
+    found = [line[line.index("reply "):].rstrip(" \u2502")
+             for line in lines if "reply " in line]
+    if len(found) > 1:
+        raise PhysicalDesktopAcceptanceError(f"Probe shows {len(found)} replies: {found!r}")
+    return found[0] if found else None
+
+
+class SandboxJourney(_AppletJourney):
+    """Desk with the Agent and Probe: a sandbox job Probe asks for runs on
+    a worker core while core 0 serves Desk's frames.
+
+    The Agent installs module inc revision 1 when asked: its review of the
+    install, a dialog over the Agent's tile, lets Approve once be chosen
+    only once its last line has shown, and approving it runs the install.
+    Probe then asks to invoke inc and is refused, since it holds no grant;
+    it asks for one, and Desk's access prompt asks the user, who chooses
+    Allow; Probe learns it was allowed, invokes inc on 41 and shows 42,
+    and Alt+1 gives the Agent focus again.  The journey keeps each core's
+    state and semantic steps from the server's status as the runner polls
+    it.  On a machine with several full cores, Desk lends the sandbox's
+    jobs to the other cores, so between Probe's invoke and the frame after
+    its answer some worker's semantic steps rise; the journey requires that
+    and records each core's rise and the frames Desk presented meanwhile.
+
+    The steps run in order from a list, so the rest of the emulator's
+    desktop-sandbox-modules journey, the Agent's refusals and the module
+    inspector's withdraw and revoke, can join as further steps.
+    """
+
+    focus_marker = SANDBOX_AGENT_FOCUS_MARKER
+    (READY, AGENT_PROMPT, AGENT_TYPED, AGENT_REVIEW, AGENT_APPROVED,
+     PROBE_FOCUS, PROBE_ASKED, PROBE_GRANT, ACCESS_SHOWN, ACCESS_CHOSEN,
+     PROBE_INVOKED, ANSWERED, CORES_READ) = range(13)
+
+    def __init__(self, ready_markers):
+        super().__init__(ready_markers)
+        # The cores of the latest status the runner polled, and how many
+        # statuses it has polled.
+        self._cores: tuple[dict, ...] | None = None
+        self._polls = 0
+        # The cores when Probe's invoke went out, the poll count when its
+        # answer showed, and the frames Desk presented in between.
+        self._cores_at_invoke: tuple[dict, ...] | None = None
+        self._polls_at_answer = 0
+        self._frames_during_job = 0
+        self._last_offer = 0
+        # Whether the install's review has been paged.
+        self._review_paged = False
+
+    @property
+    def final_stage(self) -> int:
+        return self.CORES_READ
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (SANDBOX_AGENT_FOCUS_MARKER, PROBE_SERVED)
+
+    def observe_status(self, status) -> None:
+        cores = status.get("cores") if isinstance(status, dict) else None
+        if cores:
+            self._cores = tuple(dict(core) for core in cores)
+        self._polls += 1
+
+    def _admit(self, offer, generation, projection, sender) -> bool:
+        """As every applet journey admits a frame, except that focus moves
+        from the Agent to Probe, which each step checks for itself."""
+
+        if self.stage == self.READY:
+            return super()._admit(offer, generation, projection, sender)
+        if self._frame_lineage(offer, generation) != self._lineage:
+            raise PhysicalDesktopAcceptanceError(
+                "physical acceptance frame left its original session lineage")
+        if offer.offer_id <= self.frame_barrier:
+            return False
+        self._pending = None
+        if not self._deliver_owed_pointer(offer, generation, sender):
+            self.waiting = "the rest of a pointer gesture"
+            return False
+        return True
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        agent, probe = _desk_halves(projection)
+        if self.stage <= self.AGENT_APPROVED:
+            return self._agent_install(offer, generation, projection, sender, agent)
+        reply = _probe_reply(_tile_lines(projection, probe))
+        if self.stage == self.PROBE_FOCUS:
+            if not _taskbar_has_focus(projection, SANDBOX_PROBE_FOCUS_MARKER):
+                return self._wait(f"{SANDBOX_PROBE_FOCUS_MARKER} after Alt+2")
+            return self._step("probe-focused", "send_key", "i",
+                              self.PROBE_ASKED, offer, generation, sender)
+        if self.stage == self.ANSWERED:
+            return self._cores_after_answer(offer, projection, reply)
+        # Desk's access prompt may hold the taskbar row while it is open.
+        if not _taskbar_has_focus(projection, SANDBOX_PROBE_FOCUS_MARKER) and not (
+                self.stage in (self.ACCESS_SHOWN, self.ACCESS_CHOSEN)):
+            raise PhysicalDesktopAcceptanceError(
+                f"Probe lost focus: {self._taskbar_line(projection).strip()!r}")
+        if self.stage == self.PROBE_ASKED:
+            if reply == PROBE_NONE:
+                return self._wait(f"Probe's {PROBE_REFUSED!r}")
+            if reply != PROBE_REFUSED:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Probe's first invoke was answered {reply!r}")
+            return self._step("probe-refused", "send_key", "a",
+                              self.PROBE_GRANT, offer, generation, sender)
+        access = self._access_prompt(projection)
+        if self.stage == self.PROBE_GRANT:
+            if access is None:
+                return self._wait("Desk's access prompt for Probe")
+            # Refuse comes first, so Enter alone would refuse.
+            return self._step("access-prompt-shown", "send_key", "down",
+                              self.ACCESS_SHOWN, offer, generation, sender)
+        if self.stage == self.ACCESS_SHOWN:
+            if access is None:
+                raise PhysicalDesktopAcceptanceError("Desk's access prompt closed unanswered")
+            return self._step("access-allow-chosen", "send_key", "enter",
+                              self.ACCESS_CHOSEN, offer, generation, sender)
+        if self.stage == self.ACCESS_CHOSEN:
+            if access is not None:
+                return self._wait("Desk's access prompt closed by the answer")
+            # Probe keeps showing its refusal until its ask is answered.
+            if reply == PROBE_REFUSED:
+                return self._wait(f"Probe's {PROBE_ALLOWED!r}")
+            if reply != PROBE_ALLOWED:
+                raise PhysicalDesktopAcceptanceError(f"Probe was not allowed: {reply!r}")
+            return self._invoke(offer, generation, sender)
+        return self._served(offer, generation, sender, reply)
+
+    def _agent_install(self, offer, generation, projection, sender, agent):
+        """The Agent's install of inc, from its Ask prompt through its review."""
+
+        prompt = _prompt_claim(projection, AGENT_PROMPT_MARKER, agent)
+        review = AgentAloneJourney._review(projection, agent)
+        if not _taskbar_has_focus(projection, SANDBOX_AGENT_FOCUS_MARKER):
+            raise PhysicalDesktopAcceptanceError(
+                f"the Agent lost focus: {self._taskbar_line(projection).strip()!r}")
+        if self.stage == self.READY:
+            reply = _probe_reply(_tile_lines(projection, _desk_halves(projection)[1]))
+            if reply is None:
+                return self._wait(f"Probe's {PROBE_NONE!r}")
+            if reply != PROBE_NONE:
+                raise PhysicalDesktopAcceptanceError(f"Probe starts showing {reply!r}")
+            return self._step("sandbox-desk-ready", "send_key", "ctrl+l",
+                              self.AGENT_PROMPT, offer, generation, sender)
+        if self.stage == self.AGENT_PROMPT:
+            if prompt is None:
+                return self._wait("the Agent's Ask prompt")
+            return self._step("agent-prompt-opened", "send_text", SANDBOX_INSTALL_REQUEST,
+                              self.AGENT_TYPED, offer, generation, sender)
+        if self.stage == self.AGENT_TYPED:
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError("the Agent's Ask prompt closed early")
+            if prompt.content.text != SANDBOX_INSTALL_REQUEST:
+                return self._wait("the typed install request")
+            return self._step("agent-install-asked", "send_key", "enter",
+                              self.AGENT_REVIEW, offer, generation, sender)
+        if self.stage == self.AGENT_REVIEW:
+            if review is None:
+                return self._wait("the Agent's review of the install")
+            # The review names the install as it opens; paging moves its
+            # first lines out of view.
+            approve = AgentAloneJourney._approve_of_review(
+                projection, review, agent,
+                markers=() if self._review_paged else (SANDBOX_INSTALL_TOOL,))
+            chosen = bool(approve.state & ControlState.ENABLED)
+            if review.content.lines[-1:] == (DIALOG_MORE,):
+                if chosen:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Approve once could be chosen before the review was read")
+                self._review_paged = True
+                return self._step("agent-review-paged", "send_key", "pagedown",
+                                  self.AGENT_REVIEW, offer, generation, sender)
+            if not chosen:
+                return self._wait("Approve once after the review's last line")
+            identity = approve.identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._step("agent-install-approved", "activate_button", value,
+                              self.AGENT_APPROVED, offer, generation, sender)
+        if review is not None:
+            return self._wait("the Agent's review closed by the approval")
+        transcript = AgentAloneJourney._transcript(projection, agent)
+        texts = () if transcript is None else tuple(
+            field.text for item in transcript.content.items for field in item.fields)
+        if not texts or texts[-1] != SANDBOX_INSTALL_RESULT:
+            return self._wait("the install's result in the Agent's transcript")
+        if not any(text.startswith(SANDBOX_INSTALL_TOOL) for text in texts):
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's transcript ends with a result but names no install")
+        return self._step("agent-installed", "send_key", "alt+2",
+                          self.PROBE_FOCUS, offer, generation, sender)
+
+    def _access_prompt(self, projection):
+        """Desk's access prompt for Probe, or None while it is closed."""
+
+        found = [claim for claim in projection.semantic_dialog_claims
+                 if claim.title == SANDBOX_ACCESS_TITLE]
+        if not found:
+            return None
+        if len(found) != 1:
+            raise PhysicalDesktopAcceptanceError(f"{len(found)} access prompts are open")
+        if SANDBOX_ACCESS_QUESTION not in " ".join(found[0].content.lines):
+            raise PhysicalDesktopAcceptanceError(
+                f"Desk's access prompt asks {found[0].content.lines!r}")
+        return found[0]
+
+    def _invoke(self, offer, generation, sender):
+        """Probe's invoke, sent once Probe shows it was allowed, with each
+        core's steps as the last status left them."""
+
+        if self._cores is None:
+            return self._wait("the cores in the server's status")
+        self._cores_at_invoke = self._cores
+        self._last_offer = offer.offer_id
+        return self._step("probe-allowed", "send_key", "i",
+                          self.PROBE_INVOKED, offer, generation, sender)
+
+    def _served(self, offer, generation, sender, reply):
+        """Probe's answer to the invoke, after which Alt+1 gives the Agent
+        focus again; the frame that shows it comes after a newer status."""
+
+        if offer.offer_id != self._last_offer:
+            self._frames_during_job += 1
+            self._last_offer = offer.offer_id
+        # Probe keeps showing that it was allowed until its invoke is
+        # answered.
+        if reply == PROBE_ALLOWED:
+            return self._wait(f"Probe's {PROBE_SERVED!r}")
+        if reply != PROBE_SERVED:
+            raise PhysicalDesktopAcceptanceError(f"Probe's invoke was answered {reply!r}")
+        self._polls_at_answer = self._polls
+        return self._step("probe-served", "send_key", "alt+1",
+                          self.ANSWERED, offer, generation, sender)
+
+    def _cores_after_answer(self, offer, projection, reply) -> JourneyProgress:
+        """Once the Agent has focus again, on a frame that came after a
+        status newer than Probe's answer, compare each core's semantic steps
+        with those at the invoke."""
+
+        if not _taskbar_has_focus(projection, SANDBOX_AGENT_FOCUS_MARKER):
+            return self._wait(f"{SANDBOX_AGENT_FOCUS_MARKER} after Alt+1")
+        if reply != PROBE_SERVED:
+            raise PhysicalDesktopAcceptanceError(f"Probe's answer became {reply!r}")
+        if self._polls <= self._polls_at_answer:
+            return self._wait("a status polled after Probe's answer")
+        before = {core["core"]: core["semantic_steps"] for core in self._cores_at_invoke}
+        after = {core["core"]: core["semantic_steps"] for core in self._cores}
+        rises = {core: after[core] - before.get(core, 0) for core in after}
+        self.evidence = {
+            "cores_at_invoke": self._cores_at_invoke,
+            "cores_after_answer": self._cores,
+            "semantic_step_rises": rises,
+            "frames_during_job": self._frames_during_job,
+        }
+        workers = [core for core in rises if core != 0]
+        if workers and not any(rises[core] > 0 for core in workers):
+            raise PhysicalDesktopAcceptanceError(
+                f"Probe's job ran on no worker core: the steps rose by {rises!r}")
+        return self._done("probe-job-cores", offer)
+
 def applet_journey(
     name: str,
     ready_markers: tuple[str, ...],
@@ -4067,6 +4362,7 @@ def applet_journey(
         "small-terminal": SmallTerminalJourney,
         "photo": PhotoJourney,
         "damaged": DamagedPictureJourney,
+        "sandbox": SandboxJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")

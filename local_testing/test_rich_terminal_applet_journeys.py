@@ -1555,13 +1555,16 @@ def test_every_single_applet_profile_has_a_journey() -> None:
         # Desk and the one applet, nothing else but the Agent's demo provider
         # and the device-flow fixture that gives it a catalog.
         # Observatory is checked beside Worlds, which hands it a run.
+        # The sandbox check is Desk with the Agent, whose scripted provider
+        # asks the sandbox, and Probe, which its autoexec defines.
         applets = {"small-terminal": ("pad",), "photo": ("fexp",),
                    "damaged": ("fexp",),
-                   "observatory": ("observatory", "worlds")}.get(name, (name,))
-        provider = (
-            (akashic_tui._DESK_AGENT_PROVIDER, akashic_tui._DAYBOOK_AGENT_DEVFLOW)
-            if name == "agent" else ()
-        )
+                   "observatory": ("observatory", "worlds"),
+                   "sandbox": ("agent",)}.get(name, (name,))
+        provider = {
+            "agent": (akashic_tui._DESK_AGENT_PROVIDER, akashic_tui._DAYBOOK_AGENT_DEVFLOW),
+            "sandbox": (akashic_tui._DESK_AGENT_PROVIDER,),
+        }.get(name, ())
         assert profile.roots == (
             "tui/desk-apt1.f",
             *(akashic_tui.desk_applet(applet).module for applet in applets),
