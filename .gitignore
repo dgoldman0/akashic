@@ -52,7 +52,7 @@ local_testing/*
 !local_testing/test_app_shell.py
 !local_testing/test_app_compositor.py
 !local_testing/ROADMAP-tui-apps.md
-!local_testing/test_game_suite.py
+!local_testing/test_game_2d_suite.py
 !local_testing/test_game_save.py
 !local_testing/test_game_map.py
 !local_testing/test_game_board.py

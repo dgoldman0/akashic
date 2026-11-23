@@ -1411,7 +1411,6 @@ def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
 def test_app_quiesce_is_a_public_pre_shutdown_descriptor_phase() -> None:
     desc = _text("akashic/tui/app-desc.f")
     shell = _text("akashic/tui/app-shell.f")
-    game = _text("akashic/tui/game/game-applet.f")
 
     assert "160 CONSTANT _AD-QUIESCE" in desc
     assert "168 CONSTANT _AD-SERVICE" in desc
@@ -1453,13 +1452,6 @@ def test_app_quiesce_is_a_public_pre_shutdown_descriptor_phase() -> None:
         < shutdown_claim_at
         < shutdown_callback_at
     )
-
-    # Game descriptors extend the complete current ABI instead of aliasing a
-    # newly appended standard lifecycle cell.
-    assert "APP-DESC      CONSTANT _GAPP-O-USER-INIT" in game
-    assert "APP-DESC 48 + CONSTANT _GAPP-O-GV" in game
-    assert "APP-DESC 56 + CONSTANT _GAPP-DESC-SZ" in game
-    assert "160 CONSTANT _GAPP-O-GV" not in game
 
 
 def test_app_shell_dependent_failures_quarantine_before_the_next_stage() -> None:

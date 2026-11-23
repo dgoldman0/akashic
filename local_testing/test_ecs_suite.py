@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Test suite for tui/game/* Phase 2 modules (ECS, Components, Systems).
+"""Test suite for the game library's ECS, components and systems
+(game/ecs.f, game/components.f, game/systems.f).
 
 Runs Forth test code through the Megapad-64 emulator and validates
 correctness by parsing structured UART output.
@@ -38,11 +39,6 @@ DISK_FILES = module_disk_files((
     "tui/region.f",
     "tui/widget.f",
     "tui/app-desc.f",
-    "tui/game/loop.f",
-    "tui/game/input.f",
-    "tui/game/tilemap.f",
-    "tui/game/sprite.f",
-    "tui/game/scene.f",
     "game/2d/collide.f",
     "game/ecs.f",
     "game/components.f",

@@ -124,9 +124,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 710,
-        "resolved_require_occurrence_count": 2669,
-        "unique_resolved_edge_count": 2669,
+        "module_count": 695,
+        "resolved_require_occurrence_count": 2605,
+        "unique_resolved_edge_count": 2605,
         "unresolved_require_count": 65,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -217,17 +217,13 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
     assert by_path["interop/resource-session.f"]["class"] == "independent"
     assert by_path["interop/resource-session.f"]["placement"] == "correct"
     assert by_path["game/ecs.f"]["class"] == "independent"
-    assert by_path["tui/game/game-applet.f"]["class"] == "desk-ecosystem"
-    assert by_path["game/ecs.f"]["ownership_decision"] == (
-        "deferred-current-placement"
-    )
-    assert by_path["tui/game/game-applet.f"]["ownership_decision"] == (
-        "deferred-current-placement"
-    )
+    assert by_path["tui/game/board.f"]["class"] == "desk-ecosystem"
+    assert by_path["game/ecs.f"]["owner"] == "game-library"
+    assert by_path["tui/game/board.f"]["owner"] == "game-library"
+    assert by_path["game/ecs.f"]["ownership_decision"] == "settled"
+    assert by_path["tui/game/board.f"]["ownership_decision"] == "settled"
     assert by_path["game/ecs.f"]["target"] == "game/ecs.f"
-    assert by_path["tui/game/game-applet.f"]["target"] == (
-        "tui/game/game-applet.f"
-    )
+    assert by_path["tui/game/board.f"]["target"] == "tui/game/board.f"
     assert by_path["tui/applets/streams/observation-state.f"]["class"] == (
         "applet"
     )

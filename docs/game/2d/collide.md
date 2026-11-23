@@ -1,8 +1,9 @@
 # akashic-game-2d-collide — Collision Detection
 
-Tile-based collision maps, geometric primitives (point-in-rect,
-AABB overlap), and sprite-level collision helpers.  Data is stored
-as a byte-per-tile grid — compact and fast for tile-based games.
+Tile-based collision maps and geometric primitives (point-in-rect,
+AABB overlap).  Data is stored as a byte-per-tile grid — compact and
+fast for tile-based games.  A map read by `game/map.f` gives its
+collision values, its sight map and its tile kinds in this form.
 
 ```forth
 REQUIRE game/2d/collide.f
@@ -19,7 +20,6 @@ REQUIRE game/2d/collide.f
   - [Tile Access](#tile-access)
   - [Queries](#queries)
 - [Geometric Primitives](#geometric-primitives)
-- [Sprite Helpers](#sprite-helpers)
 - [Descriptor Layout](#descriptor-layout)
 - [Quick Reference](#quick-reference)
 
@@ -167,39 +167,6 @@ edges (zero overlap) returns FALSE.
 
 ---
 
-## Sprite Helpers
-
-These require `sprite.f` (auto-loaded via `REQUIRE`).
-
-### SPR-CMAP-BLOCKED?
-
-```
-( spr dx dy cmap -- flag )
-```
-
-Check whether moving sprite `spr` by `(dx, dy)` would place it
-on a solid tile.  Computes `(spr-x + dx, spr-y + dy)` and tests
-`CMAP-SOLID?`.
-
-```forth
-player 1 0 my-cmap SPR-CMAP-BLOCKED? IF
-    \ Can't move right — wall
-ELSE
-    player 1 0 SPR-MOVE
-THEN
-```
-
-### SPR-SPR-OVERLAP?
-
-```
-( spr1 spr2 -- flag )
-```
-
-Return TRUE if two 1×1 sprites occupy the same tile (same x and
-same y).
-
----
-
 ## Descriptor Layout
 
 24 bytes (3 cells):
@@ -230,7 +197,7 @@ Offset  Size  Field
 | `CMAP-DATA` | `( cmap -- addr )` | Tile bytes, row by row |
 | `PT-IN-RECT?` | `( px py rx ry rw rh -- flag )` | Point in rect? |
 | `AABB-OVERLAP?` | `( x1 y1 w1 h1 x2 y2 w2 h2 -- flag )` | AABB overlap? |
-| `SPR-CMAP-BLOCKED?` | `( spr dx dy cmap -- flag )` | Movement blocked? |
-| `SPR-SPR-OVERLAP?` | `( spr1 spr2 -- flag )` | Sprites on same tile? |
 
-No guard section — collision operations are pure computation.
+When `GUARDED` is set, `CMAP-NEW?`, `CMAP-NEW`, `CMAP-FREE`, `CMAP-SET`
+and `CMAP-FILL` take the module's guard; the reads and the geometric
+words are pure computation.

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Full test suite for tui/game/* modules (Phase 0 + Phase 1).
+"""Test suite for the game library's camera and collision map
+(game/2d/camera.f and game/2d/collide.f).
 
 Runs Forth test code through the Megapad-64 emulator and validates
-correctness by parsing structured UART output.
+correctness by parsing structured UART output.  The checks came from the
+suites of the retired terminal half (archive/game-terminal-half-550fbf48-
+20261123), which loaded these two logic modules beside it.
 """
 import os, sys, tempfile, re
 
@@ -28,34 +31,13 @@ KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 # The modules the suite loads and their REQUIRE closure, each in its own
 # directory on the disk, so the disk follows what the modules require.
 DISK_FILES = module_disk_files((
-    "text/utf8.f",
-    "tui/ansi.f",
-    "tui/keys.f",
-    "tui/cell.f",
-    "tui/screen.f",
-    "tui/draw.f",
-    "tui/box.f",
-    "tui/region.f",
-    "tui/widget.f",
-    "tui/app-desc.f",
-    "tui/widgets/canvas.f",
-    "tui/game/loop.f",
-    "tui/game/input.f",
-    "tui/game/tilemap.f",
-    "tui/game/sprite.f",
-    "tui/game/scene.f",
     "game/2d/collide.f",
-    "tui/game/game-view.f",
-    "tui/game/game-canvas.f",
-    "tui/game/game-applet.f",
-    "tui/game/atlas.f",
     "game/2d/camera.f",
-    "tui/game/world-render.f",
 ))
 
 # ── Forth test harness ─────────────────────────────────────────
 FORTH_HARNESS = r"""\ =====================================================================
-\  test_tui_game_suite.f — Tests for tui/game/* (Phase 0 + Phase 1)
+\  test_game_2d_suite.f — Tests for game/2d/camera.f and collide.f
 \ =====================================================================
 
 \ ── Minimal test harness ─────────────────────────────────────
@@ -102,319 +84,24 @@ VARIABLE _T-NAME-U
     ." FAILED: " _T-FAIL @ . CR
     _T-FAIL @ 0= IF ." ALL-TESTS-PASSED" CR THEN ;
 
-\ ── Load all modules ──────────────────────────────────────────
+\ ── Load the modules ──────────────────────────────────────────
 
-REQUIRE tui/game/game-view.f
-REQUIRE tui/game/game-canvas.f
-REQUIRE tui/game/game-applet.f
-REQUIRE tui/game/atlas.f
 REQUIRE game/2d/camera.f
-REQUIRE tui/game/world-render.f
-
-\ Need tilemap/sprite for world-render tests
-REQUIRE tui/game/tilemap.f
-REQUIRE tui/game/sprite.f
-
-80 25 SCR-NEW SCR-USE
+REQUIRE game/2d/collide.f
 
 ." [MODULES LOADED]" CR
 
 \ ── Pre-declare test state ────────────────────────────────────
 
-\ game-view test state
-VARIABLE _GVT-WIDGET
-VARIABLE _GVT-UPDATE-COUNT   0 _GVT-UPDATE-COUNT !
-VARIABLE _GVT-DRAW-COUNT     0 _GVT-DRAW-COUNT !
-VARIABLE _GVT-INPUT-COUNT    0 _GVT-INPUT-COUNT !
-VARIABLE _GVT-RESIZE-COUNT   0 _GVT-RESIZE-COUNT !
-VARIABLE _GVT-LAST-DT        0 _GVT-LAST-DT !
-
-: _GVT-ON-UPDATE  ( dt -- )
-    _GVT-LAST-DT !
-    _GVT-UPDATE-COUNT @ 1+ _GVT-UPDATE-COUNT ! ;
-: _GVT-ON-DRAW  ( rgn -- )
-    DROP
-    _GVT-DRAW-COUNT @ 1+ _GVT-DRAW-COUNT ! ;
-: _GVT-ON-INPUT  ( ev -- )
-    DROP
-    _GVT-INPUT-COUNT @ 1+ _GVT-INPUT-COUNT ! ;
-: _GVT-ON-RESIZE  ( w h -- )
-    2DROP
-    _GVT-RESIZE-COUNT @ 1+ _GVT-RESIZE-COUNT ! ;
-
-\ game-canvas test state
-VARIABLE _GCVST-WIDGET
-
-\ game-applet test state
-VARIABLE _GAPPT-DESC
-VARIABLE _GAPPT-INIT-COUNT   0 _GAPPT-INIT-COUNT !
-: _GAPPT-ON-INIT  _GAPPT-INIT-COUNT @ 1+ _GAPPT-INIT-COUNT ! ;
-: _GAPPT-ON-UPDATE  ( dt -- ) DROP ;
-: _GAPPT-ON-DRAW    ( rgn -- ) DROP ;
-: _GAPPT-ON-INPUT   ( ev -- ) DROP ;
-: _GAPPT-ON-SHUTDOWN ;
-
-\ atlas test state
-VARIABLE _ATT-ATLAS
-
 \ camera test state
 VARIABLE _CAMT-CAM
 
-\ world-render test state
-VARIABLE _WRENT-WREN
-VARIABLE _WRENT-ATLAS
-VARIABLE _WRENT-CAM
-
-\ Shared test region
-0 0 25 80 RGN-NEW CONSTANT _TEST-RGN
+\ collide test state
+VARIABLE _CT-CM
 
 
 \ =====================================================================
-\  §1 — game-view.f tests
-\ =====================================================================
-
-." --- game-view.f ---" CR
-
-S" gv:new-returns-nonzero" T-NAME
-_TEST-RGN GV-NEW DUP _GVT-WIDGET ! 0<> T-TRUE
-
-S" gv:type-is-17" T-NAME
-_GVT-WIDGET @ _WDG-O-TYPE + @ 17 T-ASSERT
-
-S" gv:region-stored" T-NAME
-_GVT-WIDGET @ _WDG-O-REGION + @ _TEST-RGN T-ASSERT
-
-S" gv:flags-visible-dirty" T-NAME
-_GVT-WIDGET @ _WDG-O-FLAGS + @
-WDG-F-VISIBLE WDG-F-DIRTY OR T-ASSERT
-
-S" gv:default-fps-30" T-NAME
-_GVT-WIDGET @ 72 + @ 30 T-ASSERT
-
-S" gv:default-frame-ms-33" T-NAME
-_GVT-WIDGET @ 80 + @ 33 T-ASSERT
-
-S" gv:default-frame-num-0" T-NAME
-_GVT-WIDGET @ 104 + @ 0 T-ASSERT
-
-S" gv:default-not-paused" T-NAME
-_GVT-WIDGET @ GV-PAUSED? T-FALSE
-
-S" gv:fps!-sets-fps" T-NAME
-_GVT-WIDGET @ 60 GV-FPS!
-_GVT-WIDGET @ 72 + @ 60 T-ASSERT
-
-S" gv:fps!-sets-frame-ms" T-NAME
-_GVT-WIDGET @ 80 + @ 16 T-ASSERT
-
-S" gv:fps!-low-clamps" T-NAME
-_GVT-WIDGET @ 1 GV-FPS!
-_GVT-WIDGET @ 80 + @ 1000 T-ASSERT
-
-S" gv:on-update-wires" T-NAME
-_GVT-WIDGET @ ' _GVT-ON-UPDATE GV-ON-UPDATE
-_GVT-WIDGET @ 40 + @ 0<> T-TRUE
-
-S" gv:on-draw-wires" T-NAME
-_GVT-WIDGET @ ' _GVT-ON-DRAW GV-ON-DRAW
-_GVT-WIDGET @ 48 + @ 0<> T-TRUE
-
-S" gv:on-input-wires" T-NAME
-_GVT-WIDGET @ ' _GVT-ON-INPUT GV-ON-INPUT
-_GVT-WIDGET @ 56 + @ 0<> T-TRUE
-
-S" gv:on-resize-wires" T-NAME
-_GVT-WIDGET @ ' _GVT-ON-RESIZE GV-ON-RESIZE
-_GVT-WIDGET @ 64 + @ 0<> T-TRUE
-
-S" gv:pause-sets-flag" T-NAME
-_GVT-WIDGET @ GV-PAUSE
-_GVT-WIDGET @ GV-PAUSED? T-TRUE
-
-S" gv:resume-clears-flag" T-NAME
-_GVT-WIDGET @ GV-RESUME
-_GVT-WIDGET @ GV-PAUSED? T-FALSE
-
-S" gv:frame-num-starts-0" T-NAME
-_GVT-WIDGET @ GV-FRAME# 0 T-ASSERT
-
-\ Restore FPS to 30 for tick tests
-_GVT-WIDGET @ 30 GV-FPS!
-
-\ =====================================================================
-\  §2 — game-canvas.f tests
-\ =====================================================================
-
-." --- game-canvas.f ---" CR
-
-S" gcvs:new-returns-nonzero" T-NAME
-_TEST-RGN 30 GCVS-NEW DUP _GCVST-WIDGET ! 0<> T-TRUE
-
-S" gcvs:type-is-18" T-NAME
-_GCVST-WIDGET @ _WDG-O-TYPE + @ 18 T-ASSERT
-
-S" gcvs:region-stored" T-NAME
-_GCVST-WIDGET @ _WDG-O-REGION + @ _TEST-RGN T-ASSERT
-
-S" gcvs:flags-visible-dirty" T-NAME
-_GCVST-WIDGET @ _WDG-O-FLAGS + @
-WDG-F-VISIBLE WDG-F-DIRTY OR T-ASSERT
-
-S" gcvs:internal-gv-nonzero" T-NAME
-_GCVST-WIDGET @ 40 + @ 0<> T-TRUE
-
-S" gcvs:internal-cvs-nonzero" T-NAME
-_GCVST-WIDGET @ 48 + @ 0<> T-TRUE
-
-S" gcvs:auto-clear-default-on" T-NAME
-_GCVST-WIDGET @ 64 + @ 0<> T-TRUE
-
-S" gcvs:canvas-returns-cvs" T-NAME
-_GCVST-WIDGET @ GCVS-CANVAS
-_GCVST-WIDGET @ 48 + @ T-ASSERT
-
-S" gcvs:dot-w-positive" T-NAME
-_GCVST-WIDGET @ GCVS-DOT-W 0> T-TRUE
-
-S" gcvs:dot-h-positive" T-NAME
-_GCVST-WIDGET @ GCVS-DOT-H 0> T-TRUE
-
-S" gcvs:auto-clear-toggle-off" T-NAME
-_GCVST-WIDGET @ 0 GCVS-AUTO-CLEAR!
-_GCVST-WIDGET @ 64 + @ 0= T-TRUE
-
-S" gcvs:auto-clear-toggle-on" T-NAME
-_GCVST-WIDGET @ -1 GCVS-AUTO-CLEAR!
-_GCVST-WIDGET @ 64 + @ 0<> T-TRUE
-
-S" gcvs:pause-delegates" T-NAME
-_GCVST-WIDGET @ GCVS-PAUSE
-_GCVST-WIDGET @ 40 + @ GV-PAUSED? T-TRUE
-
-S" gcvs:resume-delegates" T-NAME
-_GCVST-WIDGET @ GCVS-RESUME
-_GCVST-WIDGET @ 40 + @ GV-PAUSED? T-FALSE
-
-
-\ =====================================================================
-\  §3 — game-applet.f tests
-\ =====================================================================
-
-." --- game-applet.f ---" CR
-
-S" gapp:desc-returns-nonzero" T-NAME
-GAME-APP-DESC DUP _GAPPT-DESC ! 0<> T-TRUE
-
-S" gapp:init-xt-wired" T-NAME
-_GAPPT-DESC @ APP.INIT-XT @ 0<> T-TRUE
-
-S" gapp:event-xt-wired" T-NAME
-_GAPPT-DESC @ APP.EVENT-XT @ 0<> T-TRUE
-
-S" gapp:tick-xt-wired" T-NAME
-_GAPPT-DESC @ APP.TICK-XT @ 0<> T-TRUE
-
-S" gapp:paint-xt-wired" T-NAME
-_GAPPT-DESC @ APP.PAINT-XT @ 0<> T-TRUE
-
-S" gapp:shutdown-xt-wired" T-NAME
-_GAPPT-DESC @ APP.SHUTDOWN-XT @ 0<> T-TRUE
-
-S" gapp:default-fps-30" T-NAME
-_GAPPT-DESC @ _GAPP-O-FPS + @ 30 T-ASSERT
-
-S" gapp:default-gv-0" T-NAME
-_GAPPT-DESC @ _GAPP-O-GV + @ 0 T-ASSERT
-
-S" gapp:fps!-stores" T-NAME
-60 _GAPPT-DESC @ GAPP-FPS!
-_GAPPT-DESC @ _GAPP-O-FPS + @ 60 T-ASSERT
-
-S" gapp:on-init!-stores" T-NAME
-' _GAPPT-ON-INIT _GAPPT-DESC @ GAPP-ON-INIT!
-_GAPPT-DESC @ _GAPP-O-USER-INIT + @ 0<> T-TRUE
-
-S" gapp:on-update!-stores" T-NAME
-' _GAPPT-ON-UPDATE _GAPPT-DESC @ GAPP-ON-UPDATE!
-_GAPPT-DESC @ _GAPP-O-USER-UPDATE + @ 0<> T-TRUE
-
-S" gapp:on-draw!-stores" T-NAME
-' _GAPPT-ON-DRAW _GAPPT-DESC @ GAPP-ON-DRAW!
-_GAPPT-DESC @ _GAPP-O-USER-DRAW + @ 0<> T-TRUE
-
-S" gapp:on-input!-stores" T-NAME
-' _GAPPT-ON-INPUT _GAPPT-DESC @ GAPP-ON-INPUT!
-_GAPPT-DESC @ _GAPP-O-USER-INPUT + @ 0<> T-TRUE
-
-S" gapp:on-shutdown!-stores" T-NAME
-' _GAPPT-ON-SHUTDOWN _GAPPT-DESC @ GAPP-ON-SHUTDOWN!
-_GAPPT-DESC @ _GAPP-O-USER-SHUTDOWN + @ 0<> T-TRUE
-
-S" gapp:title!-stores" T-NAME
-S" Test Game" _GAPPT-DESC @ GAPP-TITLE!
-_GAPPT-DESC @ APP.TITLE-U @ 9 T-ASSERT
-
-S" gapp:gv-returns-0-before-init" T-NAME
-_GAPPT-DESC @ GAPP-GV 0 T-ASSERT
-
-
-\ =====================================================================
-\  §4 — atlas.f tests
-\ =====================================================================
-
-." --- atlas.f ---" CR
-
-S" atlas:new-returns-nonzero" T-NAME
-64 ATLAS-NEW DUP _ATT-ATLAS ! 0<> T-TRUE
-
-S" atlas:cap-returns-capacity" T-NAME
-_ATT-ATLAS @ ATLAS-CAP 64 T-ASSERT
-
-S" atlas:initial-count-0" T-NAME
-_ATT-ATLAS @ 16 + @ 0 T-ASSERT
-
-S" atlas:define-and-get-roundtrip" T-NAME
-_ATT-ATLAS @ 0 CHAR # 7 1 0 ATLAS-DEFINE
-_ATT-ATLAS @ 0 ATLAS-GET CELL-CP@ CHAR # T-ASSERT
-
-S" atlas:define-fg-correct" T-NAME
-_ATT-ATLAS @ 0 ATLAS-GET CELL-FG@ 7 T-ASSERT
-
-S" atlas:define-bg-correct" T-NAME
-_ATT-ATLAS @ 0 ATLAS-GET CELL-BG@ 1 T-ASSERT
-
-S" atlas:define-multiple" T-NAME
-_ATT-ATLAS @ 1 CHAR . 2 3 0 ATLAS-DEFINE
-_ATT-ATLAS @ 2 CHAR ~ 4 5 0 ATLAS-DEFINE
-_ATT-ATLAS @ 1 ATLAS-GET CELL-CP@ CHAR . T-ASSERT
-
-S" atlas:get-tile-2" T-NAME
-_ATT-ATLAS @ 2 ATLAS-GET CELL-CP@ CHAR ~ T-ASSERT
-
-S" atlas:get-out-of-range-returns-blank" T-NAME
-_ATT-ATLAS @ 999 ATLAS-GET CELL-BLANK T-ASSERT
-
-S" atlas:get-undefined-returns-0" T-NAME
-\ Tile 63 never defined — should be 0 (zero-filled data)
-_ATT-ATLAS @ 63 ATLAS-GET 0 T-ASSERT
-
-S" atlas:count-after-defines" T-NAME
-_ATT-ATLAS @ 16 + @ 3 T-ASSERT
-
-S" atlas:define-attrs" T-NAME
-_ATT-ATLAS @ 10 CHAR X 7 0 5 ATLAS-DEFINE
-_ATT-ATLAS @ 10 ATLAS-GET CELL-ATTRS@ 5 T-ASSERT
-
-S" atlas:overwrite-tile" T-NAME
-_ATT-ATLAS @ 0 CHAR @ 6 2 0 ATLAS-DEFINE
-_ATT-ATLAS @ 0 ATLAS-GET CELL-CP@ CHAR @ T-ASSERT
-
-S" atlas:new-cap-1" T-NAME
-1 ATLAS-NEW ATLAS-CAP 1 T-ASSERT
-
-
-\ =====================================================================
-\  §5 — camera.f tests
+\  §1 — camera.f tests
 \ =====================================================================
 
 ." --- camera.f ---" CR
@@ -574,66 +261,72 @@ _CAMT-CAM @ 40 + @ _CAMT-CAM @ 56 + @ = AND T-TRUE
 
 
 \ =====================================================================
-\  §6 — world-render.f tests
+\  §2 — collide.f tests
 \ =====================================================================
 
-." --- world-render.f ---" CR
+." --- collide.f ---" CR
 
-S" wren:new-returns-nonzero" T-NAME
-16 ATLAS-NEW _WRENT-ATLAS !
-200 150 30 20 CAM-NEW _WRENT-CAM !
-_TEST-RGN _WRENT-ATLAS @ _WRENT-CAM @ WREN-NEW
-DUP _WRENT-WREN ! 0<> T-TRUE
+8 6 CMAP-NEW  _CT-CM !
 
-S" wren:atlas-stored" T-NAME
-_WRENT-WREN @ 0 + @ _WRENT-ATLAS @ T-ASSERT
+S" cmap:width" T-NAME
+_CT-CM @ CMAP-W 8 T-ASSERT
 
-S" wren:cam-stored" T-NAME
-_WRENT-WREN @ 8 + @ _WRENT-CAM @ T-ASSERT
+S" cmap:height" T-NAME
+_CT-CM @ CMAP-H 6 T-ASSERT
 
-S" wren:rgn-stored" T-NAME
-_WRENT-WREN @ 16 + @ _TEST-RGN T-ASSERT
+S" cmap:default-passable" T-NAME
+_CT-CM @ 0 0 CMAP-SOLID? T-FALSE
 
-S" wren:layers-initially-0" T-NAME
-_WRENT-WREN @ 24 + @ 0 T-ASSERT
+S" cmap:set-solid" T-NAME
+_CT-CM @ 3 2 1 CMAP-SET
+_CT-CM @ 3 2 CMAP-SOLID? T-TRUE
 
-S" wren:layer1-initially-0" T-NAME
-_WRENT-WREN @ 32 + @ 0 T-ASSERT
+S" cmap:get-value" T-NAME
+_CT-CM @ 3 2 CMAP-GET 1 T-ASSERT
 
-S" wren:layer2-initially-0" T-NAME
-_WRENT-WREN @ 40 + @ 0 T-ASSERT
+S" cmap:adjacent-passable" T-NAME
+_CT-CM @ 4 2 CMAP-SOLID? T-FALSE
 
-S" wren:layer3-initially-0" T-NAME
-_WRENT-WREN @ 48 + @ 0 T-ASSERT
+S" cmap:fill" T-NAME
+_CT-CM @ 2 CMAP-FILL
+_CT-CM @ 0 0 CMAP-GET 2 T-ASSERT
 
-S" wren:spool-initially-0" T-NAME
-_WRENT-WREN @ 56 + @ 0 T-ASSERT
+S" cmap:fill-corner" T-NAME
+_CT-CM @ 7 5 CMAP-GET 2 T-ASSERT
 
-\ Create a small tilemap for set-map test
-4 4 TMAP-NEW CONSTANT _WREN-TEST-MAP
+_CT-CM @ 0 CMAP-FILL
 
-S" wren:set-map-layer0" T-NAME
-_WRENT-WREN @ 0 _WREN-TEST-MAP WREN-SET-MAP
-_WRENT-WREN @ 24 + @ _WREN-TEST-MAP T-ASSERT
+S" cmap:oob-col" T-NAME
+_CT-CM @ 99 0 CMAP-GET 0 T-ASSERT
 
-S" wren:set-map-layer1" T-NAME
-_WRENT-WREN @ 1 _WREN-TEST-MAP WREN-SET-MAP
-_WRENT-WREN @ 32 + @ _WREN-TEST-MAP T-ASSERT
+S" cmap:oob-row" T-NAME
+_CT-CM @ 0 99 CMAP-GET 0 T-ASSERT
 
-S" wren:set-map-layer2" T-NAME
-_WRENT-WREN @ 2 _WREN-TEST-MAP WREN-SET-MAP
-_WRENT-WREN @ 40 + @ _WREN-TEST-MAP T-ASSERT
+S" cmap:oob-negative" T-NAME
+_CT-CM @ -1 0 CMAP-GET 0 T-ASSERT
 
-S" wren:set-map-layer3" T-NAME
-_WRENT-WREN @ 3 _WREN-TEST-MAP WREN-SET-MAP
-_WRENT-WREN @ 48 + @ _WREN-TEST-MAP T-ASSERT
+\ ── Geometric primitives ──
 
-\ Create a sprite pool for set-sprites test
-4 SPOOL-NEW CONSTANT _WREN-TEST-SPOOL
+S" geom:pt-inside" T-NAME
+5 5  2 2 8 8  PT-IN-RECT? T-TRUE
 
-S" wren:set-sprites" T-NAME
-_WRENT-WREN @ _WREN-TEST-SPOOL WREN-SET-SPRITES
-_WRENT-WREN @ 56 + @ _WREN-TEST-SPOOL T-ASSERT
+S" geom:pt-outside" T-NAME
+1 1  2 2 8 8  PT-IN-RECT? T-FALSE
+
+S" geom:pt-on-left-edge" T-NAME
+2 2  2 2 8 8  PT-IN-RECT? T-TRUE
+
+S" geom:pt-on-right-excl" T-NAME
+10 5  2 2 8 8  PT-IN-RECT? T-FALSE
+
+S" geom:aabb-overlap" T-NAME
+0 0 4 4  2 2 4 4  AABB-OVERLAP? T-TRUE
+
+S" geom:aabb-no-overlap" T-NAME
+0 0 2 2  5 5 2 2  AABB-OVERLAP? T-FALSE
+
+S" geom:aabb-touching-no" T-NAME
+0 0 2 2  2 0 2 2  AABB-OVERLAP? T-FALSE
 
 
 \ =====================================================================
@@ -645,7 +338,7 @@ T-SUMMARY
 
 AUTOEXEC_F = r"""\ autoexec.f
 ENTER-USERLAND
-LOAD test_tui_game_suite.f
+LOAD test_game_2d_suite.f
 """
 
 
@@ -694,7 +387,7 @@ def build_disk(img_path):
         fs.inject_file(name, src, ftype=FTYPE_FORTH, path=disk_dir)
 
     test_src = FORTH_HARNESS.encode("utf-8")
-    fs.inject_file("test_tui_game_suite.f", test_src, ftype=FTYPE_FORTH)
+    fs.inject_file("test_game_2d_suite.f", test_src, ftype=FTYPE_FORTH)
 
     auto_src = AUTOEXEC_F.encode("utf-8")
     fs.inject_file("autoexec.f", auto_src, ftype=FTYPE_FORTH)
