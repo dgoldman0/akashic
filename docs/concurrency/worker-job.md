@@ -41,9 +41,9 @@ can race a submission. A Desk integration should reserve core 0 for the owner
 event loop and route applet background work through this substrate; applet
 callbacks themselves never run concurrently.
 
-## Emulator boundary and follow-up
+## The emulator and the simulator
 
-MegaPad models separate guest-core register, stack, interrupt, mailbox, and
+MegaPad's emulator models separate guest-core register, stack, interrupt, mailbox, and
 shared-memory state, but its host execution loop does not run those cores in
 parallel. Cores advance in deterministic rounds of 1,000 instructions, and
 sleeping cores are skipped. A round with one awake full core runs it on the
@@ -56,9 +56,32 @@ several CPU-bound workers divide the emulator's throughput rather than gaining
 host speed. None of this is a cycle-accurate model of simultaneous bus
 requests or hardware races.
 
-`akashic_tui.py` takes `--cores` and `--clusters` for smoke, serve and accept.
-The Desk sandbox journeys pass with four full cores, and the sandbox runs its
-jobs on the other cores there; the four-core `desktop-sandbox-modules` journey
-takes about as long as the one-core run. Truly host-parallel guest-core
-execution is a separate emulator project requiring an intentional shared-RAM,
-MMIO-ordering, spinlock, and deterministic-testing model.
+MegaPad's hosted simulator runs the same jobs semantically, on one to four
+full cores (MegaPad's `docs/multicore-simulator-plan.md`, stages 3 and 4, and
+section 5 of its simulator contract). A native scheduler runs the awake cores
+in rounds: each takes a turn of up to 65,536 semantic steps, or until it
+sleeps in `IDL`, finds a spinlock another core holds, or ends its work. Core 0
+runs the host's dispatch and the other cores run the BIOS's worker loop, so a
+job reaches its worker through the same mailbox and IPI as on the emulator,
+and `WJOB-NOTIFY!`'s IPI ends the owner's `IDLE-UNTIL` on core 0. The host's
+own evaluation of source is core 0's outer interpreter, which leaves the
+other cores their turns between its words, so a line that starts a job and
+waits for it ends. Time follows the round, so `CYCLES` values compare only
+within one core. For a program whose synchronization fixes its outcome, as a
+supervised job's does, the simulator gives the emulator's results; a program
+that races gets one fixed outcome for each machine shape, not the emulator's
+interleaving. A worker that reaches the compiler, the evaluator, dictionary
+growth or terminal input takes the illegal-operation fault, -21, as KDOS's
+core-0 contract requires.
+
+`akashic_tui.py` takes `--cores` and `--clusters` for smoke, serve and accept;
+the simulator takes full cores and no clusters, and
+`physical_desktop_acceptance.py --cores` runs the physical Desktop journey on
+them and records each core's semantic steps in the run's
+`final-guest-diagnostics.json`. On the emulator the Desk sandbox journeys pass
+with four full cores, and the sandbox runs its jobs on the other cores there;
+the four-core `desktop-sandbox-modules` journey takes about as long as the
+one-core run. Truly host-parallel guest-core execution is a separate project
+for both machines; for the simulator, stage 8 of MegaPad's plan runs a
+round's turns in parallel under a commit rule that keeps the sequential
+order.

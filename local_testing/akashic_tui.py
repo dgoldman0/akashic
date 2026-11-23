@@ -38752,7 +38752,10 @@ def _parser() -> argparse.ArgumentParser:
                 "--cores",
                 type=_positive_integer,
                 default=None,
-                help="full cores (profile default, usually 1; emulator only)",
+                help=(
+                    "full cores (profile default, usually 1); the simulator "
+                    "takes as many as it admits, the hybrid backend one"
+                ),
             )
             command.add_argument(
                 "--clusters",

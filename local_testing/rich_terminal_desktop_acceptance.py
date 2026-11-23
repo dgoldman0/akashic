@@ -12330,6 +12330,10 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> dict:
             "shadow_check": shadow_check_record(client),
             "check_mode": check_mode_record(client),
             "full_refresh": full_refresh_record(client),
+            # Each full core's state, semantic steps and turns, as the
+            # server's status reports them: on several cores, the work Desk
+            # lent the others.
+            "cores": status.get("cores"),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -13430,6 +13434,12 @@ def run_physical_desktop_acceptance(
                     journey_stage=journey.stage,
                 )
                 diagnostics = _write_final_guest_diagnostics(artifact_root, client)
+                for core in diagnostics.get("cores") or ():
+                    print(
+                        f"Core {core.get('core')}: {core.get('state')}, "
+                        f"{core.get('semantic_steps')} semantic steps",
+                        flush=True,
+                    )
                 shadow_failure = shadow_check_failure(
                     diagnostics.get("shadow_check") or {}
                 )

@@ -16,6 +16,13 @@ one applet before the canonical journey runs across all of them.  That is a
 development check, so the trees need not be clean; their state, including a
 digest of uncommitted changes, is recorded and must not change during the run.
 
+With --cores N the simulated machine has N full cores, as many as MegaPad's
+simulator admits, where the profile's machine has one; the hybrid backend
+runs one, and akashic_tui refuses any other shape.  Desk lends its
+sandbox jobs to the other cores (tui/applets/desk/desk.f's
+SBOX-JOB-OTHER-CORES), and the run's final-guest-diagnostics.json records
+each core's state and semantic steps from the server's status.
+
 With --terminal-link-pace BYTES_PER_SECOND:FRAME_US the hosted terminal takes
 the guest's bytes no faster than that rate, as a real serial link would, so a
 run can see frames keep going while a picture uploads.
@@ -92,7 +99,7 @@ APPLET_KIND = "physical-desk-single-applet-check"
 # well inside the outer watchdog, so the runner still writes its diagnostics.
 APPLET_TIMEOUT_SECONDS = 300
 APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
-           "small-terminal", "photo", "damaged")
+           "small-terminal", "photo", "damaged", "sandbox")
 
 
 def write_json(path: Path, value) -> None:
@@ -191,6 +198,7 @@ def child(args) -> int:
         "style_fonts": {name: {"path": str(path), "sha256": sha256(path)}
                         for name, path in discover_style_fonts(args.font).items()},
         "native_extension": str(extension_path), "native_sha256": sha256(extension_path),
+        "full_cores": args.cores,
         "socket": str(args.socket), "font_size": 18, "action_delay_seconds": 0.75,
         "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,
         "terminal_link_pace": args.terminal_link_pace,
@@ -214,6 +222,8 @@ def child(args) -> int:
                 "--timeout", str(WATCHDOG_SECONDS if clean else APPLET_TIMEOUT_SECONDS),
                 "--font", str(args.font), "--font-size", "18", "--action-delay", "0.75",
                 "--hold-seconds", "10"]
+    if args.cores is not None:
+        sys.argv += ["--cores", str(args.cores)]
     if args.terminal_link_pace is not None:
         sys.argv += ["--terminal-link-pace", args.terminal_link_pace]
     if args.screen_profile:
@@ -370,6 +380,8 @@ def supervise(args) -> int:
                "--socket", str(socket_root / "session.sock"), "--backend", args.backend]
     if args.applet is not None:
         command += ["--applet", args.applet]
+    if args.cores is not None:
+        command += ["--cores", str(args.cores)]
     if args.terminal_link_pace is not None:
         command += ["--terminal-link-pace", args.terminal_link_pace]
     if args.screen_profile:
@@ -395,6 +407,8 @@ def supervise(args) -> int:
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
+    if args.cores is not None:
+        kind += f", {args.cores} full core{'' if args.cores == 1 else 's'}"
     if args.terminal_link_pace is not None:
         kind += f", paced link {args.terminal_link_pace}"
     if args.screen_profile:
@@ -531,10 +545,15 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-parent", type=Path)
     parser.add_argument("--applet", choices=APPLETS,
                         help="run Desk with only this applet, the small-terminal "
-                             "check of Desk with Pad, or the photo or damaged-picture "
-                             "check of Desk with File Explorer, as a development check")
+                             "check of Desk with Pad, the photo or damaged-picture "
+                             "check of Desk with File Explorer, or the sandbox "
+                             "check of Desk with the Agent and Probe, as a "
+                             "development check")
     parser.add_argument("--backend", choices=("simulator", "hybrid"), default="simulator",
                         help="semantic backend: the simulator, or MegaPad's hybrid mode")
+    parser.add_argument("--cores", type=int, default=None,
+                        help="full cores of the simulated machine (default: "
+                             "the profile's, one); the hybrid backend runs one")
     parser.add_argument("--terminal-link-pace", metavar="BYTES_PER_SECOND:FRAME_US",
                         help="pace the link to the hosted terminal, for testing")
     parser.add_argument("--shadow-check", action="store_true",
@@ -595,6 +614,8 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
             parser.error("internal child requires --artifact and --socket")
     elif args.output_parent is None:
         parser.error("--output-parent is required")
+    if args.cores is not None and args.cores < 1:
+        parser.error("--cores must be positive")
     if not args.linked:
         args.system_volume = args.token_modules = args.user_volume = True
     return args
