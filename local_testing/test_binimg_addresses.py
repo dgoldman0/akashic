@@ -95,8 +95,10 @@ def test_constant_or_value_holding_an_address_in_the_image_refuses_the_build() -
     assert _refusal(["HERE VALUE XP"], "XE5") == ["-13", "0"]
 
 
-def test_numbers_and_the_systems_own_addresses_stay_constants() -> None:
+def test_numbers_the_systems_addresses_and_created_words_are_accepted() -> None:
+    # A VARIABLE's and a CREATE'd word's code has a constant's shape; its
+    # value is its own data field, which the BIOS records and moves.
     assert _refusal(["5 CONSTANT XFIVE", "-1 CONSTANT XTRUE",
                      "' DUP CONSTANT XDUP-XT", ": XUSE XFIVE XDUP-XT EXECUTE ;",
-                     "12 VALUE XTWELVE"],
+                     "12 VALUE XTWELVE", "VARIABLE XVAR", "CREATE XBUF 16 ALLOT"],
                     "XE4") == ["0", "0"]

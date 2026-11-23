@@ -432,15 +432,22 @@ DEFER _img-defer-probe
     THEN
     0 ;
 
-\ A CONSTANT's code is the 18 bytes F0 60 10 <value> 67 E0 08 54 E1 F4 A1:
-\ ldi64 r1, value; the push; sep r17.
-CREATE _IMG-CONSTANT-TAIL  103 C, 224 C, 8 C, 84 C, 225 C, 244 C, 161 C,
+\ A CONSTANT's code is the 17 bytes F0 60 10 <value> 67 E0 08 54 E1 0E:
+\ ldi64 r1, value; the push; ret.l.  A VARIABLE's code, and a CREATE'd
+\ word's until DOES> patches it, has the same bytes, with its own data
+\ field as the value: the cell after those 17 bytes for a VARIABLE, the
+\ field after CREATE's 30-byte code otherwise.  A colon word whose whole
+\ body is one 64-bit literal compiles the same way and is judged as a
+\ constant, which it is.
+CREATE _IMG-CONSTANT-TAIL  103 C, 224 C, 8 C, 84 C, 225 C, 14 C,
 
 : _IMG-CONSTANT?  ( code -- flag )
     DUP C@ 240 = OVER 1 + C@ 96 = AND OVER 2 + C@ 16 = AND 0= IF
         DROP 0 EXIT
     THEN
-    11 + 7 _IMG-CONSTANT-TAIL 7 _IMG-SAME? ;
+    DUP 11 + 6 _IMG-CONSTANT-TAIL 6 _IMG-SAME? 0= IF DROP 0 EXIT THEN
+    DUP 3 + @ OVER 17 + = IF DROP 0 EXIT THEN
+    DUP 3 + @ SWAP 30 + <> ;
 
 \ A VALUE's code is ldi64 r1, cell; ldn r1, r1; the push; ret.l, and its
 \ cell follows those 19 bytes.
