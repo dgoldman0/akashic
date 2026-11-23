@@ -1,8 +1,8 @@
 # Repairing the game library and building a first game on it — plan, 2026-11-22
 
 Status: Accepted, 2026-11-23. The game is Folio Watch, and section 5 records
-the eight decisions. Stages 0 to 3 are done, and the stages follow section 4
-in order, each reported before the next one starts. The work runs alongside the
+the eight decisions. Stages 0 to 3 are done, and stage 4's skeleton runs in
+Desk; the stages follow section 4 in order, each reported before the next one starts. The work runs alongside the
 first release and stays off its critical path.
 
 Related: the library's evaluation and the test-health catalogue of 2026-11-22
@@ -515,9 +515,9 @@ design section.
 | A lamp relit or guttering (that turn only) | 0.3–0.7 M | 3–7 ms | measured 0.32 M for radius 4 and 0.63 M for radius 6 |
 | Distance field over 288 tiles | 1.2 M | 12 ms | measured after stage 2: 24×12 with shelves, three sources |
 | Six inkmites' trees, machines and steps | about 0.1 M | 1 ms | measured 4,372 for a tree and 4,727 for a machine |
-| Board rebuild, validation and CELL draw | 6.86 M | 69 ms | measured |
-| Rich frame | 3–8 M | 30–80 ms | estimate |
-| **Turn** | **11–17 M** | **0.11–0.17 s** | |
+| Board rebuild, validation and CELL draw | 10.6 M | 106 ms | measured in stage 4: rebuild 7.08 M, CELL draw 3.48 M on Desk's region |
+| Rich frame | about 23 M | 230 ms | measured in stage 4: 3.8 M guest steps at 6 cycles a step |
+| **Turn** | **about 37 M** | **0.37 s** | the skeleton's move measured in stage 4, before the creatures |
 
 Fit: Folio Watch belongs in the Workshop (Part 7) as a worked example of the
 game library, beside the sliding-tile solver: its sources join the shipped
@@ -765,6 +765,34 @@ counts by about 1%.
 | … `TGRID-BIND` | 918,277 | 9 ms |
 | … first CELL draw | 2,150,840 | 22 ms |
 | … a move: rebuild, bind and draw | 3,863,004 | 39 ms |
+
+### Stage 4's turn
+
+Stage 4 measured a move of Folio Watch's skeleton on 2026-11-23 (Akashic
+550fbf48, MegaPad 4a4a3fd7). In emulator cycles, one call each in the
+reading room:
+
+| Call | Cycles | At 100 MHz |
+|---|---:|---:|
+| The hand lamp: hiding the last reveal and revealing radius 4 | 321,724 | 3.2 ms |
+| The board's rebuild of 288 items: its build and `TGRID-BIND` | 7,077,964 | 71 ms |
+| … its CELL draw on the 80 by 280 region Desk gives it | 3,482,434 | 35 ms |
+| … its CELL draw on a 12 by 48 region | 2,970,814 | 30 ms |
+| A\* to a tile two steps away | 64,625 | 0.6 ms |
+| A whole move: lamp, rebuild and draw on Desk's region | 11,152,484 | 112 ms |
+
+In guest steps on the simulator, from the first arrow key of Desk with the
+game's journey to the next input (`--screen-profile`), the move took 6.09
+million steps of work: the game's event and the board's rebuild 1.25
+million, the CELL paint 0.85 million, the rich frame's capture and producer
+2.03 million and the rest of its flush 0.72 million, and the rich terminal's
+refresh check at the quiet moment after the turn 1.05 million. The board's
+rebuild costs 7.08 million cycles and 1.18 million steps, 6.0 cycles a step,
+so the move comes to about 37 million cycles, 0.37 s at 100 MHz, over the
+turn budget of 15 million (decision 3). Each validation of the grid proves
+that no two items share a cell by sorting the items' cells, and those sorts
+took 1.25 million of the move's steps across `TGRID-BIND`'s validation and
+the rich capture's.
 
 The fog figures come from today's scan. On the open 64×64 map, where nothing
 blocks sight, it visits the tiles a correct scan visits; on 40×20, whose wall
