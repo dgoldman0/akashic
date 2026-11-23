@@ -2348,6 +2348,8 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         "280",
         "--rows",
         "84",
+        "--cores",
+        "1",
         *_rich_terminal_server_arguments(profile),
         "--semantic-step-budget",
         "123456",
@@ -2355,7 +2357,6 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
     for forbidden in (
         "--bios",
         "--batch-steps",
-        "--cores",
         "--clusters",
         "--lanes",
         "--nic-tap",
@@ -2449,9 +2450,23 @@ def test_machine_shape_comes_from_the_profile_or_the_command_line() -> None:
     assert command[command.index("--clusters") + 1] == "1"
     profile_default = _session_server_command("audio-contracts", image, **arguments)
     assert profile_default[profile_default.index("--cores") + 1] == "2"
+    # The simulator runs one to four full cores and no cluster; the hybrid
+    # backend runs one full core.
+    simulated = _session_server_command(
+        "desktop-apt1", image, backend="simulator", full_cores=4, **arguments
+    )
+    assert simulated[simulated.index("--cores") + 1] == "4"
+    for shape, refusal in (
+        (dict(full_cores=5), "1 to 4 full cores"),
+        (dict(clusters=1), "no micro-core cluster"),
+    ):
+        with pytest.raises(SystemExit, match=refusal):
+            _session_server_command(
+                "desktop-apt1", image, backend="simulator", **shape, **arguments
+            )
     with pytest.raises(SystemExit, match="one full core"):
         _session_server_command(
-            "desktop-apt1", image, backend="simulator", full_cores=4, **arguments
+            "desktop-apt1", image, backend="hybrid", full_cores=4, **arguments
         )
 
     captured = {}
@@ -2485,7 +2500,11 @@ def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None
     simulator = _session_server_command("desktop-apt1", image, backend="simulator", **arguments)
     hybrid = _session_server_command("desktop-apt1", image, backend="hybrid", **arguments)
     assert hybrid[:4] == [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", "hybrid"]
-    assert hybrid[4:] == simulator[4:]
+    # Only the simulator takes a full-core count; the hybrid backend has one.
+    cores = simulator.index("--cores")
+    assert simulator[cores:cores + 2] == ["--cores", "1"]
+    assert "--cores" not in hybrid
+    assert hybrid[4:] == simulator[4:cores] + simulator[cores + 2:]
 
 
 def test_only_the_simulator_server_writes_a_screen_profile(tmp_path) -> None:
