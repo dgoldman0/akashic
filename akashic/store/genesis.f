@@ -22,7 +22,7 @@
 \
 \  Public API:
 \   GEN-CREATE  ( -- )        encode genesis from current config
-\   GEN-LOAD    ( -- flag )   decode genesis and configure chain
+\   GEN-LOAD    ( data len -- flag )  decode genesis and configure chain
 \   GEN-CHAIN-ID@ ( -- n )    return chain ID
 \   GEN-HASH    ( hash -- )   compute genesis block hash
 \
@@ -133,12 +133,30 @@ VARIABLE _GEN-I
 \  4. GEN-LOAD — decode genesis CBOR and configure consensus + state
 \ =====================================================================
 \  Called once at node startup.  Reads the genesis block's data field
-\  and applies all configuration.  Returns -1 on success, 0 on error,
-\  including a decode error cbor.f reports through CBOR-INPUT-OK?.
+\  and applies all configuration.  Returns -1 on success, 0 on error.
+\
+\  GEN-LOAD reads the genesis twice.  The first pass reads and checks
+\  all of it and changes nothing: the eight keys in order, every value
+\  of its type, every authority key and account address 32 bytes, the
+\  accounts in increasing address order (as GEN-CREATE writes the
+\  state's, so none is listed twice), none of them an account already,
+\  room in the state for all of them, and no decode error cbor.f reports
+\  through CBOR-INPUT-OK?.  Only a genesis that passes is applied: the
+\  six settings, then a second pass that adds the authorities and
+\  creates the accounts, which the first pass has shown it can.  A
+\  refused genesis therefore changes nothing.
 
 VARIABLE _GEN-NKEYS
 VARIABLE _GEN-NBAL
 CREATE _GEN-TKEY 32 ALLOT          \ temp key buffer for decode
+CREATE _GEN-PREV 32 ALLOT          \ the previous account's address
+VARIABLE _GEN-APPLY                \ TRUE in the second pass, which applies
+VARIABLE _GEN-V-CID                \ the six settings the first pass read
+VARIABLE _GEN-V-MODE
+VARIABLE _GEN-V-STARK
+VARIABLE _GEN-V-EPOCH
+VARIABLE _GEN-V-MSTK
+VARIABLE _GEN-V-LOCK
 
 \ _GEN-STR= ( addr1 len1 addr2 len2 -- flag )
 \   Compare two byte strings for equality.
@@ -157,51 +175,68 @@ CREATE _GEN-TKEY 32 ALLOT          \ temp key buffer for decode
     CBOR-NEXT-TSTR                 ( str-body len cbor-addr cbor-len )
     _GEN-STR= ;
 
-: GEN-LOAD  ( genesis-data len -- flag )
+\ _GEN-SETTING ( counted-str var -- flag )
+\   Read the next key, which must be the one named, and its unsigned
+\   integer into var.
+: _GEN-SETTING  ( counted-str var -- flag )
+    SWAP _GEN-EXPECT-KEY 0= IF DROP 0 EXIT THEN
+    CBOR-NEXT-UINT SWAP !  -1 ;
+
+\ _GEN-WALK ( genesis-data len -- flag )
+\   One pass over the genesis with every check GEN-LOAD describes.  With
+\   _GEN-APPLY set it also adds each authority and creates each account.
+: _GEN-WALK  ( genesis-data len -- flag )
     CBOR-PARSE DROP
     \ Expect map with 8 entries
     CBOR-NEXT-MAP 8 <> IF 0 EXIT THEN
-    \ 1. chain_id
-    _GEN-S-CID _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
-    CBOR-NEXT-UINT _GEN-CHAIN-ID !
-    \ 2. con_mode
-    _GEN-S-CMOD _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
-    CBOR-NEXT-UINT CON-MODE!
-    \ 3. stark
-    _GEN-S-STARK _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
-    CBOR-NEXT-UINT 0<> CON-STARK!
-    \ 4. epoch_len — apply from genesis (runtime-configurable)
-    _GEN-S-EPOCH _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
-    CBOR-NEXT-UINT CON-POS-EPOCH-LEN !
-    \ 5. min_stake — apply from genesis (runtime-configurable)
-    _GEN-S-MSTK _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
-    CBOR-NEXT-UINT CON-POS-MIN-STAKE !
-    \ 6. lock_period
-    _GEN-S-LOCK _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
-    CBOR-NEXT-UINT _ST-LOCK-PERIOD !
+    \ 1-6. chain_id, con_mode, stark, epoch_len, min_stake, lock_period
+    _GEN-S-CID   _GEN-V-CID   _GEN-SETTING 0= IF 0 EXIT THEN
+    _GEN-S-CMOD  _GEN-V-MODE  _GEN-SETTING 0= IF 0 EXIT THEN
+    _GEN-S-STARK _GEN-V-STARK _GEN-SETTING 0= IF 0 EXIT THEN
+    _GEN-S-EPOCH _GEN-V-EPOCH _GEN-SETTING 0= IF 0 EXIT THEN
+    _GEN-S-MSTK  _GEN-V-MSTK  _GEN-SETTING 0= IF 0 EXIT THEN
+    _GEN-S-LOCK  _GEN-V-LOCK  _GEN-SETTING 0= IF 0 EXIT THEN
     \ 7. authorities
     _GEN-S-AUTH _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-ARRAY _GEN-NKEYS !
     _GEN-NKEYS @ 0 ?DO
         CBOR-NEXT-BSTR             ( addr len )
         32 <> IF DROP 0 UNLOOP EXIT THEN  \ bad key length
-        _GEN-TKEY 32 CMOVE
-        _GEN-TKEY CON-POA-ADD
+        _GEN-APPLY @ IF
+            _GEN-TKEY 32 CMOVE  _GEN-TKEY CON-POA-ADD
+        ELSE DROP THEN
     LOOP
     \ 8. balances
     _GEN-S-BAL _GEN-EXPECT-KEY 0= IF 0 EXIT THEN
     CBOR-NEXT-ARRAY _GEN-NBAL !
+    _GEN-NBAL @ ST-COUNT + ST-MAX-ACCOUNTS > IF 0 EXIT THEN
     _GEN-NBAL @ 0 ?DO
         CBOR-NEXT-ARRAY 2 <> IF 0 UNLOOP EXIT THEN
         CBOR-NEXT-BSTR             ( addr len )
         32 <> IF DROP 0 UNLOOP EXIT THEN
         _GEN-TKEY 32 CMOVE
+        I IF                       \ after the previous address
+            _GEN-PREV _GEN-TKEY _ST-ADDR-CMP 0< 0= IF 0 UNLOOP EXIT THEN
+        THEN
+        _GEN-TKEY ST-LOOKUP IF 0 UNLOOP EXIT THEN   \ not an account yet
+        _GEN-TKEY _GEN-PREV 32 CMOVE
         CBOR-NEXT-UINT             ( amount )
-        \ Create account with initial balance
-        _GEN-TKEY SWAP ST-CREATE
-        0= IF 0 UNLOOP EXIT THEN  \ account creation failed
+        _GEN-APPLY @ IF
+            _GEN-TKEY SWAP ST-CREATE
+            0= IF 0 UNLOOP EXIT THEN  \ account creation failed
+        ELSE DROP THEN
     LOOP
     CBOR-INPUT-OK? ;                \ a decode error refuses the genesis
+
+: GEN-LOAD  ( genesis-data len -- flag )
+    2DUP 0 _GEN-APPLY !  _GEN-WALK 0= IF 2DROP 0 EXIT THEN
+    _GEN-V-CID @ _GEN-CHAIN-ID !
+    _GEN-V-MODE @ CON-MODE!
+    _GEN-V-STARK @ 0<> CON-STARK!
+    _GEN-V-EPOCH @ CON-POS-EPOCH-LEN !
+    _GEN-V-MSTK @ CON-POS-MIN-STAKE !
+    _GEN-V-LOCK @ _ST-LOCK-PERIOD !
+    -1 _GEN-APPLY !  _GEN-WALK  0 _GEN-APPLY ! ;
 
 \ =====================================================================
 \  5. GEN-HASH — compute genesis block hash

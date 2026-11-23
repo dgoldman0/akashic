@@ -417,6 +417,70 @@ def test_genesis_encode():
              desc="expected non-zero length")
 
 
+def _cbor_head(major, n):
+    if n < 24:
+        return bytes([major << 5 | n])
+    for addl, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | addl]) + n.to_bytes(size, "big")
+
+
+def _cbor_text(text):
+    return _cbor_head(3, len(text)) + text.encode()
+
+
+def _genesis(settings, authorities, balances):
+    """A genesis map: SETTINGS as (key, CBOR value) pairs, then the
+    authorities and [address, amount] balances."""
+    out = _cbor_head(5, 8)
+    for key, value in settings:
+        out += _cbor_text(key) + value
+    out += _cbor_text("authorities") + _cbor_head(4, len(authorities))
+    for key in authorities:
+        out += _cbor_head(2, len(key)) + key
+    out += _cbor_text("balances") + _cbor_head(4, len(balances))
+    for address, amount in balances:
+        out += _cbor_head(4, 2) + _cbor_head(2, len(address)) + address + _cbor_head(0, amount)
+    return out
+
+
+def test_genesis_load_changes_nothing_when_refused():
+    """GEN-LOAD checks the whole genesis before it applies any of it, so a
+    genesis refused after its first setting, or at its last account,
+    leaves the chain ID, the consensus settings, the authorities and the
+    state as they were."""
+    print("\n=== Genesis load is all or nothing ===")
+    settings = [("chain_id", _cbor_head(0, 42)), ("con_mode", _cbor_head(0, 3)),
+                ("stark", _cbor_head(0, 1)), ("epoch_len", _cbor_head(0, 10)),
+                ("min_stake", _cbor_head(0, 500)), ("lock_period", _cbor_head(0, 7))]
+    authorities = [bytes([0xA1]) * 32, bytes([0xA2]) * 32]
+    accounts = [(bytes([1]) * 32, 1000), (bytes([2]) * 32, 2000)]
+    whole = _genesis(settings, authorities, accounts)
+    # The mode, read right after the chain ID, is text instead of a number.
+    wrong_type = _genesis(settings[:1] + [("con_mode", _cbor_text("posa"))] + settings[2:],
+                          authorities, accounts)
+    # The last account repeats the first address.
+    repeated = _genesis(settings, authorities, accounts + [(bytes([1]) * 32, 5)])
+    lines = (create_hex_buf("_GWHOLE", whole.hex())
+             + create_hex_buf("_GTYPE", wrong_type.hex())
+             + create_hex_buf("_GREP", repeated.hex()) + [
+        "ST-INIT",
+        "5 GEN-CHAIN-ID!  CON-POW CON-MODE!  0 CON-STARK!",
+        "32 CON-POS-EPOCH-LEN !  100 CON-POS-MIN-STAKE !  64 _ST-LOCK-PERIOD !",
+        ": _GSET.  ( -- )  GEN-CHAIN-ID@ . CON-MODE@ . CON-STARK? . CON-POS-EPOCH-LEN @ . "
+        "CON-POS-MIN-STAKE @ . _ST-LOCK-PERIOD @ . CON-POA-COUNT . ST-COUNT . ;",
+        f'_GTYPE {len(wrong_type)} GEN-LOAD ." [GTYPE " . _GSET. ." ]" CR',
+        f'_GREP {len(repeated)} GEN-LOAD ." [GREP " . _GSET. ." ]" CR',
+        f'_GWHOLE {len(whole)} GEN-LOAD ." [GWHOLE " . _GSET. ." ]" CR',
+    ])
+    check("a wrong type after the first setting changes nothing", lines,
+          "[GTYPE 0 5 0 0 32 100 64 0 0 ]")
+    check("a repeated account changes nothing", lines,
+          "[GREP 0 5 0 0 32 100 64 0 0 ]")
+    check("a sound genesis applies everything", lines,
+          "[GWHOLE -1 42 3 -1 10 500 7 2 2 ]")
+
+
 def test_pow_testing_flag():
     """_CON-POW-TESTING-ONLY constant exists and is -1 (true)."""
     print("\n=== PoW testing-only flag ===")
