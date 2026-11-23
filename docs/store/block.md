@@ -156,10 +156,13 @@ Block producer finalization path:
 **Leaves the state as it was.**  `CHAIN-APPEND` is the single mutation
 point for state: the producer finalizes its block, seals it, and
 appends it, and `CHAIN-APPEND` verifies and applies it as it would a
-block from a peer.  Failing transactions are silently dropped — the
-block contains only the leading run of valid transactions, and its
-`tx_root` covers exactly those.  `BLK-FINALIZE` and `BLK-VERIFY` share
-one `ST-SNAPSHOT-SIZE` buffer in XMEM, taken on first use.
+block from a peer.  The block contains only the leading run of valid
+transactions, and its `tx_root` covers exactly those.  The node's
+producer drops the transaction the block was cut at and gives the ones
+after it back to the mempool (see
+[Block Production](../node/node.md#block-production)).  `BLK-FINALIZE`
+and `BLK-VERIFY` share one `ST-SNAPSHOT-SIZE` buffer in XMEM, taken on
+first use.
 
 ---
 

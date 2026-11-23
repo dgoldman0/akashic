@@ -118,13 +118,23 @@ Production is disabled by default.  When enabled, the node is synced
    block was cut at is dropped, and those drained after it go back to
    the mempool (`MP-RETURN`).  When the chain refuses the block, every
    drained transaction goes back.  The slots no block or pool holds are
-   then released.  The transaction the block was cut at is not given
-   back: it would drain ahead of those after it again and cut the next
-   block at the same place.
+   then released.
 
-Until the clock is set it names no instant: a block stamped from it is
-refused when it reads 0 and dated 1970 after that.  A node whose clock
-is not set produces nothing, and its pool keeps its transactions.
+The transaction a block was cut at is dropped rather than given back.
+Given back, it would drain ahead of the transactions after it again
+and cut every later block at the same place.  Passing over it inside
+`BLK-FINALIZE`, so that the transactions after it join the same block,
+would change the rule that a produced block ends at the first
+transaction the state refuses (P22).  Under that rule the transactions
+after it wait one block, since they go back to the pool for the next.
+
+Production waits for the clock.  Until the clock is set it names no
+instant: a block stamped from it is refused while it reads 0 and dated
+1970 after that.  Stamping the block with its parent's time plus a
+second was not chosen, since that time would be made up, and a block's
+timestamp is the wall time it was produced at (P34).  A node whose
+clock is not set therefore produces nothing, and its pool keeps its
+transactions until the clock is set.
 
 ### NODE-ENABLE-PRODUCE
 
