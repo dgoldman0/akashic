@@ -96,7 +96,7 @@ PROVIDED akashic-game-ecs
 \ =====================================================================
 
 : ECS-NEW  ( max-ents -- ecs )
-    1 MAX DUP >R
+    1 MAX >R
     _ECS-DESC-SZ ALLOCATE
     0<> ABORT" ECS-NEW: desc alloc"
     DUP _ECS-DESC-SZ 0 FILL
@@ -115,17 +115,19 @@ PROVIDED akashic-game-ecs
 
 : _ECS-FREE-COMP  ( comps-base i -- )
     _ECS-COMP-SZ * +
-    DUP _ECS-CO-DATA + @ ?DUP IF FREE DROP THEN
-    _ECS-CO-ATTACHED + @ ?DUP IF FREE DROP THEN ;
+    DUP _ECS-CO-DATA + @ FREE
+    _ECS-CO-ATTACHED + @ FREE ;
 
+\ KDOS's FREE takes an address and returns nothing, and frees nothing
+\ when given zero, so each FREE stands alone.
 : ECS-FREE  ( ecs -- )
     DUP _ECS-O-NCOMPS + @ 0 ?DO
         DUP _ECS-O-COMPS + @ I _ECS-FREE-COMP
     LOOP
-    DUP _ECS-O-COMPS + @ FREE DROP
-    DUP _ECS-O-GEN   + @ FREE DROP
-    DUP _ECS-O-ALIVE + @ FREE DROP
-    FREE DROP ;
+    DUP _ECS-O-COMPS + @ FREE
+    DUP _ECS-O-GEN   + @ FREE
+    DUP _ECS-O-ALIVE + @ FREE
+    FREE ;
 
 \ =====================================================================
 \  §4 — Component Registration

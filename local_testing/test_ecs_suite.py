@@ -19,7 +19,7 @@ from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
 sys.path.insert(0, SCRIPT_DIR)
-from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+from forth_disk import MEMORY_LOG, kdos_diagnostics, module_disk_files  # noqa: E402
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -98,6 +98,7 @@ VARIABLE _T-NAME-U
     ." FAILED: " _T-FAIL @ . CR
     _T-FAIL @ 0= IF ." ALL-TESTS-PASSED" CR THEN ;
 
+""" + MEMORY_LOG + r"""
 \ ── Load modules ──────────────────────────────────────────────
 
 REQUIRE game/ecs.f
@@ -594,6 +595,45 @@ _HECS _HE1 ECS-ALIVE? T-FALSE
 
 S" cull:count-after" T-NAME
 _HECS ECS-COUNT 1 T-ASSERT
+
+\ ══════════════════════════════════════════════════════════════
+\  Teardown: KDOS's FREE returns nothing, so each FREE stands alone
+\ ══════════════════════════════════════════════════════════════
+
+\ An ECS with two components and three entities, built and freed inside
+\ one memory log, with sentinels below the argument of each teardown.
+-1 MLOG-HOLD  MLOG-START
+8 ECS-NEW CONSTANT _TD-ECS
+_TD-ECS 16 ECS-REG-COMP DROP
+_TD-ECS 8 ECS-REG-COMP DROP
+_TD-ECS ECS-SPAWN DROP  _TD-ECS ECS-SPAWN DROP  _TD-ECS ECS-SPAWN DROP
+_TD-ECS SYSRUN-NEW CONSTANT _TD-RUN
+: _TD-FREE-RUN  ( -- s1 s2 s3 gain )
+    DEPTH >R  101 202 303 _TD-RUN SYSRUN-FREE  DEPTH R> - ;
+: _TD-FREE-ECS  ( -- s1 s2 s3 gain )
+    DEPTH >R  404 505 606 _TD-ECS ECS-FREE  DEPTH R> - ;
+_TD-FREE-RUN
+_TD-FREE-ECS
+MLOG-STOP  0 MLOG-HOLD
+
+S" teardown:ecs-free-leaves-callers-cells" T-NAME
+3 T-ASSERT
+S" teardown:ecs-free-sentinels-intact" T-NAME
+606 = SWAP 505 = AND SWAP 404 = AND T-TRUE
+S" teardown:sysrun-free-leaves-callers-cells" T-NAME
+3 T-ASSERT
+S" teardown:sysrun-free-sentinels-intact" T-NAME
+303 = SWAP 202 = AND SWAP 101 = AND T-TRUE
+S" teardown:every-block-freed-once" T-NAME
+MLOG-BALANCED? T-TRUE
+S" ecs:new-leaves-only-the-ecs" T-NAME
+: _TD-NEW-GAIN  ( -- gain )  DEPTH >R  4 ECS-NEW  DEPTH R> -  SWAP ECS-FREE ;
+_TD-NEW-GAIN 1 T-ASSERT
+
+S" teardown:free-count" T-NAME
+\ ECS: descriptor, alive, generations, component table, and the data
+\ and attached bits of two components; runner: descriptor and entries
+MLOG-FREES 10 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Summary

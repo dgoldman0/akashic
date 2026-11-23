@@ -75,8 +75,8 @@ REQUIRE components.f
     OVER _SR-O-ENTRIES + ! ;
 
 : SYSRUN-FREE  ( runner -- )
-    DUP _SR-O-ENTRIES + @ FREE DROP
-    FREE DROP ;
+    DUP _SR-O-ENTRIES + @ FREE
+    FREE ;
 
 \ =====================================================================
 \  §3 — Add System (insertion-sorted by priority)
