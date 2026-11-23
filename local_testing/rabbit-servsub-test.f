@@ -71,6 +71,10 @@ VARIABLE _RBT-SSRV-BIND-SERVER-STATUS
     1 _RBT-SRV-ADMISSIONS +!
     0x5150 RSERVER-ADMIT-ALLOW ;
 
+\ The admission's own token, which it installs again while it runs: a
+\ name is hidden inside its own definition, so the token is stored after it.
+VARIABLE _RBT-SSRV-BIND-XT
+
 : _RBT-SSRV-BIND-ADMISSION
   ( frame peer-token empty-builder context -- bind-decision )
     _RBT-SSRV-BIND-CONTEXT = _RBT-ASSERT
@@ -99,7 +103,7 @@ VARIABLE _RBT-SSRV-BIND-SERVER-STATUS
     _RBT-SSRV-OWNER RABBIT-SERVER-SUBSCRIPTIONS-POLL
         RSERVER-S-STATE = _RBT-ASSERT
         RSERVER-ITEM-NONE = _RBT-ASSERT
-    ['] _RBT-SSRV-BIND-ADMISSION _RBT-SSRV-BIND-CONTEXT
+    _RBT-SSRV-BIND-XT @ _RBT-SSRV-BIND-CONTEXT
         _RBT-SSRV-OWNER RABBIT-SERVER-SUBSCRIPTIONS-BIND-ADMISSION!
         RSERVSUB-S-STATE = _RBT-ASSERT
     1 _RBT-SSRV-BIND-CALLS +!
@@ -115,6 +119,7 @@ VARIABLE _RBT-SSRV-BIND-SERVER-STATUS
         RSERVSUB-BIND-RESPONSE EXIT
     THEN
     _RBT-SSRV-BIND-MODE @ ;
+' _RBT-SSRV-BIND-ADMISSION _RBT-SSRV-BIND-XT !
 
 : _RBT-SSRV-SOURCE
   ( target-a target-u expected-event-seq context )

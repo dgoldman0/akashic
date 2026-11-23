@@ -71,6 +71,10 @@ CREATE _PBTSA-marks _PBTSA-MARK-CAPACITY ALLOT
 : _PBTSA-read-slot  ( slot root-value -- generation status )
     _PBTC-store _PBTC-pstore-work PSTORE-ROOT-SLOT@ ;
 
+\ The visitor's own token, for the nested audit mode 5 starts: a name is
+\ hidden inside its own definition, so the token is stored after it.
+VARIABLE _PBTSA-visitor-xt
+
 : _PBTSA-visitor
   ( page-id expected-height visitor-context -- status )
     DROP
@@ -88,7 +92,7 @@ CREATE _PBTSA-marks _PBTSA-MARK-CAPACITY ALLOT
         _PBTSA-bound-generation @
         _PBTSA-bound-root @ PROOTV.PAGE-COUNT @
         _PBTSA-bound-root @ PROOTV.DATA-BANK @
-        ['] _PBTSA-visitor 0 _PBTC-tree _PBTSA-audit-work
+        _PBTSA-visitor-xt @ 0 _PBTC-tree _PBTSA-audit-work
             PBTREE-AUDIT-SNAPSHOT-TX
         PERSIST-S-BUSY = >R
         0= >R
@@ -119,6 +123,7 @@ CREATE _PBTSA-marks _PBTSA-MARK-CAPACITY ALLOT
     ELSE
         1 SWAP C! PERSIST-S-OK
     THEN ;
+' _PBTSA-visitor _PBTSA-visitor-xt !
 
 : _PBTSA-visitor-reset  ( mode -- )
     _PBTSA-mode !

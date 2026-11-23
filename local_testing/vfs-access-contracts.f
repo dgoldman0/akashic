@@ -125,6 +125,11 @@ VARIABLE _vfac-cb-reinit
     _vfac-ior ! _vfac-fd !
     _vfac-ior @ 0= _vfac-assert _vfac-fd @ 0<> _vfac-assert ;
 
+\ The callback's own token, for the stream it starts again while it
+\ runs: a name is hidden inside its own definition, so the token is
+\ stored after it.
+VARIABLE _vfac-cb-xt
+
 : _vfac-stream-callback  ( stream -- action ior )
     _vfac-cb-stream !
     1 _vfac-cb-calls +!
@@ -142,7 +147,7 @@ VARIABLE _vfac-cb-reinit
     _vfac-cb-u @ _vfac-cb-offset +!
     _vfac-cb-reinit @ IF
         0 _vfac-cb-reinit !
-        _vfac-fd @ 0 1 _vfac-scratch 4 ['] _vfac-stream-callback 82
+        _vfac-fd @ 0 1 _vfac-scratch 4 _vfac-cb-xt @ 82
             _vfac-stream VFA-STREAM-INIT _vfac-busy? _vfac-assert
     THEN
     _vfac-cb-throw-at @ _vfac-cb-calls @ = IF -7932 THROW THEN
@@ -151,6 +156,7 @@ VARIABLE _vfac-cb-reinit
     ELSE
         VFA-STREAM-CONTINUE 0
     THEN ;
+' _vfac-stream-callback _vfac-cb-xt !
 
 : _vfac-callback-reset  ( context -- )
     _vfac-cb-context !

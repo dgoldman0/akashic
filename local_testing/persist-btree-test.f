@@ -607,6 +607,10 @@ GUARD _PBTC-i3-guard
     _PBTC-range-fail-at @ 0>
     _PBTC-range-calls @ _PBTC-range-fail-at @ = AND ;
 
+\ The visitor's own token, for the nested call mode 4 makes: a name is
+\ hidden inside its own definition, so the token is stored after it.
+VARIABLE _PBTC-range-visitor-xt
+
 : _PBTC-range-visitor
   ( key-a key-u value-a value-u context -- status )
     DROP
@@ -634,7 +638,7 @@ GUARD _PBTC-i3-guard
         ENDOF
         4 OF
             _PBTC-root-a _PBTC-tree _PBTC-cursor 1
-                ['] _PBTC-range-visitor 0 _PBTC-work PBTREE-RANGE-NEXT
+                _PBTC-range-visitor-xt @ 0 _PBTC-work PBTREE-RANGE-NEXT
             _PBTC-range-nested-status !
             _PBTC-range-nested-count !
         ENDOF
@@ -643,6 +647,7 @@ GUARD _PBTC-i3-guard
         ENDOF
     ENDCASE
     PERSIST-S-OK ;
+' _PBTC-range-visitor _PBTC-range-visitor-xt !
 
 : _PBTC-range-next  ( limit -- count status )
     >R
