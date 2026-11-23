@@ -1,16 +1,16 @@
 {
  "measured": "Akashic's library group, with GUARDED undefined, on MegaPad 7e015eaad40530520ed72d780d69c86c600e079c",
- "definitions": 44480,
- "inferred": 43306,
+ "definitions": 44498,
+ "inferred": 43328,
  "counts": {
   "finding: return stack: I reads a cell parked by >R, not a loop index": 3,
   "finding: return stack: R> takes a DO loop's control cells": 1,
   "finding: token effect": 1,
   "mismatch": 184,
-  "not inferred": 1174,
+  "not inferred": 1170,
   "not inferred: CATCH of an input xt": 133,
   "not inferred: CATCH of an unknown xt": 19,
-  "not inferred: EVALUATE of text": 3,
+  "not inferred: EVALUATE of text": 2,
   "not inferred: EXECUTE of an input xt": 93,
   "not inferred: EXECUTE of an unknown xt": 571,
   "not inferred: computed PICK or ROLL depth": 3,
@@ -19,9 +19,9 @@
   "not inferred: loop changes the return stack depth": 1,
   "not inferred: loop changes the stack depth": 19,
   "not inferred: recursion without a declared effect": 1,
-  "not inferred: result depth varies": 137,
+  "not inferred: result depth varies": 136,
   "not inferred: return stack misuse": 1,
-  "not inferred: through a callee that fails": 37,
+  "not inferred: through a callee that fails": 35,
   "not inferred: undefined word": 130
  }
 }

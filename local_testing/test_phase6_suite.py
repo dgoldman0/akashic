@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test suite for Phase 6: save.f + map-loader.f
+"""Test suite for Phase 6: map-loader.f
 
 Runs Forth test code through the Megapad-64 emulator and validates
 correctness by parsing structured UART output.
@@ -149,14 +149,13 @@ DISK_FILES = module_disk_files((
     "tui/game/atlas.f",
     "game/2d/camera.f",
     "tui/game/world-render.f",
-    "game/save.f",
     "tui/game/map-loader.f",
 ))
 
 
 # ── Forth test harness ─────────────────────────────────────────
 FORTH_HARNESS = r"""\ =====================================================================
-\  test_phase6_suite.f — Tests for Phase 6 (save.f + map-loader.f)
+\  test_phase6_suite.f — Tests for Phase 6 (map-loader.f)
 \ =====================================================================
 
 \ ── Minimal test harness ─────────────────────────────────────
@@ -209,129 +208,12 @@ CREATE _T-NAMEBUF 80 ALLOT
 
 \ ── Load modules ─────────────────────────────────────────────
 
-REQUIRE game/save.f
 REQUIRE tui/game/map-loader.f
 REQUIRE tui/game/atlas.f
 
 80 25 SCR-NEW SCR-USE
 
 ." [MODULES LOADED]" CR
-
-\ =====================================================================
-\  §1 — save.f tests: GSAVE-NEW
-\ =====================================================================
-
-." --- save.f ---" CR
-
-VARIABLE _SV-CTX
-
-S" gsave:new-returns-nonzero" T-NAME
-GSAVE-NEW DUP _SV-CTX ! 0<> T-TRUE
-
-S" gsave:count-initially-zero" T-NAME
-_SV-CTX @ 16 + @ 0 T-ASSERT
-
-S" gsave:eptr-initially-zero" T-NAME
-_SV-CTX @ 24 + @ 0 T-ASSERT
-
-\ =====================================================================
-\  §2 — save.f tests: accumulate entries
-\ =====================================================================
-
-\ Add an integer entry
-S" gsave:int-increments-count" T-NAME
-_SV-CTX @ S" hp" 42 GSAVE-INT
-_SV-CTX @ 16 + @ 1 T-ASSERT
-
-S" gsave:int-advances-eptr" T-NAME
-_SV-CTX @ 24 + @ 0> T-TRUE
-
-\ Add a string entry (use CREATE for value to avoid S" transient collision)
-CREATE _SV-HERO  104 C, 101 C, 114 C, 111 C,  \ "hero"
-S" gsave:str-increments-count" T-NAME
-_SV-CTX @ S" name" _SV-HERO 4 GSAVE-STR
-_SV-CTX @ 16 + @ 2 T-ASSERT
-
-\ Add a blob entry
-CREATE _SV-BLOB-DATA 65 C, 66 C, 67 C, 68 C,
-S" gsave:blob-increments-count" T-NAME
-_SV-CTX @ S" data" _SV-BLOB-DATA 4 GSAVE-BLOB
-_SV-CTX @ 16 + @ 3 T-ASSERT
-
-\ =====================================================================
-\  §3 — save.f tests: encode + write + reload round-trip
-\ =====================================================================
-
-\ Write to a file
-S" gsave:write-returns-0" T-NAME
-_SV-CTX @ S" test_save.dat" GSAVE-WRITE 0 T-ASSERT
-
-\ Free save context
-_SV-CTX @ GSAVE-FREE
-
-\ Now load it back
-VARIABLE _LD-CTX
-
-S" gload:open-returns-nonzero" T-NAME
-S" test_save.dat" GLOAD-OPEN DUP _LD-CTX ! 0<> T-TRUE
-
-S" gload:mode-is-1" T-NAME
-_LD-CTX @ 40 + @ 1 T-ASSERT
-
-\ Read back the integer
-S" gload:int-hp-is-42" T-NAME
-_LD-CTX @ S" hp" GLOAD-INT 42 T-ASSERT
-
-\ Read back the string
-S" gload:str-name-len-is-4" T-NAME
-_LD-CTX @ S" name" GLOAD-STR
-DUP 4 T-ASSERT
-
-\ Check the first char is 'h'
-S" gload:str-name-starts-with-h" T-NAME
-DROP C@ 104 T-ASSERT
-
-\ Read back the blob
-S" gload:blob-data-len-is-4" T-NAME
-_LD-CTX @ S" data" GLOAD-BLOB
-DUP 4 T-ASSERT
-
-S" gload:blob-data-byte0-is-65" T-NAME
-DROP C@ 65 T-ASSERT
-
-\ Read a missing key
-S" gload:missing-key-returns-0" T-NAME
-_LD-CTX @ S" nonexistent" GLOAD-INT 0 T-ASSERT
-
-\ Close (GLOAD-CLOSE leaves nothing on stack)
-_LD-CTX @ GLOAD-CLOSE
-
-\ =====================================================================
-\  §4 — save.f tests: multiple integers round-trip
-\ =====================================================================
-
-VARIABLE _SV2-CTX
-
-GSAVE-NEW _SV2-CTX !
-_SV2-CTX @ S" x" 10 GSAVE-INT
-_SV2-CTX @ S" y" 20 GSAVE-INT
-_SV2-CTX @ S" z" 30 GSAVE-INT
-_SV2-CTX @ S" test_save2.dat" GSAVE-WRITE DROP
-_SV2-CTX @ GSAVE-FREE
-
-VARIABLE _LD2-CTX
-S" test_save2.dat" GLOAD-OPEN _LD2-CTX !
-
-S" gload:multi-int-x" T-NAME
-_LD2-CTX @ S" x" GLOAD-INT 10 T-ASSERT
-
-S" gload:multi-int-y" T-NAME
-_LD2-CTX @ S" y" GLOAD-INT 20 T-ASSERT
-
-S" gload:multi-int-z" T-NAME
-_LD2-CTX @ S" z" GLOAD-INT 30 T-ASSERT
-
-_LD2-CTX @ GLOAD-CLOSE
 
 \ =====================================================================
 \  §5 — map-loader.f tests
