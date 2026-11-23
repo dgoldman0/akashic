@@ -1,7 +1,7 @@
 # Repairing the game library and building a first game on it — plan, 2026-11-22
 
 Status: Accepted, 2026-11-23. The game is Folio Watch, and section 5 records
-the eight decisions. Stages 0 and 1 are done, and the stages follow section 4
+the eight decisions. Stages 0 to 3 are done, and the stages follow section 4
 in order, each reported before the next one starts. The work runs alongside the
 first release and stays off its critical path.
 
@@ -330,10 +330,14 @@ save context's entry buffer grows from need; the encoding buffer is sized from
 the entries, whose CBOR form has a computable bound; the file goes through
 checked replacement in the applet's home (`PLACE-VREPL!`, `VREPL-REPLACE`), as
 Grid saves, on whichever volume holds the home, ext4 in the shipping form. A
-load reads the file's size first, allocates exactly that, parses with a cursor
-of its own (`CBOR-SAVE` and `CBOR-RESTORE`); negative integers go out through
-`CBOR-NINT` and come back through `CBOR-NEXT-NINT`. Every call answers a
-status. The `EVALUATE`d commands, the 64-sector files and the shared buffers
+load reads the file's size first, allocates exactly that and checks every
+head and length against the file's end. `cbor.f`'s decoder reads lengths it
+never checks, and its `CBOR-SKIP` calls itself by name, which the simulator's
+loader refuses, so `save.f` writes and reads the part of CBOR a save uses
+itself for now, negative integers in CBOR's negative form; once `cbor.f` gains
+a checked decoder and loads on the simulator, `save.f` moves onto it. A hash
+table finds keys for the check against repeated keys and for lookups. Every
+call answers a status. The `EVALUATE`d commands, the 64-sector files and the shared buffers
 go. A save costs 1.25 to 1.35 s of
 processor time for 2 to 16 KiB on the user volume
 (`local_testing/evidence/user-volume-writer-profile-20261119.md`), so games
@@ -348,7 +352,11 @@ value and whether it blocks sight, and rows of exactly the declared width,
 with spawn marks among them. The reader checks the size before reading, reads
 exactly that, validates the whole text as Grid validates CSV, and returns a
 collision map, a kind layer and a spawn list sized from the text. Text maps
-can be written in Pad and read in the Workshop (decision 4).
+can be written in Pad and read in the Workshop (decision 4). The format, as
+built and accepted: `tile: glyph name collision clear|opaque` and `spawn:
+glyph name on tile-glyph` lines, `width:` and `height:`, any other key a value
+the game reads, then `rows:`; a map holds at most 256 tile kinds, since the
+kind layer keeps a byte a tile ([map.md](map.md)).
 
 **9. The board.** `tui/game/board.f` builds a canonical text grid
 (`USCOL-F-TEXT-GRID`, mounted with `TGRID-NEW` into a UIDL region element)
