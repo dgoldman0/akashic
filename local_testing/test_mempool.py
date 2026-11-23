@@ -400,6 +400,33 @@ def test_release():
               'MP-COUNT . CR',              # should be 0
           ], "0")
 
+def test_return():
+    """MP-RETURN gives drained transactions back to the pool.
+
+    A producer whose block did not take every drained transaction gives
+    the rest back: each is in the pool again, under its own hash, keeps
+    its slot through MP-RELEASE, and drains again in sorted order.  A
+    pointer to a slot that is no longer drained is passed over."""
+    check("returned transactions are pending again",
+          _keygen_preamble()
+          + _make_tx(1, 2, 100, 0, '_TX1')
+          + _make_tx(1, 2, 200, 1, '_TX2')
+          + _make_tx(1, 2, 300, 2, '_TX3')
+          + [
+              'CREATE _DBUF 8 CELLS ALLOT  CREATE _H 32 ALLOT',
+              ': _T  _TX1 MP-ADD DROP  _TX2 MP-ADD DROP  _TX3 MP-ADD DROP',
+              '  3 _DBUF MP-DRAIN DROP',
+              # Give back the second and third; the first stays drained.
+              '  2 _DBUF CELL+ MP-RETURN  MP-RELEASE',
+              '  ." count=" MP-COUNT .',
+              '  _TX2 _H TX-HASH ." has2=" _H MP-CONTAINS? .',
+              '  _TX1 _H TX-HASH ." has1=" _H MP-CONTAINS? .',
+              # Returning a freed slot again changes nothing.
+              '  1 _DBUF MP-RETURN ." again=" MP-COUNT .',
+              '  8 _DBUF MP-DRAIN ." drained=" .',
+              '  ." amounts=" _DBUF @ TX-AMOUNT@ . _DBUF CELL+ @ TX-AMOUNT@ . ; _T',
+          ], "count=2 has2=-1 has1=0 again=2 drained=2 amounts=200 300 ")
+
 def test_sorted_order():
     """Txs should be sorted by sender address + nonce (drain order = sorted order)."""
     # Add txs from different senders and check they come out in address-sorted order

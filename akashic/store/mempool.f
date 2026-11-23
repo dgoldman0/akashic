@@ -13,6 +13,7 @@
 \   MP-ADD         ( tx -- flag )         validate, verify sig, insert
 \   MP-REMOVE      ( hash -- flag )       remove by tx hash
 \   MP-DRAIN       ( n buf -- actual )    pop up to n txs into buffer
+\   MP-RETURN      ( n buf -- )           give n drained txs back to the pool
 \   MP-RELEASE     ( -- )                 free drained tx buffer slots
 \   MP-COUNT       ( -- n )               pending tx count
 \   MP-PRUNE       ( -- n )               remove structurally invalid
@@ -357,6 +358,44 @@ VARIABLE _MP-DR-BUF
     _MP-DR-N @ ;
 
 \ =====================================================================
+\  15b. MP-RETURN — give drained transactions back to the pool
+\ =====================================================================
+\  A producer gives back the drained transactions its block did not
+\  take: each goes into the index again where MP-ADD would put it, in the
+\  slot it was drained from, so MP-RELEASE leaves it alone.  buf holds n
+\  pointers MP-DRAIN gave.  A pointer to a slot that is not drained is
+\  passed over; a transaction whose sender and nonce the pool holds again,
+\  or one a full pool has no room for, has its slot freed.
+
+VARIABLE _MP-RET-TX
+VARIABLE _MP-RET-SLOT
+VARIABLE _MP-RET-INS
+
+: _MP-RETURN-ONE  ( tx -- )
+    DUP _MP-RET-TX !
+    _MP-POOL - TX-BUF-SIZE / _MP-RET-SLOT !
+    _MP-SLOTS _MP-RET-SLOT @ + C@ 2 <> IF EXIT THEN
+    _MP-COUNT @ MP-CAPACITY >= IF _MP-RET-SLOT @ _MP-FREE EXIT THEN
+    _MP-RET-TX @ TX-FROM@ ED25519-KEY-LEN _MP-ADDR-TMP SHA3-256-HASH
+    _MP-ADDR-TMP _MP-RET-TX @ TX-NONCE@ _MP-BSEARCH IF
+        DROP _MP-RET-SLOT @ _MP-FREE EXIT
+    THEN
+    _MP-RET-INS !
+    _MP-RET-INS @ _MP-SHIFT-R
+    _MP-ADDR-TMP  _MP-RET-INS @ _MP-ENT  32 CMOVE
+    _MP-RET-TX @ TX-NONCE@  _MP-RET-INS @ _MP-ENT 32 + !
+    _MP-RET-SLOT @  _MP-RET-INS @ _MP-ENT 40 + !
+    _MP-RET-TX @ _MP-HASH-TMP TX-HASH
+    _MP-HASH-TMP  _MP-RET-INS @ 32 * _MP-HASHES +  32 CMOVE
+    1 _MP-SLOTS _MP-RET-SLOT @ + C!
+    1 _MP-COUNT +! ;
+
+: MP-RETURN  ( n buf -- )
+    SWAP 0 ?DO
+        DUP I CELLS + @ _MP-RETURN-ONE
+    LOOP DROP ;
+
+\ =====================================================================
 \  16. MP-RELEASE — free drained pool slots
 \ =====================================================================
 \  Call after block finalization when tx buffer pointers from
@@ -406,6 +445,7 @@ GUARD _mp-guard
 ' MP-ADD        CONSTANT _mp-add-xt
 ' MP-REMOVE     CONSTANT _mp-rm-xt
 ' MP-DRAIN      CONSTANT _mp-drain-xt
+' MP-RETURN     CONSTANT _mp-ret-xt
 ' MP-RELEASE    CONSTANT _mp-rel-xt
 ' MP-PRUNE      CONSTANT _mp-prune-xt
 ' MP-CONTAINS?  CONSTANT _mp-has-xt
@@ -414,6 +454,7 @@ GUARD _mp-guard
 : MP-ADD        _mp-add-xt    _mp-guard WITH-GUARD ;
 : MP-REMOVE     _mp-rm-xt     _mp-guard WITH-GUARD ;
 : MP-DRAIN      _mp-drain-xt  _mp-guard WITH-GUARD ;
+: MP-RETURN     _mp-ret-xt    _mp-guard WITH-GUARD ;
 : MP-RELEASE    _mp-rel-xt    _mp-guard WITH-GUARD ;
 : MP-PRUNE      _mp-prune-xt  _mp-guard WITH-GUARD ;
 : MP-CONTAINS?  _mp-has-xt    _mp-guard WITH-GUARD ;

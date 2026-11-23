@@ -59,6 +59,7 @@ VARIABLE _NODE-LAST-SAVED               \ last persisted chain height
 
 \ [FIX P32] TX pointer buffer for MP-DRAIN → BLK-ADD-TX
 CREATE _NODE-TX-PTRS  BLK-MAX-TXS CELLS ALLOT
+VARIABLE _NODE-DRAINED                  \ pointers MP-DRAIN put there
 
 \ =====================================================================
 \  3. NODE-INIT — initialise all sub-systems
@@ -97,17 +98,20 @@ CREATE _NODE-HTMP 32 ALLOT
     \ Only produce if synced
     SYNC-STATUS SYNC-IDLE <> IF EXIT THEN
     MP-COUNT 0= IF EXIT THEN           \ nothing to produce
+    \ [FIX P34] A block carries the wall time.  Until the clock is set
+    \ it names no instant, and a block stamped from it is refused or
+    \ dated 1970, so the node produces nothing and the pool keeps its
+    \ transactions.
+    DT-CLOCK-VALID? 0= IF EXIT THEN
     \ Build block
     _NODE-BLK BLK-INIT
     CHAIN-HEIGHT 1+ _NODE-BLK BLK-SET-HEIGHT
     CHAIN-HEAD _NODE-HTMP BLK-HASH
     _NODE-HTMP _NODE-BLK BLK-SET-PREV
-    \ [FIX P34] Real timestamp from RTC
     DT-NOW-S _NODE-BLK BLK-SET-TIME
     \ [FIX P32] Drain mempool into temp buffer, then BLK-ADD-TX each
-    MP-COUNT BLK-MAX-TXS MIN           ( n-to-drain )
-    _NODE-TX-PTRS MP-DRAIN             ( actual )
-    0 ?DO
+    MP-COUNT BLK-MAX-TXS MIN _NODE-TX-PTRS MP-DRAIN _NODE-DRAINED !
+    _NODE-DRAINED @ 0 ?DO
         _NODE-TX-PTRS I CELLS + @      ( tx-ptr )
         _NODE-BLK BLK-ADD-TX DROP
     LOOP
@@ -120,8 +124,18 @@ CREATE _NODE-HTMP 32 ALLOT
         \ Save to log & broadcast
         _NODE-BLK PST-SAVE-BLOCK DROP
         _NODE-BLK GSP-BROADCAST-BLK
-        MP-RELEASE                      \ free drained slots
-    THEN ;
+        \ The block keeps the transactions before the first one the state
+        \ refused (BLK-FINALIZE, P22).  That one is dropped, and those
+        \ after it go back to the pool for a later block.
+        _NODE-BLK BLK-TX-COUNT@ 1+     ( first returned )
+        _NODE-DRAINED @ OVER - DUP 0> IF
+            SWAP CELLS _NODE-TX-PTRS + MP-RETURN
+        ELSE 2DROP THEN
+    ELSE
+        \ The chain refused the block: every transaction goes back
+        _NODE-DRAINED @ _NODE-TX-PTRS MP-RETURN
+    THEN
+    MP-RELEASE ;                        \ free the slots no block or pool holds
 
 \ =====================================================================
 \  5. Persistence tick  [FIX P35] wired into NODE-STEP

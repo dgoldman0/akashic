@@ -263,6 +263,12 @@ TV1_PUB  = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 TV2_SEED = "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
 TV2_PUB  = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
 
+# A third pair, from test_state.  Its address sorts between the first
+# pair's and the second's, so a pool drains the first pair's transactions
+# before the third pair's.
+TV3_SEED = "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
+TV3_PUB  = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"
+
 
 def create_hex_buf(var_name, hex_str):
     bs = bytes.fromhex(hex_str)
@@ -397,7 +403,7 @@ def test_stop():
     check("Signing key zeroed after stop",
           [': _KSUM 0 64 0 DO _CON-SIGN-PRIV I + C@ + LOOP ;',
            ': _T 8080 NODE-INIT',
-           '  _CON-SIGN-PRIV 64 $FF FILL',    # fill with 0xFF first
+           '  _CON-SIGN-PRIV 64 255 FILL',    # fill with 0xFF first
            '  NODE-STOP _KSUM . ; _T'],
           "0 ")
 
@@ -439,11 +445,16 @@ def test_produce_toggle():
 
 
 def test_timestamp():
-    """#68 P34: DT-NOW-S available for real timestamps."""
+    """#68 P34: DT-NOW-S reads the wall clock once it is set.
+
+    The machine's clock starts at the Unix epoch, unset, and reads 0; the
+    host sets it here, as the producer test does."""
     print("\n── #68 P34: DT-NOW-S Timestamp ──\n")
-    check("DT-NOW-S returns non-zero",
-          ['DT-NOW-S .'],
-          check_fn=lambda t: any(c.isdigit() and c != '0' for c in t.strip()))
+    check("DT-NOW-S reads the clock the host set",
+          ['." valid=" DT-CLOCK-VALID? .  ." now=" DT-NOW-S .'],
+          "valid=-1 now=1700000000 ", rtc_epoch_ms=1_700_000_000_000)
+    check("an unset clock is not valid",
+          ['." valid=" DT-CLOCK-VALID? .'], "valid=0 ")
 
 
 def test_produce_block_with_transaction():
@@ -477,6 +488,90 @@ def test_produce_block_with_transaction():
     check("produced block appended, saved, and applied once", lines,
           "add=-1 height=1 bal1=9900 bal2=100 nonce1=1 pool=0 saved=1 ",
           max_steps=800_000_000, rtc_epoch_ms=1_700_000_000_000)
+
+
+def _signed_tx(name, sender, recipient, amount, nonce):
+    """Lines that build transaction NAME from key pair SENDER to RECIPIENT."""
+    return [
+        f'CREATE {name} TX-BUF-SIZE ALLOT  {name} TX-INIT',
+        f'_PUB{sender} {name} TX-SET-FROM  _PUB{recipient} {name} TX-SET-TO',
+        f'{amount} {name} TX-SET-AMOUNT  {nonce} {name} TX-SET-NONCE',
+        f'{name} _PRIV{sender} _PUB{sender} TX-SIGN',
+    ]
+
+
+def _three_pairs():
+    return (_key_pair(1, TV1_SEED, TV1_PUB) + _key_pair(2, TV2_SEED, TV2_PUB)
+            + _key_pair(3, TV3_SEED, TV3_PUB) + ['CREATE _H 32 ALLOT'])
+
+
+def test_produce_waits_for_the_clock():
+    """A node whose clock is not set produces nothing and keeps its pool.
+
+    It drained the pool into a block stamped from the unset clock.  While
+    the clock still read 0, BLK-VERIFY refused the block and its drained
+    transactions never came back; once the clock had counted past a
+    second, as here, the block went into the chain dated 1970."""
+    print("\n── Production before the clock is set ──\n")
+    lines = _three_pairs() + _signed_tx('_TX1', 1, 2, 100, 0) + [
+        ': _T 8080 NODE-INIT  _ADDR1 10000 ST-CREATE DROP',
+        '  ." add=" _TX1 MP-ADD .',
+        '  NODE-ENABLE-PRODUCE _NODE-PRODUCE-BLOCK',
+        '  ." height=" CHAIN-HEIGHT .  ." pool=" MP-COUNT .',
+        '  _TX1 _H TX-HASH ." has=" _H MP-CONTAINS? . ; _T',
+    ]
+    check("no block, and the transaction waits in the pool", lines,
+          "add=-1 height=0 pool=1 has=-1 ", max_steps=400_000_000)
+
+
+def test_refused_block_returns_its_transactions():
+    """A block the chain refuses gives its transactions back to the pool.
+
+    The consensus check refuses every block here, so CHAIN-APPEND refuses
+    the producer's: its transaction goes back to the pool, and nothing is
+    applied."""
+    print("\n── A refused block ──\n")
+    lines = _three_pairs() + _signed_tx('_TX1', 1, 2, 100, 0) + [
+        ': _REFUSE  ( blk -- flag )  DROP 0 ;',
+        "' _REFUSE _BLK-CON-CHECK-XT !",
+        ': _T 8080 NODE-INIT  _ADDR1 10000 ST-CREATE DROP',
+        '  ." add=" _TX1 MP-ADD .',
+        '  NODE-ENABLE-PRODUCE _NODE-PRODUCE-BLOCK',
+        '  ." height=" CHAIN-HEIGHT .  ." pool=" MP-COUNT .',
+        '  _TX1 _H TX-HASH ." has=" _H MP-CONTAINS? .',
+        '  ." bal1=" _ADDR1 ST-BALANCE@ . ; _T',
+    ]
+    check("the transaction is pending again", lines,
+          "add=-1 height=0 pool=1 has=-1 bal1=10000 ",
+          max_steps=800_000_000, rtc_epoch_ms=1_700_000_000_000)
+
+
+def test_truncated_block_returns_the_rest():
+    """The transactions after the one a block was cut at go back to the pool.
+
+    BLK-FINALIZE ends a block before the first transaction the state
+    refuses (P22).  Here the first pair's transaction, which drains first,
+    has a nonce the state has not reached, so the block is cut before it
+    and holds none; the third pair's transaction, drained after it, went
+    with it.  Now the refused one is dropped, the other waits in the pool,
+    and the next block applies it."""
+    print("\n── A truncated block ──\n")
+    lines = _three_pairs() + _signed_tx('_TXA', 1, 2, 100, 5) + _signed_tx(
+        '_TXB', 3, 2, 50, 0) + [
+        ': _T 8080 NODE-INIT  _ADDR1 10000 ST-CREATE DROP  _ADDR3 10000 ST-CREATE DROP',
+        '  ." add=" _TXA MP-ADD . _TXB MP-ADD .',
+        '  NODE-ENABLE-PRODUCE _NODE-PRODUCE-BLOCK',
+        '  ." height=" CHAIN-HEIGHT .  ." pool=" MP-COUNT .',
+        '  _TXB _H TX-HASH ." hasB=" _H MP-CONTAINS? .',
+        '  _TXA _H TX-HASH ." hasA=" _H MP-CONTAINS? .',
+        '  _NODE-PRODUCE-BLOCK',
+        '  ." height2=" CHAIN-HEIGHT .  ." pool2=" MP-COUNT .',
+        '  ." bal2=" _ADDR2 ST-BALANCE@ .  ." bal3=" _ADDR3 ST-BALANCE@ . ; _T',
+    ]
+    check("the later transaction lands in the next block", lines,
+          "add=-1 -1 height=1 pool=1 hasB=-1 hasA=0 height2=2 pool2=0 "
+          "bal2=50 bal3=9950 ",
+          max_steps=1_200_000_000, rtc_epoch_ms=1_700_000_000_000)
 
 
 def test_subsystem_callbacks():

@@ -103,17 +103,28 @@ Execute one iteration of the main loop (useful for testing).
 
 ## Block Production
 
-Production is disabled by default.  When enabled and the node is
-synced (`SYNC-IDLE`):
+Production is disabled by default.  When enabled, the node is synced
+(`SYNC-IDLE`) and its wall clock is set (`DT-CLOCK-VALID?`):
 
-1. Drain up to `BLK-MAX-TXS` transactions from the mempool
+1. Drain up to `BLK-MAX-TXS` transactions from the mempool, into a
+   block stamped with the wall time
 2. Finalize the block (compute the tx and state Merkle roots; the state
-   is left as it was)
+   is left as it was).  The block ends before the first transaction the
+   state refuses (P22).
 3. Seal with consensus proof (`CON-SEAL`)
 4. Append to chain via `CHAIN-APPEND`, which verifies the block and
    applies its transactions to the state
-5. Persist to block log, broadcast to peers, and release the drained
-   mempool slots
+5. Persist to block log and broadcast to peers.  The transaction the
+   block was cut at is dropped, and those drained after it go back to
+   the mempool (`MP-RETURN`).  When the chain refuses the block, every
+   drained transaction goes back.  The slots no block or pool holds are
+   then released.  The transaction the block was cut at is not given
+   back: it would drain ahead of those after it again and cut the next
+   block at the same place.
+
+Until the clock is set it names no instant: a block stamped from it is
+refused when it reads 0 and dated 1970 after that.  A node whose clock
+is not set produces nothing, and its pool keeps its transactions.
 
 ### NODE-ENABLE-PRODUCE
 

@@ -96,6 +96,20 @@ MP-RELEASE  ( -- )
 
 Free buffer slots occupied by the last drain operation.
 
+### MP-RETURN
+
+```forth
+MP-RETURN  ( n buf -- )
+```
+
+Give back *n* drained transactions whose pointers *buf* holds, as
+`MP-DRAIN` wrote them, when the block they were drained for did not
+take them: each goes into the index again where `MP-ADD` would put it,
+in its own slot, and `MP-RELEASE` leaves it alone.  A pointer to a slot
+that is no longer drained is passed over; a transaction whose sender and
+nonce the pool holds again, or one a full pool has no room for, has its
+slot freed.
+
 ---
 
 ## Queries
@@ -134,7 +148,7 @@ expired nonces after state advancement).  Returns the number removed.
 ## Concurrency
 
 All public words (`MP-INIT`, `MP-ADD`, `MP-REMOVE`, `MP-DRAIN`,
-`MP-RELEASE`, `MP-PRUNE`) are wrapped with a module-level guard to
+`MP-RETURN`, `MP-RELEASE`, `MP-PRUNE`) are wrapped with a module-level guard to
 prevent concurrent access from interrupt or coroutine contexts.
 
 ---
@@ -147,6 +161,7 @@ prevent concurrent access from interrupt or coroutine contexts.
 | `MP-ADD` | `( tx -- flag )` | Validate and insert transaction |
 | `MP-REMOVE` | `( hash -- flag )` | Remove by tx hash |
 | `MP-DRAIN` | `( n buf -- actual )` | Pop up to n txs into buffer |
+| `MP-RETURN` | `( n buf -- )` | Give drained txs back to the pool |
 | `MP-RELEASE` | `( -- )` | Free drained slots |
 | `MP-COUNT` | `( -- n )` | Pending transaction count |
 | `MP-PRUNE` | `( -- n )` | Remove invalid, return count |
