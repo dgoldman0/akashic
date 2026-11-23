@@ -705,7 +705,7 @@ VARIABLE _PR-PX  VARIABLE _PR-PY  VARIABLE _PR-PW  VARIABLE _PR-PH
         _PR-CHILD @ >R
         _PR-CLIP @  >R
 
-        _PR-CHILD @ _PR-SURF @ PAINT-RENDER
+        _PR-CHILD @ _PR-SURF @ RECURSE
 
         \ Restore state
         R> _PR-CLIP !

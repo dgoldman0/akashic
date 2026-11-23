@@ -92,11 +92,12 @@ one delimiter and take text up to the next double quote or the end of the
 line. A false `[IF]` is skipped by scanning raw tokens, which reads
 `[THEN]` even inside a comment, as BIOS does.
 
-Names ignore case, and a later definition hides an earlier one. Because `:`
-publishes its header before the body compiles, a definition that names
-itself calls itself: there is no smudge bit, and the earlier word of that
-name is out of reach inside the new one. `'` is not immediate, so inside a
-definition it compiles a call that parses a name when the word runs.
+Names ignore case, and a later definition hides an earlier one. A colon
+definition's name stays hidden until `;` publishes it, as in standard Forth,
+so inside the body the name finds the earlier word of that name: a
+redefinition can extend the word it replaces, and a definition calls itself
+with `RECURSE`. `'` is not immediate, so inside a definition it compiles a
+call that parses a name when the word runs.
 
 Each module is checked against the dictionary an image would hold when the
 module loads: the base vocabulary, then the modules its REQUIRE lines load,
@@ -509,8 +510,7 @@ THROW whose code is not known to be nonzero may return, so a word that
 throws only on a path the checker cannot prove leaves two depths; a branch
 on a copy of the code now proves it.
 
-**Names and case.** The no-smudge rule matters to the language: a word
-compiled to Forth cannot call an earlier word of its own name, and a later
-word of the same name hides it everywhere after. The language's lists
-holding words rather than names (decision 34) avoids the second problem for
-quotations.
+**Names and case.** A later word of the same name hides an earlier one
+everywhere after it, which matters to the language when a word is compiled
+to Forth. The language's lists holding words rather than names (decision
+34) avoid that problem for quotations.

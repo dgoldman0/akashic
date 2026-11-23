@@ -83,7 +83,7 @@ VARIABLE _LMT-BOX
         BOX-FIRST-CHILD
         BEGIN DUP 0<> WHILE
             DUP BOX-NEXT >R
-            _LAYO-MEASURE-TEXT-REC
+            RECURSE
             R>
         REPEAT
         DROP
@@ -691,7 +691,7 @@ VARIABLE _LB-ALL-INLINE   \ flag: 1 if all children are inline
                     _LAYO-PREV-MB @   >R
                     _LB-ALL-INLINE @  >R
 
-                    LAYO-BLOCK
+                    RECURSE
 
                     R> _LB-ALL-INLINE !
                     R> _LAYO-PREV-MB !

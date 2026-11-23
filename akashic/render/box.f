@@ -746,7 +746,7 @@ VARIABLE _BUL-PREV
         BEGIN
             DUP 0<> WHILE        ( child-node )
             DUP DOM-NEXT >R      \ save next-sib on return stack
-            _BOX-BUILD-REC       \ recurse — may clobber all globals
+            RECURSE              \ may clobber all globals
             R>                   \ restore next-sib
         REPEAT
         DROP                     \ drop the 0

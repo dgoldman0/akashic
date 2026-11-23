@@ -220,8 +220,6 @@ class Record:
     failure: Fail | None = None
     relies_on_declared: set = field(default_factory=set)
     findings: list = field(default_factory=list)
-    self_named: bool = False
-    hides_older: bool = False
     # Calls whose effect came from a declaration rather than from code: a
     # token read from a typed slot, a typed token input, or a deferred word.
     declared_tokens: int = 0
@@ -251,6 +249,7 @@ class Pending:
     interp: bool = False
     outer: "Pending | None" = None
     quotation: bool = False
+    named: bool = False  # : gave a name, which ; publishes
     header_lines: list = field(default_factory=list)
     header_parens: list = field(default_factory=list)
     header_done: bool = False
@@ -676,12 +675,13 @@ class Checker:
     # The compiler
 
     def _begin_colon(self, name: str | None, quotation: bool = False) -> None:
+        # The name stays hidden until ; publishes it, as the BIOS has it:
+        # inside the body the name finds an earlier word of that name, and
+        # only RECURSE reaches the definition itself.
         word = Word(name or "(quotation)", self.module, self.line, self._origin())
         word.compiling = True
-        if name:
-            self.define(word)
         self.pending = Pending(word, outer=self.pending if quotation else None,
-                               quotation=quotation)
+                               quotation=quotation, named=bool(name))
 
     def _compile(self, token: str, cursor: LineCursor) -> None:
         pending = self.pending
@@ -748,6 +748,8 @@ class Checker:
         word.items = pending.items
         word.end_line = self.line
         self.pending = pending.outer
+        if pending.named:
+            self.define(word)
         if word.declared_text is None and word.declared_reason is None:
             preceding = self.preceding.get((word.module, word.name.upper()))
             if preceding is not None:
@@ -760,13 +762,9 @@ class Checker:
         for problem in word.problems:
             self.declaration_problem(problem, word.name, record, word.line)
         record.declared_items = word.declared_count
-        record.self_named = any(
-            op == "call" and arg is word for op, arg, _ in pending.items
-        )
-        record.hides_older = word.hides is not None and record.self_named
         self.records.append(record)
-        # The word stays "compiling" while it is analyzed, so a call to its
-        # own name, or RECURSE, takes the effect its comment declares.
+        # The word stays "compiling" while it is analyzed, so RECURSE takes
+        # the effect its comment declares.
         self._analyze_definition(word, pending, record)
         word.compiling = False
         return word
@@ -1468,7 +1466,8 @@ class Analysis:
         recursive = word.compiling or (word in self.checker.inlining
                                        and _reaches_itself(word))
         if recursive:
-            # The definition names itself: recursion uses its comment's
+            # The definition reaches itself, through RECURSE or a token that
+            # leads back to it: recursion uses its comment's
             # effect, which strict mode accepts only when the inferred effect
             # of the definition being analyzed confirms it.
             if word.declared is None or word.declared.variable:

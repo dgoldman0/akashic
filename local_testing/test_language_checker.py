@@ -245,14 +245,24 @@ def test_defining_words_give_their_children_an_effect(base_checker_state):
     assert checker.lookup(".NEXT").signature.alts[0][0].kind == E.ADDR
 
 
-def test_names_ignore_case_and_a_definition_can_name_itself(base_checker_state):
+def test_names_ignore_case_and_a_name_is_hidden_until_semicolon(base_checker_state):
     checker = check(base_checker_state, (
         ": TWICE  ( n -- n' )  2* ;\n"
         ": twice  ( n -- n' )  TWICE 1+ ;\n"
+        ": SELF  ( n -- n' )  SELF ;\n"
+        ": COUNTDOWN  ( n -- n' )  DUP IF 1- RECURSE THEN ;\n"
     ))
-    later = record(checker, "twice")
-    # ":" publishes the header before the body compiles, so TWICE is twice.
-    assert later.hides_older and later.self_named
+    earlier, later = record(checker, "TWICE"), record(checker, "twice")
+    # ";" publishes the name, so inside the body TWICE is the earlier word,
+    # which the later one extends; after it, the later word hides it.
+    assert later.word.hides is earlier.word
+    assert ("call", earlier.word) in [(op, arg) for op, arg, _ in later.word.items]
+    assert later.comparison == "match"
+    assert checker.lookup("twice") is later.word
+    # With no earlier word of its name, a definition naming itself names
+    # nothing; RECURSE is how a definition calls itself.
+    assert record(checker, "SELF").failure.category == "undefined word"
+    assert record(checker, "COUNTDOWN").comparison == "match"
 
 
 def test_a_comment_on_a_preceding_line_describes_its_own_modules_word(base_checker_state):
@@ -629,8 +639,8 @@ def test_strict_mode_trusts_no_comment(base_checker_state):
         "VARIABLE VTABLE\n"
         ": OPAQUE  ( a -- b )  VTABLE @ EXECUTE ;\n"
         ": CALLER  ( a -- b )  OPAQUE 1+ ;\n"
-        ": COUNTDOWN  ( n -- )  DUP IF 1- COUNTDOWN ELSE DROP THEN ;\n"
-        ": WRONG-REC  ( n -- n )  DUP IF 1- WRONG-REC THEN DROP ;\n"
+        ": COUNTDOWN  ( n -- )  DUP IF 1- RECURSE ELSE DROP THEN ;\n"
+        ": WRONG-REC  ( n -- n )  DUP IF 1- RECURSE THEN DROP ;\n"
     )
     plain = check(base_checker_state, source)
     strict = check(base_checker_state, source, strict=True)

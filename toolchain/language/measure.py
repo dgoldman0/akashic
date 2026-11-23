@@ -252,7 +252,6 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
                 "word": finding.word, "detail": finding.detail,
             })
     relying = sum(1 for r in inferred if r.relies_on_declared)
-    self_named = [r for r in records if r.hides_older]
     typed_slots = [word for slot_group, word in checker.typed_slots if slot_group == group]
     declarations = {
         "definitions with declared kinds": sum(1 for r in records if r.declared_items),
@@ -293,11 +292,6 @@ def summarize(checker: Checker, group: str, examples: int) -> dict:
         "mismatch examples": mismatch_examples,
         "findings": dict(findings.most_common()),
         "finding examples": finding_examples,
-        "redefinitions that call their own name": [
-            _where(r, r.word.line, f"hides {r.word.hides.module}:{r.word.hides.line}")
-            for r in self_named[:examples * 4]
-        ],
-        "redefinitions that call their own name (count)": len(self_named),
     }
 
 

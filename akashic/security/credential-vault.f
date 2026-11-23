@@ -482,7 +482,7 @@ CREATE _CV-DIR-SHARD2-INODE 0 ,
     OVER R@ + 1+
     1 PICK R@ - 1-
     R> DROP
-    _CV-ROOT-SEGMENTS-CANONICAL? >R
+    RECURSE >R
     2DROP R> ;
 
 : _CV-ROOT-CANONICAL?  ( address length -- flag )
