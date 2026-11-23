@@ -514,8 +514,9 @@ class Profile:
     minimum_free_bytes: int = 0
     default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
     # The machine a session boots by default: full cores, and micro-core
-    # clusters beside them.  The semantic backends are one full core with no
-    # cluster, so only the emulator accepts another shape.
+    # clusters beside them.  The simulator runs one to four full cores and
+    # no cluster, the hybrid backend one full core, and only the emulator
+    # accepts clusters.
     full_cores: int = 1
     clusters: int = 0
     # A profile opts into semantic execution by naming the ordinary Forth
@@ -29269,14 +29270,16 @@ def _token_form(
 
 
 def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
-    """Boot IMAGE_PATH in MegaPad's simulator until its boot script has run,
-    and return the runtime.  RECORDER, a token recorder, is attached before
-    KDOS loads.  A boot that fails raises, with the end of what the guest
-    printed."""
+    """Boot IMAGE_PATH in MegaPad's simulator, on the profile's full cores,
+    until its boot script has run, and return the runtime.  RECORDER, a token
+    recorder, is attached before KDOS loads.  A profile without a session
+    entry, such as a contract profile, does its work in the boot script and
+    binds no live entry.  A boot that fails raises, with the end of what the
+    guest printed."""
 
     from shared.storage import STORAGE_UNIT_TABLE
     from simulator.image_bootstrap import prepare_image_bootstrap
-    from simulator.platform import create_address_space
+    from simulator.platform import Topology, create_address_space
     from simulator.runtime import MegaForthRuntime
     from simulator.server import _CANONICAL_HBW_MIB
     from simulator.storage import HostedStorageService
@@ -29295,7 +29298,11 @@ def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
         )
         for unit, unit_path in zip(STORAGE_UNIT_TABLE, paths, strict=True)
     }
+    # The profile's machine: the simulator refuses a shape it cannot run.
     memory = create_address_space(
+        topology=Topology(
+            full_cores=profile.full_cores, clusters=profile.clusters,
+        ),
         bank0_size=DEFAULT_RAM_KIB << 10,
         external_size=profile.default_ext_mem_mib << 20,
         vram_size=DEFAULT_VRAM_MIB << 20,
@@ -29315,6 +29322,7 @@ def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
             terminal_cols=DESKTOP_ACCEPTANCE_COLS,
             terminal_rows=DESKTOP_ACCEPTANCE_ROWS,
             runtime=runtime,
+            session=profile.session_entry is not None,
         )
     except (KeyboardInterrupt, SystemExit):
         raise
@@ -30567,7 +30575,15 @@ def _profile_machine_shape(
             "a machine needs a positive full-core count and no negative "
             "cluster count"
         )
-    if backend in SEMANTIC_BACKENDS and shape != (1, 0):
+    if backend == "simulator":
+        from simulator.cores import MAX_FULL_CORES
+
+        if shape[0] > MAX_FULL_CORES or shape[1] != 0:
+            raise ValueError(
+                f"the simulator runs 1 to {MAX_FULL_CORES} full cores and no "
+                "micro-core cluster"
+            )
+    elif backend in SEMANTIC_BACKENDS and shape != (1, 0):
         raise ValueError(
             f"the {backend} backend is one full core with no micro-core "
             "cluster"
@@ -36527,6 +36543,8 @@ def _session_server_command(
             "--rows",
             str(rows),
         ]
+        if backend == "simulator":
+            command.extend(("--cores", str(full_cores)))
         command.extend(_rich_terminal_server_arguments(profile))
         command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
         if profile_dir is not None:
