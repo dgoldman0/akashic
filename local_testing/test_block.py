@@ -1083,6 +1083,38 @@ def test_encode_reports_overflow():
     check("an item too big reports 0 and spares its caller", lines,
           "tx=0 blk=0 ok=-1 len=2 bytes=129 7 ")
 
+# The byte-string case: a 60,000-byte string encoded whole and into 1,000
+# bytes, within a budget of steps.
+CBOR_COPY_LINES = [
+    '60000 XMEM-ALLOT CONSTANT _SRC  70000 XMEM-ALLOT CONSTANT _DST',
+    ': _FILL  60000 0 DO I _SRC I + C! LOOP ;  _FILL',
+    ': _T  _DST 70000 CBOR-RESET  _SRC 60000 CBOR-BSTR',
+    '  ." ok=" CBOR-OK? .  ." size=" CBOR-SIZE .  ." len=" CBOR-RESULT NIP .',
+    '  ." head=" _DST C@ . _DST 1+ C@ . _DST 2 + C@ .',
+    '  ." same=" _SRC 60000 _DST 3 + 60000 COMPARE 0= .',
+    '  _DST 70000 0 FILL  _DST 1000 CBOR-RESET  _SRC 60000 CBOR-BSTR',
+    '  ." ok2=" CBOR-OK? .  ." size2=" CBOR-SIZE .  ." len2=" CBOR-RESULT NIP .',
+    '  ." same2=" _SRC 997 _DST 3 + 997 COMPARE 0= .',
+    '  ." past=" _DST 1000 + C@ . CR ;  _T',
+]
+
+def test_cbor_byte_string_copies_whole():
+    """CBOR-BSTR moves a byte string into its buffer whole.
+
+    The encoder copied a byte string one byte at a time through _CB-EMIT,
+    274 steps a byte, so the two encodings here took 32.9 million steps,
+    and at that rate a transaction's SPHINCS+ signature, 7,856 bytes, took
+    about 2.2 million.  It moves the part that fits with CMOVE now, 40
+    thousand steps for both encodings, and drops and counts the rest as
+    before: the bytes, the size and the overflow flag are what they were.
+    The program's budget, 12 million steps, holds the copy and not the
+    byte loop."""
+    print("\n=== CBOR-BSTR of 60,000 bytes ===")
+    check("a byte string encodes whole, byte for byte", CBOR_COPY_LINES,
+          "ok=-1 size=60003 len=60003 head=89 234 96 same=-1 "
+          "ok2=0 size2=60003 len2=1000 same2=-1 past=0 ",
+          max_steps=12_000_000)
+
 def test_chain_history_b09():
     """B09: CHAIN-HISTORY raised to 256."""
     print("\n=== B09: CHAIN-HISTORY = 256 ===")
