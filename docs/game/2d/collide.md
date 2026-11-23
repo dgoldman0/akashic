@@ -40,7 +40,19 @@ terrain types).
 ```
 
 Allocate a collision map descriptor (24 bytes) and a byte buffer
-(`w × h` bytes).  All tiles are initialized to 0 (passable).
+(`w × h` bytes).  All tiles are initialized to 0 (passable).  A failed
+allocation aborts.
+
+#### CMAP-NEW?
+
+```
+( w h -- cmap ior )
+```
+
+`CMAP-NEW` for a caller that answers running out of memory itself, as
+the map reader does for a map a player wrote: the map and 0, or 0 and
+the ior of the allocation that failed, with nothing left allocated.
+Both sizes must be at least 1.
 
 #### CMAP-FREE
 
@@ -207,6 +219,7 @@ Offset  Size  Field
 | Word | Stack | Description |
 |------|-------|-------------|
 | `CMAP-NEW` | `( w h -- cmap )` | Allocate collision map |
+| `CMAP-NEW?` | `( w h -- cmap ior )` | The same, answering failure |
 | `CMAP-FREE` | `( cmap -- )` | Free collision map |
 | `CMAP-SET` | `( cmap col row val -- )` | Set tile value |
 | `CMAP-GET` | `( cmap col row -- val )` | Get tile value |
