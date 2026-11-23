@@ -451,7 +451,11 @@ collision map holds shelves and desks, and saves keep a night in the home. The
 camera stays idle while a room fits the board. Lamp light keeps a fog layer of
 its own, recomputed only on the turns a lamp is lit, refilled or gutters, so
 lamps cost only those turns and the hand lamp's reveal is the cost every turn
-pays.
+pays. The inkmites' distance field follows the same rule, since stage 2
+measured it at 1.2 million cycles over the board: it is recomputed only when a
+folio moves or the lamp light changes, and the inkmites answer the hand lamp
+apart from it, fleeing when its light reaches them. Stage 5's balance runs
+check that this flight reads clearly to the player.
 
 The board is one `TGRID` of 24 by 12 tiles, two cells each, so 48 by 12 cells:
 the archivist is the current item, dark tiles are unavailable and show what
@@ -639,8 +643,10 @@ rich frame in guest steps on the simulator, as the frames plan measures
 frames, converted at the emulator's ratio of cycles to steps for the same
 code. That measurement decides whether stage 4b runs, since the text grid at
 present validates and draws every item whenever its model changes. It also
-decides whether `FOG-REVEAL` gets a speed pass of 0.5 to 1 hour: after stage
-1 a reveal costs about 3,250 cycles for each tile it scans.
+decides whether `FOG-REVEAL` gets a speed pass of 0.5 to 1 hour, since after
+stage 1 a reveal costs about 3,250 cycles for each tile it scans, and whether
+the A\* distance field, 1.2 million cycles over the board after stage 2, gets
+one.
 
 **Stage 4b**, if taken, registers a partial drawer for `TGRID` through
 `WDG-PARTIAL!` and validates a new bank against the bound one only where items
