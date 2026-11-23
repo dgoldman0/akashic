@@ -206,7 +206,11 @@ CBOR-SKIP  ( -- )
 
 Skip one complete CBOR data item, including nested arrays, maps,
 and tagged items, with the same checks as the words that read them.
-Each level of nesting adds one call of `CBOR-SKIP` to the return stack.
+`CBOR-SKIP` keeps one count of the items still to skip instead of
+recursing into each level: an array adds its items, a map its keys and
+values, and a tag the item it tags.  Nesting therefore costs no return
+stack, however deep a hostile input goes, and since every pass reads an
+item's head, the passes are bounded by the input's length.
 
 ---
 

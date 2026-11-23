@@ -97,6 +97,8 @@ TRUNCATED = {
         bytes([0xBB, 0x7F]) + bytes([0xFF] * 7), "CBOR-SKIP", []),
     "skip through a truncated nested string": (
         bytes([0x81, 0x45, 0x61]), "CBOR-SKIP", []),
+    "skip of nested arrays holding more items than bytes": (
+        bytes([0x82, 0x82, 0x82, 0x00]), "CBOR-SKIP", []),
     "tag with no item after it": (bytes([0xC1]), "CBOR-NEXT-TAG .", [0]),
     "read from an empty input": (b"", "CBOR-NEXT-UINT .", [0]),
     "skip at the end of the input": (b"", "CBOR-SKIP", []),
@@ -148,3 +150,24 @@ def test_the_error_lasts_until_the_next_parse_and_travels_with_the_cursors(forth
     assert ints(lines[0]) == [0, 0, 0, -1]
     assert ints(lines[1]) == [-1, 0, 5, -1, -1]
     assert ints(lines[2]) == [5, -1, 0, -1]
+
+
+def test_a_skip_counts_items_instead_of_recursing(forth):
+    depth = 100_000
+    lines = run(forth, [
+        # A map holding a tagged integer and a string skips whole, and the
+        # item after it is the next one read.
+        given(bytes([0xA1, 0x01, 0x82, 0xC1, 0x02, 0x63, 0x61, 0x62, 0x63, 0x05]))
+        + "CBOR-SKIP CBOR-NEXT-UINT . T-STATE. CR",
+        # 100,000 nested one-item arrays around one integer.  A skip that
+        # recursed once a level ran out of return stack here; cut short
+        # before the integer, the same nesting is a decode error.
+        f"VARIABLE T-DEEP  {depth + 1} ALLOCATE DROP T-DEEP !",
+        f"T-DEEP @ {depth} 129 FILL  0 T-DEEP @ {depth} + C!",
+        f"T-DEEP @ {depth + 1} CBOR-PARSE DROP CBOR-SKIP T-STATE. CR",
+        f"T-DEEP @ {depth} CBOR-PARSE DROP CBOR-SKIP T-STATE. CR",
+        "T-DEEP @ FREE",
+    ])
+    assert ints(lines[0]) == [5, -1, -1]
+    assert ints(lines[1]) == [-1, -1]
+    assert ints(lines[2]) == [0, -1]

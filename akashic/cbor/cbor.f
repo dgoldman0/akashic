@@ -351,24 +351,35 @@ VARIABLE _CB-BAD       \ decode error flag (TRUE once the input was malformed)
     DUP 245 = IF DROP -1 EXIT THEN
     244 <> IF _CB-FAIL THEN 0 ;
 
+\ _CB-LEFT+ ( left n -- left' )  Add n items to the count CBOR-SKIP still
+\   has to skip.  Every item takes a byte at least, so a count beyond the
+\   bytes left is a decode error and gives 0, which ends the skip.
+: _CB-LEFT+  ( left n -- left' )
+    +  DUP _CB-AVAIL U> IF DROP _CB-FAIL 0 THEN ;
+
 \ CBOR-SKIP ( -- )
 \   Skip one CBOR data item, with the arrays, maps and tagged items nested
-\   in it.  Each level of nesting adds one call of CBOR-SKIP.
+\   in it.  It keeps one count of the items still to skip instead of
+\   recursing into each level: an array adds its items to the count, a map
+\   its keys and values, and a tag the item it tags.  Nesting therefore
+\   costs no return stack however deep the input goes, and every pass reads
+\   a head, so the passes are bounded by the input's length.
 : CBOR-SKIP  ( -- )
-    _CB-HEAD SWAP                        ( n major )
-    DUP CBOR-MT-BSTR = OVER CBOR-MT-TSTR = OR IF
-        DROP _CB-STRING 2DROP EXIT      \ string: skip its bytes
-    THEN
-    DUP CBOR-MT-ARRAY = IF
-        DROP _CB-ITEMS 0 ?DO RECURSE LOOP EXIT
-    THEN
-    DUP CBOR-MT-MAP = IF
-        DROP _CB-PAIRS 2* 0 ?DO RECURSE LOOP EXIT
-    THEN
-    CBOR-MT-TAG = IF
-        DROP RECURSE EXIT               \ tag: skip the item it tags
-    THEN
-    DROP ;                              \ integer or simple: the head was all
+    1                                        ( left )
+    BEGIN DUP 0<> _CB-BAD @ 0= AND WHILE
+        1- _CB-HEAD SWAP                     ( left n major )
+        DUP CBOR-MT-BSTR = OVER CBOR-MT-TSTR = OR IF
+            DROP _CB-STRING 2DROP            \ string: its bytes
+        ELSE DUP CBOR-MT-ARRAY = IF
+            DROP _CB-ITEMS _CB-LEFT+         \ array: its items
+        ELSE DUP CBOR-MT-MAP = IF
+            DROP _CB-PAIRS 2* _CB-LEFT+      \ map: its keys and values
+        ELSE CBOR-MT-TAG = IF
+            DROP 1 _CB-LEFT+                 \ tag: the item it tags
+        ELSE
+            DROP                             \ integer or simple: the head
+        THEN THEN THEN THEN
+    REPEAT DROP ;
 
 \ =====================================================================
 \  Nesting — Saving and Restoring the Cursors
