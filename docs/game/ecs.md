@@ -106,7 +106,10 @@ Return TRUE if entity `eid` is currently alive.
 
 Mark entity `eid` as having component `comp-id` and return
 the address of its component data slot.  The caller writes
-component fields at offsets from this address.
+component fields at offsets from this address.  A component
+attached anew starts zeroed, whatever an entity that held the
+slot before left there; attaching one already attached returns
+its data unchanged.
 
 ### ECS-DETACH
 
@@ -138,34 +141,39 @@ Return TRUE if entity `eid` has component `comp-id` attached.
 
 ## Iteration
 
+Each iteration keeps its ECS, descriptors, token and context on the
+data stack, under the callback's arguments, so a callback may
+iterate again, over the same ECS or another, and may kill the
+entity it was given.  The context cell `ctx` reaches every call
+unchanged, so a caller hands its state to the callback without a
+global.
+
 ### ECS-EACH
 
 ```
-( ecs comp-id xt -- )
+( ecs comp-id xt ctx -- )
 ```
 
 Call `xt` for every alive entity that has `comp-id` attached.
 The callback signature is:
 
 ```
-xt: ( eid comp-addr -- )
+xt: ( eid comp-addr ctx -- )
 ```
 
 ### ECS-EACH2
 
 ```
-( ecs c1 c2 xt -- )
+( ecs c1 c2 xt ctx -- )
 ```
 
 Call `xt` for every alive entity that has **both** `c1` and `c2`
-attached.  The callback receives:
+attached.  The callback receives the two addresses in the
+components' order:
 
 ```
-xt: ( eid c2-addr c1-addr -- )
+xt: ( eid c1-addr c2-addr ctx -- )
 ```
-
-> **Note:** addresses are pushed in reverse argument order — `c2`
-> address first, then `c1`.
 
 ---
 
@@ -234,8 +242,8 @@ Return the maximum entity capacity.
 | `ECS-DETACH`   | `( ecs eid cid -- )`             | Detach component         |
 | `ECS-GET`      | `( ecs eid cid -- addr\|0 )`    | Get component or 0       |
 | `ECS-HAS?`     | `( ecs eid cid -- ? )`           | Has component?           |
-| `ECS-EACH`     | `( ecs cid xt -- )`              | Iterate one component    |
-| `ECS-EACH2`    | `( ecs c1 c2 xt -- )`           | Iterate two components   |
+| `ECS-EACH`     | `( ecs cid xt ctx -- )`          | Iterate one component    |
+| `ECS-EACH2`    | `( ecs c1 c2 xt ctx -- )`        | Iterate two components   |
 | `ECS-COUNT`    | `( ecs -- n )`                   | Count alive entities     |
 | `ECS-GEN`      | `( ecs eid -- gen )`             | Get generation           |
 | `ECS-MAX`      | `( ecs -- n )`                   | Get max capacity         |

@@ -251,6 +251,33 @@ _TF-FSM @ 0 0 1 FSM-TICK
 S" fsm:cond-guard-fires" T-NAME
 _TF-FSM @ FSM-CURRENT _TF-IDLE @ T-ASSERT
 
+\ --- Test: a guard ticks another machine mid-scan ---
+\ M1 has two transitions from its first state: a guard that ticks M2 and
+\ declines, then one that always fires.  M1 must reach its third state
+\ and M2 its second, with M2's tick callback run once.
+VARIABLE _TF-M1  VARIABLE _TF-M2
+VARIABLE _TF-M2-TICKS  0 _TF-M2-TICKS !
+: _TF-M2-TICK  ( eid ecs dt -- )  DROP 2DROP 1 _TF-M2-TICKS +! ;
+: _TF-G-NESTS  ( eid ecs -- flag )  2DROP _TF-M2 @ 7 0 1 FSM-TICK 0 ;
+FSM-NEW _TF-M1 !  FSM-NEW _TF-M2 !
+_TF-M1 @ S" a" 0 0 0 FSM-STATE DROP
+_TF-M1 @ S" b" 0 0 0 FSM-STATE DROP
+_TF-M1 @ S" c" 0 0 0 FSM-STATE DROP
+_TF-M1 @ 0 1 ' _TF-G-NESTS FSM-TRANSITION
+_TF-M1 @ 0 2 ' _TF-GUARD-ALWAYS FSM-TRANSITION
+_TF-M2 @ S" x" 0 ' _TF-M2-TICK 0 FSM-STATE DROP
+_TF-M2 @ S" y" 0 ' _TF-M2-TICK 0 FSM-STATE DROP
+_TF-M2 @ 0 1 ' _TF-GUARD-ALWAYS FSM-TRANSITION
+_TF-M1 @ 0 FSM-START  _TF-M2 @ 0 FSM-START
+_TF-M1 @ 1 0 1 FSM-TICK
+S" fsm:nested-scan-outer-fires-next" T-NAME
+_TF-M1 @ FSM-CURRENT 2 T-ASSERT
+S" fsm:nested-scan-inner-moved" T-NAME
+_TF-M2 @ FSM-CURRENT 1 T-ASSERT
+S" fsm:nested-scan-inner-ticked-once" T-NAME
+_TF-M2-TICKS @ 1 T-ASSERT
+_TF-M1 @ FSM-FREE  _TF-M2 @ FSM-FREE
+
 \ --- Test: FSM-FREE ---
 S" fsm:free-no-crash" T-NAME
 _TF-FSM @ FSM-FREE -1 T-TRUE

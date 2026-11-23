@@ -53,7 +53,7 @@ REQUIRE components.f
 16 CONSTANT _SR-O-COUNT
 32 CONSTANT _SR-DESC-SZ
 
-0  CONSTANT _SR-E-XT
+0  CONSTANT _SR-E-XT  ( holds: xt( ecs dt -- ) )
 8  CONSTANT _SR-E-PRI
 16 CONSTANT _SR-E-ENABLED
 24 CONSTANT _SR-ENTRY-SZ
@@ -131,23 +131,20 @@ VARIABLE _SR-TMP
 \ =====================================================================
 \  §4 — Tick
 \ =====================================================================
-
-VARIABLE _SR-TICK-DT
+\
+\  The runner, the step and the loop stay on the stacks, so a system may
+\  tick another runner.
 
 : SYSRUN-TICK  ( runner dt -- )
-    _SR-TICK-DT !                        \ ( runner )
-    DUP _SR-O-COUNT + @ 0 ?DO
-        DUP _SR-O-ENTRIES + @
-        I _SR-ENTRY-SZ * +              \ ( runner entry )
+    OVER _SR-O-COUNT + @ 0 ?DO
+        OVER _SR-O-ENTRIES + @ I _SR-ENTRY-SZ * +   \ ( runner dt entry )
         DUP _SR-E-ENABLED + @ IF
-            DUP _SR-E-XT + @            \ ( runner entry xt )
-            2 PICK _SR-O-ECS + @        \ ( runner entry xt ecs )
-            _SR-TICK-DT @               \ ( runner entry xt ecs dt )
-            ROT EXECUTE                  \ xt( ecs dt -- )
+            _SR-E-XT + @ 2 PICK _SR-O-ECS + @ 2 PICK ROT EXECUTE
+        ELSE
+            DROP
         THEN
-        DROP                             \ ( runner )
     LOOP
-    DROP ;
+    2DROP ;
 
 \ =====================================================================
 \  §5 — Enable / Disable / Count
@@ -181,75 +178,44 @@ VARIABLE SYS-C-TMR
 \ =====================================================================
 \  §7 — Built-in: SYS-VELOCITY
 \ =====================================================================
+\
+\  Each built-in system hands its step, or its ECS, to the per-entity
+\  word as the iteration's context.
 
-VARIABLE _SYS-DT
-
-: _SYS-VEL-STEP  ( eid pos-addr vel-addr -- )
-    \ x' = x + dx * dt
-    OVER C-POS.X + @                     \ ( eid pos vel  x )
-    OVER C-VEL.DX + @                   \ ( eid pos vel  x dx )
-    _SYS-DT @ * +                        \ ( eid pos vel  x' )
-    2 PICK C-POS.X + !                  \ ( eid pos vel )
-    \ y' = y + dy * dt
-    OVER C-POS.Y + @
-    OVER C-VEL.DY + @
-    _SYS-DT @ * +
-    2 PICK C-POS.Y + !                  \ ( eid pos vel )
-    DROP 2DROP ;
-
-VARIABLE _SYS-VEL-XT
-' _SYS-VEL-STEP _SYS-VEL-XT !
+: _SYS-VEL-STEP  ( eid pos-addr vel-addr dt -- )
+    >R
+    DUP C-VEL.DX + @ R@ * 2 PICK C-POS.X + +!
+    C-VEL.DY + @ R> * SWAP C-POS.Y + +!
+    DROP ;
 
 : SYS-VELOCITY  ( ecs dt -- )
-    _SYS-DT !
-    SYS-C-VEL @ SYS-C-POS @
-    _SYS-VEL-XT @ ECS-EACH2 ;
+    >R SYS-C-POS @ SYS-C-VEL @ ['] _SYS-VEL-STEP R> ECS-EACH2 ;
 
 \ =====================================================================
 \  §8 — Built-in: SYS-TIMER
 \ =====================================================================
 
-: _SYS-TMR-STEP  ( eid tmr-addr -- )
-    DUP C-TMR.TICKS + @ _SYS-DT @ -    \ ( eid tmr remaining )
+: _SYS-TMR-STEP  ( eid tmr-addr dt -- )
+    OVER C-TMR.TICKS + @ SWAP -              \ ( eid tmr remaining )
     DUP 0> IF
-        OVER C-TMR.TICKS + !            \ ( eid tmr )
-        2DROP
-    ELSE
-        DROP                             \ ( eid tmr )
-        0 OVER C-TMR.TICKS + !
-        C-TMR.XT + @                    \ ( eid xt|0 )
-        ?DUP IF EXECUTE ELSE DROP THEN
-    THEN ;
-
-VARIABLE _SYS-TMR-XT
-' _SYS-TMR-STEP _SYS-TMR-XT !
+        SWAP C-TMR.TICKS + ! DROP EXIT
+    THEN
+    DROP 0 OVER C-TMR.TICKS + !
+    C-TMR.XT + @ ?DUP IF EXECUTE ELSE DROP THEN ;
 
 : SYS-TIMER  ( ecs dt -- )
-    _SYS-DT !
-    SYS-C-TMR @
-    _SYS-TMR-XT @ ECS-EACH ;
+    >R SYS-C-TMR @ ['] _SYS-TMR-STEP R> ECS-EACH ;
 
 \ =====================================================================
 \  §9 — Built-in: SYS-CULL-DEAD
 \ =====================================================================
 
-VARIABLE _SYS-CULL-ECS
-
-: _SYS-CULL-STEP  ( eid hp-addr -- )
-    C-HP.CUR + @ 0> 0= IF
-        _SYS-CULL-ECS @ SWAP ECS-KILL
-    ELSE
-        DROP
-    THEN ;
-
-VARIABLE _SYS-CULL-XT
-' _SYS-CULL-STEP _SYS-CULL-XT !
+: _SYS-CULL-STEP  ( eid hp-addr ecs -- )
+    SWAP C-HP.CUR + @ 0> IF 2DROP EXIT THEN
+    SWAP ECS-KILL ;
 
 : SYS-CULL-DEAD  ( ecs dt -- )
-    DROP
-    DUP _SYS-CULL-ECS !
-    SYS-C-HP @
-    _SYS-CULL-XT @ ECS-EACH ;
+    DROP DUP SYS-C-HP @ ['] _SYS-CULL-STEP ROT ECS-EACH ;
 
 \ =====================================================================
 \  §10 — Concurrency Guards

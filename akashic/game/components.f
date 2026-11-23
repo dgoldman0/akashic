@@ -76,7 +76,7 @@ REQUIRE ecs.f
 \ =====================================================================
 
 0 CONSTANT C-TMR.TICKS
-8 CONSTANT C-TMR.XT
+8 CONSTANT C-TMR.XT  ( holds: xt( eid -- ) )
 16 CONSTANT C-TMR-SZ
 
 \ =====================================================================

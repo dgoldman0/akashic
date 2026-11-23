@@ -74,12 +74,16 @@ disable one-way platforms.
 ```
 
 Register a collision callback.  The callback is called whenever
-movement is blocked by a solid tile:
+movement is blocked by a solid tile, with the mover and the tile it
+struck:
 
 ```
-xt signature: ( eid tile-x tile-y tile-val -- )
+xt signature: ( phys eid ecs tile-x tile-y tile-val -- )
 ```
 
+A move keeps its mover and position on the stacks, so the callback may
+move other entities with `TPHYS-MOVE`, through the same physics or
+another; the mover's own move finishes afterwards from where it stood.
 Set XT to 0 to disable callbacks.
 
 ---

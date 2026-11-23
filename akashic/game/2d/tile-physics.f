@@ -6,6 +6,11 @@
 \  gravity, one-way platforms, and per-collision callbacks.  Works
 \  on the collision map from game/collide.f.
 \
+\  A move keeps its mover and position on the stacks, so a collision
+\  callback may move other entities, through the same physics or
+\  another.  The callback receives the mover and the tile it struck:
+\    ( phys eid ecs tile-x tile-y tile-val -- )
+\
 \  Physics Descriptor (40 bytes, 5 cells):
 \    +0   cmap        Collision map pointer
 \    +8   grav-x      Gravity X per tick (0 for top-down)
@@ -29,6 +34,8 @@
 
 PROVIDED akashic-game-2d-tile-physics
 
+( kind: tphys-collide xt( phys eid ecs tile-x tile-y tile-val -- ) )
+
 REQUIRE ../ecs.f
 REQUIRE ../components.f
 REQUIRE collide.f
@@ -40,7 +47,7 @@ REQUIRE collide.f
  0 CONSTANT _TPHYS-O-CMAP
  8 CONSTANT _TPHYS-O-GX
 16 CONSTANT _TPHYS-O-GY
-24 CONSTANT _TPHYS-O-ONCOL
+24 CONSTANT _TPHYS-O-ONCOL  ( holds: tphys-collide )
 32 CONSTANT _TPHYS-O-ONEWAY
 40 CONSTANT _TPHYS-DESC-SZ
 
@@ -76,122 +83,83 @@ REQUIRE collide.f
 \  §4 — Movement Internals
 \ =====================================================================
 
-VARIABLE _TPHYS-TMP    \ phys pointer during MOVE
-VARIABLE _TPHYS-EID
-VARIABLE _TPHYS-ECS
-
-\ _TPHYS-POS ( -- x y )  Read entity position from ECS
-: _TPHYS-POS  ( -- x y )
-    _TPHYS-ECS @ _TPHYS-EID @ SYS-C-POS @ ECS-GET
+\ The mover's position, from its position component
+: _TPHYS-POS@  ( phys eid ecs -- x y )
+    ROT DROP SWAP SYS-C-POS @ ECS-GET
     DUP 0= ABORT" TPHYS: no pos"
-    DUP C-POS.X + @
-    SWAP C-POS.Y + @ ;
+    DUP C-POS.X + @ SWAP C-POS.Y + @ ;
 
-\ _TPHYS-SET-POS ( x y -- )  Write entity position
-: _TPHYS-SET-POS  ( x y -- )
-    _TPHYS-ECS @ _TPHYS-EID @ SYS-C-POS @ ECS-GET
+: _TPHYS-POS!  ( phys eid ecs x y -- )
+    2>R ROT DROP SWAP SYS-C-POS @ ECS-GET
     DUP 0= ABORT" TPHYS: no pos"
-    >R
-    R@ C-POS.Y + !
-    R> C-POS.X + ! ;
+    2R> ROT TUCK C-POS.Y + ! C-POS.X + ! ;
 
-\ _TPHYS-SOLID? ( x y -- flag )  Check collision map at tile (x,y)
-: _TPHYS-SOLID?  ( x y -- flag )
-    _TPHYS-TMP @ _TPHYS-O-CMAP + @ -ROT CMAP-SOLID? ;
+: _TPHYS-SOLID?  ( phys x y -- flag )
+    ROT _TPHYS-O-CMAP + @ -ROT CMAP-SOLID? ;
 
-\ _TPHYS-ONEWAY? ( x y -- flag )  Is tile a one-way platform?
-: _TPHYS-ONEWAY?  ( x y -- flag )
-    _TPHYS-TMP @ _TPHYS-O-ONEWAY + @ 0= IF 2DROP 0 EXIT THEN
-    _TPHYS-TMP @ _TPHYS-O-CMAP + @ -ROT CMAP-GET
-    _TPHYS-TMP @ _TPHYS-O-ONEWAY + @ = ;
+: _TPHYS-TILE-VAL  ( phys x y -- val )
+    ROT _TPHYS-O-CMAP + @ -ROT CMAP-GET ;
 
-\ _TPHYS-TILE-VAL ( x y -- val )  Read tile collision value
-: _TPHYS-TILE-VAL  ( x y -- val )
-    _TPHYS-TMP @ _TPHYS-O-CMAP + @ -ROT CMAP-GET ;
+\ Is tile (x,y) a one-way platform?
+: _TPHYS-ONE-WAY?  ( phys x y -- flag )
+    2 PICK _TPHYS-O-ONEWAY + @ ?DUP 0= IF 2DROP DROP FALSE EXIT THEN
+    >R _TPHYS-TILE-VAL R> = ;
 
-\ _TPHYS-FIRE ( tile-x tile-y tile-val -- )
-\   Fire collision callback: ( eid tile-x tile-y tile-val -- ).
-VARIABLE _TPHYS-FV
+\ Does tile (x,y) stop a sideways step?  Solid tiles do, unless one-way.
+: _TPHYS-WALL?  ( phys x y -- flag )
+    2 PICK 2 PICK 2 PICK _TPHYS-SOLID? 0= IF 2DROP DROP FALSE EXIT THEN
+    _TPHYS-ONE-WAY? 0= ;
 
-: _TPHYS-FIRE  ( x y val -- )
-    _TPHYS-TMP @ _TPHYS-O-ONCOL + @ ?DUP IF
-        >R _TPHYS-FV !                ( x y  R: xt )
-        _TPHYS-EID @ -ROT             ( eid x y  R: xt )
-        _TPHYS-FV @                    ( eid x y val  R: xt )
-        R> EXECUTE
+\ Does tile (x,ny) stop a vertical step of dy?  Solid tiles do, except
+\ that a one-way platform stops only a step down.
+: _TPHYS-STOPS-Y?  ( phys x ny dy -- flag )
+    >R 2 PICK 2 PICK 2 PICK _TPHYS-SOLID? 0= IF
+        2DROP DROP R> DROP FALSE EXIT
+    THEN
+    _TPHYS-ONE-WAY? IF R> 0> ELSE R> DROP TRUE THEN ;
+
+\ Fire the collision callback for the mover and tile (x,y).
+: _TPHYS-FIRE  ( phys eid ecs x y -- )
+    4 PICK _TPHYS-O-ONCOL + @ ?DUP 0= IF 2DROP 2DROP DROP EXIT THEN
+    >R 4 PICK 2 PICK 2 PICK _TPHYS-TILE-VAL R> EXECUTE ;
+
+\ The sideways step: a wall fires the callback and keeps the old x.
+: _TPHYS-STEP-X  ( phys eid ecs x y dx -- phys eid ecs x' y )
+    2 PICK + OVER                                ( phys eid ecs x y nx y )
+    6 PICK 2 PICK 2 PICK _TPHYS-WALL? IF
+        6 PICK 6 PICK 6 PICK 4 PICK 4 PICK _TPHYS-FIRE
+        2DROP
     ELSE
-        DROP 2DROP
+        DROP ROT DROP SWAP
     THEN ;
 
-\ _TPHYS-TRY-MOVE ( cur-x cur-y dx dy -- new-x new-y )
-\   Attempt horizontal then vertical movement with wall sliding.
-\   Fires collision callback on each blocked axis.
-VARIABLE _TPHYS-CX  VARIABLE _TPHYS-CY
-VARIABLE _TPHYS-DX  VARIABLE _TPHYS-DY
-VARIABLE _TPHYS-NX  VARIABLE _TPHYS-NY
-
-: _TPHYS-TRY-MOVE  ( cur-x cur-y dx dy -- new-x new-y )
-    _TPHYS-DY !  _TPHYS-DX !  _TPHYS-CY !  _TPHYS-CX !
-    _TPHYS-CX @ _TPHYS-DX @ + _TPHYS-NX !
-    _TPHYS-CY @ _TPHYS-DY @ + _TPHYS-NY !
-
-    \ ── Horizontal: test (nx, cy) ──
-    _TPHYS-NX @ _TPHYS-CY @ _TPHYS-SOLID? IF
-        _TPHYS-NX @ _TPHYS-CY @ _TPHYS-ONEWAY? IF
-            \ One-way: passable horizontally — keep nx
-        ELSE
-            \ Blocked: fire callback, revert to old x
-            _TPHYS-NX @ _TPHYS-CY @
-            2DUP _TPHYS-TILE-VAL _TPHYS-FIRE
-            _TPHYS-CX @ _TPHYS-NX !
-        THEN
-    THEN
-
-    \ ── Vertical: test (nx, ny) ──
-    _TPHYS-NX @ _TPHYS-NY @ _TPHYS-SOLID? IF
-        _TPHYS-NX @ _TPHYS-NY @ _TPHYS-ONEWAY? IF
-            \ One-way: block only downward (dy > 0)
-            _TPHYS-DY @ 0> IF
-                _TPHYS-NX @ _TPHYS-NY @
-                2DUP _TPHYS-TILE-VAL _TPHYS-FIRE
-                _TPHYS-CY @ _TPHYS-NY !
-            THEN
-        ELSE
-            \ Solid: fire callback, revert to old y
-            _TPHYS-NX @ _TPHYS-NY @
-            2DUP _TPHYS-TILE-VAL _TPHYS-FIRE
-            _TPHYS-CY @ _TPHYS-NY !
-        THEN
-    THEN
-
-    _TPHYS-NX @ _TPHYS-NY @ ;
+\ The vertical step: a stop fires the callback and keeps the old y.
+: _TPHYS-STEP-Y  ( phys eid ecs x y dy -- phys eid ecs x y' )
+    2DUP + SWAP                                  ( phys eid ecs x y ny dy )
+    6 PICK 4 PICK 3 PICK 3 PICK _TPHYS-STOPS-Y? IF
+        DROP >R 4 PICK 4 PICK 4 PICK 4 PICK R> _TPHYS-FIRE
+    ELSE
+        DROP NIP
+    THEN ;
 
 \ =====================================================================
 \  §5 — Public Movement API
 \ =====================================================================
 
+\ TPHYS-MOVE ( phys eid ecs dx dy -- rx ry )
+\   Step sideways, then vertically, sliding along walls, and return the
+\   position reached.
 : TPHYS-MOVE  ( phys eid ecs dx dy -- rx ry )
-    2>R                                ( phys eid ecs  R: dx dy )
-    ROT _TPHYS-TMP !
-    _TPHYS-ECS !
-    _TPHYS-EID !
-    _TPHYS-POS                         ( cx cy  R: dx dy )
-    2R>                                ( cx cy dx dy )
-    _TPHYS-TRY-MOVE                    ( nx ny )
-    2DUP _TPHYS-SET-POS ;             ( rx ry )
+    2>R 2 PICK 2 PICK 2 PICK _TPHYS-POS@         ( phys eid ecs x y  R: dx dy )
+    2R> >R _TPHYS-STEP-X                         ( phys eid ecs x y  R: dy )
+    R> _TPHYS-STEP-Y
+    2DUP 2>R _TPHYS-POS! 2R> ;
 
 : TPHYS-GROUNDED?  ( phys eid ecs -- flag )
-    ROT _TPHYS-TMP !
-    _TPHYS-ECS !  _TPHYS-EID !
-    _TPHYS-POS                         ( x y )
-    1+                                 \ tile below
-    _TPHYS-SOLID? ;
+    2 PICK >R _TPHYS-POS@ 1+ R> -ROT _TPHYS-SOLID? ;
 
 : TPHYS-APPLY-GRAV  ( phys eid ecs -- rx ry )
-    ROT DUP >R -ROT                    ( phys eid ecs  R: phys )
-    R@ _TPHYS-O-GX + @                ( phys eid ecs gx  R: phys )
-    R> _TPHYS-O-GY + @                ( phys eid ecs gx gy )
-    TPHYS-MOVE ;
+    2 PICK DUP _TPHYS-O-GX + @ SWAP _TPHYS-O-GY + @ TPHYS-MOVE ;
 
 \ =====================================================================
 \  §6 — Concurrency Guards

@@ -70,7 +70,8 @@ Enabled by default.  ABORTs if 16 systems are already registered.
 ```
 
 Execute all enabled systems in priority order, passing each
-`( ecs dt -- )`.
+`( ecs dt -- )`.  The tick keeps the runner, the step and its place
+on the stacks, so a system may tick another runner.
 
 ---
 
@@ -127,7 +128,9 @@ Store all four component IDs in one call.
 
 ## Built-in Systems
 
-All built-in systems have the signature `( ecs dt -- )`.
+All built-in systems have the signature `( ecs dt -- )`.  Each hands
+its step, or its ECS, to its per-entity word as the iteration's
+context, so the systems keep no state between calls.
 
 ### SYS-VELOCITY
 

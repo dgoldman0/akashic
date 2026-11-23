@@ -257,8 +257,8 @@ VARIABLE _TP-CB-TY      0 _TP-CB-TY !
 VARIABLE _TP-CB-TV      0 _TP-CB-TV !
 VARIABLE _TP-CB-COUNT   0 _TP-CB-COUNT !
 
-: _TP-CB  ( eid tile-x tile-y tile-val -- )
-    _TP-CB-TV !  _TP-CB-TY !  _TP-CB-TX !  _TP-CB-EID !
+: _TP-CB  ( phys eid ecs tile-x tile-y tile-val -- )
+    _TP-CB-TV !  _TP-CB-TY !  _TP-CB-TX !  DROP _TP-CB-EID !  DROP
     _TP-CB-COUNT @ 1+ _TP-CB-COUNT ! ;
 
 VARIABLE _TP-CB-XT
@@ -320,6 +320,27 @@ SWAP 5 T-ASSERT 6 T-ASSERT
 _TP-CM 5 6 0 CMAP-SET
 _TP-PH 0 TPHYS-ONE-WAY!
 _TP-PH 0 0 TPHYS-GRAVITY!
+
+\ ── 1.10 A collision callback moves another entity ──
+\ The mover strikes the left wall; its callback pushes a second entity
+\ one tile right through the same physics.  The mover keeps its own
+\ position and the second entity moves.
+VARIABLE _TP-PUSHED
+: _TP-PUSH-CB  ( phys eid ecs tile-x tile-y tile-val -- )
+    2DROP DROP NIP _TP-PUSHED @ SWAP 1 0 TPHYS-MOVE 2DROP ;
+1 3 _T-MAKE-ENT CONSTANT _TP-E9
+4 4 _T-MAKE-ENT DUP _TP-PUSHED ! CONSTANT _TP-E10
+_TP-PH ' _TP-PUSH-CB TPHYS-ON-COLLIDE
+
+S" tphys:callback-moves-another" T-NAME
+_TP-PH _TP-E9 _T-ECS -1 1 TPHYS-MOVE
+( rx ry )
+SWAP 1 T-ASSERT 4 T-ASSERT
+S" tphys:mover-position-kept" T-NAME
+_TP-E9 _T-ENT-X 1 =  _TP-E9 _T-ENT-Y 4 = AND T-TRUE
+S" tphys:pushed-entity-moved" T-NAME
+_TP-E10 _T-ENT-X 5 =  _TP-E10 _T-ENT-Y 4 = AND T-TRUE
+_TP-PH 0 TPHYS-ON-COLLIDE
 
 \ ══════════════════════════════════════════════════════════════
 \  §2 — pathfind.f Tests

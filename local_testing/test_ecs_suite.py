@@ -274,12 +274,13 @@ _IECS ECS-SPAWN CONSTANT _IE4
 VARIABLE _ITER-SUM   0 _ITER-SUM !
 VARIABLE _ITER-CNT   0 _ITER-CNT !
 
-: _ITER-CALLBACK  ( eid addr -- )
+: _ITER-CALLBACK  ( eid addr ctx -- )
+    1000 <> IF 0 _ITER-SUM ! THEN          \ the context arrives unchanged
     @ _ITER-SUM @ + _ITER-SUM !
     DROP
     _ITER-CNT @ 1+ _ITER-CNT ! ;
 
-_IECS _IC-VAL ' _ITER-CALLBACK ECS-EACH
+_IECS _IC-VAL ' _ITER-CALLBACK 1000 ECS-EACH
 
 S" ecs:each-count" T-NAME
 _ITER-CNT @ 3 T-ASSERT
@@ -316,13 +317,14 @@ _I2ECS _I2E2 _I2C-TAG ECS-ATTACH CONSTANT _I2E2-TAG
 VARIABLE _I2-SUM   0 _I2-SUM !
 VARIABLE _I2-CNT   0 _I2-CNT !
 
-: _I2-CALLBACK  ( eid pos-addr tag-addr -- )
+: _I2-CALLBACK  ( eid pos-addr tag-addr ctx -- )
+    DROP
     @ SWAP @ +
     _I2-SUM @ + _I2-SUM !
     DROP
     _I2-CNT @ 1+ _I2-CNT ! ;
 
-_I2ECS _I2C-POS _I2C-TAG ' _I2-CALLBACK ECS-EACH2
+_I2ECS _I2C-POS _I2C-TAG ' _I2-CALLBACK 0 ECS-EACH2
 
 S" ecs:each2-count" T-NAME
 _I2-CNT @ 2 T-ASSERT
@@ -330,6 +332,53 @@ _I2-CNT @ 2 T-ASSERT
 S" ecs:each2-sum" T-NAME
 \ E0: pos.x=5 + tag=7 = 12,  E2: pos.x=13 + tag=17 = 30 → total=42
 _I2-SUM @ 42 T-ASSERT
+
+\ The callback's addresses follow the components' order: c1's, then c2's.
+VARIABLE _I2-ORDER  0 _I2-ORDER !
+: _I2-ORDER-CB  ( eid pos-addr tag-addr ctx -- )
+    DROP @ SWAP @ 10 * + _I2-ORDER +! DROP ;
+_I2ECS _I2C-POS _I2C-TAG ' _I2-ORDER-CB 0 ECS-EACH2
+S" ecs:each2-address-order" T-NAME
+\ E0: 5*10+7 = 57, E2: 13*10+17 = 147
+_I2-ORDER @ 204 T-ASSERT
+
+\ ── Iteration nests ───────────────────────────────────────────
+\ A callback iterates again over another component: three entities with
+\ VAL and, for each, the two with TAG, so six pairs.
+VARIABLE _NEST-OUTER  0 _NEST-OUTER !
+VARIABLE _NEST-PAIRS  0 _NEST-PAIRS !
+: _NEST-INNER  ( eid addr ctx -- )  DROP 2DROP 1 _NEST-PAIRS +! ;
+: _NEST-OUTER-CB  ( eid addr ctx -- )
+    1 _NEST-OUTER +!
+    >R 2DROP R> _I2C-TAG ['] _NEST-INNER 0 ECS-EACH ;
+_IECS _IC-VAL ' _NEST-OUTER-CB _I2ECS ECS-EACH
+S" ecs:nested-each-outer-visits" T-NAME
+_NEST-OUTER @ 3 T-ASSERT
+S" ecs:nested-each-pairs" T-NAME
+_NEST-PAIRS @ 6 T-ASSERT
+
+\ Iterating the same ECS inside its own iteration
+0 _NEST-OUTER !  0 _NEST-PAIRS !
+: _NEST-SAME-CB  ( eid addr ctx -- )
+    1 _NEST-OUTER +!
+    >R 2DROP R> _IC-VAL ['] _NEST-INNER 0 ECS-EACH ;
+_IECS _IC-VAL ' _NEST-SAME-CB _IECS ECS-EACH
+S" ecs:nested-each-same-ecs" T-NAME
+_NEST-OUTER @ 3 = _NEST-PAIRS @ 9 = AND T-TRUE
+
+\ ── Attaching anew starts from zero ───────────────────────────
+32 ECS-NEW CONSTANT _ZECS
+_ZECS 16 ECS-REG-COMP CONSTANT _ZC
+_ZECS ECS-SPAWN CONSTANT _ZE0
+77 _ZECS _ZE0 _ZC ECS-ATTACH !
+S" ecs:reattach-keeps-data" T-NAME
+_ZECS _ZE0 _ZC ECS-ATTACH @ 77 T-ASSERT
+_ZECS _ZE0 ECS-KILL
+_ZECS ECS-SPAWN CONSTANT _ZE1
+S" ecs:respawn-reuses-slot-for-zero-test" T-NAME
+_ZE1 _ZE0 T-ASSERT
+S" ecs:attach-after-kill-is-zeroed" T-NAME
+_ZECS _ZE1 _ZC ECS-ATTACH DUP @ SWAP 8 + @ OR 0 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Components Module Tests
@@ -478,6 +527,25 @@ _SRUN 1 SYSRUN-TICK
 
 S" sys:re-enabled-runs" T-NAME
 _SYS-A-COUNT @ 1 T-ASSERT
+
+\ ── A system ticks another runner ─────────────────────────────
+\ The outer runner's first system ticks an inner runner with step 5;
+\ the outer runner's next system must still receive step 3.
+_SECS SYSRUN-NEW CONSTANT _SRUN-IN
+VARIABLE _SYS-IN-DT   0 _SYS-IN-DT !
+VARIABLE _SYS-OUT-DT  0 _SYS-OUT-DT !
+: _SYS-IN  ( ecs dt -- )  _SYS-IN-DT ! DROP ;
+: _SYS-NESTS  ( ecs dt -- )  2DROP _SRUN-IN 5 SYSRUN-TICK ;
+: _SYS-AFTER  ( ecs dt -- )  _SYS-OUT-DT ! DROP ;
+_SRUN-IN ' _SYS-IN 1 SYSRUN-ADD
+_SECS SYSRUN-NEW CONSTANT _SRUN-OUT
+_SRUN-OUT ' _SYS-NESTS 1 SYSRUN-ADD
+_SRUN-OUT ' _SYS-AFTER 2 SYSRUN-ADD
+_SRUN-OUT 3 SYSRUN-TICK
+S" sys:nested-tick-inner-step" T-NAME
+_SYS-IN-DT @ 5 T-ASSERT
+S" sys:nested-tick-outer-step" T-NAME
+_SYS-OUT-DT @ 3 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Built-in System Tests: SYS-VELOCITY

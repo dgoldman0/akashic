@@ -57,18 +57,22 @@ PROVIDED akashic-game-ai-fsm
 48 CONSTANT _FSM-O-CURRENT
 56 CONSTANT _FSM-DESC-SZ
 
+( kind: fsm-step xt( eid ecs -- ) )
+( kind: fsm-tick xt( eid ecs dt -- ) )
+( kind: fsm-guard xt( eid ecs -- flag ) )
+
 \ State descriptor offsets (40 bytes)
 0  CONSTANT _FSM-S-NAMEA
 8  CONSTANT _FSM-S-NAMEU
-16 CONSTANT _FSM-S-ENTER
-24 CONSTANT _FSM-S-TICK
-32 CONSTANT _FSM-S-LEAVE
+16 CONSTANT _FSM-S-ENTER  ( holds: fsm-step )
+24 CONSTANT _FSM-S-TICK  ( holds: fsm-tick )
+32 CONSTANT _FSM-S-LEAVE  ( holds: fsm-step )
 40 CONSTANT _FSM-STATE-SZ
 
 \ Transition descriptor offsets (24 bytes)
 0  CONSTANT _FSM-T-FROM
 8  CONSTANT _FSM-T-TO
-16 CONSTANT _FSM-T-GUARD
+16 CONSTANT _FSM-T-GUARD  ( holds: fsm-guard )
 24 CONSTANT _FSM-TRANS-SZ
 
 \ Defaults
@@ -170,88 +174,52 @@ VARIABLE _FSM-TR-GUARD
 \  §6 — Start / Tick / Current
 \ =====================================================================
 
+\ A state's on-enter or on-leave, if it has one
+: _FSM-ENTER  ( eid ecs state -- )
+    _FSM-S-ENTER + @ ?DUP IF EXECUTE ELSE 2DROP THEN ;
+
+: _FSM-LEAVE  ( eid ecs state -- )
+    _FSM-S-LEAVE + @ ?DUP IF EXECUTE ELSE 2DROP THEN ;
+
 \ FSM-START ( fsm state-id -- )
 \   Enter initial state.  Calls on-enter for that state with 0 0.
-VARIABLE _FSM-START-FSM
-VARIABLE _FSM-START-ID
 : FSM-START  ( fsm state-id -- )
-    _FSM-START-ID ! _FSM-START-FSM !
-    _FSM-START-ID @ _FSM-START-FSM @ _FSM-O-CURRENT + !
-    _FSM-START-FSM @ _FSM-START-ID @ _FSM-GET-STATE
-    _FSM-S-ENTER + @ DUP IF
-        0 0 ROT EXECUTE
-    ELSE
-        DROP
-    THEN ;
+    2DUP SWAP _FSM-O-CURRENT + !
+    _FSM-GET-STATE 0 0 ROT _FSM-ENTER ;
 
-\ Internal: perform a transition from current to to-id.
-VARIABLE _FSM-DO-FSM
-VARIABLE _FSM-DO-EID
-VARIABLE _FSM-DO-ECS
-VARIABLE _FSM-DO-TO
+\ Internal: leave the current state for to-id, calling on-leave and
+\ on-enter.
 : _FSM-DO-TRANSIT  ( fsm eid ecs to-id -- )
-    _FSM-DO-TO ! _FSM-DO-ECS ! _FSM-DO-EID ! _FSM-DO-FSM !
-    \ Call on-leave of current state
-    _FSM-DO-FSM @ DUP _FSM-O-CURRENT + @ _FSM-GET-STATE
-    _FSM-S-LEAVE + @ DUP IF
-        _FSM-DO-EID @ _FSM-DO-ECS @ ROT EXECUTE
-    ELSE
-        DROP
-    THEN
-    \ Set new current
-    _FSM-DO-TO @ _FSM-DO-FSM @ _FSM-O-CURRENT + !
-    \ Call on-enter of new state
-    _FSM-DO-FSM @ _FSM-DO-TO @ _FSM-GET-STATE
-    _FSM-S-ENTER + @ DUP IF
-        _FSM-DO-EID @ _FSM-DO-ECS @ ROT EXECUTE
-    ELSE
-        DROP
-    THEN ;
+    >R
+    2DUP 4 PICK DUP _FSM-O-CURRENT + @ _FSM-GET-STATE _FSM-LEAVE
+    ROT R@ OVER _FSM-O-CURRENT + !               ( eid ecs fsm  R: to )
+    R> _FSM-GET-STATE _FSM-ENTER ;
+
+\ Internal: fire the first transition from the current state whose
+\ guard passes, if any.  The scan keeps its place on the stack, so a
+\ guard may tick another machine.
+: _FSM-FIRE  ( fsm eid ecs -- )
+    2 PICK DUP _FSM-O-TRANS + @ SWAP _FSM-O-NTRANS + @   ( fsm eid ecs ta n )
+    BEGIN DUP 0> WHILE
+        OVER _FSM-T-FROM + @ 5 PICK _FSM-O-CURRENT + @ = IF
+            3 PICK 3 PICK 3 PICK _FSM-T-GUARD + @ EXECUTE IF
+                DROP _FSM-T-TO + @ _FSM-DO-TRANSIT EXIT
+            THEN
+        THEN
+        1- SWAP _FSM-TRANS-SZ + SWAP
+    REPEAT
+    2DROP 2DROP DROP ;
 
 \ FSM-TICK ( fsm eid ecs dt -- )
 \   Evaluate all transitions from current state (first match wins),
-\   then call on-tick of the (possibly new) current state.
-VARIABLE _FSM-TK-FSM
-VARIABLE _FSM-TK-EID
-VARIABLE _FSM-TK-ECS
-VARIABLE _FSM-TK-DT
-VARIABLE _FSM-TK-CUR
-VARIABLE _FSM-TK-I
-VARIABLE _FSM-TK-TA
+\   then call on-tick of the (possibly new) current state.  Nothing
+\   lives outside the stacks meanwhile, so callbacks may tick other
+\   machines.
 : FSM-TICK  ( fsm eid ecs dt -- )
-    _FSM-TK-DT ! _FSM-TK-ECS ! _FSM-TK-EID ! _FSM-TK-FSM !
-    _FSM-TK-FSM @ _FSM-O-CURRENT + @ _FSM-TK-CUR !
-    _FSM-TK-CUR @ -1 = IF EXIT THEN  \ not started
-    \ Scan transitions
-    0 _FSM-TK-I !
-    BEGIN _FSM-TK-I @ _FSM-TK-FSM @ _FSM-O-NTRANS + @ < WHILE
-        _FSM-TK-FSM @ _FSM-O-TRANS + @
-        _FSM-TK-I @ _FSM-TRANS-SZ * + _FSM-TK-TA !
-        \ Check if from-id matches current
-        _FSM-TK-TA @ _FSM-T-FROM + @ _FSM-TK-CUR @ = IF
-            \ Evaluate guard
-            _FSM-TK-EID @ _FSM-TK-ECS @
-            _FSM-TK-TA @ _FSM-T-GUARD + @ EXECUTE IF
-                \ Fire transition
-                _FSM-TK-FSM @ _FSM-TK-EID @ _FSM-TK-ECS @
-                _FSM-TK-TA @ _FSM-T-TO + @ _FSM-DO-TRANSIT
-                _FSM-TK-FSM @ _FSM-O-CURRENT + @ _FSM-TK-CUR !
-                _FSM-TK-FSM @ _FSM-O-NTRANS + @ _FSM-TK-I !
-            ELSE
-                1 _FSM-TK-I +!
-            THEN
-        ELSE
-            1 _FSM-TK-I +!
-        THEN
-    REPEAT
-    \ Call on-tick of current state
-    _FSM-TK-FSM @ _FSM-TK-CUR @ _FSM-GET-STATE
-    _FSM-S-TICK + @ DUP IF
-        _FSM-TK-TA !
-        _FSM-TK-EID @ _FSM-TK-ECS @ _FSM-TK-DT @ _FSM-TK-TA @ EXECUTE
-    ELSE
-        DROP
-    THEN ;
+    3 PICK _FSM-O-CURRENT + @ -1 = IF 2DROP 2DROP EXIT THEN
+    >R 2 PICK 2 PICK 2 PICK _FSM-FIRE            ( fsm eid ecs  R: dt )
+    ROT DUP _FSM-O-CURRENT + @ _FSM-GET-STATE _FSM-S-TICK + @
+    ?DUP IF R> SWAP EXECUTE ELSE 2DROP R> DROP THEN ;
 
 \ FSM-CURRENT ( fsm -- state-id )
 : FSM-CURRENT  ( fsm -- state-id )
