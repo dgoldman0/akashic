@@ -521,10 +521,9 @@ def test_blk_verify_pow_integration():
         'CREATE _PHASH 32 ALLOT',
         'CHAIN-HEAD _PHASH BLK-HASH',
         '_PHASH _BK BLK-SET-PREV',
-        # Snapshot/restore so BLK-VERIFY can re-apply txs
-        'CREATE _SS ST-SNAPSHOT-SIZE ALLOT  _SS ST-SNAPSHOT',
+        # BLK-FINALIZE leaves the state as it was, so BLK-VERIFY applies
+        # the block's transactions to the state it was built on
         '_BK BLK-FINALIZE',
-        '_SS ST-RESTORE',
         '0x00FFFFFFFFFFFFFF CON-POW-TARGET!',
         'CON-POW CON-MODE!',
         '_BK CON-POW-MINE DROP',
@@ -541,10 +540,9 @@ def test_blk_verify_poa_integration():
         'CREATE _PHASH 32 ALLOT',
         'CHAIN-HEAD _PHASH BLK-HASH',
         '_PHASH _BK BLK-SET-PREV',
-        # Snapshot/restore so BLK-VERIFY can re-apply txs
-        'CREATE _SS ST-SNAPSHOT-SIZE ALLOT  _SS ST-SNAPSHOT',
+        # BLK-FINALIZE leaves the state as it was, so BLK-VERIFY applies
+        # the block's transactions to the state it was built on
         '_BK BLK-FINALIZE',
-        '_SS ST-RESTORE',
         '_PUB1 CON-POA-ADD',
         'CON-POA CON-MODE!',
         '_BK _PRIV1 _PUB1 CON-POA-SIGN',
@@ -560,10 +558,9 @@ def test_blk_verify_pow_bad():
         'CREATE _PHASH 32 ALLOT',
         'CHAIN-HEAD _PHASH BLK-HASH',
         '_PHASH _BK BLK-SET-PREV',
-        # Snapshot/restore around FINALIZE so BLK-VERIFY can re-apply txs
-        'CREATE _SS ST-SNAPSHOT-SIZE ALLOT  _SS ST-SNAPSHOT',
+        # BLK-FINALIZE leaves the state as it was, so BLK-VERIFY applies
+        # the block's transactions to the state it was built on
         '_BK BLK-FINALIZE',
-        '_SS ST-RESTORE',
         # Set a very tight target — most nonces won't pass
         '1 CON-POW-TARGET!',
         'CON-POW CON-MODE!',
@@ -583,10 +580,9 @@ def test_blk_verify_poa_unauthorized_integration():
         'CREATE _PHASH 32 ALLOT',
         'CHAIN-HEAD _PHASH BLK-HASH',
         '_PHASH _BK BLK-SET-PREV',
-        # Snapshot/restore so BLK-VERIFY can re-apply txs
-        'CREATE _SS ST-SNAPSHOT-SIZE ALLOT  _SS ST-SNAPSHOT',
+        # BLK-FINALIZE leaves the state as it was, so BLK-VERIFY applies
+        # the block's transactions to the state it was built on
         '_BK BLK-FINALIZE',
-        '_SS ST-RESTORE',
         # Add PUB2 as authority but sign with PUB1
         '_PUB2 CON-POA-ADD',
         'CON-POA CON-MODE!',

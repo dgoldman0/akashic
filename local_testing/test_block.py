@@ -7,7 +7,7 @@ Tests:
   - BLK-INIT (zeroes struct, sets version)
   - Setters / getters (height, prev_hash, timestamp, proof, version)
   - BLK-ADD-TX (add txs, count increments, retrieval via BLK-TX@)
-  - BLK-FINALIZE (produces tx root + state root, mutates state)
+  - BLK-FINALIZE (produces tx root + state root, leaves the state as it was)
   - BLK-HASH (non-zero, deterministic, changes when header changes)
   - BLK-VERIFY (full non-destructive validation)
   - BLK-ENCODE / BLK-DECODE (round-trip header fields)
@@ -34,11 +34,11 @@ from forth_snapshot import KDOS_DIAGNOSTICS, _run_input, program_output, run_fil
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
-# BLK-VERIFY snapshots the state into a 4.7 MB buffer of its own, and the
-# verify cases keep a second snapshot to undo BLK-FINALIZE.  KDOS gives
-# ALLOCATE and XMEM-ALLOT half of extended memory, so 16 MiB held only
-# one of them ("Ext mem overflow"); 32 MiB leaves 16 MiB for both, the
-# state's pages and its tree.
+# BLK-FINALIZE and BLK-VERIFY snapshot the state into one 4.7 MB buffer
+# they share, and test_snapshot_restore takes a second of its own.  KDOS
+# gives ALLOCATE and XMEM-ALLOT half of extended memory, so 16 MiB held
+# only one of them ("Ext mem overflow"); 32 MiB leaves 16 MiB for both,
+# the state's pages and its tree.
 EXT_MEM_SIZE = 32 << 20
 
 
@@ -444,7 +444,8 @@ def test_finalize():
     ]
     check("state root non-zero after finalize", lines2, "SRNZ")
 
-    # Finalize applied txs — sender balance should have decreased
+    # Finalize takes its state root from a tentative apply and gives the
+    # state back; CHAIN-APPEND applies the block
     lines3 = _funded_blk() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
@@ -453,9 +454,11 @@ def test_finalize():
         '1700000000 _BK BLK-SET-TIME',
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_BK BLK-FINALIZE',
-        '_ADDR1 ST-BALANCE@ .',
+        ': _T ." bal1=" _ADDR1 ST-BALANCE@ .  ." bal2=" _ADDR2 ST-BALANCE@ .',
+        '  ." nonce=" _ADDR1 ST-NONCE@ .  ." count=" ST-COUNT . ; _T',
     ]
-    check("sender debited after finalize", lines3, "9900")
+    check("state unchanged after finalize", lines3,
+          "bal1=10000 bal2=0 nonce=0 count=1 ")
 
 
 def test_hash():
@@ -547,22 +550,17 @@ def test_verify_valid():
     lines = _funded_state() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
-        # Save state before finalize (we need original state for verify)
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
-        '_SNAP ST-SNAPSHOT',
-
         f'CREATE _BK BLK-STRUCT-SIZE ALLOT',
         '_BK BLK-INIT',
         '1 _BK BLK-SET-HEIGHT',
         '1700000000 _BK BLK-SET-TIME',
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_TX1 _BK BLK-ADD-TX DROP',
+        # Finalize leaves the state as it was, so the block verifies
+        # against the state it was built on
         '_BK BLK-FINALIZE',
 
-        # Restore state (undo the finalize mutation)
-        '_SNAP ST-RESTORE',
-
-        # Now verify should succeed (non-destructive)
+        # Verify should succeed (non-destructive)
         '_BK _PH BLK-VERIFY IF ." VOK" ELSE ." VFAIL" THEN',
 
         # State should be unchanged after verify (snapshot-and-restore)
@@ -578,9 +576,6 @@ def test_verify_bad_prev():
     lines = _funded_state() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
-        '_SNAP ST-SNAPSHOT',
-
         f'CREATE _BK BLK-STRUCT-SIZE ALLOT',
         '_BK BLK-INIT',
         '1 _BK BLK-SET-HEIGHT',
@@ -588,7 +583,6 @@ def test_verify_bad_prev():
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_TX1 _BK BLK-ADD-TX DROP',
         '_BK BLK-FINALIZE',
-        '_SNAP ST-RESTORE',
 
         # Try verify with WRONG prev hash -> should fail
         'CREATE _BAD 32 ALLOT  _BAD 32 0 FILL  255 _BAD C!',
@@ -603,9 +597,6 @@ def test_verify_bad_state_root():
     lines = _funded_state() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
-        '_SNAP ST-SNAPSHOT',
-
         f'CREATE _BK BLK-STRUCT-SIZE ALLOT',
         '_BK BLK-INIT',
         '1 _BK BLK-SET-HEIGHT',
@@ -613,7 +604,6 @@ def test_verify_bad_state_root():
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_TX1 _BK BLK-ADD-TX DROP',
         '_BK BLK-FINALIZE',
-        '_SNAP ST-RESTORE',
 
         # Tamper with state root
         '0 _BK BLK-STATE-ROOT@ C!',
@@ -629,9 +619,6 @@ def test_verify_no_mutation():
     lines = _funded_state() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
-        '_SNAP ST-SNAPSHOT',
-
         f'CREATE _BK BLK-STRUCT-SIZE ALLOT',
         '_BK BLK-INIT',
         '1 _BK BLK-SET-HEIGHT',
@@ -639,7 +626,6 @@ def test_verify_no_mutation():
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_TX1 _BK BLK-ADD-TX DROP',
         '_BK BLK-FINALIZE',
-        '_SNAP ST-RESTORE',
 
         # Check balance before verify
         '_ADDR1 ST-BALANCE@ .',           # 10000
@@ -651,17 +637,15 @@ def test_verify_no_mutation():
 
 
 def _verifiable_block():
-    """A funded state and a one-transaction block, finalized and undone.
+    """A funded state and a one-transaction block, finalized.
 
-    BLK-FINALIZE applies the block's transaction to fill its state root,
-    and _SNAP gives the state back as it was, so BLK-VERIFY checks the
-    block against the state it was built on.
+    BLK-FINALIZE takes the block's state root from a tentative apply and
+    leaves the state as it was, so BLK-VERIFY checks the block against the
+    state it was built on.
     """
     return _funded_state() + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + [
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SNAP',
-        '_SNAP ST-SNAPSHOT',
         'CREATE _BK BLK-STRUCT-SIZE ALLOT',
         '_BK BLK-INIT',
         '1 _BK BLK-SET-HEIGHT',
@@ -669,7 +653,6 @@ def _verifiable_block():
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_TX1 _BK BLK-ADD-TX DROP',
         '_BK BLK-FINALIZE',
-        '_SNAP ST-RESTORE',
         'CREATE _BAD 32 ALLOT  _BAD 32 0 FILL  255 _BAD C!',
         # _V verifies _BK against PREV and prints the cells BLK-VERIFY
         # left, then its flag.
@@ -791,12 +774,9 @@ def test_chain_append():
         '_GH _BK1 BLK-SET-PREV',
         '_TX1 _BK1 BLK-ADD-TX DROP',
 
-        # Snapshot state since finalize mutates it
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
-        '_SN ST-SNAPSHOT',
+        # Finalize and append, as the producer does: finalize leaves the
+        # state as it was, and the append applies the block
         '_BK1 BLK-FINALIZE',
-        # Restore so CHAIN-APPEND can re-apply
-        '_SN ST-RESTORE',
 
         # Append
         '_BK1 CHAIN-APPEND IF ." APPOK" ELSE ." APPFAIL" THEN',
@@ -820,10 +800,7 @@ def test_chain_append_mutates():
         '1700000000 _BK1 BLK-SET-TIME',
         '_GH _BK1 BLK-SET-PREV',
         '_TX1 _BK1 BLK-ADD-TX DROP',
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
-        '_SN ST-SNAPSHOT',
         '_BK1 BLK-FINALIZE',
-        '_SN ST-RESTORE',
         '_BK1 CHAIN-APPEND DROP',
         '_ADDR1 ST-BALANCE@ .',
     ]
@@ -844,17 +821,18 @@ def test_chain_append_bad_height():
         '1700000000 _BK1 BLK-SET-TIME',
         '_GH _BK1 BLK-SET-PREV',
         '_TX1 _BK1 BLK-ADD-TX DROP',
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
-        '_SN ST-SNAPSHOT',
         '_BK1 BLK-FINALIZE',
-        '_SN ST-RESTORE',
         '_BK1 CHAIN-APPEND IF ." APPOK" ELSE ." APPFAIL" THEN',
     ]
     check("wrong height rejected", lines, "APPFAIL")
 
 
 def test_chain_two_blocks():
-    """Append two consecutive blocks."""
+    """Append two consecutive blocks, each finalized and then appended.
+
+    That is the producer's order.  BLK-FINALIZE leaves the state as it
+    was, so each append applies its block once: the sender pays each
+    amount once and its nonce counts both transactions."""
     print("\n=== CHAIN two blocks ===")
     lines = _funded_state() + [
         'CHAIN-INIT',
@@ -868,11 +846,8 @@ def test_chain_two_blocks():
         '1700000000 _BK1 BLK-SET-TIME',
         '_GH _BK1 BLK-SET-PREV',
         '_TX1 _BK1 BLK-ADD-TX DROP',
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
-        '_SN ST-SNAPSHOT',
         '_BK1 BLK-FINALIZE',
-        '_SN ST-RESTORE',
-        '_BK1 CHAIN-APPEND DROP',
+        '_BK1 CHAIN-APPEND ." app1=" .',
 
         # Get block 1 hash for block 2's prev_hash
         'CREATE _H1 32 ALLOT',
@@ -885,16 +860,14 @@ def test_chain_two_blocks():
         '1700000100 _BK2 BLK-SET-TIME',
         '_H1 _BK2 BLK-SET-PREV',
         '_TX2 _BK2 BLK-ADD-TX DROP',
-        '_SN ST-SNAPSHOT',
         '_BK2 BLK-FINALIZE',
-        '_SN ST-RESTORE',
-        '_BK2 CHAIN-APPEND IF ." APP2OK" ELSE ." APP2FAIL" THEN',
-        'CHAIN-HEIGHT .',
-        '_ADDR1 ST-BALANCE@ .',
+        ': _T ." app2=" _BK2 CHAIN-APPEND .  ." height=" CHAIN-HEIGHT .',
+        '  ." bal1=" _ADDR1 ST-BALANCE@ .  ." bal2=" _ADDR2 ST-BALANCE@ .',
+        '  ." nonce=" _ADDR1 ST-NONCE@ . ; _T',
     ]
-    check("block 2 appended", lines, "APP2OK")
-    check("chain height is 2", lines, "2")
-    check("sender balance after 2 blocks", lines, "9700")
+    check("two blocks appended, each applied once", lines,
+          "app2=-1 height=2 bal1=9700 bal2=300 nonce=2 ",
+          not_expected="app1=0")
 
 
 def test_empty_block():
@@ -911,10 +884,7 @@ def test_empty_block():
         '1700000000 _BK BLK-SET-TIME',
         '_GH _BK BLK-SET-PREV',
         # No txs added
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
-        '_SN ST-SNAPSHOT',
         '_BK BLK-FINALIZE',
-        '_SN ST-RESTORE',
         '_BK CHAIN-APPEND IF ." EMPTYOK" ELSE ." EMPTYFAIL" THEN',
         'CHAIN-HEIGHT .',
     ]
@@ -927,11 +897,20 @@ def test_empty_block():
 # =================================================================
 
 def test_finalize_truncate_p22():
-    """P22: BLK-FINALIZE truncates on tx failure instead of DROP."""
+    """P22: BLK-FINALIZE truncates on tx failure instead of DROP.
+
+    The block keeps the transactions before the first that fails, and its
+    tx root covers only those.  The root used to be computed before the
+    truncation, over every transaction, so CHAIN-APPEND refused the block
+    it had truncated.  The state stays as it was until CHAIN-APPEND
+    applies the kept transaction."""
     print("\n=== P22: BLK-FINALIZE truncate on tx failure ===")
     # Build a block with 2 txs: tx1 (valid), tx2 (insufficient balance → fail)
-    # After finalize, only tx1 should be applied (block truncated to 1 tx)
-    lines = _funded_state() + _make_tx_lines(
+    lines = _funded_state() + [
+        'CHAIN-INIT',
+        'CREATE _GH 32 ALLOT',
+        'CHAIN-HEAD _GH BLK-HASH',
+    ] + _make_tx_lines(
         '_TX1', '_PUB1', '_PRIV1', '_PUB2', 100, 0
     ) + _make_tx_lines(
         '_TX2', '_PUB1', '_PRIV1', '_PUB2', 999999, 1  # nonce 1, but balance too low after tx1
@@ -940,17 +919,18 @@ def test_finalize_truncate_p22():
         '_BK BLK-INIT',
         '1 _BK BLK-SET-HEIGHT',
         '1700000000 _BK BLK-SET-TIME',
-        'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
+        '_GH _BK BLK-SET-PREV',
         '_TX1 _BK BLK-ADD-TX DROP',
         '_TX2 _BK BLK-ADD-TX DROP',
-        '_BK BLK-TX-COUNT@ .',            # should be 2 before finalize
-        '_BK BLK-FINALIZE',
-        '_BK BLK-TX-COUNT@ .',            # should be 1 after truncation
-        '_ADDR1 ST-BALANCE@ .',           # 10000 - 100 = 9900 (only tx1 applied)
+        ': _T ." before=" _BK BLK-TX-COUNT@ .',
+        '  _BK BLK-FINALIZE ." after=" _BK BLK-TX-COUNT@ .',
+        '  ." bal=" _ADDR1 ST-BALANCE@ .',
+        '  ." append=" _BK CHAIN-APPEND .  ." height=" CHAIN-HEIGHT .',
+        '  ." bal1=" _ADDR1 ST-BALANCE@ .  ." bal2=" _ADDR2 ST-BALANCE@ .',
+        '  ." nonce=" _ADDR1 ST-NONCE@ . ; _T',
     ]
-    check("2 txs before finalize", lines, "2")
-    check("1 tx after truncation", lines, "1")
-    check("balance reflects only tx1", lines, "9900")
+    check("the block keeps tx1, and its append applies tx1 once", lines,
+          "before=2 after=1 bal=10000 append=-1 height=1 bal1=9900 bal2=100 nonce=1 ")
 
 
 def test_chain_append_truncate_a02():
@@ -971,10 +951,7 @@ def test_chain_append_truncate_a02():
         '1700000000 _BK1 BLK-SET-TIME',
         '_GH _BK1 BLK-SET-PREV',
         '_TX1 _BK1 BLK-ADD-TX DROP',
-        'ST-SNAPSHOT-SIZE XMEM-ALLOT CONSTANT _SN',
-        '_SN ST-SNAPSHOT',
         '_BK1 BLK-FINALIZE',
-        '_SN ST-RESTORE',
         '_BK1 CHAIN-APPEND IF ." AOK" ELSE ." AFAIL" THEN',
         '_ADDR1 ST-BALANCE@ .',
     ]
