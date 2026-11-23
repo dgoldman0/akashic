@@ -46,6 +46,7 @@ REQUIRE uint-range.f
 -10 CONSTANT IMG-E-SHORT
 -11 CONSTANT IMG-E-NOMEM
 -12 CONSTANT IMG-E-UNSUPPORTED
+-13 CONSTANT IMG-E-ADDRESS
 
 \ Old private spellings are retained for source compatibility.
 IMG-E-IO       CONSTANT _IMG-ERR-IO
@@ -401,10 +402,47 @@ VARIABLE _img-import-entry
     THEN
     0 ;
 
+\ A CONSTANT's code is the 18 bytes F0 60 10 <value> 67 E0 08 54 E1 F4 A1:
+\ ldi64 r1, value; the push; sep r17.
+CREATE _IMG-CONSTANT-TAIL  103 C, 224 C, 8 C, 84 C, 225 C, 244 C, 161 C,
+
+: _IMG-CONSTANT?  ( code -- flag )
+    DUP C@ 240 = OVER 1 + C@ 96 = AND OVER 2 + C@ 16 = AND 0= IF
+        DROP 0 EXIT
+    THEN
+    11 + 7 _IMG-CONSTANT-TAIL 7 _IMG-SAME? ;
+
+\ The compiler records every immediate it knows to carry an address, so
+\ those move with the image.  A CONSTANT's value carries no such fact: the
+\ build cannot tell an address from a number.  Moving every value that
+\ falls inside the segment would turn such a number into a wrong one, and
+\ moving none would leave a loaded image using the build's addresses, as a
+\ constant made by HERE or ' did.  Either guess fails silently, so a
+\ constant compiled into the image whose value lies inside the segment,
+\ its end included, refuses the build.  The image's own addresses come
+\ from CREATE, VARIABLE and VALUE, or from ['] inside a colon definition.
+: _IMG-CHECK-CONSTANTS  ( -- ior )
+    LATEST
+    BEGIN DUP _img-mark-latest @ <> WHILE
+        DUP 8 + C@ 127 AND OVER 9 + +          ( entry code )
+        DUP _IMG-CONSTANT? IF
+            3 + @
+            DUP _img-mark-base @ >=
+            SWAP _img-mark-base @ _img-seg-size @ + <= AND IF
+                DROP IMG-E-ADDRESS EXIT
+            THEN
+        ELSE
+            DROP
+        THEN
+        @
+    REPEAT
+    DROP 0 ;
+
 : _IMG-PREPARE  ( -- ior )
     _IMG-FINALIZE DUP 0<> IF EXIT THEN DROP
     _img-build-error @ DUP 0<> IF EXIT THEN DROP
-    _IMG-PRECHECK-RELOCS DUP 0<> IF _IMG-LATCH THEN ;
+    _IMG-PRECHECK-RELOCS DUP 0<> IF _IMG-LATCH EXIT THEN DROP
+    _IMG-CHECK-CONSTANTS DUP 0<> IF _IMG-LATCH THEN ;
 
 : _IMG-IMAGE-SIZE  ( -- u )
     _IMG-HDR-SZ _img-seg-size @ +

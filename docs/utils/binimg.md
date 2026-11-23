@@ -77,6 +77,14 @@ Calling `IMG-MARK` again without first calling `IMG-DISCARD` preserves the histo
 
 The first build error is sticky. Once an operation latches an error, subsequent preparation reports it until `IMG-DISCARD` or a new `IMG-MARK` resets the state.
 
+### Addresses inside the image
+
+A loaded image runs at another address than the one it was built at, so every address inside the segment that its code holds must move with it. The BIOS records each immediate it knows to carry one: the XT of a compiled call, of `[']` and of a non-immediate `POSTPONE`, the data-field address in the code of `CREATE`, `VARIABLE` and `VALUE`, the cell a compiled `TO` stores through, and the address `DOES>` patches in. A loaded `VALUE` therefore reads and writes its own cell.
+
+A `CONSTANT`'s value is a number to the compiler, which cannot tell an address from it. Moving every value that falls inside the segment would turn such a number into a wrong one, and moving none would leave the loaded image using the build's addresses, as `HERE CONSTANT` and `' WORD CONSTANT` did. Either guess fails silently, so `IMG-BUFFER-MAX` and `IMG-BUILD-INTO` refuse a build with `IMG-E-ADDRESS` when a constant compiled after the mark holds a value inside the segment, its end included. An image names its own addresses with `CREATE`, `VARIABLE` or `VALUE`, or with `[']` inside a colon definition. A constant that holds an address outside the segment, in the system the image is built on, is kept as it is.
+
+Data the image stores is not examined: a cell that `,`, `!` or `IS` filled with an address inside the segment, or a `VALUE`'s initial contents, keeps the build's address.
+
 ### Buffer ownership
 
 `IMG-BUFFER-MAX` finalizes and prechecks the marked region and returns the exact version-2 image size. `IMG-BUILD-INTO` requires a nonzero caller-owned buffer of at least that size. A malformed or wrapping destination is a capacity error. Malformed live build geometry is a state error, as is a destination that overlaps the relocation buffer or live marked segment.
@@ -170,6 +178,7 @@ A successful load is permanent: binimg exposes no unload operation. The module i
 | -10 | `IMG-E-SHORT` | truncated header/body or short raw-file read |
 | -11 | `IMG-E-NOMEM` | DMA, dictionary, or XMEM allocation failed |
 | -12 | `IMG-E-UNSUPPORTED` | this system's dictionary holds no MP64 machine code, so it can neither build an image nor load one |
+| -13 | `IMG-E-ADDRESS` | a constant compiled into the image holds an address inside the image, which the build cannot tell from a number |
 
 The old private `_IMG-ERR-*` aliases remain only for source compatibility. New code should use the public `IMG-E-*` names.
 
