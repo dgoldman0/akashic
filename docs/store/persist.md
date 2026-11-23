@@ -71,8 +71,8 @@ Periodic state snapshot:
 [8 bytes]          — the snapshot's size, read first by PST-LOAD-STATE
 ```
 
-The snapshot holds no memory address, so a later session loads it
-into pages of its own.
+The file ends after the size marker.  The snapshot holds no memory
+address, so a later session loads it into pages of its own.
 
 `PST-SET-CAPACITY ( chain-sectors state-sectors -- )`, called before
 `PST-INIT`, sets both files' sector counts when they are created.
@@ -160,7 +160,9 @@ PST-SAVE-STATE  ( -- flag )
 
 Snapshot the state (`ST-SNAPSHOT`) into the record buffer, then write
 the snapshot (`ST-SNAPSHOT-BYTES` long), the 8-byte chain height and an
-8-byte size marker to `state.snap`.  Flushes immediately.  Returns `-1` on success,
+8-byte size marker to `state.snap`, and cut the file to end after the
+marker (`FTRUNCATE`), so a snapshot smaller than the last leaves
+nothing of it behind.  Flushes immediately.  Returns `-1` on success,
 `0` if the heap or the state file cannot hold the snapshot.
 
 ### PST-LOAD-STATE
@@ -195,8 +197,10 @@ and incremented by each `PST-SAVE-BLOCK`.
 PST-CLEAR  ( -- )
 ```
 
-Rewind `chain.dat` and write a zero-length marker at offset 0.
-Resets block count to 0.  The file itself is not deleted.
+Cut `chain.dat` to size 0 (`FTRUNCATE`) and reset the block count to
+0.  The file keeps its sectors, and the next `PST-SAVE-BLOCK` writes
+from its start, so a `PST-INIT` after a reopen finds the blocks saved
+since the clear.
 
 ---
 
@@ -227,7 +231,7 @@ All seven public words are wrapped with `_pst-guard` via `WITH-GUARD`:
 | Constraint | Impact |
 |---|---|
 | MP64FS contiguous allocation | Files pre-allocated at fixed sector counts (1024 chain, 512 state by default; `PST-SET-CAPACITY` sets others) |
-| Files cannot be resized | Over-allocate at creation; a save that does not fit returns `0` and writes nothing |
+| A file's sectors are fixed at creation | Over-allocate at creation; a save that does not fit returns `0` and writes nothing.  The size within them shrinks with `FTRUNCATE`, as `PST-CLEAR` and `PST-SAVE-STATE` use it |
 | FD pool is 16 slots | persist uses at most 2; 14 remain for application use |
 | FREAD/FWRITE use DMA | Whole sectors move between the disk and the record buffer; partial sectors pass through KDOS's own sector scratch, so the 8-byte length cell needs only 8 bytes |
 | XMEM heap never joins free blocks | The record buffer is kept and grows by doubling (see [The record buffer](#the-record-buffer)) |
@@ -243,7 +247,7 @@ All seven public words are wrapped with `_pst-guard` via `WITH-GUARD`:
 | `PST-SAVE-BLOCK` | `( blk -- flag )` | Encode + append to chain.dat |
 | `PST-LOAD-BLOCK` | `( idx blk -- flag )` | Decode block N from chain.dat |
 | `PST-BLOCK-COUNT` | `( -- n )` | Number of saved blocks |
-| `PST-CLEAR` | `( -- )` | Reset log (write zero marker) |
+| `PST-CLEAR` | `( -- )` | Empty the log (truncate chain.dat) |
 | `PST-SAVE-STATE` | `( -- flag )` | Snapshot state to state.snap |
 | `PST-LOAD-STATE` | `( -- flag )` | Restore state from state.snap |
 | `PST-CLOSE` | `( -- )` | Flush + close all files |

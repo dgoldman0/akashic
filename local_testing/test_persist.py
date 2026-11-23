@@ -651,6 +651,49 @@ def test_state_loads_after_a_restart():
           max_steps=400_000_000)
 
 
+def test_clear_then_save_survives_reopen():
+    """Blocks saved after PST-CLEAR are there when the log is opened again.
+
+    PST-CLEAR wrote a zero length at the start of the chain file and left
+    the file's size, so the next block went after the old ones and the
+    walk at PST-INIT stopped at the zero.  The file is emptied now."""
+    print("\n── PST-CLEAR, then a save ──\n")
+    check("the block saved after a clear is found again",
+          ['CREATE _BL BLK-STRUCT-SIZE ALLOT',
+           f': _T {_PST_PREAMBLE}',
+           '  CHAIN-HEAD PST-SAVE-BLOCK DROP  CHAIN-HEAD PST-SAVE-BLOCK DROP',
+           '  PST-CLEAR  ." size=" _PST-CHAIN-FD @ FSIZE .',
+           '  ." saved=" CHAIN-HEAD PST-SAVE-BLOCK .',
+           '  PST-CLOSE PST-INIT DROP  ." count=" PST-BLOCK-COUNT .',
+           '  ." load=" 0 _BL PST-LOAD-BLOCK . ; _T'],
+          "size=0 saved=-1 count=1 load=-1 ")
+
+
+def test_smaller_state_cuts_the_file():
+    """A smaller snapshot than the last leaves nothing of the larger one.
+
+    PST-SAVE-STATE wrote from the start of the file and left its size, so
+    the larger snapshot's tail, height and size marker stayed after the
+    new one, and PST-LOAD-STATE read the old marker.  The file ends after
+    the new snapshot's marker now."""
+    print("\n── A smaller state after a larger ──\n")
+    lines = _ACCOUNTS + [
+        'VARIABLE _BIG',
+        f': _T {_PST_PREAMBLE}',
+        '  300 _ACCTS  PST-SAVE-STATE DROP  _PST-STATE-FD @ FSIZE _BIG !',
+        '  ST-DESTROY ST-INIT DROP  10 _ACCTS',
+        '  ." save=" PST-SAVE-STATE .',
+        '  ." cut=" _PST-STATE-FD @ FSIZE _BIG @ < .',
+        '  ." fits=" _PST-STATE-FD @ FSIZE  ST-SNAPSHOT-BYTES 16 + = .',
+        '  ST-DESTROY ST-INIT DROP',
+        '  ." load=" PST-LOAD-STATE .  ." count=" ST-COUNT .',
+        '  9 _ADDR! ." last=" _AD ST-BALANCE@ . ; _T',
+    ]
+    check("the state file holds the smaller snapshot alone", lines,
+          "save=-1 cut=-1 fits=-1 load=-1 count=10 last=10 ",
+          max_steps=400_000_000)
+
+
 # =====================================================================
 #  Main
 # =====================================================================

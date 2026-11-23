@@ -13,6 +13,9 @@
 \                    Format: [8B len][len bytes CBOR] repeated
 \    state_N.snap  — the latest state snapshot
 \                    Format: [snapshot][8B chain-height][8B snapshot size]
+\  A file holds exactly what the last write left in it: PST-CLEAR empties
+\  the chain file and PST-SAVE-STATE cuts the state file to its new
+\  snapshot, so nothing an earlier, longer write left comes back.
 \
 \  Known KDOS limitations:
 \   - MP64FS contiguous allocation; files cannot be resized
@@ -45,7 +48,7 @@
 \   PST-SAVE-BLOCK  ( blk -- flag ) encode + append to chain.dat
 \   PST-LOAD-BLOCK  ( idx blk -- flag ) decode block N from log
 \   PST-BLOCK-COUNT ( -- n )        number of saved blocks
-\   PST-CLEAR       ( -- )          reset log (truncate chain.dat)
+\   PST-CLEAR       ( -- )          empty the log (truncate chain.dat)
 \   PST-SAVE-STATE  ( -- flag )     snapshot state to state.snap
 \   PST-LOAD-STATE  ( -- flag )     restore state from state.snap
 \   PST-CLOSE       ( -- )          flush + close all files
@@ -393,10 +396,9 @@ VARIABLE _PST-LB-LEN
 
 : PST-CLEAR  ( -- )
     _PST-OK @ 0= IF EXIT THEN
-    \ Rewind chain file and write a zero-length marker
-    _PST-CHAIN-FD @ FREWIND
-    0 _PST-LEN-IO !
-    _PST-LEN-IO 8 _PST-CHAIN-FD @ FWRITE
+    \ The file's size goes to 0, so the next block is written from its
+    \ start and PST-INIT finds the blocks saved after the clear.
+    0 _PST-CHAIN-FD @ FTRUNCATE
     _PST-CHAIN-FD @ FFLUSH
     0 _PST-COUNT ! ;
 
@@ -409,7 +411,7 @@ VARIABLE _PST-LB-LEN
 \    [8 bytes]         — the snapshot's size, the marker
 \  ST-SNAPSHOT-SIZE is the worst case (all 256 pages = ~4.7 MB).
 \  PST-SAVE-STATE writes the state's actual snapshot, ST-SNAPSHOT-BYTES,
-\  and the record buffer grows to it.
+\  the record buffer grows to it, and the file ends after its marker.
 \  The snapshot holds no memory address, so a later session loads it
 \  into pages of its own.
 
@@ -432,6 +434,8 @@ VARIABLE _PST-SS
     \ Write total length marker so LOAD knows how much to read
     _PST-SS @ _PST-LEN-IO !
     _PST-LEN-IO 8 _PST-STATE-FD @ FWRITE
+    \ The file ends here, after a smaller snapshot than the last as well
+    _PST-SS @ 16 + _PST-STATE-FD @ FTRUNCATE
     _PST-STATE-FD @ FFLUSH
     -1 ;
 
