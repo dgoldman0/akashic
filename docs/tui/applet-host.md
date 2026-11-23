@@ -141,11 +141,14 @@ must succeed before unlink, notification, or any owned-resource release.
 
 `AHOST-TICK` ticks each live child that is dirty, or that asks to be ticked
 while clean (`APP-F-TICK-WHEN-CLEAN`). A child whose instance a caller
-touched (`CINST-TOUCH`) since it was last painted is dirty. A child that
-touches its own instance while it ticks, to have a change of its own drawn,
-or whose tick marks a UIDL element or changes a widget, which asks for a
-paint, is marked dirty at once and asks the shell to paint, so the paint
-that follows the tick in the same pass draws it.
+touched (`CINST-TOUCH`) since it was last painted is dirty; a shown one that
+turns dirty so asks the shell to paint, once, so a change that came between
+passes, such as a reply that completes a request, is drawn in the next pass.
+A child that touches its own instance while it ticks, to have a change of
+its own drawn, or whose tick marks a UIDL element or changes a widget, which
+asks for a paint, is marked dirty at once and asks the shell to paint, so the
+paint that follows the tick in the same pass draws it. A dirty child that has
+not been painted, such as a minimized one, does not ask again.
 
 Code that runs for a child from outside its callbacks, such as a capability
 handler the request bus calls from its owner's tick, would otherwise run in

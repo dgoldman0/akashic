@@ -896,7 +896,8 @@ VARIABLE _ah-ew
     ." AH-M10-OVERLAY-ID" CR
 
     \ A child that touches itself as it ticks is drawn in that pass, and
-    \ only then: a minimized child left unpainted does not ask again.
+    \ only then: a minimized child left unpainted does not ask again.  A
+    \ shown child touched between passes asks once, as it turns dirty.
     _ah-memory-snapshot
     0 _ah-inst-a ! 0 _ah-inst-b !
     _ah-try-launch _ah-launch-ior @ 0= _ah-assert
@@ -920,6 +921,16 @@ VARIABLE _ah-ew
     _ASHELL-DIRTY @ _ah-assert
     0 _ASHELL-DIRTY ! 0 _ah-tick-touch ! _ah-host AHOST-TICK
     _ah-slot-b @ AHS.DIRTY @ -1 = _ah-assert
+    _ASHELL-DIRTY @ 0= _ah-assert
+    \ A shown child touched between passes, as a reply that completes its
+    \ request touches it, asks for a paint at the next tick, once.
+    -1 0 _ah-host AHOST-PAINT
+    _ah-slot-a @ AHS.DIRTY @ 0= _ah-assert
+    0 _ASHELL-DIRTY !
+    _ah-inst-a @ CINST-TOUCH _ah-host AHOST-TICK
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    _ASHELL-DIRTY @ _ah-assert
+    0 _ASHELL-DIRTY ! _ah-host AHOST-TICK
     _ASHELL-DIRTY @ 0= _ah-assert
     0 _ah-app APP.FLAGS !
     _ah-host AHOST-DRAIN 0= _ah-assert
