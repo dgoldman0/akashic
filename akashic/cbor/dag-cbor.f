@@ -70,12 +70,13 @@ VARIABLE _DCB-L2
     LOOP
     0 ;
 
-\ DCBOR-SORT-MAP ( addr len -- flag )
+\ DCBOR-SORT-MAP ( -- flag )
 \   Validate that the next CBOR map in the input has keys in
 \   DAG-CBOR canonical order.  Does NOT advance the decoder cursor
 \   beyond the map.
-\   addr/len = the raw CBOR data to check.
-\   Returns -1 if keys are correctly sorted, 0 if not.
+\   Returns -1 if keys are correctly sorted, 0 if not, or if the map
+\   does not decode (CBOR-INPUT-OK? false), a key that is not a text
+\   string included.
 \
 \   Note: This reads map keys (text strings) from the decode stream.
 \   The caller should CBOR-PARSE the data before calling.
@@ -90,7 +91,7 @@ VARIABLE _DCB-OK
 : DCBOR-SORT-MAP  ( -- flag )
     -1 _DCB-OK !
     CBOR-NEXT-MAP _DCB-PAIRS !
-    _DCB-PAIRS @ 0= IF -1 EXIT THEN   \ empty map = trivially sorted
+    _DCB-PAIRS @ 0= IF CBOR-INPUT-OK? EXIT THEN   \ empty map = trivially sorted
     \ Read first key
     CBOR-NEXT-TSTR _DCB-PREV-L ! _DCB-PREV-A !
     CBOR-SKIP                          \ skip first value
@@ -106,7 +107,7 @@ VARIABLE _DCB-OK
         _DCB-CUR-A @ _DCB-PREV-A !
         _DCB-CUR-L @ _DCB-PREV-L !
     LOOP
-    _DCB-OK @ ;
+    _DCB-OK @ CBOR-INPUT-OK? AND ;
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]

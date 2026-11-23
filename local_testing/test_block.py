@@ -1156,6 +1156,51 @@ def test_decode_version_check_c07():
     check("version 99 rejected", lines, "D2FAIL")
 
 
+def _cbor_head(major, n):
+    if n < 24:
+        return bytes([major << 5 | n])
+    for addl, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | addl]) + n.to_bytes(size, "big")
+
+
+def _cbor_text(text):
+    return _cbor_head(3, len(text)) + text.encode()
+
+
+def _block_cbor(prev_hash):
+    """[ {version: 1, height: 7, prev_hash: PREV_HASH}, [] ]"""
+    header = (_cbor_head(5, 3) + _cbor_text("version") + _cbor_head(0, 1)
+              + _cbor_text("height") + _cbor_head(0, 7)
+              + _cbor_text("prev_hash") + _cbor_head(2, len(prev_hash)) + prev_hash)
+    return _cbor_head(4, 2) + header + _cbor_head(4, 0)
+
+
+def test_decode_refuses_a_short_hash_and_a_decode_error():
+    """BLK-DECODE copies a hash only from a 32-byte byte string, and refuses
+    a block whose CBOR does not decode, which cbor.f reports through
+    CBOR-INPUT-OK?."""
+    print("\n=== BLK-DECODE: hash lengths and decode errors ===")
+    whole = _block_cbor(bytes(range(1, 33)))
+    short = _block_cbor(bytes(range(1, 6)))
+    # The header's height announces a 4-byte argument and the input ends
+    # after two of them.
+    cut = (_cbor_head(4, 2) + _cbor_head(5, 2) + _cbor_text("version") + _cbor_head(0, 1)
+           + _cbor_text("height") + bytes([0x1A, 0x00, 0x01]))
+    lines = (create_hex_buf("_WHOLE", whole.hex()) + create_hex_buf("_SHORT", short.hex())
+             + create_hex_buf("_CUT", cut.hex()) + [
+        'CREATE _BK BLK-STRUCT-SIZE ALLOT',
+        f'_WHOLE {len(whole)} _BK BLK-DECODE IF ." WHOLEOK" ELSE ." WHOLEFAIL" THEN',
+        '_BK BLK-HEIGHT@ . _BK BLK-PREV-HASH@ C@ .',
+        f'_SHORT {len(short)} _BK BLK-DECODE IF ." SHORTOK" ELSE ." SHORTFAIL" THEN',
+        f'_CUT {len(cut)} _BK BLK-DECODE IF ." CUTOK" ELSE ." CUTFAIL" THEN',
+    ])
+    check("a 32-byte hash decodes", lines, "WHOLEOK")
+    check("its height and hash arrive", lines, "7 1")
+    check("a 5-byte hash is refused", lines, "SHORTFAIL")
+    check("a decode error refuses the block", lines, "CUTFAIL")
+
+
 def test_cbuf_size_d07():
     """D07: _BLK-CBUF raised to 2048."""
     print("\n=== D07: _BLK-CBUF-SZ = 2048 ===")

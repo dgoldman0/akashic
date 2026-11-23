@@ -564,7 +564,8 @@ CREATE _TX-E-CURSORS  CBOR-CURSORS-SIZE ALLOT    \ the caller's CBOR cursors
 \ =====================================================================
 \
 \  Parse a CBOR map and populate a transaction buffer.
-\  Returns -1 (TRUE) on success, 0 (FALSE) on parse error.
+\  Returns -1 (TRUE) on success, 0 (FALSE) on parse error, including a
+\  decode error cbor.f reports through CBOR-INPUT-OK?.
 \  Strategy: iterate map keys, match against known strings,
 \  populate the corresponding tx field.  TX-DECODE keeps its caller's
 \  CBOR cursors, so BLK-DECODE carries on after each transaction.
@@ -664,7 +665,7 @@ CREATE _TX-D-CURSORS  CBOR-CURSORS-SIZE ALLOT    \ the caller's CBOR cursors
 
 : TX-DECODE  ( buf len tx -- flag )
     _TX-D-CURSORS CBOR-SAVE
-    _TX-DECODE-MAP
+    _TX-DECODE-MAP  CBOR-INPUT-OK? AND      \ a decode error refuses the transaction
     _TX-D-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================

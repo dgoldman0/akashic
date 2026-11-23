@@ -171,3 +171,22 @@ def test_a_skip_counts_items_instead_of_recursing(forth):
     assert ints(lines[0]) == [5, -1, -1]
     assert ints(lines[1]) == [-1, -1]
     assert ints(lines[2]) == [0, -1]
+
+
+DAG_SUITE = NativeForth(("cbor/dag-cbor.f",), prelude=tuple(PRELUDE.strip().splitlines()))
+
+
+def test_dag_cbor_key_order_refuses_a_map_that_does_not_decode():
+    forth = DAG_SUITE.shared()
+    lines = run(forth, [
+        # {"a": 1, "bb": 2} is in DAG-CBOR order; {"bb": 1, "a": 2} is not.
+        given(bytes([0xA2, 0x61, 0x61, 0x01, 0x62, 0x62, 0x62, 0x02]))
+        + "DCBOR-SORT-MAP . CR",
+        given(bytes([0xA2, 0x62, 0x62, 0x62, 0x01, 0x61, 0x61, 0x02]))
+        + "DCBOR-SORT-MAP . CR",
+        # A key that is not a text string, and an array where the map
+        # should be: neither decodes, so neither is in order.
+        given(bytes([0xA1, 0x01, 0x02])) + "DCBOR-SORT-MAP . CR",
+        given(bytes([0x80])) + "DCBOR-SORT-MAP . CR",
+    ])
+    assert [ints(line) for line in lines] == [[-1], [0], [0], [0]]

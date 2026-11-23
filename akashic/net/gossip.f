@@ -279,6 +279,7 @@ VARIABLE _GSP-RX-PEER
     CBOR-NEXT-ARRAY DROP
     CBOR-NEXT-BSTR 2DROP               \ skip hash
     CBOR-NEXT-UINT                     ( height )
+    CBOR-INPUT-OK? 0= IF DROP EXIT THEN   \ a decode error refuses it
     GSP-ON-BLK-ANN-XT @ ?DUP IF
         _GSP-RX-PEER @ SWAP EXECUTE    \ ( height peer xt )
     ELSE DROP THEN ;
@@ -296,6 +297,7 @@ VARIABLE _GSP-RX-PEER
     CBOR-NEXT-ARRAY DROP
     CBOR-NEXT-BSTR 2DROP               \ skip hash
     CBOR-NEXT-UINT                     ( height )
+    CBOR-INPUT-OK? 0= IF DROP EXIT THEN   \ a decode error refuses it
     GSP-ON-STATUS-XT @ ?DUP IF
         _GSP-RX-PEER @ SWAP EXECUTE    \ ( height peer xt )
     ELSE DROP THEN ;

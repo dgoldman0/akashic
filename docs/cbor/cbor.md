@@ -282,7 +282,9 @@ DAG-CBOR key ordering rules:
 2. Keys of equal length sort lexicographically
 3. Duplicate keys are not allowed
 
-Returns `-1` if valid, `0` if invalid.
+Returns `-1` if valid, `0` if invalid, which includes a map that does
+not decode: a key that is not a text string, or any other decode error
+`CBOR-INPUT-OK?` reports.
 
 ---
 

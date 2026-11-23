@@ -459,7 +459,9 @@ CREATE _BLK-E-CURSORS  CBOR-CURSORS-SIZE ALLOT   \ the caller's CBOR cursors
 \  by every later BLK-DECODE, so a decoded block's transactions stay
 \  valid until the next BLK-DECODE.  BLK-MAX-TXS bounds their number, as
 \  it bounds a block's.  Returns -1 on success, 0 on failure, including
-\  a heap that cannot hold another buffer.  TX-DECODE keeps this
+\  a heap that cannot hold another buffer, a previous hash, state root
+\  or transaction root that is not a 32-byte byte string, and a decode
+\  error cbor.f reports through CBOR-INPUT-OK?.  TX-DECODE keeps this
 \  decoding's cursors, so the next transaction follows the last, and
 \  BLK-DECODE keeps its own caller's.
 
@@ -492,6 +494,14 @@ VARIABLE _BLK-D-NBUF                         \ how many are allocated
     LOOP
     2DROP -1 ;
 
+\ _BLK-D-HASH ( dst -- flag )
+\   Copy the next item, which must be a byte string of exactly 32 bytes,
+\   to dst.  Any other item or length leaves dst as it was and gives 0.
+: _BLK-D-HASH  ( dst -- flag )
+    CBOR-NEXT-BSTR                       ( dst addr len )
+    32 <> IF 2DROP 0 EXIT THEN
+    SWAP 32 CMOVE -1 ;
+
 \ _BLK-DECODE-ITEMS ( buf len blk -- flag )  the decoding BLK-DECODE brackets
 : _BLK-DECODE-ITEMS  ( buf len blk -- flag )
     _BLK-D-BLK !
@@ -519,16 +529,13 @@ VARIABLE _BLK-D-NBUF                         \ how many are allocated
             CBOR-NEXT-UINT _BLK-D-BLK @ _BLK-HEIGHT !
         ELSE _BLK-D-KA @ _BLK-D-KL @
         _BK-PREVHASH _BK> _BLK-STREQ IF
-            CBOR-NEXT-BSTR DROP          \ -- addr
-            _BLK-D-BLK @ _BLK-PREV 32 CMOVE
+            _BLK-D-BLK @ _BLK-PREV _BLK-D-HASH 0= IF 0 UNLOOP EXIT THEN
         ELSE _BLK-D-KA @ _BLK-D-KL @
         _BK-STATEROOT _BK> _BLK-STREQ IF
-            CBOR-NEXT-BSTR DROP
-            _BLK-D-BLK @ _BLK-SROOT 32 CMOVE
+            _BLK-D-BLK @ _BLK-SROOT _BLK-D-HASH 0= IF 0 UNLOOP EXIT THEN
         ELSE _BLK-D-KA @ _BLK-D-KL @
         _BK-TXROOT _BK> _BLK-STREQ IF
-            CBOR-NEXT-BSTR DROP
-            _BLK-D-BLK @ _BLK-TXROOT 32 CMOVE
+            _BLK-D-BLK @ _BLK-TXROOT _BLK-D-HASH 0= IF 0 UNLOOP EXIT THEN
         ELSE _BLK-D-KA @ _BLK-D-KL @
         _BK-TIMESTAMP _BK> _BLK-STREQ IF
             CBOR-NEXT-UINT _BLK-D-BLK @ _BLK-TIME !
@@ -569,7 +576,7 @@ VARIABLE _BLK-D-NBUF                         \ how many are allocated
 
 : BLK-DECODE  ( buf len blk -- flag )
     _BLK-D-CURSORS CBOR-SAVE
-    _BLK-DECODE-ITEMS
+    _BLK-DECODE-ITEMS  CBOR-INPUT-OK? AND   \ a decode error refuses the block
     _BLK-D-CURSORS CBOR-RESTORE ;
 
 \ =====================================================================

@@ -133,7 +133,8 @@ VARIABLE _GEN-I
 \  4. GEN-LOAD — decode genesis CBOR and configure consensus + state
 \ =====================================================================
 \  Called once at node startup.  Reads the genesis block's data field
-\  and applies all configuration.  Returns -1 on success, 0 on error.
+\  and applies all configuration.  Returns -1 on success, 0 on error,
+\  including a decode error cbor.f reports through CBOR-INPUT-OK?.
 
 VARIABLE _GEN-NKEYS
 VARIABLE _GEN-NBAL
@@ -200,7 +201,7 @@ CREATE _GEN-TKEY 32 ALLOT          \ temp key buffer for decode
         _GEN-TKEY SWAP ST-CREATE
         0= IF 0 UNLOOP EXIT THEN  \ account creation failed
     LOOP
-    -1 ;
+    CBOR-INPUT-OK? ;                \ a decode error refuses the genesis
 
 \ =====================================================================
 \  5. GEN-HASH — compute genesis block hash
