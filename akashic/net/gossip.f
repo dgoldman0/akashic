@@ -273,7 +273,7 @@ VARIABLE _GSP-RX-PEER
     CBOR-NEXT-BSTR                     ( hash-a hash-u )
     DUP 32 = IF
         DROP GSP-SEEN? IF EXIT THEN    \ already seen
-    ELSE 2DROP THEN
+    ELSE 2DROP EXIT THEN               \ a hash of another length refuses it
     \ Re-parse to get height
     _GSP-RX-BUF @ 1+ _GSP-RX-LEN @ 1- CBOR-PARSE DROP
     CBOR-NEXT-ARRAY DROP

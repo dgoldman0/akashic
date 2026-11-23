@@ -447,6 +447,29 @@ def test_on_msg_blk_ann_callback():
     ]
     check("ON-BLK-ANN callback → height=99", lines, "99")
 
+def test_on_msg_blk_ann_refuses_a_short_hash_or_a_cut_message():
+    """A block announcement fires GSP-ON-BLK-ANN-XT only when its hash is
+    32 bytes and its CBOR decodes."""
+    lines = _keygen_preamble() + [
+        'CREATE _BMSG 128 ALLOT',
+        '2 _BMSG C!',                              # tag = BLK-ANN
+    ] + create_hex_buf('_BHASH', 'dd' * 32) + [
+        'VARIABLE _ANN-HT',
+        '0 _ANN-HT !',
+        ': _MY-BLK-CB  ( height peer -- ) DROP _ANN-HT ! ;',
+        "' _MY-BLK-CB GSP-ON-BLK-ANN-XT !",
+        # A 5-byte hash
+        '_BMSG 1+ 127 CBOR-RESET  2 CBOR-ARRAY  _BHASH 5 CBOR-BSTR  77 CBOR-UINT',
+        '_BMSG CBOR-RESULT NIP 1+ 3 GSP-ON-MSG',
+        '." [SHORT " _ANN-HT @ . ." ]" CR',
+        # A 32-byte hash, cut off inside its 4-byte height
+        '_BMSG 1+ 127 CBOR-RESET  2 CBOR-ARRAY  _BHASH 32 CBOR-BSTR  100000 CBOR-UINT',
+        '_BMSG CBOR-RESULT NIP 1+ 2 - 3 GSP-ON-MSG',
+        '." [CUT " _ANN-HT @ . ." ]" CR',
+    ]
+    check("a 5-byte hash fires nothing", lines, "[SHORT 0 ]")
+    check("a cut announcement fires nothing", lines, "[CUT 0 ]")
+
 def test_on_msg_unknown_type():
     """GSP-ON-MSG with unknown tag should not crash."""
     lines = _keygen_preamble() + [
