@@ -11,8 +11,8 @@
 \  Files on disk (chain-id derived, e.g. chain_1.dat / state_1.snap):
 \    chain_N.dat   — append-only block log
 \                    Format: [8B len][len bytes CBOR] repeated
-\    state_N.snap  — periodic state snapshot
-\                    Format: [ST-SNAPSHOT-SIZE bytes][8B chain-height]
+\    state_N.snap  — the latest state snapshot
+\                    Format: [snapshot][8B chain-height][8B snapshot size]
 \
 \  Known KDOS limitations:
 \   - MP64FS contiguous allocation; files cannot be resized
@@ -404,24 +404,20 @@ VARIABLE _PST-LB-LEN
 \  9. PST-SAVE-STATE / PST-LOAD-STATE
 \ =====================================================================
 \  Layout in state.snap:
-\    [actual_snap bytes]  — ST-SNAPSHOT (header + pgdir + pages)
-\    [8 bytes]            — chain height
-\    [8 bytes]            — actual_snap, the size marker
-\  ST-SNAPSHOT-SIZE is the worst-case (all 256 pages = ~4.7 MB).
-\  PST-SAVE-STATE writes the actual size, and the record buffer grows
-\  to it.
+\    [snapshot bytes]  — ST-SNAPSHOT: the accounts by page position
+\    [8 bytes]         — chain height
+\    [8 bytes]         — the snapshot's size, the marker
+\  ST-SNAPSHOT-SIZE is the worst case (all 256 pages = ~4.7 MB).
+\  PST-SAVE-STATE writes the state's actual snapshot, ST-SNAPSHOT-BYTES,
+\  and the record buffer grows to it.
+\  The snapshot holds no memory address, so a later session loads it
+\  into pages of its own.
 
-\ The bytes ST-SNAPSHOT writes: 16 + MAX_PAGES*8 + allocated pages *
-\ PAGE_BYTES.  ST-SNAPSHOT copies every page the state has allocated,
-\ which _ST-PGCNT counts, and the record buffer is sized to exactly this.
 VARIABLE _PST-SS
-: _PST-SNAP-ACTUAL  ( -- n )
-    16 _ST-MAX-PAGES CELLS +
-    _ST-PGCNT @ _ST-PAGE-BYTES * + ;
 
 : PST-SAVE-STATE  ( -- flag )
     _PST-OK @ 0= IF 0 EXIT THEN
-    _PST-SNAP-ACTUAL _PST-SS !
+    ST-SNAPSHOT-BYTES _PST-SS !
     \ The snapshot, the height and the marker must fit in the file
     _PST-SS @ 16 +  _PST-STATE-FD @ F.MAX SECTOR * > IF 0 EXIT THEN
     _PST-SS @ _PST-ROOM 0= IF 0 EXIT THEN
@@ -458,6 +454,8 @@ VARIABLE _PST-SS
     _PST-STATE-FD @ FREWIND
     _PST-BUF _PST-SS @ _PST-STATE-FD @ FREAD
     _PST-SS @ < IF 0 EXIT THEN
+    \ The snapshot's header must give the size the marker gives
+    _PST-BUF ST-SNAPSHOT-LEN _PST-SS @ <> IF 0 EXIT THEN
     _PST-BUF ST-RESTORE
     \ Skip chain height (informational)
     -1 ;

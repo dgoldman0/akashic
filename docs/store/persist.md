@@ -66,10 +66,13 @@ A length of 0 or a short read marks end-of-data.
 Periodic state snapshot:
 
 ```
-[actual snapshot bytes]   — ST-SNAPSHOT: header, page directory, allocated pages
-[8 bytes]                 — chain height at snapshot time
-[8 bytes]                 — the actual snapshot size, read first by PST-LOAD-STATE
+[snapshot bytes]   — ST-SNAPSHOT: account count, page count, the pages in order
+[8 bytes]          — chain height at snapshot time
+[8 bytes]          — the snapshot's size, read first by PST-LOAD-STATE
 ```
+
+The snapshot holds no memory address, so a later session loads it
+into pages of its own.
 
 `PST-SET-CAPACITY ( chain-sectors state-sectors -- )`, called before
 `PST-INIT`, sets both files' sector counts when they are created.
@@ -118,7 +121,7 @@ in either direction.  The buffer comes from the heap (XMEM when
 present) the first time a record needs it and is kept.  When a record
 needs more, the buffer grows to twice its size, or to the record's size
 when that is more: `BLK-ENCODED-SIZE` gives a block's size, the state's
-allocated pages give a snapshot's, and a record read back is bounded by
+`ST-SNAPSHOT-BYTES` gives a snapshot's, and a record read back is bounded by
 the file that holds it.  A full block of 256 hybrid transactions
 encodes to about 2.1 MB.
 
@@ -156,10 +159,9 @@ PST-SAVE-STATE  ( -- flag )
 ```
 
 Snapshot the state (`ST-SNAPSHOT`) into the record buffer, then write
-the snapshot at its actual size (its header, page directory and
-allocated pages), the 8-byte chain height and an 8-byte size marker to
-`state.snap`.  Flushes immediately.  Returns `-1` on success, `0` if
-the heap or the state file cannot hold the snapshot.
+the snapshot (`ST-SNAPSHOT-BYTES` long), the 8-byte chain height and an
+8-byte size marker to `state.snap`.  Flushes immediately.  Returns `-1` on success,
+`0` if the heap or the state file cannot hold the snapshot.
 
 ### PST-LOAD-STATE
 
@@ -170,7 +172,9 @@ PST-LOAD-STATE  ( -- flag )
 Read the size marker from the end of `state.snap`, then the snapshot
 into the record buffer, and restore via `ST-RESTORE`.  Returns `-1` on
 success, `0` if the file is empty, the marker is larger than
-`ST-SNAPSHOT-SIZE` or than the file, or a short read occurs.
+`ST-SNAPSHOT-SIZE` or than the file, a short read occurs, or the
+snapshot's header gives a size other than the marker's
+(`ST-SNAPSHOT-LEN`).  The state is left as it was when it returns `0`.
 
 ---
 
