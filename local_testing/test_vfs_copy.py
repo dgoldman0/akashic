@@ -32,7 +32,7 @@ from native_forth import (
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import MP64FS  # noqa: E402
-from simulator.platform import create_one_core_address_space  # noqa: E402
+from simulator.platform import create_address_space  # noqa: E402
 from simulator.runtime import MegaForthRuntime  # noqa: E402
 from simulator.storage import HostedStorageService  # noqa: E402
 
@@ -762,7 +762,7 @@ def boot_machine(image: bytes) -> tuple[SharedMachine, object]:
     (tui/platform/mp64fs-vfs.f), with the RAM volumes beside it."""
     storage = HostedStorageService(image)
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(
+        memory=create_address_space(
             external_size=128 << 20, hbw_size=1 << 20,
         ),
         execution_backend="native",

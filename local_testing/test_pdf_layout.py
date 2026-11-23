@@ -22,7 +22,7 @@ from forth_dependencies import dependency_order
 from test_pdf_content import FILE_BYTES, page_pdf
 from test_pdf_file import stream_object, write_pdf
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 OK = 0
@@ -86,7 +86,7 @@ LY-LNK PDF-LINKS-SIZE 0 FILL
 class Layout:
     def __init__(self):
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=96 << 20, hbw_size=1 << 20),
+            memory=create_address_space(external_size=96 << 20, hbw_size=1 << 20),
             execution_backend="native",
         )
         self.runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

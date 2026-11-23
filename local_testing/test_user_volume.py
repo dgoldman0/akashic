@@ -24,7 +24,7 @@ import akashic_tui as tui
 from forth_dependencies import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from test_vfs_module_source import _boot_disk
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 
@@ -132,7 +132,7 @@ class Machine:
     ) -> None:
         self.user = None if user is None else HostedStorageService(user)
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=128 << 20),
+            memory=create_address_space(external_size=128 << 20),
             execution_backend="native",
             storage=HostedStorageService(_boot_disk()),
             user_storage=self.user,

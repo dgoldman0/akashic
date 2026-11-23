@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Live integration test — Akashic web framework over TAP networking.
+"""Manual live check of the Akashic web framework over TAP networking.
+
+A tool, not a test unit: it needs a TAP device that only a person can
+create, so its name keeps the test tool from collecting it.
 
 Boots BIOS + KDOS + all web framework files, configures TAP networking,
 registers demo routes with middleware + templates, then starts SERVE on
@@ -14,9 +17,9 @@ Requires: mp64tap0 TAP device configured.  Set up with:
     sudo ip link set mp64tap0 up
 
 Usage:
-    python test_live_web.py                # boot + auto-test + keep alive
-    python test_live_web.py --auto-only    # boot + auto-test, then exit
-    python test_live_web.py --serve-only   # boot + keep alive (no auto-tests)
+    python live_web.py                # boot + auto-test + keep alive
+    python live_web.py --auto-only    # boot + auto-test, then exit
+    python live_web.py --serve-only   # boot + keep alive (no auto-tests)
 
 Browse to:    http://10.64.0.2:8080/
 API endpoint: http://10.64.0.2:8080/api/status

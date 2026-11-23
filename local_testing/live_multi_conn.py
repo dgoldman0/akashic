@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Live multi-connection stress test — Akashic web server over TAP.
+"""Manual live multi-connection check of the Akashic web server over TAP.
+
+A tool, not a test unit: it needs a TAP device that only a person can
+create, so its name keeps the test tool from collecting it.  Without the
+device every test skipped, so the tool ran it at every run and never
+counted it as passing.
 
 Boots the Akashic web framework server, then verifies it can handle
 multiple simultaneous TCP connections.  This exercises the KDOS TCP
@@ -36,8 +41,8 @@ Prerequisites
 Running
 -------
     cd local_testing
-    python test_live_multi_conn.py                    # standalone
-    python -m pytest test_live_multi_conn.py -v       # via pytest
+    python live_multi_conn.py                         # standalone
+    python -m pytest live_multi_conn.py -v            # via pytest
     python -m pytest test_live_multi_conn.py -v -k concurrent  # subset
 """
 from __future__ import annotations
@@ -101,7 +106,7 @@ KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 HTTP_TIMEOUT = 10.0
 
 # ---------------------------------------------------------------------------
-#  Low-level helpers (shared with test_live_web.py)
+#  Low-level helpers (shared with live_web.py)
 # ---------------------------------------------------------------------------
 
 def _load_bios():
@@ -176,7 +181,7 @@ def _forth_create_string(name: str, s: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-#  Demo Application (Forth source) — same routes as test_live_web.py
+#  Demo Application (Forth source) — same routes as live_web.py
 #  but uses the standard SERVE (no debug SRV-HANDLE redefinition) for
 #  maximum throughput during concurrent-connection testing.
 # ---------------------------------------------------------------------------

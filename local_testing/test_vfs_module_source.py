@@ -22,7 +22,7 @@ import generate_ext4_profile_fixtures as ext4_fixture_generator
 from forth_dependencies import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from diskutil import FTYPE_FORTH, MP64FS
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 
@@ -191,7 +191,7 @@ class Machine:
         self.boot = HostedStorageService(_boot_disk())
         self.volume = HostedStorageService(volume, write_protected=True)
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=128 << 20),
+            memory=create_address_space(external_size=128 << 20),
             execution_backend="native",
             storage=self.boot,
             settings_storage=self.volume,

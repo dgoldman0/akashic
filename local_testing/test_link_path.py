@@ -16,7 +16,7 @@ import re
 
 from forth_dependencies import dependency_order
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 OK, EMPTY, SCHEME, ROOM = 0, 1, 2, 3
@@ -106,7 +106,7 @@ def _forth_string(name: str, data: bytes) -> list[str]:
 def test_paths_are_the_rules_paths() -> None:
     cases = _cases(5, 1200)
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=64 << 20, hbw_size=1 << 20),
+        memory=create_address_space(external_size=64 << 20, hbw_size=1 << 20),
         execution_backend="native",
     )
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

@@ -26,8 +26,14 @@
 \   AIR-MAX-OFF    ( air -- n )
 \
 \  Public API — evaluation:
-\   AIR-EVAL-TRANS   ( air cols row -- residual )
+\   AIR-EVAL-TRANS   ( air cols row -- residual )  sum of residuals
+\   AIR-CHECK-TRANS  ( air cols row -- flag )  every constraint holds
 \   AIR-CHECK-BOUND  ( air cols -- flag )
+\   AIR-FITS?        ( air ncols rows -- flag )  reads only that trace
+\
+\  Residuals of different constraints can cancel in the sum, so a
+\  zero from AIR-EVAL-TRANS does not show that a row satisfies the
+\  AIR; a verifier checks rows with AIR-CHECK-TRANS.
 \
 \  Descriptor layout (flat byte buffer):
 \    Header 8 bytes:
@@ -198,33 +204,56 @@ VARIABLE _AET-VA
 VARIABLE _AET-VB
 VARIABLE _AET-VR
 
+\ Residual of transition entry ent at row _AET-ROW of trace _AET-COLS
+: _AIR-RESIDUAL  ( ent -- residual )
+    _AET-ENT !
+    \ valA = trace[row+offA][colA]
+    _AET-ROW @  _AET-ENT @ 2 + C@  +
+    _AET-ENT @ 1 + C@
+    _AET-COLS @
+    _AIR-TRACE@  _AET-VA !
+    \ valB = trace[row+offB][colB]
+    _AET-ROW @  _AET-ENT @ 4 + C@  +
+    _AET-ENT @ 3 + C@
+    _AET-COLS @
+    _AIR-TRACE@  _AET-VB !
+    \ valR = trace[row+offR][colR]
+    _AET-ROW @  _AET-ENT @ 6 + C@  +
+    _AET-ENT @ 5 + C@
+    _AET-COLS @
+    _AIR-TRACE@  _AET-VR !
+    \ residual = valR - op(valA, valB)
+    _AET-VA @  _AET-VB @  _AET-ENT @ C@  _AIR-OP
+    _AET-VR @ SWAP BB- ;
+
+\ Address of transition entry j of descriptor _AET-AIR
+: _AIR-TRANS-ENT  ( j -- ent )  8 * 8 + _AET-AIR @ + ;
+
 : AIR-EVAL-TRANS  ( air cols row -- residual )
     _AET-ROW !  _AET-COLS !  _AET-AIR !
     0 _AET-SUM !  0 _AET-J !
     BEGIN _AET-J @ _AET-AIR @ AIR-N-TRANS < WHILE
-        _AET-J @ 8 * 8 + _AET-AIR @ +  _AET-ENT !
-        \ valA = trace[row+offA][colA]
-        _AET-ROW @  _AET-ENT @ 2 + C@  +
-        _AET-ENT @ 1 + C@
-        _AET-COLS @
-        _AIR-TRACE@  _AET-VA !
-        \ valB = trace[row+offB][colB]
-        _AET-ROW @  _AET-ENT @ 4 + C@  +
-        _AET-ENT @ 3 + C@
-        _AET-COLS @
-        _AIR-TRACE@  _AET-VB !
-        \ valR = trace[row+offR][colR]
-        _AET-ROW @  _AET-ENT @ 6 + C@  +
-        _AET-ENT @ 5 + C@
-        _AET-COLS @
-        _AIR-TRACE@  _AET-VR !
-        \ residual = valR - op(valA, valB)
-        _AET-VA @  _AET-VB @  _AET-ENT @ C@  _AIR-OP
-        _AET-VR @ SWAP BB-
+        _AET-J @ _AIR-TRANS-ENT _AIR-RESIDUAL
         _AET-SUM @ BB+  _AET-SUM !
         _AET-J @ 1 + _AET-J !
     REPEAT
     _AET-SUM @ ;
+
+\ =====================================================================
+\  AIR-CHECK-TRANS  ( air cols row -- flag )
+\ =====================================================================
+\  TRUE only when the residual of every transition constraint is zero
+\  at row, each checked on its own.
+
+: AIR-CHECK-TRANS  ( air cols row -- flag )
+    _AET-ROW !  _AET-COLS !  _AET-AIR !
+    0 _AET-J !
+    BEGIN _AET-J @ _AET-AIR @ AIR-N-TRANS < WHILE
+        _AET-J @ _AIR-TRANS-ENT _AIR-RESIDUAL
+        IF 0 EXIT THEN
+        _AET-J @ 1 + _AET-J !
+    REPEAT
+    -1 ;
 
 \ =====================================================================
 \  AIR-CHECK-BOUND  ( air cols -- flag )
@@ -254,6 +283,43 @@ VARIABLE _ACB-ENT
     REPEAT
     _ACB-OK @ ;
 
+\ =====================================================================
+\  AIR-FITS?  ( air ncols rows -- flag )
+\ =====================================================================
+\  TRUE when the descriptor names exactly ncols columns and every
+\  constraint reads inside a trace of ncols columns and rows rows: each
+\  operand's column below ncols and its offset below rows, each
+\  boundary's column below ncols and its row below rows.  The builder
+\  checks none of these, and an evaluator reads whatever cols holds.
+
+VARIABLE _AF-AIR
+VARIABLE _AF-NCOLS
+VARIABLE _AF-ROWS
+VARIABLE _AF-J
+VARIABLE _AF-ENT
+
+: _AF-IN?  ( col n -- flag )
+    _AF-ROWS @ U<  SWAP _AF-NCOLS @ U<  AND ;
+
+: AIR-FITS?  ( air ncols rows -- flag )
+    _AF-ROWS !  _AF-NCOLS !  _AF-AIR !
+    _AF-AIR @ AIR-N-COLS _AF-NCOLS @ <> IF 0 EXIT THEN
+    0 _AF-J !
+    BEGIN _AF-J @ _AF-AIR @ AIR-N-TRANS < WHILE
+        _AF-J @ 8 * 8 + _AF-AIR @ +  _AF-ENT !
+        _AF-ENT @ 1 + C@  _AF-ENT @ 2 + C@  _AF-IN? 0= IF 0 EXIT THEN
+        _AF-ENT @ 3 + C@  _AF-ENT @ 4 + C@  _AF-IN? 0= IF 0 EXIT THEN
+        _AF-ENT @ 5 + C@  _AF-ENT @ 6 + C@  _AF-IN? 0= IF 0 EXIT THEN
+        _AF-J @ 1 + _AF-J !
+    REPEAT
+    0 _AF-J !
+    BEGIN _AF-J @ _AF-AIR @ AIR-N-BOUND < WHILE
+        _AF-AIR @ AIR-N-TRANS  _AF-J @ +  8 *  8 +  _AF-AIR @ +  _AF-ENT !
+        _AF-ENT @ C@  _AF-ENT @ 2 + _AIR-W16@  _AF-IN? 0= IF 0 EXIT THEN
+        _AF-J @ 1 + _AF-J !
+    REPEAT
+    -1 ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -268,14 +334,18 @@ GUARD _air-guard
 ' AIR-N-BOUND     CONSTANT _air-n-bound-xt
 ' AIR-MAX-OFF     CONSTANT _air-max-off-xt
 ' AIR-EVAL-TRANS  CONSTANT _air-eval-trans-xt
+' AIR-CHECK-TRANS CONSTANT _air-check-trans-xt
 ' AIR-CHECK-BOUND CONSTANT _air-check-bound-xt
+' AIR-FITS?       CONSTANT _air-fits-xt
 
 : AIR-N-COLS      _air-n-cols-xt _air-guard WITH-GUARD ;
 : AIR-N-TRANS     _air-n-trans-xt _air-guard WITH-GUARD ;
 : AIR-N-BOUND     _air-n-bound-xt _air-guard WITH-GUARD ;
 : AIR-MAX-OFF     _air-max-off-xt _air-guard WITH-GUARD ;
 : AIR-EVAL-TRANS  _air-eval-trans-xt _air-guard WITH-GUARD ;
+: AIR-CHECK-TRANS _air-check-trans-xt _air-guard WITH-GUARD ;
 : AIR-CHECK-BOUND _air-check-bound-xt _air-guard WITH-GUARD ;
+: AIR-FITS?       _air-fits-xt _air-guard WITH-GUARD ;
 : AIR-BEGIN
   _air-guard GUARD-ACQUIRE
   _air-begin-xt CATCH IF _air-guard GUARD-RELEASE THROW THEN ;

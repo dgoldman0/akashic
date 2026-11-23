@@ -38,7 +38,7 @@ import akashic_tui  # noqa: E402
 import qoi_codec  # noqa: E402
 import test_png  # noqa: E402
 from forth_dependencies import dependency_order  # noqa: E402
-from simulator.platform import create_one_core_address_space  # noqa: E402
+from simulator.platform import create_address_space  # noqa: E402
 from simulator.runtime import MegaForthRuntime  # noqa: E402
 from test_inflate import _text, _zlib  # noqa: E402
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines  # noqa: E402
@@ -96,7 +96,7 @@ VARIABLE MD-P  VARIABLE MD-LEFT  VARIABLE MD-O  VARIABLE MD-W
 class Machine:
     def __init__(self):
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(external_size=32 << 20, hbw_size=1 << 20),
+            memory=create_address_space(external_size=32 << 20, hbw_size=1 << 20),
             execution_backend="native",
         )
         self.runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

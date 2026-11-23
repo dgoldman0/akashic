@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic render/bmp.f — BMP Image Encoder.
 
 Uses snapshot-based testing: boots BIOS + KDOS, loads surface.f + bmp.f
@@ -245,24 +228,32 @@ def build_snapshot():
     load_errs = [l for l in load_text.split('\n')
                  if 'not found' in l.lower() or 'error' in l.lower() or 'abort' in l.lower()]
     if load_errs:
-        print("[!] Errors during load:")
-        for e in load_errs[-15:]:
-            print(f"    {e}")
+        raise RuntimeError("bmp.f failed to load:\n" + "\n".join(load_errs[-15:]))
 
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print("[*] Snapshot ready.")
     return _snapshot
 
 
 def run_forth(lines, max_steps=200_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16*(1<<20))
+    # Boot the BIOS on the fresh machine before restoring the snapshot: the
+    # boot wires the UART and the native accelerator's MMIO routing, which a
+    # restored memory image alone does not.
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    sys_obj = MegapadSystem(ram_size=1024*1024, storage_image=_img_path,
+                            ext_mem_size=16*(1<<20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    sys_obj._storage_path = _img_path
+    restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
 
     steps = _feed_and_run(sys_obj, buf, lines, max_steps)
     text = uart_text(buf)

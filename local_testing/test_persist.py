@@ -13,6 +13,9 @@ attaches it to the emulator, and exercises the full persist API:
   - PST-CLEAR resets
   - PST-SAVE-STATE + PST-LOAD-STATE round-trip
   - PST-CLOSE releases file descriptors
+  - Records larger than 256 KB: a block and a state snapshot round-trip
+  - Repeated saves of mixed sizes leave extended memory where it was
+  - A block the chain file cannot hold is refused whole
 """
 import os, sys, time, tempfile
 
@@ -432,12 +435,163 @@ def test_o1_block_load():
           check_fn=lambda t: '3 1' in t)
 
 
-def test_encode_buffer_size():
-    """[FIX D06] _PST-ENC-SZ is 262144 (256 KB)."""
-    print("\n── Encode Buffer Size ──\n")
-    check("_PST-ENC-SZ = 262144",
-          ['_PST-ENC-SZ .'],
-          "262144 ")
+# ── Records larger than the old 256 KB buffer ──
+#
+# persist.f encoded every block into one 256 KB buffer, which a block of
+# 33 hybrid transactions outgrows; a full block of 256 encodes to about
+# 2.1 MB.  The record buffer now grows to what a record needs and is
+# kept, so these cases build blocks of hybrid-shaped transactions: each
+# carries both signatures at their full lengths, patterned bytes in place
+# of real signatures, since encoding and decoding do not verify and a
+# SPHINCS+ signature costs far more emulator time than this suite has.
+# An encoding pass costs about 570 emulator steps per byte it writes, so
+# only the case about size uses a block over 256 KB.  _SAME compares two
+# blocks field by field: their header bytes, and for each transaction
+# every byte before the internal flags, which holds every field
+# TX-ENCODE writes.
+
+def _hybrid_blocks(*blocks):
+    """Lines that build each (NAME, COUNT, HEIGHT) block from one pool of
+    hybrid-shaped transactions, the block holding the pool's first COUNT,
+    and the helpers the cases share."""
+    most = max(count for _, count, _ in blocks)
+    lines = [
+        f'CREATE _HPOOL {most} TX-BUF-SIZE * ALLOT',
+        'CREATE _HK1 32 ALLOT  _HK1 32 17 FILL',
+        'CREATE _HK2 32 ALLOT  _HK2 32 34 FILL',
+        'VARIABLE _HT  VARIABLE _HI',
+        # _HTX ( i -- tx )  pool transaction i, its fields set from i
+        ': _HTX  ( i -- tx )  DUP _HI !  TX-BUF-SIZE * _HPOOL + DUP _HT !',
+        '  TX-INIT  _HK1 _HT @ TX-SET-FROM  _HK2 _HT @ TX-SET-TO',
+        '  _HI @ 1+ _HT @ TX-SET-AMOUNT  _HI @ _HT @ TX-SET-NONCE',
+        '  _HT @ _TX-SIG ED25519-SIG-LEN _HI @ FILL',
+        '  _HT @ _TX-SIG-PQ SPX-SIG-LEN _HI @ 101 + FILL',
+        '  TX-SIG-HYBRID _HT @ _TX-SIG-MODE C!  _HT @ ;',
+        # _HBLK ( n height blk -- )  a block holding pool transactions 0..n-1
+        ': _HBLK  ( n height blk -- )  DUP BLK-INIT  TUCK BLK-SET-HEIGHT',
+        '  1700000000 OVER BLK-SET-TIME',
+        '  SWAP 0 ?DO I _HTX OVER BLK-ADD-TX DROP LOOP DROP ;',
+        'VARIABLE _SB1  VARIABLE _SB2',
+        # _SAME ( blk1 blk2 -- flag )  TRUE when the blocks match field by field
+        ': _SAME  ( blk1 blk2 -- flag )  _SB2 ! _SB1 !',
+        '  _SB1 @ BLK-HDR-SIZE _SB2 @ BLK-HDR-SIZE COMPARE IF 0 EXIT THEN',
+        '  _SB1 @ BLK-TX-COUNT@ _SB2 @ BLK-TX-COUNT@ <> IF 0 EXIT THEN',
+        '  _SB1 @ BLK-TX-COUNT@ 0 ?DO',
+        '    I _SB1 @ BLK-TX@ _TX-OFF-FLAGS  I _SB2 @ BLK-TX@ _TX-OFF-FLAGS',
+        '    COMPARE IF 0 UNLOOP EXIT THEN',
+        '  LOOP -1 ;',
+        'CREATE _BL BLK-STRUCT-SIZE ALLOT',
+    ]
+    for name, count, height in blocks:
+        lines.append(f'CREATE {name} BLK-STRUCT-SIZE ALLOT  {count} {height} {name} _HBLK')
+    return lines
+
+
+def test_large_block_round_trip():
+    """A block larger than 256 KB saves and loads back intact.
+
+    Its record goes into the chain file whole, the walk at PST-INIT finds
+    it again after a close, and the block read back matches the saved
+    block field by field."""
+    print("\n── Block over 256 KB ──\n")
+    lines = _hybrid_blocks(('_BB', 40, 5)) + [
+        f': _T {_PST_PREAMBLE}',
+        '  ." save=" _BB PST-SAVE-BLOCK .',
+        '  ." record=" _PST-CHAIN-FD @ FSIZE 8 - DUP .  262144 > ." over=" .',
+        '  PST-CLOSE PST-INIT DROP  ." count=" PST-BLOCK-COUNT .',
+        '  ." load=" 0 _BL PST-LOAD-BLOCK .  ." txs=" _BL BLK-TX-COUNT@ .',
+        '  ." same=" _BL _BB _SAME . ; _T',
+    ]
+    check("a 40-transaction block round-trips", lines,
+          check_fn=lambda t: "save=-1 record=" in t
+          and "over=-1 count=1 load=-1 txs=40 same=-1 " in t,
+          max_steps=800_000_000)
+
+
+def test_mixed_saves_keep_memory():
+    """Saves and loads of mixed sizes leave extended memory where it was.
+
+    KDOS's XMEM heap never joins free blocks, so a buffer allocated and
+    freed at each record's size would leave holes behind and push
+    XMEM-HERE up.  The record buffer grows to the largest block, here one
+    of six transactions, and later saves and loads of every size reuse
+    it; BLK-DECODE reuses its transaction buffers.  ALLOCATE takes its
+    blocks from XMEM here, which HEAP-FREE-BYTES does not count, so the
+    measure is XMEM-HERE less the bytes on the XMEM free list."""
+    print("\n── Mixed saves ──\n")
+    lines = _hybrid_blocks(('_BM', 6, 5), ('_BS', 1, 6)) + [
+        ': _XFL  ( -- n )  0 XMEM-FL @ BEGIN ?DUP WHILE DUP @ ROT + SWAP 8 + @ REPEAT ;',
+        ': _USED  ( -- n )  XMEM-HERE @ _XFL - ;',
+        'VARIABLE _U0  VARIABLE _H0',
+        f': _T {_PST_PREAMBLE}',
+        '  _BM PST-SAVE-BLOCK DROP  0 _BL PST-LOAD-BLOCK DROP',
+        '  _USED _U0 !  XMEM-HERE @ _H0 !',
+        '  10 0 DO',
+        '    _BS PST-SAVE-BLOCK DROP  CHAIN-HEAD PST-SAVE-BLOCK DROP',
+        '    I 1 AND IF _BM PST-SAVE-BLOCK DROP THEN',
+        '    PST-BLOCK-COUNT 1- _BL PST-LOAD-BLOCK DROP',
+        '  LOOP',
+        '  ." count=" PST-BLOCK-COUNT .',
+        '  ." used=" _USED _U0 @ - .  ." here=" XMEM-HERE @ _H0 @ - .',
+        '  ." load=" PST-BLOCK-COUNT 1- _BL PST-LOAD-BLOCK .',
+        '  ." same=" _BL _BM _SAME .',
+        '  ." small=" PST-BLOCK-COUNT 3 - _BL PST-LOAD-BLOCK .',
+        '  ." same2=" _BL _BS _SAME . ; _T',
+    ]
+    check("26 saves of three sizes, no memory taken", lines,
+          "count=26 used=0 here=0 load=-1 same=-1 small=-1 same2=-1 ",
+          max_steps=600_000_000)
+
+
+def test_full_chain_file_refuses_block():
+    """A block the chain file cannot hold is refused whole.
+
+    KDOS's FWRITE writes nothing past a file's sectors, so a save that did
+    not fit wrote its length prefix and no block, reported success, and
+    left the log holding a record the walk at PST-INIT misreads.  The save
+    is refused before anything is written, and a block that fits still
+    saves after it.  A chain file of 80 sectors holds two blocks of two
+    hybrid transactions, about 16 KB each, and not a third."""
+    print("\n── Full chain file ──\n")
+    lines = _hybrid_blocks(('_B2', 2, 6)) + [
+        ': _T 80 512 PST-SET-CAPACITY PST-INIT DROP',
+        '  ." s1=" _B2 PST-SAVE-BLOCK .  ." s2=" _B2 PST-SAVE-BLOCK .',
+        '  ." s3=" _B2 PST-SAVE-BLOCK .  ." count=" PST-BLOCK-COUNT .',
+        '  ." small=" CHAIN-HEAD PST-SAVE-BLOCK .',
+        '  PST-CLOSE PST-INIT DROP  ." reopened=" PST-BLOCK-COUNT .',
+        '  ." load=" 2 _BL PST-LOAD-BLOCK .  ." h=" _BL BLK-HEIGHT@ .',
+        '  ." load1=" 1 _BL PST-LOAD-BLOCK .  ." same=" _BL _B2 _SAME . ; _T',
+    ]
+    check("the third block does not fit and is refused", lines,
+          "s1=-1 s2=-1 s3=0 count=2 small=-1 reopened=3 load=-1 h=0 "
+          "load1=-1 same=-1 ")
+
+
+def test_large_state_round_trip():
+    """A state snapshot larger than 256 KB saves and loads back.
+
+    3,585 accounts fill 15 pages of 256, a snapshot of 278,544 bytes.  The
+    addresses count up, so each account goes at the end of the table."""
+    print("\n── State over 256 KB ──\n")
+    lines = [
+        'CREATE _AD 32 ALLOT',
+        # _ADDR! ( i -- )  _AD holds i big-endian in its last 8 bytes
+        ': _ADDR!  ( i -- )  _AD 32 0 FILL',
+        '  8 0 DO DUP 255 AND _AD 31 I - + C!  8 RSHIFT LOOP DROP ;',
+        ': _ACCTS  ( n -- )  0 ?DO I _ADDR!  _AD I 1+ ST-CREATE DROP LOOP ;',
+        ': _T 16 600 PST-SET-CAPACITY PST-INIT DROP',
+        '  3585 _ACCTS  ." count=" ST-COUNT .',
+        '  ." snap=" _PST-SNAP-ACTUAL DUP .  262144 > ." over=" .',
+        '  ." save=" PST-SAVE-STATE .',
+        '  ST-INIT DROP  ." wiped=" ST-COUNT .',
+        '  ." load=" PST-LOAD-STATE .  ." count2=" ST-COUNT .',
+        '  0 _ADDR! ." first=" _AD ST-BALANCE@ .',
+        '  3584 _ADDR! ." last=" _AD ST-BALANCE@ . ; _T',
+    ]
+    check("a 15-page state round-trips", lines,
+          "count=3585 snap=278544 over=-1 save=-1 wiped=0 load=-1 "
+          "count2=3585 first=1 last=3585 ",
+          max_steps=600_000_000)
 
 
 # =====================================================================

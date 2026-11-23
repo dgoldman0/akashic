@@ -598,7 +598,9 @@ VARIABLE _satc-source-b
     _STM-OPEN-TIMELINE
     _STM-VIEW @ _STM-V-TIMELINE = _satc-assert
     24 _STM-DH !
-    _STM-VISIBLE-ITEMS 0> _satc-assert
+    \ The timeline shows its posts as cards; at this height it has rows
+    \ for them
+    _STM-TIMELINE-FIRST-ROW _STM-CARD-ROWS 0> _satc-assert
     _STM-FEED-PROVENANCE$
         S" PDS-authenticated / AppView proxy requested"
         STR-STR= _satc-assert

@@ -9,7 +9,7 @@ real ones, over the system heap through a counting allocator.
 import pytest
 
 import akashic_tui as packaging
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 
@@ -74,7 +74,7 @@ CREATE GT-ADAPTER-MEM RUHA-SIZE 7 + ALLOT
 class ProducerGrowthHarness:
     def __init__(self, backend):
         self.runtime = MegaForthRuntime(
-            memory=create_one_core_address_space(
+            memory=create_address_space(
                 external_size=packaging.DESKTOP_APT1_EXT_MEM_MIB << 20,
                 hbw_size=1 << 20,
             ),

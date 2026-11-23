@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import argparse
+import tempfile
 from pathlib import Path
 
 
@@ -21,9 +22,11 @@ import akashic_tui as harness  # noqa: E402
 
 
 SHELL_PROFILE = "applet-close-shell"
-SHELL_IMAGE = Path("/tmp/akashic-applet-close-shell.img")
+# The folder for the images (pytest's temporary folder under a test)
+IMAGE_DIR = Path(tempfile.gettempdir())
+SHELL_IMAGE_NAME = "akashic-applet-close-shell.img"
 DESK_PROFILE = "applet-close-desk"
-DESK_IMAGE = Path("/tmp/akashic-applet-close-desk.img")
+DESK_IMAGE_NAME = "akashic-applet-close-desk.img"
 
 AUTOEXEC = r"""\ autoexec.f - applet close negotiation regression
 ENTER-USERLAND
@@ -690,10 +693,17 @@ def main() -> int:
     timeout = args.timeout or 120.0
     ok = True
     if args.profile in ("shell", "all"):
-        ok = _run_profile(SHELL_PROFILE, SHELL_IMAGE, timeout) and ok
+        ok = _run_profile(SHELL_PROFILE, IMAGE_DIR / SHELL_IMAGE_NAME, timeout) and ok
     if args.profile in ("desk", "all"):
-        ok = _run_profile(DESK_PROFILE, DESK_IMAGE, timeout) and ok
+        ok = _run_profile(DESK_PROFILE, IMAGE_DIR / DESK_IMAGE_NAME, timeout) and ok
     return 0 if ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,11 @@
 
 This test uses the supported sibling MegaPad checkout rather than the removed
 ``local_testing/emu`` copy.  It boots four full cores so the worker trampoline
-and publication boundary are exercised, not merely parsed on core 0.
+and publication boundary are exercised, not merely parsed on core 0.  Each
+case also runs on MegaPad's simulator, on four full cores and, where it uses
+core 1 alone, on two, and must print the same integers there: the simulator
+runs its cores in rounds, so a job moves through each state on a worker as on
+the emulator's lock-step cores.
 """
 
 from __future__ import annotations
@@ -106,22 +110,11 @@ def _restore_cpu(cpu, state: dict) -> None:
 _snapshot: tuple[bytes, bytes, list[dict]] | None = None
 
 
-def build_snapshot() -> None:
-    global _snapshot
-    if _snapshot is not None:
-        return
-    print("[*] Building four-core worker-job snapshot ...")
-    started = time.monotonic()
-    bios = assemble(BIOS_PATH.read_text())
-    system = MegapadSystem(ram_size=1024 * 1024, num_cores=4)
-    output = _capture_uart(system)
-    system.load_binary(0, bios)
-    system.boot()
-    # The contemporary monolithic KDOS source nearly fills the 1 MiB Forth
-    # dictionary by itself.  This focused test loads the exact KDOS primitives
-    # the library relies on over the real BIOS multicore words; production
-    # image builds separately validate the complete REQUIRE closure.
-    kdos_contract = [
+def _kdos_contract() -> list[str]:
+    """The KDOS primitives the library relies on, over the BIOS's multicore
+    words, for both machines."""
+
+    return [
         "VARIABLE CURRENT-TASK 0 CURRENT-TASK !",
         "1 CONSTANT T.READY",
         "2 CONSTANT T.RUNNING",
@@ -140,13 +133,50 @@ def build_snapshot() -> None:
         ": THROW ?DUP IF HANDLER @ RP! R> HANDLER ! R> SWAP >R SP! DROP R> THEN ;",
         "6 CONSTANT EVT-LOCK",
     ]
-    payload = "\n".join(
-        kdos_contract
-        + _forth_lines(CLASS_F)
+
+
+def _library_lines() -> list[str]:
+    return (
+        _forth_lines(CLASS_F)
         + _forth_lines(UINT_RANGE_F)
         + _forth_lines(MEMORY_SPAN_F)
         + _forth_lines(WORKER_F)
-    ) + "\n"
+    )
+
+
+def run_simulated(lines: list[str], cores: int) -> str:
+    """Run LINES on MegaPad's simulator with CORES full cores, the library
+    loaded over the same KDOS primitives, and return what it printed."""
+
+    from simulator.platform import Topology, create_address_space
+    from simulator.runtime import MegaForthRuntime
+
+    memory = create_address_space(
+        topology=Topology(full_cores=cores), bank0_size=1024 * 1024,
+    )
+    runtime = MegaForthRuntime(memory=memory)
+    runtime.evaluate("\n".join(_kdos_contract() + _library_lines()).encode())
+    runtime.drain_uart_output()
+    runtime.evaluate("\n".join(lines).encode(), step_budget=50_000_000)
+    return bytes(runtime.drain_uart_output()).decode("latin-1")
+
+
+def build_snapshot() -> None:
+    global _snapshot
+    if _snapshot is not None:
+        return
+    print("[*] Building four-core worker-job snapshot ...")
+    started = time.monotonic()
+    bios = assemble(BIOS_PATH.read_text())
+    system = MegapadSystem(ram_size=1024 * 1024, num_cores=4)
+    output = _capture_uart(system)
+    system.load_binary(0, bios)
+    system.boot()
+    # The contemporary monolithic KDOS source nearly fills the 1 MiB Forth
+    # dictionary by itself.  This focused test loads the exact KDOS primitives
+    # the library relies on over the real BIOS multicore words; production
+    # image builds separately validate the complete REQUIRE closure.
+    payload = "\n".join(_kdos_contract() + _library_lines()) + "\n"
     data = payload.encode()
     pos = 0
     steps = 0
@@ -227,12 +257,24 @@ def run_forth(lines: list[str], max_steps: int = 100_000_000) -> str:
     return transcript
 
 
-def check(name: str, forth: list[str], expected: str) -> None:
-    """Require the integers the program printed to be EXPECTED, exactly.
+def check(
+    name: str, forth: list[str], expected: str, *, simulated_cores=(4, 2),
+) -> None:
+    """Require the integers the program printed to be EXPECTED, exactly, on
+    the emulator and on the simulator with each of SIMULATED_CORES.
 
     Each printed line that ends in KDOS's ``ok`` and holds only integers adds
     its integers, in order.  The check fails when KDOS reported a failed line.
+    The simulator prints no prompt, so there every integer it printed counts.
     """
+    for cores in simulated_cores:
+        said = run_simulated(forth, cores)
+        printed = [field for field in said.split() if re.fullmatch(r"-?\d+", field)]
+        actual = " ".join(printed) + (" " if printed else "")
+        assert actual == expected, (
+            f"{name} on {cores} simulated cores: expected the integers "
+            f"{expected!r}, printed {actual!r}\n{said[-2000:]}"
+        )
     output = run_forth(forth)
     printed = printed_output(name, forth, output)
     results: list[str] = []
@@ -311,6 +353,8 @@ def test_two_supervised_jobs_run_on_distinct_full_cores():
             "_WJ WJOB-REAP . _WJ2 WJOB-REAP .",
         ],
         "0 0 0 0 0 3 0 3 42 100 0 0 ",
+        # Core 2 is the second job's: two cores do not have it.
+        simulated_cores=(4,),
     )
 
 

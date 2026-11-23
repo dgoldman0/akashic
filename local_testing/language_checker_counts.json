@@ -1,27 +1,27 @@
 {
- "measured": "Akashic's library group, with GUARDED undefined, on MegaPad 1d91b2c69b4d43265e6397a208cf050c44578882",
- "definitions": 44481,
- "inferred": 43282,
+ "measured": "Akashic's library group, with GUARDED undefined, on MegaPad 1315133f0055c3ff70c0d5a37e32a91dbad6332e",
+ "definitions": 44404,
+ "inferred": 43215,
  "counts": {
   "finding: return stack: I reads a cell parked by >R, not a loop index": 3,
   "finding: return stack: R> takes a DO loop's control cells": 1,
   "finding: token effect": 1,
-  "mismatch": 190,
-  "not inferred": 1199,
+  "mismatch": 189,
+  "not inferred": 1189,
   "not inferred: CATCH of an input xt": 133,
   "not inferred: CATCH of an unknown xt": 19,
   "not inferred: EVALUATE of text": 3,
   "not inferred: EXECUTE of an input xt": 93,
-  "not inferred: EXECUTE of an unknown xt": 584,
+  "not inferred: EXECUTE of an unknown xt": 582,
   "not inferred: computed PICK or ROLL depth": 3,
   "not inferred: deferred word without a declared effect": 25,
   "not inferred: direct stack-pointer access": 1,
   "not inferred: loop changes the return stack depth": 1,
-  "not inferred: loop changes the stack depth": 20,
+  "not inferred: loop changes the stack depth": 19,
   "not inferred: recursion without a declared effect": 1,
-  "not inferred: result depth varies": 145,
+  "not inferred: result depth varies": 139,
   "not inferred: return stack misuse": 1,
   "not inferred: through a callee that fails": 37,
-  "not inferred: undefined word": 133
+  "not inferred: undefined word": 132
  }
 }

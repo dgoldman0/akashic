@@ -107,10 +107,13 @@ Production is disabled by default.  When enabled and the node is
 synced (`SYNC-IDLE`):
 
 1. Drain up to `BLK-MAX-TXS` transactions from the mempool
-2. Finalize the block (compute Merkle roots, apply state transitions)
+2. Finalize the block (compute the tx and state Merkle roots; the state
+   is left as it was)
 3. Seal with consensus proof (`CON-SEAL`)
-4. Append to chain via `CHAIN-APPEND`
-5. Persist to block log and broadcast to peers
+4. Append to chain via `CHAIN-APPEND`, which verifies the block and
+   applies its transactions to the state
+5. Persist to block log, broadcast to peers, and release the drained
+   mempool slots
 
 ### NODE-ENABLE-PRODUCE
 

@@ -30,7 +30,9 @@ EXT_MEM_SIZE = 128 << 20
 NUM_CORES = 1
 LINKED = False
 COALESCED_LOAD = True
-BUNDLE_BYTES = 80 * 1024
+# Each bundle file holds whole minified modules; the limit must exceed the
+# largest one (utils/fs/vfs.f, 91,466 bytes on 2026-11-22).
+BUNDLE_BYTES = 120 * 1024
 
 OWNER = SOURCE_ROOT / "atproto" / "create-record.f"
 CODEC = SOURCE_ROOT / "atproto" / "create-record-codec.f"
@@ -609,6 +611,20 @@ def main() -> int:
         print("CREATE RECORD STATIC PASS")
         return 0
     return _run_vertical(args.timeout)
+
+
+def test_static_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The source contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--static-only")
+
+
+def test_vertical(tmp_path: Path, monkeypatch) -> None:
+    """The staged createRecord vertical as a test."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--vertical")
 
 
 if __name__ == "__main__":

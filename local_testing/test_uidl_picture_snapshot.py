@@ -17,7 +17,7 @@ from test_media import _gradient, _scaled
 from test_uidl_collection_snapshot import (
     AK, COLOR_ABI_STUBS, KDOS_PATH, STYLE_ABI_STUBS, _load_forth_lines,
 )
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 _STUBBED = {"css/css.f", "tui/color.f"}
@@ -45,7 +45,7 @@ QOI = qoi_codec.encode(ROWS)
 
 def _runtime():
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=128 << 20, hbw_size=1 << 20),
+        memory=create_address_space(external_size=128 << 20, hbw_size=1 << 20),
         execution_backend="native",
     )
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

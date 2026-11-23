@@ -3,7 +3,9 @@
 
 Tests AIR builder (AIR-BEGIN/TRANS/BOUNDARY/END), query words
 (AIR-N-COLS/N-TRANS/N-BOUND/MAX-OFF), transition evaluation
-(AIR-EVAL-TRANS), and boundary checking (AIR-CHECK-BOUND).
+(AIR-EVAL-TRANS), the per-constraint transition check (AIR-CHECK-TRANS),
+boundary checking (AIR-CHECK-BOUND), and whether a descriptor reads only
+inside a given trace (AIR-FITS?).
 
 Depends on baby-bear.f for BB+ BB- BB* BB-W32! BB-W32@.
 """
@@ -383,6 +385,72 @@ def test_sub_constraint():
     check("sub boundary valid",
           setup + ['." V=" _SUB-AIR _scols AIR-CHECK-BOUND .'],
           'V=-1 ')
+
+def test_check_trans():
+    """AIR-CHECK-TRANS holds only when every constraint's residual is zero."""
+    print("\n=== Transition check, one constraint at a time ===")
+    check("fib check row 0 = TRUE",
+          FIB_SETUP + ['." V=" _FIB-AIR _fcols 0 AIR-CHECK-TRANS .'],
+          'V=-1 ')
+    check("fib check tampered = FALSE",
+          FIB_SETUP + [
+              '999 _ftrace 8 + BB-W32!',
+              '." V=" _FIB-AIR _fcols 0 AIR-CHECK-TRANS .'
+          ],
+          'V=0 ')
+    check("2col check row 100 = TRUE",
+          TWOCOL_SETUP + ['." V=" _2C-AIR _2cols 100 AIR-CHECK-TRANS .'],
+          'V=-1 ')
+    # Two constraints whose residuals cancel: col0 holds 1 at every row and
+    # col1 holds 2*i, so col0's Fibonacci residual is -1 and col1's
+    # running-sum residual +1 at every row.
+    cancel = [
+        'CREATE _x0 1024 ALLOT',
+        'CREATE _x1 1024 ALLOT',
+        'CREATE _xcols 16 ALLOT  _x0 _xcols !  _x1 _xcols 8 + !',
+        ': _fill-x  256 0 DO  1 I 4 * _x0 + BB-W32!  I 2 * I 4 * _x1 + BB-W32!  LOOP ;',
+        '_fill-x',
+        '2 AIR-BEGIN',
+        '  AIR-ADD 0 0  0 1  0 2  AIR-TRANS',
+        '  AIR-ADD 1 0  0 0  1 1  AIR-TRANS',
+        'AIR-END CONSTANT _X-AIR',
+    ]
+    check("cancelling residuals sum to 0",
+          cancel + ['." V=" _X-AIR _xcols 7 AIR-EVAL-TRANS .'],
+          'V=0 ')
+    check("cancelling residuals check = FALSE",
+          cancel + ['." V=" _X-AIR _xcols 7 AIR-CHECK-TRANS .'],
+          'V=0 ')
+
+def test_fits():
+    """AIR-FITS? holds only for a trace the descriptor reads inside."""
+    print("\n=== AIR-FITS? ===")
+    check("fib fits 1 column of 256 rows",
+          FIB_SETUP + ['." V=" _FIB-AIR 1 256 AIR-FITS? .'],
+          'V=-1 ')
+    check("fib does not fit 2 columns",
+          FIB_SETUP + ['." V=" _FIB-AIR 2 256 AIR-FITS? .'],
+          'V=0 ')
+    check("2col fits 2 columns of 256 rows",
+          TWOCOL_SETUP + ['." V=" _2C-AIR 2 256 AIR-FITS? .'],
+          'V=-1 ')
+    check("2col does not fit 1 column",
+          TWOCOL_SETUP + ['." V=" _2C-AIR 1 256 AIR-FITS? .'],
+          'V=0 ')
+    # A one-column descriptor whose constraint reads column 1
+    check("constraint past the columns",
+          ['1 AIR-BEGIN',
+           '  AIR-ADD 0 0  1 0  0 1  AIR-TRANS',
+           'AIR-END CONSTANT _W-AIR',
+           '." V=" _W-AIR 1 256 AIR-FITS? .'],
+          'V=0 ')
+    # A boundary at row 300 of a 256-row trace
+    check("boundary past the rows",
+          ['1 AIR-BEGIN',
+           '  0 300 7 AIR-BOUNDARY',
+           'AIR-END CONSTANT _R-AIR',
+           '." V=" _R-AIR 1 256 AIR-FITS? .'],
+          'V=0 ')
 
 def test_all_rows_fib():
     """Evaluate Fibonacci transition at all 254 valid rows."""

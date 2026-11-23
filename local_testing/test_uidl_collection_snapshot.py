@@ -16,7 +16,7 @@ MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT", PROJECT_ROOT / "megapad"))
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from forth_dependencies import dependency_order  # noqa: E402
-from simulator.platform import create_one_core_address_space  # noqa: E402
+from simulator.platform import create_address_space  # noqa: E402
 from simulator.runtime import MegaForthRuntime  # noqa: E402
 
 
@@ -78,7 +78,7 @@ def _run_forth(lines: list[str], max_steps: int = 250_000_000) -> str:
     """Load KDOS and the snapshot closure natively, then run LINES."""
 
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=128 << 20, hbw_size=1 << 20),
+        memory=create_address_space(external_size=128 << 20, hbw_size=1 << 20),
         execution_backend="native",
     )
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

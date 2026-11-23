@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -17,6 +18,7 @@ CONTRACT = LOCAL_TESTING / "kdos-net-owner-test.f"
 
 PASS_MARKER = "KDOS NET OWNER PASS"
 MAX_PHASE_STEPS = 120_000_000
+IMAGE = Path(tempfile.gettempdir()) / "akashic-kdos-network-owner.img"
 LOAD_STAGES = (
     ("source", "net/kdos-network-owner.f", "KDOS NET OWNER READY"),
     (
@@ -142,7 +144,7 @@ def _run_lifecycle(timeout: float) -> int:
     autoexec.append("_KNOT-RUN\nTX-FLUSH\n")
 
     profile_name = "kdos-network-owner"
-    image = Path("/tmp/akashic-kdos-network-owner.img")
+    image = IMAGE
     harness.PROFILES[profile_name] = harness.Profile(
         roots=("net/kdos-network-owner.f",),
         resources=(),
@@ -271,6 +273,20 @@ def main() -> int:
         print("KDOS NETWORK OWNER STATIC PASS")
         return 0
     return _run_lifecycle(args.timeout)
+
+
+def test_static_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The source contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--static-only")
+
+
+def test_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    """The staged guest lifecycle as a test."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--lifecycle")
 
 
 if __name__ == "__main__":

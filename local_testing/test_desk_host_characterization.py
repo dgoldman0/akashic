@@ -144,14 +144,17 @@ VARIABLE _dh-injected-throw
     _dh-call-app-try ;
 : _dh-xmem-fault  ( -- )
     0 XMEM-FL !
-    80 ALLOCATE DUP 0= _dh-assert DROP DUP _dh-probe ! FREE
+    COMP-INST ALLOCATE DUP 0= _dh-assert DROP DUP _dh-probe ! FREE
     XMEM-LIMIT @ XMEM-HERE !
     _dh-call-app-try ;
 : _dh-uctx-fault  ( -- )
     0 XMEM-FL !
-    80 ALLOCATE DUP 0= _dh-assert DROP _dh-probe !
+    COMP-INST ALLOCATE DUP 0= _dh-assert DROP _dh-probe !
     AHS-SIZE ALLOCATE DUP 0= _dh-assert DROP _dh-probe2 !
-    _dh-probe @ FREE _dh-probe2 @ FREE
+    \ The free list is first fit, and a freed block goes to its head: the
+    \ slot's block is freed first, so the instance takes its own block and
+    \ does not split the slot's.
+    _dh-probe2 @ FREE _dh-probe @ FREE
     XMEM-LIMIT @ XMEM-HERE !
     _dh-call-app-try ;
 
@@ -194,7 +197,7 @@ VARIABLE _dh-fi-shutdowns
     _DESK-NEXT-ID @ _dh-next @ = _dh-assert _dh-memory-clean
     _dh-retry
 
-    \ Isolate one exact 80-byte instance block, exhaust the bump tail, and
+    \ Isolate one exact COMP-INST instance block, exhaust the bump tail, and
     \ let the following AHS-SIZE slot allocation fail naturally.  Restoring
     \ both allocator roots discards the temporary probe after rollback.
     _dh-base-fill _dh-snapshot
@@ -272,6 +275,7 @@ VARIABLE _dh-ai VARIABLE _dh-bi
 VARIABLE _dh-aid VARIABLE _dh-bid
 VARIABLE _dh-as VARIABLE _dh-bs
 VARIABLE _dh-au VARIABLE _dh-bu
+VARIABLE _dh-brgn
 VARIABLE _dh-shutdown-a VARIABLE _dh-shutdown-b
 VARIABLE _dh-er VARIABLE _dh-ec VARIABLE _dh-eh VARIABLE _dh-ew
 
@@ -368,13 +372,16 @@ VARIABLE _dh-er VARIABLE _dh-ec VARIABLE _dh-eh VARIABLE _dh-ew
     _dh-as @ 0 0 31 49 _dh-region= _dh-assert
     _dh-bs @ 0 50 31 50 _dh-region= _dh-assert
 
+    \ A minimized child keeps its one region descriptor: Desk updates a
+    \ child's bounds in place and frees the region only when it closes.
+    _dh-bs @ _SL-RGN @ _dh-brgn !
     _dh-bid @ DESK-MINIMIZE-ID
     _dh-bs @ _SL-STATE @ _ST-MINIMIZED = _dh-assert
     _DESK-LAST-MIN-SA @ _dh-bs @ = _dh-assert
     _DESK-FOCUS-SA @ _dh-as @ = _dh-assert
     _dh-as @ _SL-STATE @ _ST-FOCUSED = _dh-assert
     _dh-as @ 0 0 31 100 _dh-region= _dh-assert
-    _dh-bs @ _SL-RGN @ 0= _dh-assert
+    _dh-bs @ _SL-RGN @ _dh-brgn @ = _dh-assert
     DESK-VCOUNT 1 = _dh-assert _dh-sentinels-stable? _dh-assert
     _dh-as @ _DESK-CTX-SWITCH _dh-ctx-a? _dh-assert
 
@@ -384,6 +391,7 @@ VARIABLE _dh-er VARIABLE _dh-ec VARIABLE _dh-eh VARIABLE _dh-ew
     _DESK-FOCUS-SA @ _dh-as @ = _dh-assert
     _dh-as @ 0 0 31 49 _dh-region= _dh-assert
     _dh-bs @ 0 50 31 50 _dh-region= _dh-assert
+    _dh-bs @ _SL-RGN @ _dh-brgn @ = _dh-assert
     _dh-sentinels-stable? _dh-assert _dh-isolation
 
     _dh-bid @ DESK-FOCUS-ID
@@ -502,6 +510,13 @@ def main() -> int:
         timeout=args.timeout,
     )
     return 0 if ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

@@ -699,6 +699,19 @@ where `Z_trace(x) = x^256 − 1` is the trace zerofier and
 still hold (because Z_trace vanishes on the trace domain), but
 evaluations outside the trace domain are randomized.
 
+### Constraint Weights
+
+A query-based verifier needs a Fiat-Shamir weight for every
+constraint.  The v2.5 verifier opens the whole trace and checks each
+transition constraint on its own at every row (`AIR-CHECK-TRANS`), so
+the prover's quotient can sum the transition residuals unweighted.  A
+verifier that samples the composition polynomial at a few points sees
+only that sum, and residuals of different constraints can cancel in
+it: a trace that breaks two constraints by opposite amounts would
+pass.  v3 therefore weights each transition constraint's quotient with
+its own challenge, drawn from the transcript after the trace
+commitment, as v2.5 already does for each boundary constraint.
+
 ### Changes from v2
 
 | Component | v2 | v3 |
@@ -709,6 +722,7 @@ evaluations outside the trace domain are randomized.
 | Proof size | ~2,500 bytes | ~4,000 bytes (but 128-bit security) |
 | ZK | No | Yes — random masking polynomial |
 | AIR | Fibonacci or via air.f | Fully parameterized via air.f |
+| Transition composition | Unweighted sum; the verifier checks each constraint | One Fiat-Shamir weight per constraint |
 | FRI | 8 rounds (256→1) | 10 rounds (1024→1) |
 | Soundness | ~64 bits (small domain) | ~128 bits |
 
@@ -745,6 +759,7 @@ STARK-SECURITY     ( -- bits )         Report effective security level
 - ZK: two proofs of same trace produce different transcripts
 - AIR: Fibonacci and at least one non-Fibonacci AIR both work
 - FRI: 10 rounds with evaluation-space folding
+- Composition: each transition constraint weighted by its own challenge; a trace whose residuals cancel in an unweighted sum is rejected
 - 128-bit soundness with 64 queries
 - Proof size < 8 KB
 - Verifier runs in O(log² n)

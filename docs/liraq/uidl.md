@@ -922,4 +922,3 @@ See the Chrome Types table above for the full list.
 
 - [uidl-tui.md](../tui/uidl-tui.md) — UIDL-TUI backend (renders UIDL to character cells)
 - [uidl-semantic.md](uidl-semantic.md) — neutral semantic value and snapshot contract
-- [dom-tui.md](../tui/dom-tui.md) — DOM-TUI backend (alternative rendering path via DOM)

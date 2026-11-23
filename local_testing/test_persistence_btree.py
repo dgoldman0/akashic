@@ -28,7 +28,9 @@ _PBTC-RUN
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=float, default=240.0)
+    # Wall-clock guard only; the step budget below bounds the run.  The
+    # contracts took about 240 s on this machine on 2026-11-22.
+    parser.add_argument("--timeout", type=float, default=480.0)
     args = parser.parse_args()
 
     harness.PROFILES[PROFILE] = harness.Profile(
@@ -60,6 +62,13 @@ def main() -> int:
         timeout=args.timeout,
     )
     return 0 if ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

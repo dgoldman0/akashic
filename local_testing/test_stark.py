@@ -285,11 +285,18 @@ def test_fri_final_nonzero():
         return False
     check_fn("fri-final-nonzero", lines, pred, "final should be nonzero")
 
+# STARK-TRACE! writes the prover's input, which STARK-VERIFY never reads: the
+# proof carries the trace as each column's coefficients.  A change to the
+# trace made after STARK-PROVE leaves a valid proof of the original trace, so
+# the tamper tests change the trace the proof carries.  A forger who changes
+# the trace has to prove the changed trace; every commitment, challenge and
+# FRI round then matches it, and only the constraint check can reject it.
+
 def test_tamper_trace_reject():
-    """Tampering with trace after prove causes verify to fail"""
+    """A proof of a trace that breaks the transition at row 10 is rejected"""
     lines = STARK_INIT_LINES + [
-        'STARK-PROVE',
         '999 0 10 STARK-TRACE!',
+        'STARK-PROVE',
         'STARK-VERIFY',
         'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
     ]
@@ -712,24 +719,74 @@ def test_2col_prove_verify():
     check("2col-prove-verify", lines, "VERIFY-TRUE")
 
 def test_2col_tamper_col0_reject():
-    """Tampering col0 after prove → reject"""
+    """A proof whose col0 breaks its transitions at row 10 is rejected"""
     lines = TWO_COL_INIT + [
-        'STARK-PROVE',
         '999 0 10 STARK-TRACE!',
+        'STARK-PROVE',
         'STARK-VERIFY',
         'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
     ]
     check("2col-tamper-col0", lines, "VERIFY-FALSE")
 
 def test_2col_tamper_col1_reject():
-    """Tampering col1 after prove → reject"""
+    """A proof whose col1 breaks the running sum at row 10 is rejected"""
     lines = TWO_COL_INIT + [
-        'STARK-PROVE',
         '999 1 10 STARK-TRACE!',
+        'STARK-PROVE',
         'STARK-VERIFY',
         'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
     ]
     check("2col-tamper-col1", lines, "VERIFY-FALSE")
+
+def test_2col_cancelling_residuals_reject():
+    """A trace whose two transition residuals cancel at every row is rejected
+
+    Col0 holds 1 at every row and col1 holds 2*i, so at each row the
+    Fibonacci residual is -1 and the running-sum residual +1.  The boundaries
+    hold, and the prover commits to the trace as it is, so only the
+    transition check can reject it; it must check each constraint on its
+    own, since the residuals' sum is zero at every row.
+    """
+    lines = [
+        'STARK-INIT',
+        '2 STARK-SET-COLS',
+    ] + TWO_COL_AIR_SETUP + [
+        '_2COL-AIR STARK-SET-AIR',
+        ': _fill-cancel',
+        '  STARK-TRACE-ZERO',
+        '  256 0 DO  1 0 I STARK-TRACE!  I 2 * 1 I STARK-TRACE!  LOOP ;',
+        '_fill-cancel',
+        'STARK-PROVE',
+        'STARK-VERIFY',
+        'IF .\" VERIFY-TRUE\" ELSE .\" VERIFY-FALSE\" THEN CR',
+        # STARK-VERIFY leaves the trace it rebuilt in _SK-COLS
+        '.\" SUM=\" _2COL-AIR _SK-COLS 7 AIR-EVAL-TRANS . CR',
+    ]
+    def pred(out):
+        return 'VERIFY-FALSE' in out and 'SUM=0 ' in out
+    check_fn("2col-cancelling-residuals", lines, pred,
+             "expected VERIFY-FALSE with a residual sum of 0 at row 7")
+
+def test_air_wider_than_proof_reject():
+    """An AIR that names a column the proof does not commit is rejected
+
+    After an honest two-column proof, _SK-COLS still points column 1 at that
+    proof's evaluations.  A proof that commits column 0 alone, verified
+    against the two-column AIR, would have its second column checked on that
+    stale data; the verifier refuses an AIR wider than the proof instead.
+    """
+    lines = TWO_COL_INIT + [
+        'STARK-PROVE STARK-VERIFY',
+        'IF .\" TWO-COL-TRUE\" ELSE .\" TWO-COL-FALSE\" THEN CR',
+        '1 STARK-SET-COLS',
+        '_fill-2col',
+        'STARK-PROVE STARK-VERIFY',
+        'IF .\" ONE-COL-TRUE\" ELSE .\" ONE-COL-FALSE\" THEN CR',
+    ]
+    def pred(out):
+        return 'TWO-COL-TRUE' in out and 'ONE-COL-FALSE' in out
+    check_fn("air-wider-than-proof", lines, pred,
+             "expected TWO-COL-TRUE, then ONE-COL-FALSE")
 
 def test_2col_wrong_col1_boundary():
     """Wrong boundary on col1 → reject"""

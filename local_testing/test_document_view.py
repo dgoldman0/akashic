@@ -24,7 +24,7 @@ from forth_dependencies import dependency_order
 from test_media import _gradient
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from test_widget_pointer import _run_forth  # noqa: F401  (puts MegaPad on the path)
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 from rich_terminal.semantic_content import StyleRun, TextStyle
@@ -249,7 +249,7 @@ CREATE DV-EV-MEM 31 ALLOT
 
 def _runtime(document: bytes = b"", picture: bytes = b"", roots: tuple[str, ...] = ()):
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=128 << 20, hbw_size=1 << 20),
+        memory=create_address_space(external_size=128 << 20, hbw_size=1 << 20),
         execution_backend="native",
     )
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")

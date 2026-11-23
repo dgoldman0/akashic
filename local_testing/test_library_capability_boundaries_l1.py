@@ -17,10 +17,13 @@ import akashic_tui as harness  # noqa: E402
 PROFILE = "library-capability-boundaries-l1"
 IMAGE = Path("/tmp/akashic-library-capability-boundaries-l1.img")
 WIRE_PROFILE = "library-wire-boundaries-l1"
-WIRE_IMAGE = Path("/tmp/akashic-library-wire-boundaries-l1.img")
+# Written beside IMAGE, so a test that moves IMAGE moves this image too
+WIRE_IMAGE_NAME = "akashic-library-wire-boundaries-l1.img"
 FIXTURE = LOCAL_TESTING / "lib-cap-l1.f"
 MAX_STEPS = 10_000_000_000
-DEFAULT_TIMEOUT = 330.0
+# Wall-clock guard only; MAX_STEPS bounds the run.  The boundary contracts
+# took about 330 s on this machine on 2026-11-22.
+DEFAULT_TIMEOUT = 660.0
 
 BOUNDARY_AUTOEXEC = r"""\ autoexec.f
 ENTER-USERLAND
@@ -85,7 +88,7 @@ def main() -> int:
 
     if args.wire:
         profile_name = WIRE_PROFILE
-        image_path = WIRE_IMAGE
+        image_path = IMAGE.with_name(WIRE_IMAGE_NAME)
         autoexec = WIRE_AUTOEXEC
         marker = "LIBRARY WIRE BOUNDS PASS"
     else:
@@ -115,6 +118,20 @@ def main() -> int:
         timeout=args.timeout,
     )
     return 0 if ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """The contracts as a test, so the test selection tool runs them."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
+
+
+def test_wire_bounds(tmp_path: Path, monkeypatch) -> None:
+    """The Checkpoint-5 wire maxima and bounded-decode gate as a test."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--wire")
 
 
 if __name__ == "__main__":

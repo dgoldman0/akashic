@@ -18,41 +18,40 @@ from asm import assemble
 from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
+sys.path.insert(0, SCRIPT_DIR)
+from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
 # ── Disk files (dependency order) ──────────────────────────────
-DISK_FILES = [
-    # text
-    ("utf8.f", "/text", os.path.join(AK_DIR, "text", "utf8.f")),
-    # tui base
-    ("ansi.f",      "/tui", os.path.join(AK_DIR, "tui", "ansi.f")),
-    ("keys.f",      "/tui", os.path.join(AK_DIR, "tui", "keys.f")),
-    ("cell.f",      "/tui", os.path.join(AK_DIR, "tui", "cell.f")),
-    ("screen.f",    "/tui", os.path.join(AK_DIR, "tui", "screen.f")),
-    ("draw.f",      "/tui", os.path.join(AK_DIR, "tui", "draw.f")),
-    ("box.f",       "/tui", os.path.join(AK_DIR, "tui", "box.f")),
-    ("region.f",    "/tui", os.path.join(AK_DIR, "tui", "region.f")),
-    ("widget.f",    "/tui", os.path.join(AK_DIR, "tui", "widget.f")),
-    ("app-desc.f",  "/tui", os.path.join(AK_DIR, "tui", "app-desc.f")),
-    # tui widgets needed by game-canvas
-    ("canvas.f", "/tui/widgets", os.path.join(AK_DIR, "tui", "widgets", "canvas.f")),
-    # tui game engine (used by world-render for tilemap/sprite formats)
-    ("loop.f",    "/tui/game", os.path.join(AK_DIR, "tui", "game", "loop.f")),
-    ("input.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "input.f")),
-    ("tilemap.f", "/tui/game", os.path.join(AK_DIR, "tui", "game", "tilemap.f")),
-    ("sprite.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "sprite.f")),
-    ("scene.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "scene.f")),
-    # 2d game engine
-    ("collide.f", "/game/2d", os.path.join(AK_DIR, "game", "2d", "collide.f")),
-    # TUI game components (Phase 0 + Phase 1)
-    ("game-view.f",     "/tui/game", os.path.join(AK_DIR, "tui", "game", "game-view.f")),
-    ("game-canvas.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "game-canvas.f")),
-    ("game-applet.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "game-applet.f")),
-    ("atlas.f",         "/tui/game", os.path.join(AK_DIR, "tui", "game", "atlas.f")),
-    ("camera.f",        "/game/2d",   os.path.join(AK_DIR, "game", "2d", "camera.f")),
-    ("world-render.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "world-render.f")),
-]
+# The modules the suite loads and their REQUIRE closure, each in its own
+# directory on the disk, so the disk follows what the modules require.
+DISK_FILES = module_disk_files((
+    "text/utf8.f",
+    "tui/ansi.f",
+    "tui/keys.f",
+    "tui/cell.f",
+    "tui/screen.f",
+    "tui/draw.f",
+    "tui/box.f",
+    "tui/region.f",
+    "tui/widget.f",
+    "tui/app-desc.f",
+    "tui/widgets/canvas.f",
+    "tui/game/loop.f",
+    "tui/game/input.f",
+    "tui/game/tilemap.f",
+    "tui/game/sprite.f",
+    "tui/game/scene.f",
+    "game/2d/collide.f",
+    "tui/game/game-view.f",
+    "tui/game/game-canvas.f",
+    "tui/game/game-applet.f",
+    "tui/game/atlas.f",
+    "game/2d/camera.f",
+    "tui/game/world-render.f",
+))
 
 # ── Forth test harness ─────────────────────────────────────────
 FORTH_HARNESS = r"""\ =====================================================================
@@ -322,34 +321,34 @@ S" gapp:shutdown-xt-wired" T-NAME
 _GAPPT-DESC @ APP.SHUTDOWN-XT @ 0<> T-TRUE
 
 S" gapp:default-fps-30" T-NAME
-_GAPPT-DESC @ 152 + @ 30 T-ASSERT
+_GAPPT-DESC @ _GAPP-O-FPS + @ 30 T-ASSERT
 
 S" gapp:default-gv-0" T-NAME
-_GAPPT-DESC @ 160 + @ 0 T-ASSERT
+_GAPPT-DESC @ _GAPP-O-GV + @ 0 T-ASSERT
 
 S" gapp:fps!-stores" T-NAME
 60 _GAPPT-DESC @ GAPP-FPS!
-_GAPPT-DESC @ 152 + @ 60 T-ASSERT
+_GAPPT-DESC @ _GAPP-O-FPS + @ 60 T-ASSERT
 
 S" gapp:on-init!-stores" T-NAME
 ' _GAPPT-ON-INIT _GAPPT-DESC @ GAPP-ON-INIT!
-_GAPPT-DESC @ 112 + @ 0<> T-TRUE
+_GAPPT-DESC @ _GAPP-O-USER-INIT + @ 0<> T-TRUE
 
 S" gapp:on-update!-stores" T-NAME
 ' _GAPPT-ON-UPDATE _GAPPT-DESC @ GAPP-ON-UPDATE!
-_GAPPT-DESC @ 120 + @ 0<> T-TRUE
+_GAPPT-DESC @ _GAPP-O-USER-UPDATE + @ 0<> T-TRUE
 
 S" gapp:on-draw!-stores" T-NAME
 ' _GAPPT-ON-DRAW _GAPPT-DESC @ GAPP-ON-DRAW!
-_GAPPT-DESC @ 128 + @ 0<> T-TRUE
+_GAPPT-DESC @ _GAPP-O-USER-DRAW + @ 0<> T-TRUE
 
 S" gapp:on-input!-stores" T-NAME
 ' _GAPPT-ON-INPUT _GAPPT-DESC @ GAPP-ON-INPUT!
-_GAPPT-DESC @ 136 + @ 0<> T-TRUE
+_GAPPT-DESC @ _GAPP-O-USER-INPUT + @ 0<> T-TRUE
 
 S" gapp:on-shutdown!-stores" T-NAME
 ' _GAPPT-ON-SHUTDOWN _GAPPT-DESC @ GAPP-ON-SHUTDOWN!
-_GAPPT-DESC @ 144 + @ 0<> T-TRUE
+_GAPPT-DESC @ _GAPP-O-USER-SHUTDOWN + @ 0<> T-TRUE
 
 S" gapp:title!-stores" T-NAME
 S" Test Game" _GAPPT-DESC @ GAPP-TITLE!
@@ -678,7 +677,7 @@ def build_disk(img_path):
 
 
 def main():
-    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False, dir=SCRIPT_DIR)
+    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     img_path = tmp.name
     tmp.close()
 
@@ -714,6 +713,10 @@ def main():
 
         # Check for fatal errors (only after [MODULES LOADED])
         fatal = False
+        diagnostics = kdos_diagnostics(text)
+        if diagnostics:
+            print(f"[!] KDOS reported: {', '.join(diagnostics)}")
+            fatal = True
         test_section = text[text.find("[MODULES LOADED]"):] if "[MODULES LOADED]" in text else text
         for err_pat in ["ABORT", "STACK"]:
             if err_pat.lower() in test_section.lower():
@@ -745,6 +748,11 @@ def main():
         os.unlink(img_path)
 
     return rc
+
+
+def test_suite() -> None:
+    """The suite as a test, so the test selection tool runs it."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

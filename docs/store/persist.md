@@ -36,7 +36,8 @@ REQUIRE persist.f
 | **Append-only** | Block log grows monotonically — no in-place edits |
 | **Disk-backed** | Two files on MP64FS: `chain.dat`, `state.snap` |
 | **Length-prefixed** | Each log entry: `[8B cbor_len][cbor_len bytes]` |
-| **Linear scan** | `PST-LOAD-BLOCK` walks entries sequentially — acceptable for small chains |
+| **Indexed load** | `PST-INIT` walks the log once to build an offset index; `PST-LOAD-BLOCK` seeks straight to its entry |
+| **Records sized from need** | One kept record buffer grows to the largest record; records the files cannot hold are refused whole |
 | **Auto-create** | `PST-INIT` creates files via MKFILE if they don't exist |
 | **Guard-wrapped** | All public words serialized via `WITH-GUARD` |
 
@@ -60,14 +61,18 @@ Offset  Content
 
 A length of 0 or a short read marks end-of-data.
 
-### state.snap  (~20 KB, 40 sectors)
+### state.snap  (~256 KB, 512 sectors)
 
-Periodic state snapshot. Fixed layout:
+Periodic state snapshot:
 
 ```
-[ST-SNAPSHOT-SIZE bytes]  — account table + count
+[actual snapshot bytes]   — ST-SNAPSHOT: header, page directory, allocated pages
 [8 bytes]                 — chain height at snapshot time
+[8 bytes]                 — the actual snapshot size, read first by PST-LOAD-STATE
 ```
+
+`PST-SET-CAPACITY ( chain-sectors state-sectors -- )`, called before
+`PST-INIT`, sets both files' sector counts when they are created.
 
 ---
 
@@ -96,12 +101,31 @@ automatically if not already mounted.
 PST-SAVE-BLOCK  ( blk -- flag )
 ```
 
-Encode the block via `BLK-ENCODE` into an internal 16 KB scratch
-buffer, seek to end of `chain.dat`, then write the 8-byte length
-prefix followed by the CBOR data.  Flushes immediately.
+Encode the block via `BLK-ENCODE` into the record buffer, seek to end
+of `chain.dat`, then write the 8-byte length prefix followed by the
+CBOR data.  Flushes immediately.
 
-Returns `-1` on success, `0` if `PST-INIT` hasn't been called or
-the block couldn't be encoded.
+Returns `-1` on success, `0` if `PST-INIT` hasn't been called, the
+heap cannot hold the block's encoding, or the chain file cannot hold
+its record.  A record that does not fit is refused before anything is
+written, so the log keeps only whole records.
+
+### The record buffer
+
+Each record passes whole through one scratch buffer: a block's
+encoding on its way to the log, a block read back, and a state snapshot
+in either direction.  The buffer comes from the heap (XMEM when
+present) the first time a record needs it and is kept.  When a record
+needs more, the buffer grows to twice its size, or to the record's size
+when that is more: `BLK-ENCODED-SIZE` gives a block's size, the state's
+allocated pages give a snapshot's, and a record read back is bounded by
+the file that holds it.  A full block of 256 hybrid transactions
+encodes to about 2.1 MB.
+
+KDOS's XMEM heap reuses freed blocks first-fit and never joins them, so
+a buffer freed and taken again at each record's size would leave a hole
+of each size behind.  The kept buffer grows once per doubling, and the
+holes it leaves are together smaller than the buffer.
 
 ---
 
@@ -113,12 +137,13 @@ the block couldn't be encoded.
 PST-LOAD-BLOCK  ( idx blk -- flag )
 ```
 
-Rewind `chain.dat`, walk to entry *idx* by reading and skipping
-each preceding entry's 8-byte length + data.  Read the target entry
-and decode via `BLK-DECODE`.
+Seek to entry *idx* through the offset index `PST-INIT` builds, read
+its 8-byte length and the record into the record buffer, and decode it
+via `BLK-DECODE`.
 
 Returns `-1` on success, `0` if the index is out of range, `PST-INIT`
-hasn't been called, or decoding fails.
+hasn't been called, the record's length runs past the file's end, the
+heap cannot hold the record, or decoding fails.
 
 ---
 
@@ -130,9 +155,11 @@ hasn't been called, or decoding fails.
 PST-SAVE-STATE  ( -- flag )
 ```
 
-Snapshot the full state tree (`ST-SNAPSHOT`) into the internal
-scratch buffer, then write it plus the 8-byte chain height to
-`state.snap`.  Flushes immediately.  Returns `-1` on success.
+Snapshot the state (`ST-SNAPSHOT`) into the record buffer, then write
+the snapshot at its actual size (its header, page directory and
+allocated pages), the 8-byte chain height and an 8-byte size marker to
+`state.snap`.  Flushes immediately.  Returns `-1` on success, `0` if
+the heap or the state file cannot hold the snapshot.
 
 ### PST-LOAD-STATE
 
@@ -140,9 +167,10 @@ scratch buffer, then write it plus the 8-byte chain height to
 PST-LOAD-STATE  ( -- flag )
 ```
 
-Read `state.snap` into the internal scratch buffer, restore via
-`ST-RESTORE`.  Returns `-1` on success, `0` if the file is empty
-or a short read occurs.
+Read the size marker from the end of `state.snap`, then the snapshot
+into the record buffer, and restore via `ST-RESTORE`.  Returns `-1` on
+success, `0` if the file is empty, the marker is larger than
+`ST-SNAPSHOT-SIZE` or than the file, or a short read occurs.
 
 ---
 
@@ -194,10 +222,11 @@ All seven public words are wrapped with `_pst-guard` via `WITH-GUARD`:
 
 | Constraint | Impact |
 |---|---|
-| MP64FS contiguous allocation | Files pre-allocated at fixed sector counts (1024 chain, 40 state) |
-| Files cannot be resized | Over-allocate at creation; `chain.dat` caps at ~512 KB |
+| MP64FS contiguous allocation | Files pre-allocated at fixed sector counts (1024 chain, 512 state by default; `PST-SET-CAPACITY` sets others) |
+| Files cannot be resized | Over-allocate at creation; a save that does not fit returns `0` and writes nothing |
 | FD pool is 16 slots | persist uses at most 2; 14 remain for application use |
-| FREAD/FWRITE use DMA | All I/O goes through the 16 KB `_PST-BUF` scratch buffer |
+| FREAD/FWRITE use DMA | Whole sectors move between the disk and the record buffer; partial sectors pass through KDOS's own sector scratch, so the 8-byte length cell needs only 8 bytes |
+| XMEM heap never joins free blocks | The record buffer is kept and grows by doubling (see [The record buffer](#the-record-buffer)) |
 | OPEN/MKFILE parse from input | Handled via `S" OPEN chain.dat" EVALUATE` |
 
 ---

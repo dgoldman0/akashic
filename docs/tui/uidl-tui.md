@@ -63,7 +63,7 @@ REQUIRE tui/uidl-tui.f
 | Principle | Detail |
 |---|---|
 | **One sidecar per element** | Every UIDL element receives a 96-byte sidecar in a parallel array, indexed by pool position. |
-| **No DOM intermediary** | Unlike `dom-tui.f`, this backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
+| **No DOM intermediary** | The backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
 | **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree`, `tabs`, `input`, `textarea`, and `media` allocate widget state. |
 | **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, media widget, manually attached widget) or mini state block (tabs active index). `+80` records whether that pointer belongs to UIDL or the caller. Zero `wptr` means "no widget state". |
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
@@ -1661,7 +1661,6 @@ my-rgn RGN-FREE
 
 - [uidl.md](../liraq/uidl.md) — UIDL document model and element registry
 - [color.md](color.md) — Shared RGB → xterm-256 color resolution
-- [dom-tui.md](dom-tui.md) — DOM-to-TUI backend (alternative path)
 - [widget.md](widget.md) — Widget common header
 - [region.md](region.md) — Region primitives
 - [draw.md](draw.md) — Draw engine

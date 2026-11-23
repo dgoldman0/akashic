@@ -9,8 +9,10 @@ Priority 9 fixes tested:
  #70 P37  Graceful shutdown (persist, disconnect, key zeroize)
  #71 P36  Busy-wait yield (_NODE-YIELD)
  #72 D03  Time-based block production interval
+
+Block production: the producer appends a block that holds a transaction.
 """
-import os, sys, time, tempfile
+import hashlib, os, sys, time, tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -213,7 +215,12 @@ def build_snapshot():
     return _snapshot
 
 
-def run_forth(lines, max_steps=200_000_000):
+def run_forth(lines, max_steps=200_000_000, rtc_epoch_ms=None):
+    """Run LINES on the snapshot with a fresh disk.
+
+    RTC_EPOCH_MS sets the machine's wall clock, which otherwise starts at
+    the Unix epoch.
+    """
     if _snapshot is None:
         build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
@@ -223,7 +230,8 @@ def run_forth(lines, max_steps=200_000_000):
     try:
         sys_obj = MegapadSystem(ram_size=1024*1024,
                                 storage_image=disk_path,
-                                ext_mem_size=EXT_MEM_SIZE)
+                                ext_mem_size=EXT_MEM_SIZE,
+                                rtc_epoch_ms=rtc_epoch_ms)
         buf = capture_uart(sys_obj)
         sys_obj.load_binary(0, bios_code)
         sys_obj.boot()
@@ -245,6 +253,45 @@ def run_forth(lines, max_steps=200_000_000):
 # The checks read only what the program printed, and fail their test when a
 # check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 check = transcript_checks(run_forth)[0]
+
+
+# ── Key pairs (RFC 8032 test vectors 1 and 2) ──
+
+TV1_SEED = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+TV1_PUB  = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+TV2_SEED = "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
+TV2_PUB  = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+
+
+def create_hex_buf(var_name, hex_str):
+    bs = bytes.fromhex(hex_str)
+    lines = [f'CREATE {var_name} {len(bs)} ALLOT']
+    for i, b in enumerate(bs):
+        lines.append(f'{b} {var_name} {i} + C!')
+    return lines
+
+
+def _ed25519_private(seed_hex):
+    """The 64 bytes ED25519-KEYGEN writes as a seed's private key: SHA-512
+    of the seed, its first half clamped into the secret scalar (RFC 8032
+    section 5.1.5), its second half kept as the signing prefix."""
+    digest = bytearray(hashlib.sha512(bytes.fromhex(seed_hex)).digest())
+    digest[0] &= 0xF8
+    digest[31] &= 0x3F
+    digest[31] |= 0x40
+    return digest.hex()
+
+
+def _key_pair(n, seed_hex, pub_hex):
+    """Key pair n from an RFC 8032 vector, and the address of its public key.
+
+    The pair is written as ED25519-KEYGEN writes it rather than derived by
+    it, which saves about 54M emulator steps; test_ed25519 checks the
+    derivation on these vectors."""
+    return (create_hex_buf(f'_PUB{n}', pub_hex)
+            + create_hex_buf(f'_PRIV{n}', _ed25519_private(seed_hex))
+            + [f'CREATE _ADDR{n} 32 ALLOT', f'_PUB{n} _ADDR{n} ST-ADDR-FROM-KEY'])
 
 
 # =====================================================================
@@ -397,6 +444,39 @@ def test_timestamp():
     check("DT-NOW-S returns non-zero",
           ['DT-NOW-S .'],
           check_fn=lambda t: any(c.isdigit() and c != '0' for c in t.strip()))
+
+
+def test_produce_block_with_transaction():
+    """The producer appends a block that holds a transaction.
+
+    BLK-FINALIZE applied the block's transaction to the state, and
+    CHAIN-APPEND's BLK-VERIFY then applied it a second time, on the
+    changed state, where the sender's nonce no longer matched.  The append
+    failed: the chain stayed at height 0, the block was neither saved nor
+    broadcast, and the drained slots were never released, while the sender
+    had already paid.  BLK-FINALIZE now leaves the state as it was, and
+    CHAIN-APPEND applies the block once.
+
+    BLK-VERIFY refuses a block after genesis whose timestamp is 0, and the
+    producer stamps its block with the wall clock, so the machine's clock
+    starts at a wall time."""
+    print("\n── Block production ──\n")
+    lines = _key_pair(1, TV1_SEED, TV1_PUB) + _key_pair(2, TV2_SEED, TV2_PUB) + [
+        'CREATE _TX1 TX-BUF-SIZE ALLOT  _TX1 TX-INIT',
+        '_PUB1 _TX1 TX-SET-FROM  _PUB2 _TX1 TX-SET-TO',
+        '100 _TX1 TX-SET-AMOUNT  0 _TX1 TX-SET-NONCE',
+        '_TX1 _PRIV1 _PUB1 TX-SIGN',
+        ': _T 8080 NODE-INIT  _ADDR1 10000 ST-CREATE DROP',
+        '  ." add=" _TX1 MP-ADD .',
+        '  NODE-ENABLE-PRODUCE _NODE-PRODUCE-BLOCK',
+        '  ." height=" CHAIN-HEIGHT .',
+        '  ." bal1=" _ADDR1 ST-BALANCE@ .  ." bal2=" _ADDR2 ST-BALANCE@ .',
+        '  ." nonce1=" _ADDR1 ST-NONCE@ .  ." pool=" MP-COUNT .',
+        '  ." saved=" PST-BLOCK-COUNT . ; _T',
+    ]
+    check("produced block appended, saved, and applied once", lines,
+          "add=-1 height=1 bal1=9900 bal2=100 nonce1=1 pool=0 saved=1 ",
+          max_steps=800_000_000, rtc_epoch_ms=1_700_000_000_000)
 
 
 def test_subsystem_callbacks():

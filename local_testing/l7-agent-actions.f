@@ -79,13 +79,16 @@ VARIABLE _L7AA-REFRESH-CALLS
     _AG-E-ACCESS @ S" text" UIDL-ATTR 0= IF 2DROP 2DROP 0 EXIT THEN
     2SWAP STR-STR= ;
 
+\ The Agent repaints its body by dirtying the panel widget mounted on it,
+\ whose revision move asks for the paint; the body element itself is not
+\ marked.  An action shows its repaint through the panel's dirty flag.
 : _L7AA-RENDER-BEGIN  ( -- )
-    _AG-E-BODY @ UIDL-CLEAN!
+    _AG-PANEL WDG-CLEAN
     _AG-E-ACCESS @ UIDL-CLEAN!
     _AG-E-STATE @ UIDL-CLEAN! ;
 
 : _L7AA-RENDERED?  ( -- flag )
-    _AG-E-BODY @ UIDL-DIRTY?
+    _AG-PANEL WDG-DIRTY?
     _AG-E-STATE @ UIDL-DIRTY? AND ;
 
 : _L7AA-REVIEW-CAPACITY  ( -- )
@@ -218,7 +221,7 @@ VARIABLE _L7AA-REVISION
     DUP DAP-PROFILE-VALID? _L7AA-ASSERT
     AAP.PRESET @ AAP-PRESET-PRACTICE-LIBRARY-BURROW = _L7AA-ASSERT
     S" Practice Library Burrow" _L7AA-ACCESS= _L7AA-ASSERT
-    _AG-E-BODY @ UIDL-DIRTY?
+    _AG-PANEL WDG-DIRTY?
         _AG-E-ACCESS @ UIDL-DIRTY? AND _L7AA-ASSERT
 
     AAP-PRESET-CHAT-ONLY _L7AA-RUNTIME @ ARUNTIME-ACCESS-PRESET!

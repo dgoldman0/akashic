@@ -19,29 +19,32 @@ from asm import assemble
 from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
+sys.path.insert(0, SCRIPT_DIR)
+from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
 # ── Disk files (dependency order) ──────────────────────────────
-DISK_FILES = [
-    ("utf8.f",     "/text", os.path.join(AK_DIR, "text", "utf8.f")),
-    ("ansi.f",     "/tui",  os.path.join(AK_DIR, "tui", "ansi.f")),
-    ("keys.f",     "/tui",  os.path.join(AK_DIR, "tui", "keys.f")),
-    ("cell.f",     "/tui",  os.path.join(AK_DIR, "tui", "cell.f")),
-    ("screen.f",   "/tui",  os.path.join(AK_DIR, "tui", "screen.f")),
-    ("draw.f",     "/tui",  os.path.join(AK_DIR, "tui", "draw.f")),
-    ("box.f",      "/tui",  os.path.join(AK_DIR, "tui", "box.f")),
-    ("region.f",   "/tui",  os.path.join(AK_DIR, "tui", "region.f")),
-    ("app-desc.f", "/tui",  os.path.join(AK_DIR, "tui", "app-desc.f")),
-    # tui game engine
-    ("loop.f",     "/tui/game", os.path.join(AK_DIR, "tui", "game", "loop.f")),
-    ("input.f",    "/tui/game", os.path.join(AK_DIR, "tui", "game", "input.f")),
-    ("tilemap.f",  "/tui/game", os.path.join(AK_DIR, "tui", "game", "tilemap.f")),
-    ("sprite.f",   "/tui/game", os.path.join(AK_DIR, "tui", "game", "sprite.f")),
-    ("scene.f",    "/tui/game", os.path.join(AK_DIR, "tui", "game", "scene.f")),
-    # 2d game engine
-    ("collide.f",  "/game/2d", os.path.join(AK_DIR, "game", "2d", "collide.f")),
-]
+# The modules the suite loads and their REQUIRE closure, each in its own
+# directory on the disk, so the disk follows what the modules require.
+DISK_FILES = module_disk_files((
+    "text/utf8.f",
+    "tui/ansi.f",
+    "tui/keys.f",
+    "tui/cell.f",
+    "tui/screen.f",
+    "tui/draw.f",
+    "tui/box.f",
+    "tui/region.f",
+    "tui/app-desc.f",
+    "tui/game/loop.f",
+    "tui/game/input.f",
+    "tui/game/tilemap.f",
+    "tui/game/sprite.f",
+    "tui/game/scene.f",
+    "game/2d/collide.f",
+))
 
 # ── Forth test harness ─────────────────────────────────────────
 # Provides T{ ... }T assertion framework and per-module tests.
@@ -789,7 +792,7 @@ def build_disk(img_path):
 
 
 def main():
-    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False, dir=SCRIPT_DIR)
+    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     img_path = tmp.name
     tmp.close()
 
@@ -825,6 +828,10 @@ def main():
 
         # Check for fatal errors
         fatal = False
+        diagnostics = kdos_diagnostics(text)
+        if diagnostics:
+            print(f"[!] KDOS reported: {', '.join(diagnostics)}")
+            fatal = True
         for err_pat in ["? (not found)", "ABORT", "STACK"]:
             if err_pat.lower() in text.lower():
                 idx = text.lower().find(err_pat.lower())
@@ -855,6 +862,11 @@ def main():
         os.unlink(img_path)
 
     return rc
+
+
+def test_suite() -> None:
+    """The suite as a test, so the test selection tool runs it."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

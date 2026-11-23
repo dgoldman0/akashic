@@ -18,6 +18,9 @@ from asm import assemble
 from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
+sys.path.insert(0, SCRIPT_DIR)
+from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -25,25 +28,23 @@ KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
 # ── Disk files (dependency order) ──────────────────────────────
 
-DISK_FILES = [
-    # text
-    ("utf8.f", "/text", os.path.join(AK_DIR, "text", "utf8.f")),
-    # tui base
-    ("ansi.f",      "/tui", os.path.join(AK_DIR, "tui", "ansi.f")),
-    ("keys.f",      "/tui", os.path.join(AK_DIR, "tui", "keys.f")),
-    ("cell.f",      "/tui", os.path.join(AK_DIR, "tui", "cell.f")),
-    ("screen.f",    "/tui", os.path.join(AK_DIR, "tui", "screen.f")),
-    ("draw.f",      "/tui", os.path.join(AK_DIR, "tui", "draw.f")),
-    ("box.f",       "/tui", os.path.join(AK_DIR, "tui", "box.f")),
-    ("region.f",    "/tui", os.path.join(AK_DIR, "tui", "region.f")),
-    # 2d game engine
-    ("camera.f",    "/game/2d",  os.path.join(AK_DIR, "game", "2d", "camera.f")),
-    ("collide.f",   "/game/2d",  os.path.join(AK_DIR, "game", "2d", "collide.f")),
-    # Phase 7 modules
-    ("fsm.f",       "/game/ai",  os.path.join(AK_DIR, "game", "ai", "fsm.f")),
-    ("btree.f",     "/game/ai",  os.path.join(AK_DIR, "game", "ai", "btree.f")),
-    ("fog.f",       "/game/2d",  os.path.join(AK_DIR, "game", "2d", "fog.f")),
-]
+# The modules the suite loads and their REQUIRE closure, each in its own
+# directory on the disk, so the disk follows what the modules require.
+DISK_FILES = module_disk_files((
+    "text/utf8.f",
+    "tui/ansi.f",
+    "tui/keys.f",
+    "tui/cell.f",
+    "tui/screen.f",
+    "tui/draw.f",
+    "tui/box.f",
+    "tui/region.f",
+    "game/2d/camera.f",
+    "game/2d/collide.f",
+    "game/ai/fsm.f",
+    "game/ai/btree.f",
+    "game/2d/fog.f",
+))
 
 
 # ── Forth test harness ─────────────────────────────────────────
@@ -101,6 +102,7 @@ CREATE _T-NAMEBUF 80 ALLOT
 
 \ ── Load modules ─────────────────────────────────────────────
 
+REQUIRE tui/screen.f
 REQUIRE game/ai/fsm.f
 REQUIRE game/ai/btree.f
 REQUIRE game/2d/fog.f
@@ -613,7 +615,7 @@ def build_disk(img_path):
 
 
 def main():
-    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False, dir=SCRIPT_DIR)
+    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     img_path = tmp.name
     tmp.close()
 
@@ -649,6 +651,10 @@ def main():
 
         # Check for fatal errors
         fatal = False
+        diagnostics = kdos_diagnostics(text)
+        if diagnostics:
+            print(f"[!] KDOS reported: {', '.join(diagnostics)}")
+            fatal = True
         test_section = text[text.find("[MODULES LOADED]"):] if "[MODULES LOADED]" in text else text
         for err_pat in ["ABORT", "STACK"]:
             if err_pat.lower() in test_section.lower():
@@ -680,6 +686,11 @@ def main():
         os.unlink(img_path)
 
     return rc
+
+
+def test_suite() -> None:
+    """The suite as a test, so the test selection tool runs it."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

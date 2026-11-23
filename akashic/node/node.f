@@ -111,11 +111,11 @@ CREATE _NODE-HTMP 32 ALLOT
         _NODE-TX-PTRS I CELLS + @      ( tx-ptr )
         _NODE-BLK BLK-ADD-TX DROP
     LOOP
-    \ Finalize: compute roots, apply txs to state
+    \ Finalize: compute the tx and state roots, leaving the state as it is
     _NODE-BLK BLK-FINALIZE
     \ Seal with consensus proof
     _NODE-BLK CON-SEAL
-    \ Append to chain
+    \ Append to chain: verify the block, then apply its txs to the state
     _NODE-BLK CHAIN-APPEND IF
         \ Save to log & broadcast
         _NODE-BLK PST-SAVE-BLOCK DROP

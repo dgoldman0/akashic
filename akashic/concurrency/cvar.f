@@ -80,7 +80,7 @@ PROVIDED akashic-cvar
 
 : CV@  ( cv -- val )
     DUP _CV-LOCK LOCK
-    @ SWAP
+    DUP @ SWAP
     _CV-LOCK UNLOCK ;
 
 \ =====================================================================
@@ -186,7 +186,7 @@ PROVIDED akashic-cvar
 
 : CV-WAIT-TIMEOUT  ( expected cv ms -- flag )
     \ Fast path: value already differs
-    OVER CV@ 2 PICK <> IF             \ cv's value ≠ expected?
+    OVER CV@ 3 PICK <> IF             \ cv's value ≠ expected?
         2DROP DROP -1 EXIT             \ yes → TRUE immediately
     THEN
     ROT >R                             \ R: expected  ( cv ms )

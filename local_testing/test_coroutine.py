@@ -27,6 +27,16 @@ from forth_snapshot import run_file_tests, transcript_checks
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
+# The variables every check may use, loaded after coroutine.f.
+HELPERS = [
+    'VARIABLE _RES   0 _RES !',
+    'VARIABLE _CTR   0 _CTR !',
+    'VARIABLE _DONE  0 _DONE !',
+    'VARIABLE _R2    0 _R2 !',
+    'VARIABLE _R3    0 _R3 !',
+    ': _CLR  0 _RES !  0 _CTR !  0 _DONE !  0 _R2 !  0 _R3 ! ;',
+]
+
 # ── Emulator helpers ──
 
 _snapshot = None
@@ -82,19 +92,11 @@ def build_snapshot():
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
     crt_lines  = _load_forth_lines(COROUTINE_F)
-    helpers = [
-        'VARIABLE _RES   0 _RES !',
-        'VARIABLE _CTR   0 _CTR !',
-        'VARIABLE _DONE  0 _DONE !',
-        'VARIABLE _R2    0 _R2 !',
-        'VARIABLE _R3    0 _R3 !',
-        ': _CLR  0 _RES !  0 _CTR !  0 _DONE !  0 _R2 !  0 _R3 ! ;',
-    ]
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
-    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + crt_lines + helpers) + "\n"
+    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + crt_lines + HELPERS) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
         if sys_obj.cpu.halted: break

@@ -45,13 +45,10 @@ and no circular imports.
   - [4.6 tui/table.f — Tabular Data Display](#46-tuitablef--tabular-data-display)
   - [4.7 tui/widgets/dialog.f — Modal Dialog Boxes](#47-tuidialogyf--modal-dialog-boxes)
   - [4.8 tui/widgets/tabs.f — Tabbed Panels](#48-tuitabsf--tabbed-panels)
-- [Layer 5 — DOM-TUI Bridge](#layer-5--dom-tui-bridge)
+- [Layer 5 — Declarative UI](#layer-5--declarative-ui)
   - [5.0 dom/event.f — DOM Event System](#50-domeventf--dom-event-system)
-  - [5.1 tui/dom-tui.f — DOM-to-TUI Node Mapping](#51-tuidom-tuif--dom-to-tui-node-mapping)
-  - [5.2 tui/dom-render.f — DOM Tree Layout & Paint](#52-tuidom-renderf--dom-tree-layout--paint)
-  - [5.3 tui/dom-event.f — DOM Event Routing](#53-tuidom-eventf--dom-event-routing)
-  - [5.4 liraq/uidl.f Hardening — Element Registry & Five Protocols (Phase 0)](#54-liraquidlf-hardening--element-registry--five-protocols-phase-0)
-  - [5.5 tui/uidl-tui.f — UIDL TUI Backend](#55-tuiuidl-tuif--uidl-tui-backend)
+  - [5.1 liraq/uidl.f Hardening — Element Registry & Five Protocols (Phase 0)](#51-liraquidlf-hardening--element-registry--five-protocols-phase-0)
+  - [5.2 tui/uidl-tui.f — UIDL TUI Backend](#52-tuiuidl-tuif--uidl-tui-backend)
 - [Layer 6 — Application Shell](#layer-6--application-shell)
   - [6.1 tui/event.f — Event Loop & Dispatch](#61-tuieventf--event-loop--dispatch)
   - [6.2 tui/focus.f — Focus Manager](#62-tuifocusf--focus-manager)
@@ -211,9 +208,6 @@ column.
    - `tui/app-manifest.f`→ `MFT-`
    - `tui/app-launcher.f`→ `LAUNCH-`
    - `dom/event.f`    → `DOME-`
-   - `tui/dom-tui.f`  → `DTUI-`
-   - `tui/dom-render.f`→ `DREN-`
-   - `tui/dom-event.f` → `DEVT-`
    - `liraq/uidl-chrome.f` → `UIDL-T-` (chrome type constants)
    - `tui/uidl-tui.f`  → `UTUI-`
 
@@ -248,16 +242,16 @@ primitives.  Both converge on the screen buffer.
 │  Layer 6: Application Shell                                  │
 │  event.f (loop) │ focus.f + focus-2d.f  │ app.f (lifecycle)  │
 ├─────────────────────────┬────────────────────────────────────┤
-│  Layer 5a: UIDL Path    │  Layer 5b: DOM Path (HTML/CSS)     │
-│  (primary — direct)     │  (optional — web content)          │
+│  Layer 5a: UIDL Path    │  Layer 5b: DOM Events              │
+│  (primary — direct)     │  (optional — no renderer)          │
 │                         │                                    │
 │  liraq/uidl.f           │  dom/event.f  (W3C events)         │
-│    Element Registry     │  tui/dom-tui.f  (sidecars)        │
-│    Five Protocols       │  tui/dom-render.f  (layout+paint)  │
-│    Subscription Table   │  tui/dom-event.f  (key/mouse)      │
+│    Element Registry     │                                   │
+│    Five Protocols       │                                    │
+│    Subscription Table   │                                    │
 │  liraq/uidl-chrome.f    │                                    │
-│    (chrome elements)    │  ▲ consumes: dom/, css/,           │
-│  tui/uidl-tui.f         │    liraq/lel.f, state-tree.f       │
+│    (chrome elements)    │  ▲ consumes: dom/                  │
+│  tui/uidl-tui.f         │                                    │
 │    (TUI backend)        │                                    │
 │                         │                                    │
 │  ▲ consumes: liraq/,    │                                    │
@@ -1492,13 +1486,12 @@ implementations that write directly to the screen buffer.  No DOM
 intermediary.  Reactive binding, focus management, and dirty-rect
 repaint all operate on the UIDL tree.
 
-**Path 5b — DOM (web/HTML).**  For rendering HTML content with CSS
-to the terminal, this path maps DOM nodes to TUI sidecars via
-`dom-tui.f`, paints through `dom-render.f`, and routes input through
-`dom-event.f`.  This reuses the existing `dom/dom.f` + `css/` stack.
+**Path 5b — DOM events.**  `dom/event.f` gives DOM trees W3C-style
+events.  It knows no renderer: the terminal draws UIDL only, and a
+DOM consumer such as the pixel pipeline feeds it events.
 
-Sections 5.0–5.3 describe the DOM path (unchanged).
-Sections 5.4–5.5 describe the UIDL path.
+Section 5.0 describes the DOM event system.
+Sections 5.1–5.2 describe the UIDL path.
 
 ### 5.0 dom/event.f — DOM Event System
 
@@ -1705,8 +1698,8 @@ DROP
 
 1. **Renderer-agnostic.** This module knows nothing about TUI cells,
    pixel surfaces, or any rendering backend.  It operates purely on
-   the DOM tree structure.  The TUI bridge (`tui/dom-event.f`) and
-   the pixel pipeline can both feed events into this system.
+   the DOM tree structure.  The pixel pipeline, or any other DOM
+   consumer, feeds events into this system.
 
 2. **W3C-compatible semantics.** Capture → target → bubble matches
    the browser model.  `stopPropagation` prevents further phase
@@ -1755,295 +1748,7 @@ DROP
 
 ---
 
-### 5.1 tui/dom-tui.f — DOM-to-TUI Node Mapping
-
-**Goal:** Map DOM element nodes to TUI sidecar descriptors.  Walk
-the DOM tree, allocate a TUI descriptor for each visible element,
-and resolve CSS properties into character-cell attributes (fg/bg
-color, border style, text-align, display mode, visibility).
-
-File: `tui/dom-tui.f`
-Prefix: `DTUI-` (public), `_DTUI-` (internal)
-Provider: `PROVIDED akashic-tui-dom-tui`
-Dependencies: `REQUIRE dom/dom.f`, `REQUIRE css/css.f`,
-`REQUIRE css/bridge.f`, `REQUIRE tui/cell.f`, `REQUIRE tui/region.f`
-
-~350 lines
-
-#### TUI Sidecar Descriptor (8 cells = 64 bytes)
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0 | node | Back-pointer to DOM node |
-| +8 | flags | Dirty, visible, focusable, block/inline |
-| +16 | row | Computed row in screen coordinates |
-| +24 | col | Computed column in screen coordinates |
-| +32 | width | Computed width (character cells) |
-| +40 | height | Computed height (character cells) |
-| +48 | style | Packed: fg(8) bg(8) attrs(8) border-style(8) |
-| +56 | draw-xt | Custom draw hook (0 = default) |
-
-The `aux` cell of the DOM node points to this sidecar.
-Total overhead: 64 bytes per visible element.
-
-#### CSS → TUI Property Mapping
-
-| CSS Property | TUI Effect |
-|-------------|------------|
-| `color` | fg color → nearest 256-palette index |
-| `background-color` | bg color → nearest 256-palette index |
-| `display: none` | Skip node and subtree entirely |
-| `display: block` | Starts new row, fills available width |
-| `display: inline` | Flows left-to-right within current row |
-| `visibility: hidden` | Allocate space but don't paint |
-| `border-style` | Box-drawing characters (none/solid/double/dashed) |
-| `text-align` | Left/center/right padding of text content |
-| `font-weight: bold` | ANSI bold attribute |
-| `font-style: italic` | ANSI italic attribute |
-| `text-decoration: underline` | ANSI underline attribute |
-| `text-decoration: line-through` | ANSI strikethrough attribute |
-| `width` / `height` | Explicit character-cell dimensions |
-| `min-width` / `min-height` | Floor constraints |
-| `max-width` / `max-height` | Ceiling constraints |
-| `padding` | Character-cell inset (top/right/bottom/left) |
-| `margin` | Character-cell outset |
-
-#### Color Resolution
-
-`_DTUI-RESOLVE-COLOR` maps a CSS color value (as parsed by
-`CSS-PARSE-HEX-COLOR` or `CSS-COLOR-FIND`) to the nearest
-256-palette index.  For the 16 standard ANSI colors, this is a
-direct lookup.  For arbitrary RGB, it finds the nearest entry in
-the 6×6×6 color cube (indices 16–231) or the 24-step grayscale
-ramp (indices 232–255) by Euclidean distance in RGB space.
-
-#### Words
-
-| Word | Stack | Description |
-|------|-------|-------------|
-| `DTUI-ATTACH` | `( doc -- )` | Walk DOM tree, allocate sidecars for all visible elements, store in `aux` |
-| `DTUI-DETACH` | `( doc -- )` | Free all sidecars, clear `aux` fields |
-| `DTUI-REFRESH` | `( doc -- )` | Re-resolve CSS styles into existing sidecars (after style/class change) |
-| `DTUI-SIDECAR` | `( node -- sidecar | 0 )` | Get sidecar for a DOM node (reads `aux`) |
-| `DTUI-VISIBLE?` | `( node -- flag )` | Is this node visible (display≠none, visibility≠hidden)? |
-| `DTUI-STYLE!` | `( node fg bg attrs -- )` | Override resolved style for one node |
-| `DTUI-RESOLVE-COLOR` | `( r g b -- idx )` | Map 24-bit RGB → 256-palette index |
-| `DTUI-CLASS-ADD` | `( node addr len -- )` | Add CSS class + trigger sidecar refresh |
-| `DTUI-CLASS-REMOVE` | `( node addr len -- )` | Remove CSS class + trigger sidecar refresh |
-
-#### Algorithm — DTUI-ATTACH
-
-```forth
-: DTUI-ATTACH ( doc -- )
-  DUP DOM-ROOT  ( doc root )
-  BEGIN ?DUP WHILE
-    DUP DOM-TYPE@ DOM-ELEMENT = IF
-      DUP _DTUI-ALLOC-SIDECAR  ( node sidecar )
-      2DUP SWAP DOM-AUX!       \ store sidecar in node.aux
-      OVER _DTUI-RESOLVE-NODE  \ resolve CSS → sidecar fields
-    THEN
-    DOM-WALK-NEXT              \ iterative DFS — next node
-  REPEAT
-  DROP ;
-```
-
-#### Test targets: ~20 tests
-
-- Attach to simple DOM (div > p > span), verify sidecars allocated
-- display:none elements get no sidecar
-- Color resolution: #FF0000 → palette red, #808080 → gray
-- Bold/italic/underline CSS → ANSI attribute bits
-- border-style: solid → BOX-SINGLE, double → BOX-DOUBLE
-- Detach frees all sidecars
-- Refresh after class change updates colors
-- Back-pointer integrity (sidecar.node → original node)
-
----
-
-### 5.2 tui/dom-render.f — DOM Tree Layout & Paint
-
-**Goal:** Walk the DOM tree with attached sidecars, compute
-character-cell layout (block/inline flow), and paint the result
-into the TUI screen buffer using the existing draw/box primitives.
-
-File: `tui/dom-render.f`
-Prefix: `DREN-` (public), `_DREN-` (internal)
-Provider: `PROVIDED akashic-tui-dom-render`
-Dependencies: `REQUIRE tui/dom-tui.f`, `REQUIRE tui/draw.f`,
-`REQUIRE tui/box.f`, `REQUIRE tui/region.f`, `REQUIRE tui/screen.f`
-
-~400 lines
-
-#### Layout Algorithm
-
-A simplified block/inline flow model operating in character cells:
-
-1. **Block elements** start on a new row, extend to `available-width`
-   (or explicit `width` if set), and stack vertically.
-2. **Inline elements** flow left-to-right within the current row,
-   wrapping to the next row when the line is full.
-3. **Padding/margin** add character-cell offsets before/after the
-   content box.
-4. **Border** consumes 1 character cell per side (if present).
-5. **Text nodes** contribute their character length (with UTF-8
-   awareness via `akashic-utf8`) to inline flow.
-
-This is intentionally simpler than the pixel-pipeline `render/layout.f`
-(which implements full CSS 2.1 block/inline flow at sub-pixel
-precision).  Character cells impose a coarse grid — fractional
-positions are meaningless, so the algorithm rounds eagerly.
-
-#### Words
-
-| Word | Stack | Description |
-|------|-------|-------------|
-| `DREN-LAYOUT` | `( doc rgn -- )` | Compute character-cell layout for entire DOM tree within region |
-| `DREN-PAINT` | `( doc -- )` | Paint laid-out tree into the screen back buffer |
-| `DREN-RENDER` | `( doc rgn -- )` | Layout + paint in one call |
-| `DREN-RELAYOUT` | `( doc rgn -- )` | Re-layout (after mutation or resize) |
-| `DREN-DIRTY?` | `( doc -- flag )` | Any sidecar marked dirty? |
-| `DREN-PAINT-NODE` | `( node -- )` | Paint a single node (for partial updates) |
-
-#### Paint Order
-
-1. For each node in DFS order:
-   a. If `visibility: hidden`, skip paint (but children still reserve space).
-   b. Paint background: `DRW-FILL` the content box with bg color.
-   c. Paint border: `BOX-DRAW` with resolved border style (single/double/etc).
-   d. Paint text content: `DRW-TEXT` with fg color + attributes.
-   e. Recurse into children.
-
-#### Usage Example
-
-```forth
-REQUIRE dom/dom.f
-REQUIRE css/css.f
-REQUIRE css/bridge.f
-REQUIRE tui/dom-tui.f
-REQUIRE tui/dom-render.f
-REQUIRE tui/screen.f
-
-80 24 SCR-CREATE CONSTANT my-scr
-my-scr SCR-USE
-
-S" <div style='color:red; border:solid'><p>Hello DOM-TUI!</p></div>"
-DOM-PARSE-HTML CONSTANT my-doc
-
-my-doc DTUI-ATTACH
-my-doc  0 0 80 24 RGN-SET  DREN-RENDER
-SCR-FLUSH
-```
-
-#### Test targets: ~18 tests
-
-- Single block element: fills width, 1 row
-- Nested blocks: vertical stacking
-- Inline elements: horizontal flow, wrap at boundary
-- Text node rendering with correct fg/bg
-- Border: box-drawing characters at correct positions
-- Padding: content inset by correct amount
-- Margin: gap between sibling blocks
-- display:none skips entirely (no space reserved)
-- visibility:hidden reserves space but no paint
-- text-align center/right
-- Re-layout after DOM mutation
-- Partial paint (single dirty node)
-
----
-
-### 5.3 tui/dom-event.f — DOM Event Routing
-
-**Goal:** TUI-specific adapter that feeds keyboard and mouse events
-from the TUI input system into the general-purpose DOM event system
-(`dom/event.f`).  Translates `KEY-READ` events into `DOME-T-KEYDOWN`
-/ `DOME-T-KEYPRESS` DOM events, mouse reports into `DOME-T-CLICK` /
-`DOME-T-MOUSEDOWN` / `DOME-T-MOUSEUP`, and manages DOM-level focus
-(Tab cycling through focusable elements).
-
-This module does **not** re-implement dispatch logic — it delegates
-entirely to `DOME-DISPATCH` for three-phase capture/target/bubble
-propagation.  Its job is translation and focus management.
-
-File: `tui/dom-event.f`
-Prefix: `DEVT-` (public), `_DEVT-` (internal)
-Provider: `PROVIDED akashic-tui-dom-event`
-Dependencies: `REQUIRE dom/event.f`, `REQUIRE tui/dom-tui.f`, `REQUIRE tui/keys.f`
-
-~200 lines
-
-#### Event Flow
-
-```
-  KEY-READ / mouse report
-      │
-      ▼
-  DEVT-TRANSLATE           ← convert TUI input → DOM event object
-      │
-      ▼
-  DOME-DISPATCH            ← full W3C three-phase dispatch
-      │                       (capture → target → bubble)
-      ├─► listeners fire via dom/event.f
-      │
-      └─► returns prevented?
-```
-
-#### Focus Model
-
-The DOM-TUI focus is a single DOM node pointer.  Elements are
-focusable if they have the `tabindex` attribute or are inherently
-interactive (input, button, select, textarea — matched by tag name).
-`DEVT-FOCUS-NEXT` / `DEVT-FOCUS-PREV` cycle through focusable
-elements in DOM tree order.
-
-#### Words
-
-| Word | Stack | Description |
-|------|-------|-------------|
-| `DEVT-DISPATCH` | `( doc key-event-addr -- prevented? )` | Translate TUI key event → DOM event, dispatch via `DOME-DISPATCH` |
-| `DEVT-DISPATCH-MOUSE` | `( doc row col button -- prevented? )` | Translate mouse click → DOM click event, hit-test, dispatch |
-| `DEVT-FOCUS` | `( doc -- node | 0 )` | Get currently focused DOM element |
-| `DEVT-FOCUS!` | `( doc node -- )` | Set focus to specific element (fires `DOME-T-BLUR` / `DOME-T-FOCUS`) |
-| `DEVT-FOCUS-NEXT` | `( doc -- )` | Move focus to next focusable element (Tab order) |
-| `DEVT-FOCUS-PREV` | `( doc -- )` | Move focus to previous focusable element (Shift-Tab) |
-| `DEVT-TRANSLATE` | `( key-event-addr -- dome-event )` | Convert TUI key event to DOM event object |
-| `DEVT-HIT-TEST` | `( doc row col -- node | 0 )` | Find deepest visible element at screen position |
-
-#### Handler Storage
-
-Event handlers are now registered through the DOM event system:
-`DOME-LISTEN`, `DOME-LISTEN-CAPTURE`, `DOME-LISTEN-ONCE`, and
-removed via `DOME-UNLISTEN`.  The `DEVT-ON-KEY!` / `DEVT-ON-CLICK!`
-convenience words from the earlier design are replaced by direct
-calls to `DOME-LISTEN` with the appropriate type constant
-(`DOME-T-KEYDOWN`, `DOME-T-CLICK`, etc.).
-
-All listener callbacks follow the DOM event convention:
-`( event node -- )` where `event` is a full DOM event object with
-phase, propagation control, and payload fields.
-
-#### Hit Testing
-
-`DEVT-HIT-TEST` walks the DOM tree (reverse paint order for
-correct z-order) and checks whether `(row, col)` falls within
-each sidecar's layout rectangle.  Returns the deepest (most
-specific) match.
-
-#### Test targets: ~15 tests
-
-- Key event translated to DOME-T-KEYDOWN + dispatched
-- Mouse click translated to DOME-T-CLICK + dispatched via hit-test
-- Focus change fires DOME-T-BLUR on old + DOME-T-FOCUS on new
-- Focus-next cycles through tabindex elements
-- Focus-prev cycles backward
-- Hit-test returns correct element
-- Hit-test returns 0 for empty area
-- preventDefault on keydown suppresses default
-- Capture-phase listener on ancestor fires before target
-- Mouse button mapping (left/right/middle)
-
----
-
-### 5.4 liraq/uidl.f Hardening — Element Registry & Five Protocols (Phase 0)
+### 5.1 liraq/uidl.f Hardening — Element Registry & Five Protocols (Phase 0)
 
 **Goal:** Refactor `liraq/uidl.f` from a fixed-vocabulary parser
 into an extensible runtime anchored by an **Element Registry** and
@@ -2456,7 +2161,7 @@ for user-defined components.
 
 ---
 
-### 5.5 tui/uidl-tui.f — UIDL TUI Backend
+### 5.2 tui/uidl-tui.f — UIDL TUI Backend
 
 **Goal:** The TUI rendering backend for UIDL.  Installs real
 render-xt, event-xt, and layout-xt implementations into the Element
@@ -3367,9 +3072,7 @@ position, scroll offset, expand bitmap, active tab index) that
 neither the 128-byte UIDL element pool slot nor the 48-byte sidecar
 can carry.
 
-The DOM path solves this via `N.AUX` (a generic pointer cell per DOM
-node) which stores a 64-byte TUI sidecar allocated by `DTUI-ATTACH`.
-The UIDL path has no equivalent extension point — until now.
+The UIDL path has no extension point for that state — until now.
 
 #### Design: Sidecar Extension + Widget Struct Reuse
 
@@ -4201,11 +3904,11 @@ Estimated size: ~200 lines
                   │    ╲  │
                   │     ╲ │
         ┌─────────┴──────┴──────────────────────────────┐
-        │  Layer 5a: UIDL Path    │  Layer 5b: DOM Path  │
+        │  Layer 5a: UIDL Path    │  Layer 5b: DOM Events│
         │                         │                      │
-        │  uidl-tui.f             │  dom-tui.f           │
-        │    ▲                    │  dom-render.f        │
-        │    │                    │  dom-event.f         │
+        │  uidl-tui.f             │                      │
+        │    ▲                    │                      │
+        │    │                    │                      │
         │  uidl.f (registry)     │  dom/event.f         │
         │  uidl-chrome.f         │    ▲                  │
         │    ▲                    │    │                  │
@@ -4281,9 +3984,6 @@ Estimated size: ~200 lines
 | 16 | tui/widgets/dialog.f | 4 | keys, screen, widget, draw, box, region | ~340 | ✅ Done |
 | 17 | tui/widgets/tabs.f | 4 | widget, draw, box, region, keys | 282 | ✅ Done |
 | 18 | dom/event.f | 5b | dom.f | ~450 | ❌ Not started |
-| 19 | tui/dom-tui.f | 5b | dom.f, css.f, bridge.f, cell, region | ~350 | ❌ Not started |
-| 20 | tui/dom-render.f | 5b | dom-tui, draw, box, region, screen | ~400 | ❌ Not started |
-| 21 | tui/dom-event.f | 5b | dom/event.f, dom-tui, keys | ~200 | ❌ Not started |
 | 22 | liraq/uidl.f refactor | **5a-P0** | liraq/uidl.f (existing) | ~+200 | ❌ **Phase 0** |
 | 23 | liraq/uidl-chrome.f | **5a-P0** | uidl.f (refactored) | ~120 | ❌ **Phase 0** |
 | 24 | tui/uidl-tui.f | 5a | uidl.f, uidl-chrome.f, liraq/*, Layers 0–4 | ~500 | ❌ Not started |
@@ -4313,7 +4013,7 @@ and subscription table, then create `liraq/uidl-chrome.f` to register
 chrome + must-have + nice-to-have elements.  This touches only
 `liraq/` — no TUI code.  All existing uidl.f tests must still pass.
 
-Layer 5b (DOM path, rows 18–21) is independent of Layer 5a (UIDL
+Layer 5b (DOM events, row 18) is independent of Layer 5a (UIDL
 path, rows 22–24).  Either can be built first.  The UIDL path has
 no dependency on `dom/`, `css/`, or `bridge.f`.
 
@@ -4334,16 +4034,15 @@ no dependency on `dom/`, `css/`, or `bridge.f`.
 | Layout descriptors (10) | 10 × 48 | 480 | 480 |
 | Canvas dot buffer (80×24) | (W×2 × H×4) / 8 | 1,920 | 6,600 |
 | DOM document (100 nodes) | 80 + 100×80 + 200×24 + 4K str | 16,880 | 16,880 |
-| DOM-TUI sidecars (100 nodes) | 100 × 64 | 6,400 | 6,400 |
 | DOM event listener pool (256 slots) | 256 × 40 | 10,240 | 10,240 |
 | DOM event object pool (8 slots) | 8 × 80 | 640 | 640 |
-| **Total** | | **~71,000** | **~150,520** |
+| **Total** | | **~64,600** | **~144,120** |
 
 All fits in XMEM (16 MiB) with room to spare.  Even the largest
 terminal (200×60) uses under 300 KiB.  The DOM event system adds
 ~11 KiB for its listener and event pools — shared across all event
-types and all nodes.  Applications that don't use the DOM-TUI
-bridge incur none of the DOM-related costs.  Dictionary footprint
+types and all nodes.  Applications that don't use DOM events
+incur none of the DOM-related costs.  Dictionary footprint
 for the code itself: ~6,150 lines × ~12 bytes/line ≈ ~74 KiB.
 
 ---
@@ -5366,13 +5065,13 @@ Akashic has a **full CSS parser** (`css/css.f`, 1836 lines) with rule
 iteration, selector matching (type, class, id, compound, groups),
 specificity calculation, `!important`, hex/rgb()/named color parsing,
 and declaration lookup — plus a bridge (`css/bridge.f`) that collects
-matching rules for an element.  The DOM-TUI path already uses it.
+matching rules for an element.
 
 The UIDL path can use the exact same CSS engine.  `uidl-tui.f` adds
 a thin resolution layer: parse the stylesheet once at load time, then
 for each UIDL element, match CSS rules by element type (`label`,
 `action`, `input`, etc.), `id=`, and `class=` attributes, resolve
-colors to 256-palette indices via `DTUI-RESOLVE-COLOR`, and pack the
+colors to 256-palette indices via `TUI-RESOLVE-COLOR`, and pack the
 result into the sidecar `style` field.
 
 #### How It Works
@@ -5393,7 +5092,7 @@ CSS text
   │
   ▼  CSS-MATCH-SIMPLE for each rule's selector → collect matching decls
   │
-  ▼  CSS-DECL-FIND "color" → CSS-PARSE-HEX-COLOR → DTUI-RESOLVE-COLOR → fg index
+  ▼  CSS-DECL-FIND "color" → CSS-PARSE-HEX-COLOR → TUI-RESOLVE-COLOR → fg index
   ▼  CSS-DECL-FIND "background" → ... → bg index
   ▼  CSS-DECL-FIND "font-weight" → "bold" → CELL-A-BOLD
   ▼  CSS-DECL-FIND "border-style" → "rounded" → border byte
@@ -5412,7 +5111,7 @@ resolution.  Uses the subset of CSS properties that map to TUI cells:
 \ ════════════════════════════════════════════════════════
 \ Parsed at load time by the CSS engine (css/css.f).
 \ Colors are standard CSS (#hex, rgb(), named).
-\ Properties map to TUI attributes per dom-tui.f §5.1.
+\ Properties map to TUI attributes as the table below lists.
 
 : pad-css  ( -- addr len )
   S" /* ── Akashic Dark Theme ────────────────────── */" S+
@@ -5684,7 +5383,7 @@ VARIABLE _UTUI-CSS-A   VARIABLE _UTUI-CSS-L
     _UTUI-CSS-BUF OVER                     \ decls-a decls-len
     S" color" CSS-DECL-FIND IF             \ → val-a val-u  (e.g. "#DADADA")
       _UTUI-PARSE-CSS-COLOR                \ → r g b
-      DTUI-RESOLVE-COLOR                   \ → 256-palette index
+      TUI-RESOLVE-COLOR                   \ → 256-palette index
     ELSE TH-FG THEN                        \ fallback
 
     \ ── Extract background property ──
@@ -5695,7 +5394,7 @@ VARIABLE _UTUI-CSS-A   VARIABLE _UTUI-CSS-L
     THEN
     IF
       _UTUI-PARSE-CSS-COLOR
-      DTUI-RESOLVE-COLOR
+      TUI-RESOLVE-COLOR
     ELSE TH-BG THEN
 
     \ ── Extract font-weight ──
@@ -6030,7 +5729,7 @@ Swapping themes = swapping stylesheets:
 
 | CSS Property | TUI Mapping | Example |
 |-------------|------------|---------|
-| `color` | Foreground → 256-palette via `DTUI-RESOLVE-COLOR` | `color: #5FAFFF` → index 75 |
+| `color` | Foreground → 256-palette via `TUI-RESOLVE-COLOR` | `color: #5FAFFF` → index 75 |
 | `background` / `background-color` | Background → 256-palette | `background: #303030` → index 236 |
 | `font-weight: bold` | `CELL-A-BOLD` (bit 0) | Bold text |
 | `font-style: italic` | `CELL-A-ITALIC` (bit 2) | Italic text |
@@ -6045,7 +5744,7 @@ Color formats recognized by the parser:
 - **RGB function**: `rgb(218, 218, 218)` → `CSS-PARSE-RGB`
 - **Named**: all 148 CSS named colors → `CSS-COLOR-FIND` (includes `red`, `blue`, `dodgerblue`, `coral`, `whitesmoke`, etc.)
 
-All three produce `( r g b )` which `DTUI-RESOLVE-COLOR` maps to the
+All three produce `( r g b )` which `TUI-RESOLVE-COLOR` maps to the
 nearest 256-palette index via Euclidean distance in RGB space.
 
 #### Style Cascade Order

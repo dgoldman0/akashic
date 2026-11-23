@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from test_textarea import MEGAPAD_ROOT, SOURCE_PATHS, _load_forth_lines
-from simulator.platform import create_one_core_address_space
+from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime
 
 
@@ -22,7 +22,7 @@ def _run(program: str, marker: str, minimum: int) -> None:
     # source executor avoids the unrelated timing-correct CPU boot cost;
     # there are no substitute status, text, drawing, or allocation words.
     runtime = MegaForthRuntime(
-        memory=create_one_core_address_space(external_size=128 << 20),
+        memory=create_address_space(external_size=128 << 20),
         execution_backend="native",
     )
     runtime.evaluate((MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")

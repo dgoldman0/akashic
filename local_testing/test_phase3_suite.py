@@ -18,21 +18,24 @@ from asm import assemble
 from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
+sys.path.insert(0, SCRIPT_DIR)
+from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
 # ── Disk files (dependency order) ──────────────────────────────
-DISK_FILES = [
-    # core game
-    ("ecs.f",        "/game",    os.path.join(AK_DIR, "game", "ecs.f")),
-    ("components.f", "/game",    os.path.join(AK_DIR, "game", "components.f")),
-    ("systems.f",    "/game",    os.path.join(AK_DIR, "game", "systems.f")),
-    # 2d game
-    ("collide.f",       "/game/2d", os.path.join(AK_DIR, "game", "2d", "collide.f")),
-    ("tile-physics.f",  "/game/2d", os.path.join(AK_DIR, "game", "2d", "tile-physics.f")),
-    ("pathfind.f",      "/game/2d", os.path.join(AK_DIR, "game", "2d", "pathfind.f")),
-    ("steer.f",         "/game/2d", os.path.join(AK_DIR, "game", "2d", "steer.f")),
-]
+# The modules the suite loads and their REQUIRE closure, each in its own
+# directory on the disk, so the disk follows what the modules require.
+DISK_FILES = module_disk_files((
+    "game/ecs.f",
+    "game/components.f",
+    "game/systems.f",
+    "game/2d/collide.f",
+    "game/2d/tile-physics.f",
+    "game/2d/pathfind.f",
+    "game/2d/steer.f",
+))
 
 # ── Forth test harness ─────────────────────────────────────────
 FORTH_HARNESS = r"""\ =====================================================================
@@ -675,7 +678,7 @@ def build_disk(img_path):
 
 
 def main():
-    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False, dir=SCRIPT_DIR)
+    tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
     img_path = tmp.name
     tmp.close()
 
@@ -710,6 +713,10 @@ def main():
 
         # Check for fatal errors (only after [MODULES LOADED])
         fatal = False
+        diagnostics = kdos_diagnostics(text)
+        if diagnostics:
+            print(f"[!] KDOS reported: {', '.join(diagnostics)}")
+            fatal = True
         test_section = text[text.find("[MODULES LOADED]"):] if "[MODULES LOADED]" in text else text
         for err_pat in ["ABORT", "STACK"]:
             if err_pat.lower() in test_section.lower():
@@ -741,6 +748,11 @@ def main():
         os.unlink(img_path)
 
     return rc
+
+
+def test_suite() -> None:
+    """The suite as a test, so the test selection tool runs it."""
+    assert main() == 0
 
 
 if __name__ == "__main__":
