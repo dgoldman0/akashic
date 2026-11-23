@@ -15150,9 +15150,11 @@ DESKTOP_APT1_APPLETS = (
     "pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
 )
 # Development checks beyond one applet: Desk with Pad on a terminal with
-# little room for retained text, and Desk with File Explorer showing a real
-# photograph (below).
-DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damaged")
+# little room for retained text, Desk with File Explorer showing a real
+# photograph, and Desk with the Agent and Probe sharing the sandbox (below).
+DESKTOP_APT1_CHECKS = (
+    *DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damaged", "sandbox",
+)
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
@@ -23380,6 +23382,33 @@ PROFILES["desktop-sandbox-modules"] = replace(
     ),
     ready_markers=(*desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS), "reply none"),
 )
+
+# The same Desk on the rich terminal, for the physical driver: the Agent,
+# whose scripted provider carries every sandbox request the journey above
+# asks for, and Probe.  On a machine with several full cores Desk lends the
+# sandbox's jobs to the other cores (_DESK_SANDBOX_POLICY), so its journey
+# shows a job run on a worker while core 0 serves Desk's frames.
+PROFILES["desktop-apt1-sandbox"] = replace(
+    PROFILES["desktop-apt1"],
+    roots=desktop_roots(_DESKTOP_SANDBOX_APPLETS, rich=True),
+    resources=desktop_resources(_DESKTOP_SANDBOX_APPLETS),
+    autoexec=desktop_autoexec(_DESKTOP_SANDBOX_APPLETS, rich=True).replace(
+        _DESK_AGENT_SOURCE_BOOT,
+        (_DESKTOP_SANDBOX_TOOLS + _DESKTOP_SANDBOX_MODULES_SOURCE).strip(),
+        1,
+    ).replace(
+        "\n" + _DESK_SANDBOX_POLICY,
+        "\n" + _DESKTOP_SANDBOX_PROBE + "\n" + _DESK_SANDBOX_POLICY,
+        1,
+    ),
+    # The Agent's markers alone: Probe's one line of text changes as the
+    # journey goes, while the final frame must still show every ready
+    # marker, and the journey waits for Probe's first line itself.
+    ready_markers=desktop_ready_markers(_DESKTOP_SANDBOX_APPLETS),
+    stable_markers=desktop_stable_markers(_DESKTOP_SANDBOX_APPLETS),
+)
+assert _DESKTOP_SANDBOX_PROBE in PROFILES["desktop-apt1-sandbox"].autoexec
+assert _DESK_AGENT_SOURCE_BOOT not in PROFILES["desktop-apt1-sandbox"].autoexec
 
 PROFILES["desktop-streams"] = Profile(
     roots=(
@@ -38752,7 +38781,10 @@ def _parser() -> argparse.ArgumentParser:
                 "--cores",
                 type=_positive_integer,
                 default=None,
-                help="full cores (profile default, usually 1; emulator only)",
+                help=(
+                    "full cores (profile default, usually 1); the simulator "
+                    "takes as many as it admits, the hybrid backend one"
+                ),
             )
             command.add_argument(
                 "--clusters",

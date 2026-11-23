@@ -1245,6 +1245,11 @@ VARIABLE _AHTI-PAINT
         DUP AHS-ALIVE? OVER AHS-CALLABLE? AND IF
             DUP >R
             R@ AHS.INST @ CINST.REVISION @ R@ AHS.SEEN-REV @ <> IF
+                \ A shown child whose instance changed since its last
+                \ paint, as a reply that came between passes touches it,
+                \ asks for a paint as it turns dirty, once: a dirty child
+                \ has asked already, and a minimized one is not drawn.
+                R@ AHS.DIRTY @ 0= R@ AHS.RGN @ 0<> AND IF ASHELL-DIRTY! THEN
                 -1 R@ AHS.DIRTY !
             THEN
             R@ AHS.DIRTY @
