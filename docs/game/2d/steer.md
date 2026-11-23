@@ -68,8 +68,8 @@ in the path and seeks toward the **next** waypoint.  If the
 entity is at the last waypoint or not on the path, velocity is
 set to (0, 0).
 
-Path format: flat cell array of (x, y) pairs — compatible with
-`ASTAR-FIND` output.
+Path format: flat cell array of (x, y) pairs, as `ASTAR-PATH` gives
+it.
 
 ---
 

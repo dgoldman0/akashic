@@ -19,10 +19,18 @@ lit.  ``fog_maps`` makes the fixed maps of the plan's probe and seeded
 random maps, ``fog_forth`` emits Forth that reveals three viewers into one
 fog on each map, two before a hide and one after, and prints the layer
 after each, and ``fog_check`` compares the layers with the oracle.
+
+A*: ``grid_dijkstra`` computes the cheapest costs under the same step
+rules as pathfind.f: terrain costs by collision value, straight and
+diagonal step weights, and the corner rule.  ``astar_trials`` makes seeded
+maps with searches, fields and downhill steps, ``astar_forth`` emits Forth
+that runs them, and ``astar_check`` compares every status, cost, path,
+distance and step with the oracle.
 """
 
 from __future__ import annotations
 
+import heapq
 import math
 import random
 from fractions import Fraction
@@ -520,4 +528,248 @@ def fog_check(text: str, maps: list[FogMap]) -> list[str]:
             problems.append(f"map {number}: the memory log does not balance")
         if depth != 0:
             problems.append(f"map {number}: stack depth {depth} after the trial")
+    return problems
+
+
+# ── A* and distance fields ───────────────────────────────────────
+
+_DIRECTIONS = [(-1, 0), (1, 0), (0, -1), (0, 1),
+               (-1, -1), (1, -1), (-1, 1), (1, 1)]
+
+
+@dataclass
+class AstarMap:
+    width: int
+    height: int
+    tiles: list[list[int]]                  # collision values by row
+    costs: dict[int, int]                   # value -> cost, 0 impassable
+    straight: int = 1
+    diagonal: int = 0
+    corners: bool = False
+    runs: list[tuple[int, int, int, int]] = field(default_factory=list)
+    sources: list[tuple[int, int]] = field(default_factory=list)
+    probes: list[tuple[int, int]] = field(default_factory=list)
+
+    def cost(self, x: int, y: int) -> int:
+        return self.costs.get(self.tiles[y][x], 0)
+
+    def inside(self, x: int, y: int) -> bool:
+        return 0 <= x < self.width and 0 <= y < self.height
+
+    def steps(self, x: int, y: int):
+        """(nx, ny, cost) for each legal step from (x, y), in order."""
+        count = 8 if self.diagonal else 4
+        for dx, dy in _DIRECTIONS[:count]:
+            nx, ny = x + dx, y + dy
+            if not self.inside(nx, ny):
+                continue
+            tile = self.cost(nx, ny)
+            if tile == 0:
+                continue
+            if dx and dy:
+                side_a = self.cost(nx, y) > 0
+                side_b = self.cost(x, ny) > 0
+                if self.corners and not (side_a and side_b):
+                    continue
+                if not (side_a or side_b):
+                    continue
+                yield nx, ny, tile * self.diagonal
+            else:
+                yield nx, ny, tile * self.straight
+
+
+def grid_dijkstra(amap: AstarMap, sources: list[tuple[int, int]]) -> dict:
+    """Cheapest cost from the nearest source to every reachable tile."""
+    dist: dict[tuple[int, int], int] = {}
+    heap = []
+    for source in sources:
+        if amap.inside(*source) and source not in dist:
+            dist[source] = 0
+            heap.append((0, source))
+    heapq.heapify(heap)
+    done = set()
+    while heap:
+        d, tile = heapq.heappop(heap)
+        if tile in done:
+            continue
+        done.add(tile)
+        for nx, ny, step in amap.steps(*tile):
+            nd = d + step
+            if nd < dist.get((nx, ny), 1 << 62):
+                dist[(nx, ny)] = nd
+                heapq.heappush(heap, (nd, (nx, ny)))
+    return dist
+
+
+def astar_trials(seed: int = 20261123, count: int = 24) -> list[AstarMap]:
+    """Seeded maps, each with runs, field sources and downhill probes."""
+    rng = random.Random(seed)
+    settings = [(1, 0, False), (1, 1, False), (1, 1, True), (5, 7, False),
+                (2, 3, True), (10, 14, False)]
+    maps = []
+    for number in range(count):
+        width, height = rng.randint(3, 24), rng.randint(3, 12)
+        density = rng.choice([0.0, 0.15, 0.3, 0.45])
+        terrain = number % 3 == 2
+        tiles = [[(1 if rng.random() < density else
+                   (rng.choice([0, 0, 2, 3]) if terrain else 0))
+                  for _ in range(width)] for _ in range(height)]
+        costs = {0: 1, 2: 3, 3: 2} if terrain else {0: 1}
+        straight, diagonal, corners = settings[number % len(settings)]
+        amap = AstarMap(width, height, tiles, costs, straight, diagonal, corners)
+        for _ in range(6):
+            amap.runs.append((rng.randrange(width), rng.randrange(height),
+                              rng.randrange(width), rng.randrange(height)))
+        amap.sources = [(rng.randrange(width), rng.randrange(height))
+                        for _ in range(rng.randint(1, 3))]
+        amap.probes = [(rng.randrange(width), rng.randrange(height))
+                       for _ in range(6)]
+        maps.append(amap)
+    return maps
+
+
+ASTAR_FORTH_SUPPORT = r"""
+\ ── A* against the host Dijkstra ───────────────────────────────
+VARIABLE _AST-MAP  VARIABLE _AST-S
+64 CELLS ALLOCATE DROP CONSTANT _AST-SRC
+: _AST-BEGIN  ( w h -- )  CMAP-NEW DUP _AST-MAP !  ASTAR-NEW _AST-S ! ;
+: _AST-ROW!  ( addr u y -- )
+    SWAP 0 ?DO
+        OVER I + C@ [CHAR] 0 - DUP IF _AST-MAP @ I 3 PICK 3 PICK CMAP-SET THEN DROP
+    LOOP 2DROP ;
+: _AST-END  ( -- )  _AST-S @ ASTAR-FREE  _AST-MAP @ CMAP-FREE ;
+: _AST-RESULT.  ( status id k -- )
+    ." AS: " SWAP . . .  _AST-S @ ASTAR-PATH-COST .
+    _AST-S @ ASTAR-PATH DUP . ." | "
+    0 ?DO DUP I 2* CELLS + @ . DUP I 2* 1+ CELLS + @ . LOOP DROP CR ;
+: _AST-SRC!  ( x y k -- )  2* CELLS _AST-SRC + TUCK CELL+ ! ! ;
+: _AST-FIELD.  ( status id -- )
+    ." AF: " . . CR
+    _AST-MAP @ CMAP-H 0 ?DO
+        ." AFR: " _AST-MAP @ CMAP-W 0 ?DO _AST-S @ I J ASTAR-DIST . LOOP CR
+    LOOP ;
+: _AST-DOWN.  ( x y id -- )
+    ." AD: " . 2DUP SWAP . .  _AST-S @ -ROT ASTAR-DOWNHILL
+    IF SWAP . . ." 1" ELSE ." 0" THEN CR ;
+DEPTH CONSTANT _AST-DEPTH0
+"""
+
+
+def astar_forth(maps: list[AstarMap]) -> str:
+    """Forth that runs each map's searches, its field and its probes."""
+    lines = [ASTAR_FORTH_SUPPORT]
+    for number, amap in enumerate(maps):
+        lines += ["-1 MLOG-HOLD  MLOG-START",
+                  f"{amap.width} {amap.height} _AST-BEGIN"]
+        for y, row in enumerate(amap.tiles):
+            lines.append(f'S" {"".join(str(v) for v in row)}" {y} _AST-ROW!')
+        for value, cost in sorted(amap.costs.items()):
+            if (value, cost) != (0, 1):
+                lines.append(f"_AST-S @ {value} {cost} ASTAR-COST!")
+        lines.append(f"_AST-S @ {amap.straight} {amap.diagonal} ASTAR-STEPS!")
+        if amap.corners:
+            lines.append("_AST-S @ -1 ASTAR-CORNERS!")
+        for k, (x0, y0, x1, y1) in enumerate(amap.runs):
+            lines.append(f"_AST-S @ {x0} {y0} {x1} {y1} ASTAR-RUN {number} {k} _AST-RESULT.")
+        for k, (x, y) in enumerate(amap.sources):
+            lines.append(f"{x} {y} {k} _AST-SRC!")
+        lines.append(f"_AST-SRC {len(amap.sources)} _AST-S @ ASTAR-FIELD {number} _AST-FIELD.")
+        for x, y in amap.probes:
+            lines.append(f"{x} {y} {number} _AST-DOWN.")
+        lines += ["_AST-END",
+                  "MLOG-STOP  0 MLOG-HOLD",
+                  f'." ASM: " {number} . MLOG-BALANCED? . DEPTH _AST-DEPTH0 - . CR']
+    return "\n".join(lines) + "\n"
+
+
+def astar_check(text: str, maps: list[AstarMap]) -> list[str]:
+    """Differences between the transcript and the Dijkstra oracle."""
+    problems: list[str] = []
+    runs: dict[tuple[int, int], tuple] = {}
+    fields: dict[int, tuple[int, list[list[int]]]] = {}
+    downs: dict[int, list[tuple]] = {}
+    memory: dict[int, tuple[int, int]] = {}
+    current = None
+    for line in text.splitlines():
+        try:
+            if line.startswith("AS: "):
+                head, _, path = line[4:].partition("|")
+                number, k, status, cost, count = (int(x) for x in head.split())
+                cells = [int(x) for x in path.split()]
+                runs[(number, k)] = (status, cost, count,
+                                     list(zip(cells[0::2], cells[1::2])))
+            elif line.startswith("AF: "):
+                number, status = (int(x) for x in line[4:].split())
+                fields[number] = (status, [])
+                current = number
+            elif line.startswith("AFR: ") and current is not None:
+                fields[current][1].append([int(x) for x in line[5:].split()])
+            elif line.startswith("AD: "):
+                values = [int(x) for x in line[4:].split()]
+                downs.setdefault(values[0], []).append(tuple(values[1:]))
+            elif line.startswith("ASM: "):
+                number, balanced, depth = (int(x) for x in line[5:].split())
+                memory[number] = (balanced, depth)
+                current = None
+        except ValueError:
+            problems.append(f"unreadable line: {line!r}")
+    for number, amap in enumerate(maps):
+        for k, (x0, y0, x1, y1) in enumerate(amap.runs):
+            got = runs.get((number, k))
+            if got is None:
+                problems.append(f"map {number} run {k}: no result")
+                continue
+            status, cost, count, path = got
+            want = grid_dijkstra(amap, [(x0, y0)]).get((x1, y1))
+            if (x1, y1) != (x0, y0) and amap.cost(x1, y1) == 0:
+                want = None
+            if want is None:
+                if status != 1:
+                    problems.append(f"map {number} run {k}: status {status}, "
+                                    f"oracle finds no path")
+                continue
+            if status != 0 or cost != want:
+                problems.append(f"map {number} run {k}: status {status} cost "
+                                f"{cost}, oracle cost {want}")
+                continue
+            if len(path) != count or not path or path[0] != (x0, y0) \
+                    or path[-1] != (x1, y1):
+                problems.append(f"map {number} run {k}: path ends wrong")
+                continue
+            total = 0
+            for (ax, ay), (bx, by) in zip(path, path[1:]):
+                step = [c for nx, ny, c in amap.steps(ax, ay) if (nx, ny) == (bx, by)]
+                if not step:
+                    problems.append(f"map {number} run {k}: illegal step "
+                                    f"({ax},{ay})->({bx},{by})")
+                    break
+                total += step[0]
+            else:
+                if total != cost:
+                    problems.append(f"map {number} run {k}: path costs {total}, "
+                                    f"reported {cost}")
+        dist = grid_dijkstra(amap, amap.sources)
+        status, rows = fields.get(number, (-1, []))
+        want_rows = [[dist.get((x, y), -1) for x in range(amap.width)]
+                     for y in range(amap.height)]
+        if status != 0 or rows != want_rows:
+            problems.append(f"map {number}: field status {status} or its "
+                            f"distances differ from the oracle")
+        for x, y, *rest in downs.get(number, []):
+            legal = [(nx, ny) for nx, ny, _ in amap.steps(x, y)
+                     if (nx, ny) in dist]
+            own = dist.get((x, y), 1 << 62)
+            best = None
+            for tile in legal:
+                if dist[tile] < own and (best is None or dist[tile] < dist[best]):
+                    best = tile
+            got = tuple(rest)
+            want = (best[0], best[1], 1) if best else (0,)
+            if got != want:
+                problems.append(f"map {number}: downhill from ({x},{y}) gave "
+                                f"{got}, oracle {want}")
+        balanced, depth = memory.get(number, (0, -1))
+        if balanced != -1 or depth != 0:
+            problems.append(f"map {number}: memory balanced {balanced}, "
+                            f"stack depth {depth}")
     return problems

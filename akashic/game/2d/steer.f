@@ -16,7 +16,7 @@
 \
 \  Path / waypoint format:
 \    Array of cell pairs:  arr[i*2] = x, arr[i*2+1] = y.
-\    Compatible with ASTAR-FIND output.
+\    The format of ASTAR-PATH.
 \
 \  Prefix: STEER- (public), _ST- (internal)
 \  Provider: akashic-game-2d-steer
