@@ -43,8 +43,8 @@ process-wide state or duplicate a canonical widget or UIDL facility, so the
 plan retires them; a board builder over the canonical text grid and a text map
 reader take their place. Each game is an ordinary applet with its own
 descriptor, as Grid is. The repairs cost 18 to 25.5 agent hours and the
-chosen game, Folio Watch, 8 to 12 more. The six stages, which add the
-game's skeleton, its measurement and its configuration entry, come to 27 to 39
+chosen game, Folio Watch, 9.5 to 15 more. The six stages, which add the game's
+skeleton, its measurement and its configuration entry, come to 28.5 to 42
 hours, with an optional stage of 3 to 5 hours that teaches the text grid to
 follow change.
 
@@ -428,8 +428,9 @@ that shun light, creep from the shelves' shadows toward folios left on the
 desks and eat their ink. The player is the night archivist with a hand lamp.
 Each turn the archivist steps, relights a wall lamp from a limited store of
 oil, carries a folio back to its shelf, or rings a hand bell that scatters
-nearby inkmites. A relit lamp lights its part of the room until dawn, so the
-player spends oil to make safe ground and plans routes through it. Inkmites
+nearby inkmites. A relit lamp lights its part of the room while its oil
+lasts, so the player spends oil to make safe ground and plans routes through
+it, and as the night wears on lamps gutter and more inkmites stir. Inkmites
 cross only dark tiles, head for the nearest unguarded folio, feed while it
 stays dark around them, and flee the moment light reaches them. Dawn comes
 after a fixed number of turns, and the night's score counts the folios
@@ -456,8 +457,41 @@ events, a dialog closes the night, and a menu starts, saves and loads nights.
 Every one of these is a canonical widget or UIDL element the Desktop already
 publishes, and the text grid holds every state the game shows.
 
-Size: 1,200 to 1,600 lines of Forth and UIDL and three maps, 8 to 12 hours
-after the library stages.
+#### Designing for play
+
+Folio Watch is meant to be fun to play, so each module earns its place through
+something the player sees, decides or feels. The fog is what the archivist
+knows and the light the inkmites flee; path search and steering give
+creatures that move with visible purpose; behaviour trees and state machines
+give them moods the player can read and exploit; the ECS and the collision
+map give many small actors that block and crowd. A module whose only effect
+is hidden complexity keeps a small role, and the stage's report names it.
+
+The core loop gives every turn a decision: which lamp to relight next,
+whether to cross a dark corridor to save turns, when to spend scarce oil, and
+which folio to guard. A strategy that dominates, such as standing in one pool
+of light, meets pressure elsewhere on the map. Losses are fair: each inkmite
+shows where it is heading or what mood it is in, the log says why a folio was
+lost, and the rules stay consistent and readable on the 24 by 12 board. A
+night escalates as lamps gutter and more inkmites stir, and it stays a short
+session with save points. The three maps teach, then test, then combine:
+lamps and fog in the reading room, the creatures' behaviours in the map room,
+and everything together in the stacks.
+
+Scripted players check the balance in stage 5's headless replay, over many
+seeds, since the game has no human playtester. Doing nothing and moving at
+random should usually lose, and a sensible greedy strategy should often win,
+though not always. The replay also counts the turns that offer more than one
+reasonable move, and it switches each module's influence off in turn, since a
+module whose absence changes no outcome gives the player nothing. A design
+section, here or in `docs/game/folio-watch.md` if it grows, records the core
+loop, each module's role, these numbers and the changes they caused. The
+skeleton of stage 4 follows these rules, and stage 5's rules, creatures and
+maps follow them in full.
+
+Size: 1,200 to 1,600 lines of Forth and UIDL and three maps, 9.5 to 15 hours
+after the library stages, 1.5 to 3 of them for the scripted players and the
+design section.
 
 | Per turn | Cycles | At 100 MHz | Basis |
 |---|---:|---:|---|
@@ -570,11 +604,11 @@ Garden Automata would reuse.
 | 3 | Repairs 7 and 8 | Save round trips on MP64FS and ext4; refused files; map validation | 2.5–3.5 | Saved nights and shipped maps |
 | 4 | Repairs 9 to 11; the chosen game's skeleton (a map, a player who moves, fog, save and load, close negotiation); its first per-turn measurement | Board model and CELL draw; headless rich run with `GRID_CELLS` and a `PLACE`; Desk with the game | 5–7 | Stage 5; decision 3's measurement |
 | 4b | On decision 3: the text grid follows change | Grid, Daybook and the game; the physical Desktop journey once | 3–5 | A turn within budget at a larger board |
-| 5 | The game: rules, creatures, three maps, dialogs, status, log, seeds, save points | Headless turn replay; per-turn cycles; Desk with the game through a short night | 8–12 | Inclusion in a configuration |
+| 5 | The game: rules, creatures, three maps, dialogs, status, log, seeds, save points | Headless turn replay; scripted players over many seeds; per-turn cycles; Desk with the game through a short night | 9.5–15 | Inclusion in a configuration |
 | 6 | Configuration entry, documents, closing runs | `run --recorded` with patterns; the physical Desktop journey if a composition it gates includes the game | 1.5–2.5 | Part 1d status "ships" for the library |
 
-Stages 1 to 6 come to 27 to 39 hours with Folio Watch, and stage 4b to 3 to 5
-more. Stage 0 is done: `test-health-3` landed on main with the six converted
+Stages 1 to 6 come to 28.5 to 42 hours with Folio Watch, and stage 4b to 3 to
+5 more. Stage 0 is done: `test-health-3` landed on main with the six converted
 suites, and the game is chosen. Stage 4's measured turn settles, under
 decision 3, whether stage 4b runs.
 
@@ -621,7 +655,8 @@ recommended.
 **1. The game.** Folio Watch, under that name, for the reasons in 3.4. A
 night archivist relights lamps while light-shy inkmites go after the folios,
 and the fog layer is both what the player sees and the light the creatures
-flee. Cost: 8 to 12 hours after the library stages.
+flee. Cost: 9.5 to 15 hours after the library stages, with the scripted
+players of 3.1's design for play.
 
 A game uses the logic modules that serve its play, and one that tries to use
 them all can feel forced. Folio Watch, the library's first sample, tries all
