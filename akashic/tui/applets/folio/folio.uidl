@@ -1,0 +1,25 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=Night>
+<item text=New_Night do=new key=Ctrl+N/>
+<item text=Save do=save key=Ctrl+S/>
+<item text=Load do=load key=Ctrl+O/>
+<separator/>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+<menu label=Help>
+<item text=Keys do=keys key=F1/>
+<item text=About_Folio_Watch do=about/>
+</menu>
+</menubar>
+<region id=board style=color:#d7d7af;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#5f5f00>
+<label id=sbar-room text=Folio_Watch/>
+<label id=sbar-turn text=Night_falls/>
+</status>
+<action do=new key=Ctrl+N/>
+<action do=save key=Ctrl+S/>
+<action do=load key=Ctrl+O/>
+<action do=keys key=F1/>
+<action do=quit key=Ctrl+Q/>
+</uidl>

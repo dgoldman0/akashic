@@ -153,6 +153,8 @@ kind of one tile; `GMAP-W` and `GMAP-H` give the size.
 | `GMAP-TILE` | `( map name-a name-u -- kind \| -1 )` | A kind by name |
 | `GMAP-TILE-NAME` | `( map kind -- a u )` | Its name |
 | `GMAP-TILE-GLYPH` | `( map kind -- char )` | Its glyph, a code point |
+| `GMAP-TILE-COLLISION` | `( map kind -- value )` | The collision value its tiles take |
+| `GMAP-TILE-OPAQUE?` | `( map kind -- flag )` | Whether its tiles block sight |
 | `GMAP-MARKS` | `( map -- n )` | Marks |
 | `GMAP-MARK` | `( map name-a name-u -- mark \| -1 )` | A mark by name |
 | `GMAP-MARK-NAME` | `( map mark -- a u )` | Its name |

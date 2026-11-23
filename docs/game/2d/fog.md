@@ -138,6 +138,17 @@ The tile's state; a tile off the map is unseen.
 
 The map's width and height.
 
+### FOG-DATA
+
+```
+( fog -- addr )
+```
+
+The tiles' states, `w × h` bytes row by row: tile `(x, y)` is at
+`addr + y × w + x`. A game that writes them, as a load restores what a
+player had seen, writes only `FOG-UNSEEN` and `FOG-REMEMBERED`; visible
+tiles come from `FOG-REVEAL`, which keeps the list `FOG-HIDE-ALL` reads.
+
 ---
 
 ## How Sight Is Computed
@@ -197,5 +208,6 @@ Emulator cycles, one call each, Akashic `game-library`, 2026-11-23:
 | `FOG-HIDE-ALL`   | `( fog -- )`                    | Visible becomes remembered   |
 | `FOG-RESET`      | `( fog -- )`                    | Every tile unseen            |
 | `FOG-STATE`      | `( fog x y -- 0\|1\|2 )`        | A tile's state               |
+| `FOG-DATA`       | `( fog -- addr )`               | The tiles' states as bytes   |
 | `FOG-W`          | `( fog -- w )`                  | Map width                    |
 | `FOG-H`          | `( fog -- h )`                  | Map height                   |

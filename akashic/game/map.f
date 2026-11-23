@@ -74,6 +74,8 @@
 \    GMAP-TILE        ( map name-a name-u -- kind | -1 )
 \    GMAP-TILE-NAME   ( map kind -- a u )
 \    GMAP-TILE-GLYPH  ( map kind -- char )
+\    GMAP-TILE-COLLISION ( map kind -- value )
+\    GMAP-TILE-OPAQUE? ( map kind -- flag )
 \    GMAP-MARKS       ( map -- n )
 \    GMAP-MARK        ( map name-a name-u -- mark | -1 )
 \    GMAP-MARK-NAME   ( map mark -- a u )
@@ -548,6 +550,10 @@ VARIABLE _GML-FD
 : GMAP-TILE-NAME   ( map kind -- a u )
     _GMAP-TILE-ENTRY DUP 8 + @ SWAP 16 + @ ;
 : GMAP-TILE-GLYPH  ( map kind -- char )  _GMAP-TILE-ENTRY @ ;
+: GMAP-TILE-COLLISION  ( map kind -- value )
+    _GMAP-TILE-ENTRY 24 + @ 255 AND ;
+: GMAP-TILE-OPAQUE?  ( map kind -- flag )
+    _GMAP-TILE-ENTRY 24 + @ _GMAP-OPAQUE AND 0<> ;
 
 : GMAP-MARK  ( map name-a name-u -- mark | -1 )
     ROT DUP _GMAP-O-MARKS + @ SWAP GMAP-MARKS 8 _GMP-FIND-AT ;

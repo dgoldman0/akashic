@@ -53,6 +53,7 @@
 \    FOG-STATE       ( fog x y -- 0|1|2 )
 \    FOG-W           ( fog -- w )
 \    FOG-H           ( fog -- h )
+\    FOG-DATA        ( fog -- addr )
 \
 \  Prefix: FOG- (public), _FOG- (internal)
 \  Provider: akashic-game-2d-fog
@@ -134,6 +135,13 @@ REQUIRE collide.f
 
 : FOG-W  ( fog -- w )  _FOG-O-W + @ ;
 : FOG-H  ( fog -- h )  _FOG-O-H + @ ;
+
+\ FOG-DATA ( fog -- addr )
+\   The tiles' states, w x h bytes row by row: tile (x,y) at addr + y x w
+\   + x.  A game that writes them, as a load restores what a player had
+\   seen, writes only FOG-UNSEEN and FOG-REMEMBERED: visible tiles come
+\   from FOG-REVEAL, which keeps the list FOG-HIDE-ALL reads.
+: FOG-DATA  ( fog -- addr )  _FOG-O-DATA + @ ;
 
 \ FOG-BLOCK-MAP! ( fog cmap -- )
 \   Tiles whose collision value is nonzero block sight.  The map must
