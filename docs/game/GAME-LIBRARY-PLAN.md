@@ -1,8 +1,8 @@
 # Repairing the game library and building a first game on it — plan, 2026-11-22
 
 Status: Accepted, 2026-11-23. The game is Folio Watch, and section 5 records
-the eight decisions. Stage 0 is done, and the stages follow section 4 in
-order, each reported before the next one starts. The work runs alongside the
+the eight decisions. Stages 0 and 1 are done, and the stages follow section 4
+in order, each reported before the next one starts. The work runs alongside the
 first release and stays off its critical path.
 
 Related: the library's evaluation and the test-health catalogue of 2026-11-22
@@ -287,10 +287,11 @@ A host oracle implementing the same definition checks fixed and seeded random
 maps, symmetry and the edges, and real checks replace the suite's empty one.
 
 **4. Callbacks that re-enter.** `ECS-EACH` and `ECS-EACH2` keep their ECS,
-token and second descriptor on the return stack; the systems receive their
-step on the stack; tile physics passes its mover and position to the collision
-callback and keeps them across it; the state machine keeps its loop and
-transition on the stacks. `ECS-ATTACH` zeroes the component it attaches. Tests
+token and descriptors on the data stack beside their loops, whose index the
+return stack holds, and pass a context cell to every callback; the systems
+receive their step as that context; tile physics passes its mover and
+position to the collision callback and keeps them across it; the state
+machine keeps its loop and transition on the stacks. `ECS-ATTACH` zeroes the component it attaches. Tests
 nest an `ECS-EACH` inside another, move a second entity from a collision
 callback, and tick a machine from another machine's tick.
 
@@ -447,7 +448,10 @@ unguarded folios across dark tiles serves every inkmite, and the archivist's
 walk to a selected tile is an A\* path over lit ground. Steering's flee moves
 a lit inkmite, the ECS holds the archivist, inkmites, folios and lamps, the
 collision map holds shelves and desks, and saves keep a night in the home. The
-camera stays idle while a room fits the board.
+camera stays idle while a room fits the board. Lamp light keeps a fog layer of
+its own, recomputed only on the turns a lamp is lit, refilled or gutters, so
+lamps cost only those turns and the hand lamp's reveal is the cost every turn
+pays.
 
 The board is one `TGRID` of 24 by 12 tiles, two cells each, so 48 by 12 cells:
 the archivist is the current item, dark tiles are unavailable and show what
@@ -495,8 +499,8 @@ design section.
 
 | Per turn | Cycles | At 100 MHz | Basis |
 |---|---:|---:|---|
-| Hand lamp, radius 4, and hiding the last reveal | 0.3–0.5 M | 3–5 ms | estimate from 0.71 M measured for radius 6 on 40×20 |
-| A lamp relit (that turn only) | 0.5–1 M | 5–10 ms | estimate |
+| Hand lamp, radius 4, and hiding the last reveal | 0.33 M | 3.3 ms | measured on an open 24×12 board after stage 1 |
+| A lamp relit or guttering (that turn only) | 0.3–0.7 M | 3–7 ms | measured 0.32 M for radius 4 and 0.63 M for radius 6 |
 | Distance field over 288 tiles | 0.1–0.3 M | 1–3 ms | estimate |
 | Six inkmites' trees, machines and steps | about 0.1 M | 1 ms | measured 4,372 for a tree and 4,727 for a machine |
 | Board rebuild, validation and CELL draw | 6.86 M | 69 ms | measured |
@@ -613,7 +617,8 @@ suites, and the game is chosen. Stage 4's measured turn settles, under
 decision 3, whether stage 4b runs.
 
 **Stage 1** fixes everything that gives wrong results today. It changes the
-interfaces of `BT-RUN` and `FOG-NEW`, which only the library's suites call.
+interfaces of `BT-RUN`, `FOG-NEW`, `ECS-EACH` and `ECS-EACH2` and of the
+collision callback, which only the library's suites call.
 Its tests include their own oracles, a host model of tree traces and a host
 shadowcast, so each test checks the specified result. Commits follow the
 modules: teardown, behaviour trees, fog, callbacks.
@@ -633,7 +638,9 @@ turn: the logic and the board in emulator cycles, as Appendix A does, and the
 rich frame in guest steps on the simulator, as the frames plan measures
 frames, converted at the emulator's ratio of cycles to steps for the same
 code. That measurement decides whether stage 4b runs, since the text grid at
-present validates and draws every item whenever its model changes.
+present validates and draws every item whenever its model changes. It also
+decides whether `FOG-REVEAL` gets a speed pass of 0.5 to 1 hour: after stage
+1 a reveal costs about 3,250 cycles for each tile it scans.
 
 **Stage 4b**, if taken, registers a partial drawer for `TGRID` through
 `WDG-PARTIAL!` and validates a new bank against the bound one only where items
