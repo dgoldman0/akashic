@@ -9,9 +9,11 @@ load the image at another address, so any build-time address the image still
 holds points into the fill.
 
 A VALUE's cell, a compiled TO and a POSTPONE'd XT are addresses the BIOS knows
-to record.  A CONSTANT's value is not: the build cannot tell an address from
-a number there, so a constant holding an address inside the image refuses
-the build (IMG-E-ADDRESS) instead of loading with the build's address.
+to record, and a DEFER's cell always holds an XT, which binimg records.  A
+CONSTANT's value, and what a VALUE holds, are not: the build cannot tell an
+address from a number there, so one holding an address inside the image
+refuses the build (IMG-E-ADDRESS) instead of loading with the build's
+address.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ MOVED = FIXTURE + [
     ": XSET  ( n -- ) TO XVAL ;",
     ": XDOUBLE  ( n -- 2n ) 2 * ;",
     ": XPOST  ( -- ) POSTPONE XDOUBLE ; IMMEDIATE",
+    "DEFER XD  : XSIX  ( -- n ) 6 ;  ' XSIX IS XD  : XRUN  ( -- n ) XD ;",
+    "DEFER XD2  ' DUP IS XD2",
     ": XENTRY  ( -- ) ;",
     "' XENTRY S\" XENTRY\" IMG-ENTRY-NAMED THROW",
     "' XVAL 3 + @ _ta-cell !",
@@ -46,6 +50,7 @@ MOVED = FIXTURE + [
     "60 EMIT XGET . 9 XSET XGET . _ta-cell @ C@ . 62 EMIT",
     ": USE  ( -- n ) 21 XPOST ;",
     "60 EMIT USE . 62 EMIT",
+    "60 EMIT XRUN . 3 XD2 . . 62 EMIT",
 ]
 
 
@@ -53,10 +58,10 @@ def _results(text: str) -> list[str]:
     return re.findall(r"<([^<>]*)>", text)
 
 
-def test_value_to_and_postpone_use_the_loaded_images_own_addresses() -> None:
+def test_value_to_postpone_and_defer_use_the_loaded_images_own_addresses() -> None:
     text = program_output(_snapshot.run(MOVED, max_steps=400_000_000), MOVED)
     results = _results(text)
-    assert len(results) == 3, text
+    assert len(results) == 4, text
     # The loaded VALUE's code names a cell other than the build's.
     assert results[0].split() == ["-1"], text
     # It reads 7 from its own cell and TO writes 9 there; the build's cell
@@ -64,6 +69,9 @@ def test_value_to_and_postpone_use_the_loaded_images_own_addresses() -> None:
     assert results[1].split() == ["7", "9", "171"], text
     # The POSTPONE'd XT is the loaded XDOUBLE's.
     assert results[2].split() == ["42"], text
+    # A DEFER set to a word in the image runs the loaded word, and one set
+    # to a system word runs that word, imported by name.
+    assert results[3].split() == ["6", "3", "3"], text
 
 
 def _refusal(definitions: list[str], entry: str) -> list[str]:
@@ -77,15 +85,18 @@ def _refusal(definitions: list[str], entry: str) -> list[str]:
     return results[0].split()
 
 
-def test_constant_holding_an_address_in_the_image_refuses_the_build() -> None:
+def test_constant_or_value_holding_an_address_in_the_image_refuses_the_build() -> None:
     # IMG-E-ADDRESS is -13; the discard after it succeeds.
     assert _refusal(["HERE CONSTANT XH"], "XE1") == ["-13", "0"]
     assert _refusal([": XW 1 ;", "' XW CONSTANT XW-XT"], "XE2") == ["-13", "0"]
     # The segment's end is inside it: HERE as the last constant.
     assert _refusal([": XW2 2 ;", "HERE CONSTANT XEND"], "XE3") == ["-13", "0"]
+    # What a VALUE holds is judged as a constant's value is.
+    assert _refusal(["HERE VALUE XP"], "XE5") == ["-13", "0"]
 
 
 def test_numbers_and_the_systems_own_addresses_stay_constants() -> None:
     assert _refusal(["5 CONSTANT XFIVE", "-1 CONSTANT XTRUE",
-                     "' DUP CONSTANT XDUP-XT", ": XUSE XFIVE XDUP-XT EXECUTE ;"],
+                     "' DUP CONSTANT XDUP-XT", ": XUSE XFIVE XDUP-XT EXECUTE ;",
+                     "12 VALUE XTWELVE"],
                     "XE4") == ["0", "0"]

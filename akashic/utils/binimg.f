@@ -304,13 +304,42 @@ VARIABLE _img-import-entry
 \ Finalization, normalization, and serialization
 \ =====================================================================
 
-: _IMG-APPEND-LINK  ( entry -- )
-    DUP _img-tail-slot !
+: _IMG-APPEND-SLOT  ( slot -- )
     _RELOC-COUNT @ _img-reloc-cap @ >= IF
         DROP IMG-E-CAPACITY _IMG-LATCH DROP EXIT
     THEN
     _RELOC-COUNT @ 8 * _img-reloc-buf @ + !
     1 _RELOC-COUNT +! ;
+
+: _IMG-APPEND-LINK  ( entry -- )
+    DUP _img-tail-slot !
+    _IMG-APPEND-SLOT ;
+
+\ A DEFER's cell always holds an XT, so the cell of a DEFER compiled after
+\ the mark is recorded like a compiled call's: an XT inside the image moves
+\ with it, and one outside it is imported by name, kept as a fixed ABI
+\ address or refused, as every external address is.  A DEFER is a CREATE'd
+\ word whose code DOES> patched (at offset 16: ldi64 r11, body; call.l r11;
+\ ret.l) to enter DEFER's DOES> body, and that body's address is read from
+\ a DEFER made here.  Its cell is the data field, at offset 30.
+DEFER _img-defer-probe
+' _img-defer-probe 19 + @ CONSTANT _IMG-DEFER-DOES
+
+: _IMG-DEFER?  ( code -- flag )
+    DUP 16 + C@ 240 = OVER 17 + C@ 96 = AND OVER 18 + C@ 176 = AND IF
+        19 + @ _IMG-DEFER-DOES =
+    ELSE
+        DROP 0
+    THEN ;
+
+: _IMG-APPEND-DEFERS  ( -- )
+    LATEST
+    BEGIN DUP _img-mark-latest @ <> WHILE
+        DUP 8 + C@ 127 AND OVER 9 + +          ( entry code )
+        DUP _IMG-DEFER? IF 30 + _IMG-APPEND-SLOT ELSE DROP THEN
+        @
+    REPEAT
+    DROP ;
 
 : _IMG-FINALIZE  ( -- ior )
     _img-marked @ 0= IF _IMG-NO-BUILD EXIT THEN
@@ -330,6 +359,7 @@ VARIABLE _img-import-entry
             @
         REPEAT
         DROP
+        _IMG-APPEND-DEFERS
     THEN
     -1 _img-finalized !
     _img-build-error @ ;
@@ -412,28 +442,42 @@ CREATE _IMG-CONSTANT-TAIL  103 C, 224 C, 8 C, 84 C, 225 C, 244 C, 161 C,
     THEN
     11 + 7 _IMG-CONSTANT-TAIL 7 _IMG-SAME? ;
 
+\ A VALUE's code is ldi64 r1, cell; ldn r1, r1; the push; ret.l, and its
+\ cell follows those 19 bytes.
+CREATE _IMG-VALUE-TAIL  80 C, 17 C, 103 C, 224 C, 8 C, 84 C, 225 C, 14 C,
+
+: _IMG-VALUE?  ( code -- flag )
+    DUP C@ 240 = OVER 1 + C@ 96 = AND OVER 2 + C@ 16 = AND 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP 3 + @ OVER 19 + <> IF DROP 0 EXIT THEN
+    11 + 8 _IMG-VALUE-TAIL 8 _IMG-SAME? ;
+
+: _IMG-INSIDE?  ( value -- flag )
+    DUP _img-mark-base @ >=
+    SWAP _img-mark-base @ _img-seg-size @ + <= AND ;
+
 \ The compiler records every immediate it knows to carry an address, so
-\ those move with the image.  A CONSTANT's value carries no such fact: the
-\ build cannot tell an address from a number.  Moving every value that
-\ falls inside the segment would turn such a number into a wrong one, and
-\ moving none would leave a loaded image using the build's addresses, as a
-\ constant made by HERE or ' did.  Either guess fails silently, so a
-\ constant compiled into the image whose value lies inside the segment,
-\ its end included, refuses the build.  The image's own addresses come
-\ from CREATE, VARIABLE and VALUE, or from ['] inside a colon definition.
-: _IMG-CHECK-CONSTANTS  ( -- ior )
+\ those move with the image.  A CONSTANT's value, and what a VALUE holds,
+\ carry no such fact: the build cannot tell an address from a number.
+\ Moving every value that falls inside the segment would turn such a
+\ number into a wrong one, and moving none would leave a loaded image
+\ using the build's addresses, as a constant made by HERE or ' did.
+\ Either guess fails silently, so a constant or a VALUE compiled into the
+\ image whose value lies inside the segment, its end included, refuses the
+\ build.  The image's own addresses come from CREATE, VARIABLE and VALUE
+\ words themselves, from ['] inside a colon definition, or from a DEFER.
+: _IMG-CHECK-VALUES  ( -- ior )
     LATEST
     BEGIN DUP _img-mark-latest @ <> WHILE
         DUP 8 + C@ 127 AND OVER 9 + +          ( entry code )
         DUP _IMG-CONSTANT? IF
-            3 + @
-            DUP _img-mark-base @ >=
-            SWAP _img-mark-base @ _img-seg-size @ + <= AND IF
-                DROP IMG-E-ADDRESS EXIT
-            THEN
+            3 + @ _IMG-INSIDE? IF DROP IMG-E-ADDRESS EXIT THEN
+        ELSE DUP _IMG-VALUE? IF
+            19 + @ _IMG-INSIDE? IF DROP IMG-E-ADDRESS EXIT THEN
         ELSE
             DROP
-        THEN
+        THEN THEN
         @
     REPEAT
     DROP 0 ;
@@ -442,7 +486,7 @@ CREATE _IMG-CONSTANT-TAIL  103 C, 224 C, 8 C, 84 C, 225 C, 244 C, 161 C,
     _IMG-FINALIZE DUP 0<> IF EXIT THEN DROP
     _img-build-error @ DUP 0<> IF EXIT THEN DROP
     _IMG-PRECHECK-RELOCS DUP 0<> IF _IMG-LATCH EXIT THEN DROP
-    _IMG-CHECK-CONSTANTS DUP 0<> IF _IMG-LATCH THEN ;
+    _IMG-CHECK-VALUES DUP 0<> IF _IMG-LATCH THEN ;
 
 : _IMG-IMAGE-SIZE  ( -- u )
     _IMG-HDR-SZ _img-seg-size @ +

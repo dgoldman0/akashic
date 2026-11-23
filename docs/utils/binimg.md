@@ -79,11 +79,13 @@ The first build error is sticky. Once an operation latches an error, subsequent 
 
 ### Addresses inside the image
 
-A loaded image runs at another address than the one it was built at, so every address inside the segment that its code holds must move with it. The BIOS records each immediate it knows to carry one: the XT of a compiled call, of `[']` and of a non-immediate `POSTPONE`, the data-field address in the code of `CREATE`, `VARIABLE` and `VALUE`, the cell a compiled `TO` stores through, and the address `DOES>` patches in. A loaded `VALUE` therefore reads and writes its own cell.
+A loaded image runs at another address than the one it was built at, so every address inside the segment that it holds must move with it. The BIOS records each immediate it knows to carry one: the XT of a compiled call, of `[']` and of a non-immediate `POSTPONE`, the data-field address in the code of `CREATE`, `VARIABLE` and `VALUE`, the cell a compiled `TO` stores through, and the address `DOES>` patches in. A loaded `VALUE` therefore reads and writes its own cell.
 
-A `CONSTANT`'s value is a number to the compiler, which cannot tell an address from it. Moving every value that falls inside the segment would turn such a number into a wrong one, and moving none would leave the loaded image using the build's addresses, as `HERE CONSTANT` and `' WORD CONSTANT` did. Either guess fails silently, so `IMG-BUFFER-MAX` and `IMG-BUILD-INTO` refuse a build with `IMG-E-ADDRESS` when a constant compiled after the mark holds a value inside the segment, its end included. An image names its own addresses with `CREATE`, `VARIABLE` or `VALUE`, or with `[']` inside a colon definition. A constant that holds an address outside the segment, in the system the image is built on, is kept as it is.
+A `DEFER`'s cell always holds an XT, so the build records the cell of each `DEFER` compiled after the mark as it records a compiled call: an XT inside the image moves with it, and one outside it is imported by name, kept as a fixed ABI address or refused, as every external address is. A `DEFER` here is one made by KDOS's `DEFER`, which binimg recognises by the `DOES>` body its code enters.
 
-Data the image stores is not examined: a cell that `,`, `!` or `IS` filled with an address inside the segment, or a `VALUE`'s initial contents, keeps the build's address.
+A `CONSTANT`'s value, and what a `VALUE` holds, are numbers to the compiler, which cannot tell an address from them. Moving every value that falls inside the segment would turn such a number into a wrong one, and moving none would leave the loaded image using the build's addresses, as `HERE CONSTANT` and `' WORD CONSTANT` did. Either guess fails silently, so `IMG-BUFFER-MAX` and `IMG-BUILD-INTO` refuse a build with `IMG-E-ADDRESS` when a constant or a `VALUE` compiled after the mark holds a value inside the segment, its end included. An image names its own addresses with `CREATE`, `VARIABLE` or `VALUE` words themselves, with `[']` inside a colon definition, or with a `DEFER`. A constant or `VALUE` that holds an address outside the segment, in the system the image is built on, is kept as it is.
+
+Cells the image fills with `,` or `!` are not examined: one that holds an address inside the segment keeps the build's address.
 
 ### Buffer ownership
 
@@ -178,7 +180,7 @@ A successful load is permanent: binimg exposes no unload operation. The module i
 | -10 | `IMG-E-SHORT` | truncated header/body or short raw-file read |
 | -11 | `IMG-E-NOMEM` | DMA, dictionary, or XMEM allocation failed |
 | -12 | `IMG-E-UNSUPPORTED` | this system's dictionary holds no MP64 machine code, so it can neither build an image nor load one |
-| -13 | `IMG-E-ADDRESS` | a constant compiled into the image holds an address inside the image, which the build cannot tell from a number |
+| -13 | `IMG-E-ADDRESS` | a constant or `VALUE` compiled into the image holds an address inside the image, which the build cannot tell from a number |
 
 The old private `_IMG-ERR-*` aliases remain only for source compatibility. New code should use the public `IMG-E-*` names.
 
