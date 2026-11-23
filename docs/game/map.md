@@ -61,7 +61,8 @@ rows:
 A glyph is one Unicode character other than a space or tab, and appears
 once in the legend, as a tile or as a mark. Names hold letters, digits,
 `-` and `_`; a tile's name is unique among tiles, a mark's among marks.
-A key appears once. Fields on a legend line are separated by spaces or
+A key appears once. A map declares at most 256 tile kinds, the values a
+byte of the kind layer holds; marks have no such bound. Fields on a legend line are separated by spaces or
 tabs. Blank lines may stand in the header and after the rows, and a CR
 before a line's end is dropped, so a map saved with CRLF ends reads the
 same.
@@ -79,7 +80,7 @@ same.
 | `GMAP-S-UTF8` | 4 | A line that is not UTF-8 |
 | `GMAP-S-HEADER` | 5 | A header line that is no `key: value`, a key given twice, or no `rows:` line |
 | `GMAP-S-SIZE` | 6 | Width or height missing, or not a whole number from 1 |
-| `GMAP-S-LEGEND` | 7 | A malformed `tile:` or `spawn:` line, a glyph or name given twice, or a mark on no tile declared above it |
+| `GMAP-S-LEGEND` | 7 | A malformed `tile:` or `spawn:` line, a glyph or name given twice, a mark on no tile declared above it, or a 257th tile kind |
 | `GMAP-S-ROW` | 8 | A row of another width, a row missing, or text after the rows |
 | `GMAP-S-GLYPH` | 9 | A glyph in a row that the legend lacks |
 

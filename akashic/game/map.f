@@ -27,8 +27,10 @@
 \  header, and exactly `height` rows of exactly `width` glyphs follow it.
 \  A glyph is one Unicode character other than a space or tab, used once
 \  in the legend; a name holds letters, digits, `-` and `_`, and a key
-\  appears once.  Blank lines may stand in the header and after the rows,
-\  and a CR before a line's end is dropped.
+\  appears once.  A map declares at most 256 tile kinds, the values a
+\  byte of the kind layer holds; marks have no such bound.  Blank lines
+\  may stand in the header and after the rows, and a CR before a line's
+\  end is dropped.
 \
 \  A map gives a game three layers in the collision map's form
 \  (collide.f), a byte a tile: the collision values, the sight map, 1
@@ -106,7 +108,8 @@ REQUIRE ../utils/fs/vfs-access.f
 6 CONSTANT GMAP-S-SIZE      \ width or height missing, or not a whole
                             \ number from 1
 7 CONSTANT GMAP-S-LEGEND    \ a malformed tile or spawn line, a glyph or
-                            \ name given twice, or a mark on no tile
+                            \ name given twice, a mark on no tile, or a
+                            \ 257th tile kind
 8 CONSTANT GMAP-S-ROW       \ a row of another width, a row missing, or
                             \ text after the rows
 9 CONSTANT GMAP-S-GLYPH     \ a glyph in a row that the legend lacks
@@ -132,6 +135,7 @@ REQUIRE ../utils/fs/vfs-access.f
 32 CONSTANT _GMAP-ENTRY-SZ
 24 CONSTANT _GMAP-SPAWN-SZ
 256 CONSTANT _GMAP-OPAQUE
+256 CONSTANT _GMAP-MAX-TILES   \ the kinds a byte of the kind layer holds
 
 \ =====================================================================
 \  §2 — Reading Lines
@@ -204,31 +208,35 @@ VARIABLE _GMP-NS
     REPEAT
     2DROP TRUE ;
 
+\ The parsing words below answer their results and a flag, the results
+\ meaningless when the flag is false, so a refusal's path and the
+\ success's hold the same items.
+
 \ A whole number in decimal digits, of at most 18 of them
-: _GMP-NUMBER  ( a u -- n true | false )
-    DUP 0= OVER 18 > OR IF 2DROP FALSE EXIT THEN
+: _GMP-NUMBER  ( a u -- n flag )
+    DUP 0= OVER 18 > OR IF 2DROP 0 FALSE EXIT THEN
     0 -ROT
     BEGIN DUP WHILE
-        OVER C@ [CHAR] 0 - DUP 10 U< 0= IF DROP DROP 2DROP FALSE EXIT THEN
+        OVER C@ [CHAR] 0 - DUP 10 U< 0= IF DROP 2DROP FALSE EXIT THEN
         >R ROT 10 * R> + -ROT  1 _GMP-ADV
     REPEAT
     2DROP TRUE ;
 
 \ One character: its code point
-: _GMP-GLYPH  ( a u -- char true | false )
-    DUP 0= IF 2DROP FALSE EXIT THEN
-    UTF8-DECODE NIP 0= IF TRUE ELSE DROP FALSE THEN ;
+: _GMP-GLYPH  ( a u -- char flag )
+    DUP 0= IF 2DROP 0 FALSE EXIT THEN
+    UTF8-DECODE NIP 0= ;
 
 \ The line as `key: value`: the key, and the value without the spaces
-\ around it; false when the line holds no colon or its key is no name
-: _GMP-KEY-VALUE  ( a u -- key-a key-u val-a val-u true | false )
+\ around it; the flag is false when the line holds no colon or its key
+\ is no name
+: _GMP-KEY-VALUE  ( a u -- key-a key-u val-a val-u flag )
     2DUP
     BEGIN DUP IF OVER C@ [CHAR] : <> ELSE FALSE THEN WHILE 1 _GMP-ADV REPEAT
-    DUP 0= IF 2DROP 2DROP FALSE EXIT THEN         ( a u colon-a colon-u )
+    DUP 0= IF FALSE EXIT THEN                     ( a u colon-a colon-u )
     OVER >R  1 _GMP-ADV _GMP-SKIP _GMP-TRIM       ( a u val-a val-u  R: colon )
     2SWAP DROP R> OVER -                          ( val-a val-u a key-u )
-    2DUP _GMP-NAME? 0= IF 2DROP 2DROP FALSE EXIT THEN
-    2SWAP TRUE ;
+    2SWAP 2OVER _GMP-NAME? ;
 
 \ =====================================================================
 \  §3 — The Legend and the Values
@@ -281,6 +289,7 @@ VARIABLE _GMP-NS
 \ A `tile:` line's value: glyph, name, collision value, clear or opaque
 : _GMP-TILE-LINE  ( a u -- )
     _GMP-FILL @ 0= IF 2DROP 1 _GMP-NT +! EXIT THEN
+    _GMP-NT @ _GMAP-MAX-TILES = IF GMAP-S-LEGEND _GMP-FAIL THEN
     _GMP-TILE-TABLE _GMP-NT @ _GMP-GLYPH-NAME 2>R >R    ( a u  R: name char )
     _GMP-FIELD _GMP-NUMBER 0= IF GMAP-S-LEGEND _GMP-FAIL THEN
     DUP 255 > IF GMAP-S-LEGEND _GMP-FAIL THEN -ROT     ( value a u )
@@ -410,7 +419,7 @@ VARIABLE _GMP-NS
 \ An array of n entries of size bytes for the map's field at offset
 : _GMP-TABLE  ( n size offset -- )
     >R * ?DUP IF
-        ALLOCATE IF DROP GMAP-S-NOMEM _GMP-FAIL THEN
+        ALLOCATE IF GMAP-S-NOMEM _GMP-FAIL THEN
     ELSE
         0
     THEN
@@ -419,7 +428,7 @@ VARIABLE _GMP-NS
 \ A layer of the map's size for its field at offset
 : _GMP-LAYER  ( offset -- )
     _GMP-MAP @ DUP _GMAP-O-W + @ SWAP _GMAP-O-H + @ CMAP-NEW?
-    IF DROP GMAP-S-NOMEM _GMP-FAIL THEN
+    IF GMAP-S-NOMEM _GMP-FAIL THEN
     _GMP-MAP @ ROT + ! ;
 
 : _GMP-RESTART  ( -- )

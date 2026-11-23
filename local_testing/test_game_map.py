@@ -119,6 +119,8 @@ def read_map(text: bytes) -> dict:
         parts = fields(value) + [b""] * 4
         if key in (b"tile", b"spawn"):
             mark = key == b"spawn"
+            if not mark and len(tiles) == 256:
+                raise Refused(LEGEND, number)
             char = glyph(parts[0]) if parts[0] else None
             if char is None or char in taken:
                 raise Refused(LEGEND, number)
@@ -446,6 +448,29 @@ def test_each_refusal_names_its_cause_and_line():
     for (text, status, line), got in zip(REFUSALS, parse_all(SUITE, texts)):
         assert got == f"{status} {line}", (text, got)
         assert answer(text) == got, (text, answer(text))
+
+
+def many_kinds(count: int) -> bytes:
+    """A 16 by 16 map whose legend declares COUNT tile kinds and whose
+    rows show the first 256, one a tile."""
+    lines = ["width: 16", "height: 16"]
+    lines += [f"tile: {chr(0x4E00 + kind)} k{kind} {kind % 7} clear"
+              for kind in range(count)]
+    lines.append("rows:")
+    lines += ["".join(chr(0x4E00 + 16 * y + x) for x in range(16))
+              for y in range(16)]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_a_legend_holds_256_tile_kinds_and_refuses_more():
+    """The kind layer holds a byte a tile, so a map declares at most 256
+    tile kinds: 256 read, each tile its own kind, and a 257th tile line
+    is refused where it stands."""
+    full, over = many_kinds(256), many_kinds(257)
+    got = parse_all(SUITE, [full, over])
+    assert got[0] == answer(full).lower(), got[0][:200]
+    assert f" x{bytes(range(256)).hex()} " in got[0]
+    assert got[1] == f"{LEGEND} 259" == answer(over), got[1]
 
 
 def test_repeated_reads_keep_the_heap_flat():
