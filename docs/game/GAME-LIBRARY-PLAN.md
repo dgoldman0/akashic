@@ -1,9 +1,9 @@
 # Repairing the game library and building a first game on it — plan, 2026-11-22
 
-Status: Proposed, 2026-11-22. Nothing in it is built. The game is chosen
-(decision 1) before any stage starts, and each stage is approved on its own.
-The work runs alongside the first release and stays off its critical path.
-Decisions lists what is open.
+Status: Accepted, 2026-11-23. The game is Folio Watch, and section 5 records
+the eight decisions. Stage 0 is done, and the stages follow section 4 in
+order, each reported before the next one starts. The work runs alongside the
+first release and stays off its critical path.
 
 Related: the library's evaluation and the test-health catalogue of 2026-11-22
 (`~/.cache/fantasy-engine/notes/game-library-evaluation-20261122.md`,
@@ -43,7 +43,7 @@ process-wide state or duplicate a canonical widget or UIDL facility, so the
 plan retires them; a board builder over the canonical text grid and a text map
 reader take their place. Each game is an ordinary applet with its own
 descriptor, as Grid is. The repairs cost 18 to 25.5 agent hours and the
-recommended game, Folio Watch, 8 to 12 more. The six stages, which add the
+chosen game, Folio Watch, 8 to 12 more. The six stages, which add the
 game's skeleton, its measurement and its configuration entry, come to 27 to 39
 hours, with an optional stage of 3 to 5 hours that teaches the text grid to
 follow change.
@@ -421,7 +421,7 @@ a typed letter's frame builds in 2.05 million steps in a typing burst and in
 4.0 to 6.5 million when it stands alone
 (`local_testing/evidence/frames-follow-change-part10-20261101.md`).
 
-### 3.1 Folio Watch (working name)
+### 3.1 Folio Watch
 
 At night an archive's reading rooms lie dark, and inkmites, small creatures
 that shun light, creep from the shelves' shadows toward folios left on the
@@ -549,9 +549,9 @@ own risk, as its Forth console will. Later, brains written in Lisp on LM1
 (Part 9e) would put both engines in one program, as the sliding-tile solver
 does.
 
-### 3.4 Recommendation
+### 3.4 The first game
 
-Build Folio Watch first. It uses every logic module, and it uses the fog of
+Folio Watch comes first. It tries every logic module, and it uses the fog of
 war twice, as the player's view and as the creatures' fear, so the repaired
 shadowcast is tested by play. Its applet has the simplest shape, one board,
 one status bar, one log, and it needs neither a new canonical widget nor
@@ -574,8 +574,9 @@ Garden Automata would reuse.
 | 6 | Configuration entry, documents, closing runs | `run --recorded` with patterns; the physical Desktop journey if a composition it gates includes the game | 1.5–2.5 | Part 1d status "ships" for the library |
 
 Stages 1 to 6 come to 27 to 39 hours with Folio Watch, and stage 4b to 3 to 5
-more. Decision 4 is due before stage 3, decisions 2, 6 and 7 before stage 4,
-decision 3 once stage 4 has measured a turn, and decision 5 before stage 6.
+more. Stage 0 is done: `test-health-3` landed on main with the six converted
+suites, and the game is chosen. Stage 4's measured turn settles, under
+decision 3, whether stage 4b runs.
 
 **Stage 1** fixes everything that gives wrong results today. It changes the
 interfaces of `BT-RUN` and `FOG-NEW`, which only the library's suites call.
@@ -614,73 +615,63 @@ library's reference pages, and runs the closing checks.
 
 ## 5. Decisions
 
-**1. Which game.** The repairs serve all three concepts, but the choice of
-game determines stage 4's skeleton and stage 5's work, so it comes first.
-Options: Folio Watch (8 to 12 hours), Valley Relay (11 to 15) or Garden
-Automata (9 to 13, plus Part 7's module loading and a design for running
-learner code). Recommendation: Folio Watch, for the reasons in 3.4. The names
-are working names, and choosing the game includes choosing its name.
+The project took all eight decisions on 2026-11-23, each as this plan
+recommended.
 
-**2. How the board reaches the screen.** The board must go through an ordinary
-canonical widget, and each form has a different device cost and a different
-set of states. Options: (a) a `TGRID` item for each tile, with per-tile
-current, unavailable and selection states, at 6.86 million cycles a move on
-the CELL path at 24 by 12 and 12.13 million at 32 by 16; (b) a `TGRID` item
-for each row, 3.86 million cycles at 32 by 16, with no state or pointer target
-for a single tile, so fog shows only by glyph; (c) a new canonical board
-widget and rich family with compact tiles and semantic tile kinds that a
-renderer could colour, which needs an APT-1 contract, a MegaPad terminal side,
-a producer and qualification, an estimated 15 to 25 hours, and a second
-ordinary Desk use to justify it. Recommendation: (a) at 24 by 12 tiles, since
-it is the ordinary widget the Desktop already publishes and it carries every
-state the concepts need. Cost: inside stage 4.
+**1. The game.** Folio Watch, under that name, for the reasons in 3.4. A
+night archivist relights lamps while light-shy inkmites go after the folios,
+and the fog layer is both what the player sees and the light the creatures
+flee. Cost: 8 to 12 hours after the library stages.
 
-**3. A turn's budget, and whether the text grid follows change.** The board
-dominates a turn's cost, so a budget decides how large a board may be.
-Options: a budget of 10 million cycles (0.1 s at 100 MHz), 15 million (0.15 s)
-or none; and, if stage 4's turn exceeds the budget, stage 4b, a smaller board,
-or both. Recommendation: 15 million cycles for a whole turn including its rich
-frame, measured in stage 4, with stage 4b if the turn exceeds it, because a
-board that answers its key within about 0.15 s keeps a turn-based game
-responsive, and stage 4b improves a canonical widget that Grid and Daybook
-share. Cost: stage 4b's 3 to 5 hours and one physical Desktop journey.
+A game uses the logic modules that serve its play, and one that tries to use
+them all can feel forced. Folio Watch, the library's first sample, tries all
+twelve. Where a module fits the game only by bending its design, the stage's
+report names the module and the strain, and the game keeps the design its
+play needs.
 
-**4. The map format.** The loader is rewritten in either case, and the format
-decides who can make maps. Options: text maps with a legend, or CBOR maps as
-today. Recommendation: text, because a person can write and read a map in Pad
-and a learner can read one in the Workshop, while CBOR needs a writing tool
-the project lacks; saves stay CBOR, since only the machine writes them. Cost:
-the same 1 to 1.5 hours either way.
+**2. How the board reaches the screen.** A `TGRID` item for each tile, at 24
+by 12 tiles. The canonical text grid is the ordinary widget the Desktop
+already publishes, and an item a tile carries the per-tile current,
+unavailable and selection states the game needs. A move costs 6.86 million
+cycles on the CELL path at that size (Appendix A). Cost: inside stage 4.
 
-**5. Where the game ships.** Under Part 1d a library ships when something that
-ships uses it, so the game's placement settles the library's status. Options:
-the Workshop as a worked example, Everyday as a pastime, both, or after the
-first release. Recommendation: the Workshop, with Everyday optional, provided
-stage 6 lands before Part 7 closes; should Part 7 close first, it goes ahead
-and the game and the library wait for the next release. Cost: about an hour
-within stage 6 for the entry and a narrow journey.
+**3. A turn's budget.** A whole turn, its rich frame included, has a budget of
+15 million cycles, 0.15 s at 100 MHz, because a board that answers its key
+within about 0.15 s keeps a turn-based game responsive. Stage 4 measures a
+turn and reports the figure. If the turn exceeds the budget, stage 4b
+teaches the text grid to follow change, a saving Grid and Daybook share, and
+it starts once that report is reviewed. Cost: stage 4b's 3 to 5 hours and one
+physical Desktop journey, when it runs.
 
-**6. Real-time play.** Deleting `loop.f` removes the library's real-time loop.
-Options: turn-based games only, or a real-time loop kept for later games.
-Recommendation: turn-based only. At 30 frames a second a frame has 3.3 million
-cycles, half a measured 24 by 12 board move before its rich frame, so
-real-time play exceeds the device until the screen path costs a fraction of
-today's. Cost: none.
+**4. The map format.** Maps are text files with a legend, so a person writes
+and reads a map in Pad and a learner reads one in the Workshop. Saves stay
+CBOR, since only the machine writes them. Cost: 1 to 1.5 hours, in stage 3.
 
-**7. What to keep of the terminal half.** Options: retire fifteen files and
-rewrite the map loader, as 1.4 proposes; keep `input.f` or `scene.f` as
-conveniences; or patch all sixteen. Recommendation: retire fifteen, because
-every one paints cells directly, keeps process-wide state or repeats what UIDL
-and the canonical widgets already do, and the rich-terminal rules give an
+**5. Where the game ships.** In the Workshop as a worked example of the game
+library, with Everyday optional, if stage 6 lands before release Part 7
+closes; should Part 7 close first, the game and the library wait for the next
+release. Under Part 1d a library ships when something that ships uses it, so
+this placement settles the library's status. Cost: about an hour within stage
+6 for the entry and a narrow journey.
+
+**6. Real-time play.** The library serves turn-based games, and repair 11
+deletes `loop.f`. At 30 frames a second a frame has 3.3 million cycles, half a
+measured 24 by 12 board move before its rich frame, so real-time play exceeds
+the device until the screen path costs a fraction of today's. Cost: none.
+
+**7. What to keep of the terminal half.** The plan retires fifteen of the
+sixteen files and rewrites the map loader as `game/map.f` (1.4). Every one of
+the fifteen paints cells directly, keeps process-wide state or repeats what
+UIDL and the canonical widgets already do, and the rich-terminal rules give an
 applet its UI only through ordinary UIDL documents and canonical widgets.
 Cost: 0.5 to 1 hour, within stage 4.
 
-**8. A registration word for widget kinds.** The game needs none after repair
-11, while applets' own panels still reuse canonical type numbers. Options: add
-`WDG-T-NEW ( -- type )` to `widget.f` and move those panels to it, or leave
-the accepted practice that fd761ec4 made safe for partial drawers.
-Recommendation: leave it out of this plan and take it up with the next Desk
-cleanup, since no fault depends on it today. Cost: 0.5 to 1 hour when taken.
+**8. A registration word for widget kinds.** The game mounts the canonical
+`TGRID` and defines no widget kind after repair 11, and applets' own panels
+keep reusing canonical type numbers under the practice that fd761ec4 made
+safe for partial drawers. A `WDG-T-NEW ( -- type )` in `widget.f`, with those
+panels moved to it, belongs to the next Desk cleanup. Cost: 0.5 to 1 hour when
+taken.
 
 ## Appendix A. Measurements
 
