@@ -149,10 +149,34 @@ The encoder automatically chooses the most compact representation:
 ### Setup
 
 ```forth
-CBOR-PARSE  ( addr len -- ior )
+CBOR-PARSE      ( addr len -- ior )
+CBOR-INPUT-OK?  ( -- flag )
 ```
 
-Set the input cursor.  Returns `0` on success.
+`CBOR-PARSE` sets the input cursor and clears the decode error.
+Returns `0` on success.
+
+The decoder never reads past the input's end.  Each read is checked
+against it, and each `CBOR-NEXT-*` word checks that the item has the
+major type it reads.  These are decode errors:
+
+- an item, a string or an argument that runs past the end;
+- an array count larger than the bytes left, or a map count larger
+  than half of them, since every item takes one byte at least;
+- an item whose major type is not the one the word reads, and for
+  `CBOR-NEXT-BOOL` anything but `true` or `false`;
+- a tag with no item after it;
+- an additional-info value of 28 to 31, which is reserved or starts an
+  indefinite length, a form this subset does not decode.
+
+On a decode error the read position moves to the end, so every later
+read finds the input exhausted, and the word that met the error returns
+0, or for a string an empty one at the input's end.  `CBOR-INPUT-OK?`
+returns `TRUE` (-1) while the input has decoded without a decode error
+since `CBOR-PARSE`, and `FALSE` (0) after one.  A word that decodes
+untrusted input reads it once its item is read.  Because counts are
+checked against the bytes left, a loop over an array's or a map's count
+runs no more times than the input has bytes.
 
 ### Inspection
 
@@ -164,13 +188,13 @@ CBOR-DONE?  ( -- flag )         \ True (-1) if input is exhausted
 ### Reading Items
 
 ```forth
-CBOR-NEXT-UINT   ( -- n )          \ Decode unsigned integer
-CBOR-NEXT-NINT   ( -- n )          \ Decode negative integer argument
-CBOR-NEXT-BSTR   ( -- addr len )   \ Decode byte string (pointer into input)
-CBOR-NEXT-TSTR   ( -- addr len )   \ Decode text string (pointer into input)
-CBOR-NEXT-ARRAY  ( -- n )          \ Decode array header, return item count
-CBOR-NEXT-MAP    ( -- n )          \ Decode map header, return pair count
-CBOR-NEXT-TAG    ( -- n )          \ Decode tag number
+CBOR-NEXT-UINT   ( -- n )          \ Decode unsigned integer (major type 0)
+CBOR-NEXT-NINT   ( -- n )          \ Decode negative integer argument (1)
+CBOR-NEXT-BSTR   ( -- addr len )   \ Decode byte string, pointer into input (2)
+CBOR-NEXT-TSTR   ( -- addr len )   \ Decode text string, pointer into input (3)
+CBOR-NEXT-ARRAY  ( -- n )          \ Decode array header, return item count (4)
+CBOR-NEXT-MAP    ( -- n )          \ Decode map header, return pair count (5)
+CBOR-NEXT-TAG    ( -- n )          \ Decode tag number (6)
 CBOR-NEXT-BOOL   ( -- flag )       \ Decode boolean (-1 = true, 0 = false)
 ```
 
@@ -181,7 +205,8 @@ CBOR-SKIP  ( -- )
 ```
 
 Skip one complete CBOR data item, including nested arrays, maps,
-and tagged items.  Handles recursive structures.
+and tagged items, with the same checks as the words that read them.
+Each level of nesting adds one call of `CBOR-SKIP` to the return stack.
 
 ---
 
@@ -194,8 +219,8 @@ CBOR-RESTORE       ( addr -- )   \ make the cursors saved at addr current
 ```
 
 The encoder keeps one cursor (buffer, capacity, write position and
-overflow flag) and the decoder keeps one (input, end and read
-position).  A word that encodes or decodes a whole item of its own
+overflow flag) and the decoder keeps one (input, end, read position and
+decode error flag).  A word that encodes or decodes a whole item of its own
 can be called between another user's CBOR calls: `BLK-ENCODE` calls
 `TX-ENCODE` for each transaction, `BLK-DECODE` calls `TX-DECODE`, and
 gossip's status message calls `BLK-HASH` between its array header and
@@ -207,8 +232,9 @@ in the saving word's storage, so words nest as deeply as that storage
 allows; a word that could run inside itself would need storage for
 each level.
 
-The restore also brings back the caller's overflow flag, so a nested
-word reports its own overflow in its result, as `TX-ENCODE` and
+The restore also brings back the caller's overflow flag and decode
+error flag, so a nested word's overflow or decode error stays its own
+and reaches the caller only through its result, as `TX-ENCODE` and
 `BLK-ENCODE` return 0 when their item does not fit.
 
 ```forth
@@ -282,6 +308,7 @@ Returns `-1` if valid, `0` if invalid.
 | Word | Stack | Purpose |
 |---|---|---|
 | `CBOR-PARSE` | `( addr len -- ior )` | Set input buffer |
+| `CBOR-INPUT-OK?` | `( -- flag )` | No decode error since `CBOR-PARSE`? |
 | `CBOR-TYPE` | `( -- major-type )` | Peek next type |
 | `CBOR-DONE?` | `( -- flag )` | Input exhausted? |
 | `CBOR-NEXT-UINT` | `( -- n )` | Read unsigned int |
@@ -336,6 +363,7 @@ CBOR-NEXT-TSTR TYPE            \ → name
 CBOR-NEXT-TSTR TYPE            \ → Alice
 CBOR-NEXT-TSTR TYPE            \ → age
 CBOR-NEXT-UINT .               \ → 25
+CBOR-INPUT-OK? .               \ → -1 (no decode error)
 ```
 
 ### Encode a CID link (DAG-CBOR)
@@ -373,11 +401,12 @@ Encoder variables prefixed `_CB-`:
 
 Decoder variables prefixed `_CB-`:
 - `_CB-SRC` / `_CB-END` / `_CB-PTR` — input buffer state
-- `_CB-SKIP-N` — recursion counter for `CBOR-SKIP`
+- `_CB-BAD` — decode error flag (set by `_CB-FAIL`, cleared by
+  `CBOR-PARSE`)
 
 `CBOR-SAVE` and `CBOR-RESTORE` copy `_CB-DST`, `_CB-MAX`, `_CB-POS`,
-`_CB-OVF`, `_CB-SRC`, `_CB-END` and `_CB-PTR`; `_CB-MT` and
-`_CB-SKIP-N` hold scratch within one call.
+`_CB-OVF`, `_CB-SRC`, `_CB-END`, `_CB-PTR` and `_CB-BAD`; `_CB-MT`
+holds scratch within one call.
 
 DAG-CBOR variables prefixed `_DCB-`:
 - `_DCB-CID-LEN` — scratch for CID encoding

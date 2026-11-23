@@ -170,28 +170,54 @@ VARIABLE _CB-MT   \ stash major type
 \ =====================================================================
 \  Decoder State
 \ =====================================================================
+\
+\ Every read is checked against the input's end, and each CBOR-NEXT-*
+\ word checks that the item has the major type it reads.  An item, a
+\ string or an argument that runs past the end, an array or map count
+\ larger than the bytes left could hold, an item of another type, or an
+\ argument form this subset does not decode (reserved, or indefinite
+\ length) is a decode error.  The error is recorded, and the read
+\ position moves to the input's end, so every later read finds the input
+\ exhausted and nothing past the end is ever read.  The word that met
+\ the error returns 0, or an empty string at the input's end.
+\ CBOR-INPUT-OK? tells whether the input has decoded cleanly since
+\ CBOR-PARSE.
 
 VARIABLE _CB-SRC       \ input buffer address
 VARIABLE _CB-END       \ input buffer end
 VARIABLE _CB-PTR       \ current read position
+VARIABLE _CB-BAD       \ decode error flag (TRUE once the input was malformed)
 
 \ CBOR-PARSE ( addr len -- ior )
-\   Set input cursor for decoding.  Returns 0 on success.
+\   Set input cursor for decoding and clear the decode error.
+\   Returns 0 on success.
 : CBOR-PARSE  ( addr len -- ior )
     OVER + _CB-END !
     _CB-SRC !
     _CB-SRC @ _CB-PTR !
+    0 _CB-BAD !
     0 ;
+
+\ CBOR-INPUT-OK? ( -- flag )  TRUE if the input has decoded without a
+\   decode error since CBOR-PARSE.
+: CBOR-INPUT-OK?  ( -- flag )  _CB-BAD @ 0= ;
 
 \ _CB-AVAIL ( -- n )  Bytes remaining in input.
 : _CB-AVAIL  ( -- n )
-    _CB-END @ _CB-PTR @ - ;
+    _CB-END @ _CB-PTR @ - 0 MAX ;
 
-\ _CB-GET ( -- byte )  Read and advance one byte.
+\ _CB-FAIL ( -- )  Record a decode error and move to the input's end.
+: _CB-FAIL  ( -- )
+    -1 _CB-BAD !  _CB-END @ _CB-PTR ! ;
+
+\ _CB-GET ( -- byte )  Read and advance one byte.  At the input's end it
+\   is a decode error and gives 0.
 : _CB-GET  ( -- byte )
+    _CB-AVAIL 0= IF _CB-FAIL 0 EXIT THEN
     _CB-PTR @ C@  1 _CB-PTR +! ;
 
-\ _CB-PEEK ( -- byte )  Peek at current byte (no advance).
+\ _CB-PEEK ( -- byte )  Peek at current byte (no advance), once a check
+\   has found a byte left.
 : _CB-PEEK  ( -- byte )
     _CB-PTR @ C@ ;
 
@@ -222,21 +248,53 @@ VARIABLE _CB-PTR       \ current read position
 \ =====================================================================
 
 \ _CB-READ-ARG ( addl -- n )
-\   Read the argument value given the additional-info field (0-27).
+\   Read the argument the additional-info field announces: the field
+\   itself below 24, or the 1, 2, 4 or 8 bytes that follow for 24 to 27.
+\   28 to 30 are reserved and 31 starts an indefinite length, which this
+\   subset does not decode.  Either, or an argument that runs past the
+\   input's end, is a decode error and gives 0.
 : _CB-READ-ARG  ( addl -- n )
     DUP 24 < IF EXIT THEN        \ 0..23: value is addl itself
+    DUP 27 > IF DROP _CB-FAIL 0 EXIT THEN
+    1 OVER 24 - LSHIFT _CB-AVAIL > IF DROP _CB-FAIL 0 EXIT THEN
     DUP 24 = IF DROP _CB-GET EXIT THEN
     DUP 25 = IF DROP _CB-GET2 EXIT THEN
-    DUP 26 = IF DROP _CB-GET4 EXIT THEN
-        27 = IF _CB-GET8 EXIT THEN
-    0 ;   \ shouldn't reach here
+        26 = IF _CB-GET4 EXIT THEN
+    _CB-GET8 ;
+
+\ _CB-HEAD ( -- major n )  Read an item's initial byte and its argument.
+: _CB-HEAD  ( -- major n )
+    _CB-GET DUP 5 RSHIFT SWAP 31 AND _CB-READ-ARG ;
+
+\ _CB-EXPECT ( major n want -- n )  Keep n when the item's major type is
+\   the one wanted; any other is a decode error and gives 0.
+: _CB-EXPECT  ( major n want -- n )
+    ROT <> IF DROP _CB-FAIL 0 THEN ;
+
+\ _CB-STRING ( n -- addr len )  Take a string's n bytes from the input.
+\   A length beyond the bytes left is a decode error and gives an empty
+\   string at the input's end.
+: _CB-STRING  ( n -- addr len )
+    DUP _CB-AVAIL U> IF DROP _CB-FAIL 0 THEN
+    _CB-PTR @ SWAP
+    DUP _CB-PTR +! ;
+
+\ _CB-ITEMS ( n -- n )  An array's item count.  Each item takes a byte at
+\   least, so a count beyond the bytes left is a decode error and gives 0.
+: _CB-ITEMS  ( n -- n )
+    DUP _CB-AVAIL U> IF DROP _CB-FAIL 0 THEN ;
+
+\ _CB-PAIRS ( n -- n )  A map's pair count, checked as _CB-ITEMS checks
+\   an array's: each pair takes two bytes at least.
+: _CB-PAIRS  ( n -- n )
+    DUP _CB-AVAIL 2/ U> IF DROP _CB-FAIL 0 THEN ;
 
 \ =====================================================================
 \  Decoder — Public API
 \ =====================================================================
 
 \ CBOR-TYPE ( -- major-type )
-\   Peek at the major type of the next item (0-7).
+\   Peek at the major type of the next item (0-7), or -1 at the end.
 \   Does NOT advance the cursor.
 : CBOR-TYPE  ( -- type )
     _CB-AVAIL 0= IF -1 EXIT THEN
@@ -250,99 +308,83 @@ VARIABLE _CB-PTR       \ current read position
 \ CBOR-NEXT-UINT ( -- n )
 \   Decode unsigned integer (major type 0).
 : CBOR-NEXT-UINT  ( -- n )
-    _CB-GET 31 AND _CB-READ-ARG ;
+    _CB-HEAD CBOR-MT-UINT _CB-EXPECT ;
 
 \ CBOR-NEXT-NINT ( -- n )
 \   Decode negative integer (major type 1).
 \   Returns the CBOR argument value.  The actual integer is -(1+n).
 : CBOR-NEXT-NINT  ( -- n )
-    _CB-GET 31 AND _CB-READ-ARG ;
+    _CB-HEAD CBOR-MT-NINT _CB-EXPECT ;
 
 \ CBOR-NEXT-BSTR ( -- addr len )
-\   Decode byte string.  Returns pointer into input buffer.
+\   Decode byte string (major type 2).  Returns pointer into input buffer.
 : CBOR-NEXT-BSTR  ( -- addr len )
-    _CB-GET 31 AND _CB-READ-ARG
-    _CB-PTR @ SWAP
-    DUP _CB-PTR +! ;
+    _CB-HEAD CBOR-MT-BSTR _CB-EXPECT _CB-STRING ;
 
 \ CBOR-NEXT-TSTR ( -- addr len )
-\   Decode text string.  Returns pointer into input buffer.
+\   Decode text string (major type 3).  Returns pointer into input buffer.
 : CBOR-NEXT-TSTR  ( -- addr len )
-    _CB-GET 31 AND _CB-READ-ARG
-    _CB-PTR @ SWAP
-    DUP _CB-PTR +! ;
+    _CB-HEAD CBOR-MT-TSTR _CB-EXPECT _CB-STRING ;
 
 \ CBOR-NEXT-ARRAY ( -- n )
-\   Decode array header, return item count.
+\   Decode array header (major type 4), return item count.
 : CBOR-NEXT-ARRAY  ( -- n )
-    _CB-GET 31 AND _CB-READ-ARG ;
+    _CB-HEAD CBOR-MT-ARRAY _CB-EXPECT _CB-ITEMS ;
 
 \ CBOR-NEXT-MAP ( -- n )
-\   Decode map header, return pair count.
+\   Decode map header (major type 5), return pair count.
 : CBOR-NEXT-MAP  ( -- n )
-    _CB-GET 31 AND _CB-READ-ARG ;
+    _CB-HEAD CBOR-MT-MAP _CB-EXPECT _CB-PAIRS ;
 
 \ CBOR-NEXT-TAG ( -- n )
-\   Decode semantic tag, return tag number.
+\   Decode semantic tag (major type 6), return tag number.  The item it
+\   tags must follow.
 : CBOR-NEXT-TAG  ( -- n )
-    _CB-GET 31 AND _CB-READ-ARG ;
+    _CB-HEAD CBOR-MT-TAG _CB-EXPECT
+    _CB-AVAIL 0= IF DROP _CB-FAIL 0 THEN ;
 
 \ CBOR-NEXT-BOOL ( -- flag )
-\   Decode boolean.  Returns -1 for true, 0 for false.
+\   Decode boolean.  Returns -1 for true (0xF5), 0 for false (0xF4).
+\   Any other item is a decode error and gives 0.
 : CBOR-NEXT-BOOL  ( -- flag )
-    _CB-GET 31 AND
-    21 = IF -1 ELSE 0 THEN ;
+    _CB-GET
+    DUP 245 = IF DROP -1 EXIT THEN
+    244 <> IF _CB-FAIL THEN 0 ;
 
 \ CBOR-SKIP ( -- )
-\   Skip one CBOR data item (including nested structures).
-VARIABLE _CB-SKIP-N
-
+\   Skip one CBOR data item, with the arrays, maps and tagged items nested
+\   in it.  Each level of nesting adds one call of CBOR-SKIP.
 : CBOR-SKIP  ( -- )
-    _CB-AVAIL 0= IF EXIT THEN
-    _CB-PEEK 5 RSHIFT           \ major type
-    DUP 0 = OVER 1 = OR IF     \ uint or nint
-        DROP _CB-GET 31 AND _CB-READ-ARG DROP EXIT
+    _CB-HEAD SWAP                        ( n major )
+    DUP CBOR-MT-BSTR = OVER CBOR-MT-TSTR = OR IF
+        DROP _CB-STRING 2DROP EXIT      \ string: skip its bytes
     THEN
-    DUP 2 = OVER 3 = OR IF     \ bstr or tstr
-        DROP _CB-GET 31 AND _CB-READ-ARG
-        _CB-PTR +! EXIT
+    DUP CBOR-MT-ARRAY = IF
+        DROP _CB-ITEMS 0 ?DO RECURSE LOOP EXIT
     THEN
-    DUP 6 = IF                  \ tag — skip tag number, then skip content
-        DROP _CB-GET 31 AND _CB-READ-ARG DROP
-        CBOR-SKIP EXIT          \ recurse to skip tagged item
+    DUP CBOR-MT-MAP = IF
+        DROP _CB-PAIRS 2* 0 ?DO RECURSE LOOP EXIT
     THEN
-    DUP 7 = IF                  \ simple/float
-        DROP _CB-GET DROP EXIT
+    CBOR-MT-TAG = IF
+        DROP RECURSE EXIT               \ tag: skip the item it tags
     THEN
-    DUP 4 = IF                  \ array
-        DROP _CB-GET 31 AND _CB-READ-ARG
-        _CB-SKIP-N !
-        _CB-SKIP-N @ 0 ?DO CBOR-SKIP LOOP
-        EXIT
-    THEN
-    5 = IF                      \ map
-        _CB-GET 31 AND _CB-READ-ARG
-        2 * _CB-SKIP-N !
-        _CB-SKIP-N @ 0 ?DO CBOR-SKIP LOOP
-        EXIT
-    THEN
-    _CB-GET DROP ;              \ unknown — skip initial byte
+    DROP ;                              \ integer or simple: the head was all
 
 \ =====================================================================
 \  Nesting — Saving and Restoring the Cursors
 \ =====================================================================
 \
 \ The encoder keeps one cursor (its buffer, capacity, write position and
-\ overflow flag) and the decoder keeps one (its input, end and read
-\ position).  A word that encodes or decodes a whole item of its own,
-\ such as a transaction inside a block or a block's hash inside a
-\ message, may run between another user's CBOR calls.  It saves both
+\ overflow flag) and the decoder keeps one (its input, end, read position
+\ and decode error flag).  A word that encodes or decodes a whole item of
+\ its own, such as a transaction inside a block or a block's hash inside
+\ a message, may run between another user's CBOR calls.  It saves both
 \ cursors before it starts and restores them when it is done, so the
-\ caller's encoding or decoding carries on where it was.  Each save
-\ goes in CBOR-CURSORS-SIZE bytes that the saving word provides, so
-\ words nest as deeply as their own storage allows.
+\ caller's encoding or decoding carries on where it was.  Each save goes
+\ in CBOR-CURSORS-SIZE bytes that the saving word provides, so words
+\ nest as deeply as their own storage allows.
 
-7 CELLS CONSTANT CBOR-CURSORS-SIZE
+8 CELLS CONSTANT CBOR-CURSORS-SIZE
 
 \ CBOR-SAVE ( addr -- )
 \   Copy both cursors into the CBOR-CURSORS-SIZE bytes at addr.
@@ -353,7 +395,8 @@ VARIABLE _CB-SKIP-N
     _CB-OVF @ OVER !  CELL+
     _CB-SRC @ OVER !  CELL+
     _CB-END @ OVER !  CELL+
-    _CB-PTR @ SWAP ! ;
+    _CB-PTR @ OVER !  CELL+
+    _CB-BAD @ SWAP ! ;
 
 \ CBOR-RESTORE ( addr -- )
 \   Make the cursors CBOR-SAVE copied to addr the current ones.
@@ -364,7 +407,8 @@ VARIABLE _CB-SKIP-N
     DUP @ _CB-OVF !  CELL+
     DUP @ _CB-SRC !  CELL+
     DUP @ _CB-END !  CELL+
-    @ _CB-PTR ! ;
+    DUP @ _CB-PTR !  CELL+
+    @ _CB-BAD ! ;
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -386,6 +430,7 @@ GUARD _cbor-guard
 ' CBOR-RESULT     CONSTANT _cbor-result-xt
 ' CBOR-SIZE       CONSTANT _cbor-size-xt
 ' CBOR-PARSE      CONSTANT _cbor-parse-xt
+' CBOR-INPUT-OK?  CONSTANT _cbor-input-ok-q-xt
 ' CBOR-TYPE       CONSTANT _cbor-type-xt
 ' CBOR-DONE?      CONSTANT _cbor-done-q-xt
 ' CBOR-NEXT-UINT  CONSTANT _cbor-next-uint-xt
@@ -415,6 +460,7 @@ GUARD _cbor-guard
 : CBOR-RESULT     _cbor-result-xt _cbor-guard WITH-GUARD ;
 : CBOR-SIZE       _cbor-size-xt _cbor-guard WITH-GUARD ;
 : CBOR-PARSE      _cbor-parse-xt _cbor-guard WITH-GUARD ;
+: CBOR-INPUT-OK?  _cbor-input-ok-q-xt _cbor-guard WITH-GUARD ;
 : CBOR-TYPE       _cbor-type-xt _cbor-guard WITH-GUARD ;
 : CBOR-DONE?      _cbor-done-q-xt _cbor-guard WITH-GUARD ;
 : CBOR-NEXT-UINT  _cbor-next-uint-xt _cbor-guard WITH-GUARD ;
