@@ -129,6 +129,7 @@ REQUIRE game/2d/fog.f
 ." --- fsm.f ---" CR
 
 VARIABLE _TF-FSM
+VARIABLE _TF-CUR  -1 _TF-CUR !        \ the entity's current state
 VARIABLE _TF-IDLE
 VARIABLE _TF-CHASE
 VARIABLE _TF-FLEE
@@ -165,7 +166,7 @@ S" fsm:new-nonzero" T-NAME
 FSM-NEW DUP _TF-FSM ! 0<> T-TRUE
 
 S" fsm:initial-current-neg1" T-NAME
-_TF-FSM @ FSM-CURRENT -1 T-ASSERT
+_TF-CUR @ -1 T-ASSERT
 
 \ --- Test: FSM-STATE ---
 S" fsm:define-idle-returns-0" T-NAME
@@ -186,20 +187,20 @@ FSM-STATE DUP _TF-FLEE ! 2 T-ASSERT
 \ --- Test: FSM-START ---
 0 _TF-ENTER-COUNT !
 S" fsm:start-enter-called" T-NAME
-_TF-FSM @ _TF-IDLE @ FSM-START
+_TF-FSM @ _TF-CUR 0 0 _TF-IDLE @ FSM-START
 _TF-ENTER-COUNT @ 1 T-ASSERT
 
 S" fsm:start-current-is-idle" T-NAME
-_TF-FSM @ FSM-CURRENT _TF-IDLE @ T-ASSERT
+_TF-CUR @ _TF-IDLE @ T-ASSERT
 
 \ --- Test: FSM-TICK (no transitions) ---
 0 _TF-TICK-COUNT !
 S" fsm:tick-calls-on-tick" T-NAME
-_TF-FSM @ 42 99 16 FSM-TICK
+_TF-FSM @ _TF-CUR 42 99 16 FSM-TICK
 _TF-TICK-COUNT @ 1 T-ASSERT
 
 S" fsm:tick-stays-in-idle" T-NAME
-_TF-FSM @ FSM-CURRENT _TF-IDLE @ T-ASSERT
+_TF-CUR @ _TF-IDLE @ T-ASSERT
 
 \ --- Test: FSM-TRANSITION (guard=never) ---
 _TF-FSM @ _TF-IDLE @ _TF-CHASE @ ' _TF-GUARD-NEVER FSM-TRANSITION
@@ -208,8 +209,8 @@ _TF-FSM @ _TF-IDLE @ _TF-CHASE @ ' _TF-GUARD-NEVER FSM-TRANSITION
 0 _TF-LEAVE-COUNT !
 0 _TF-ENTER-COUNT !
 S" fsm:tick-no-transition-when-guard-false" T-NAME
-_TF-FSM @ 0 0 1 FSM-TICK
-_TF-FSM @ FSM-CURRENT _TF-IDLE @ T-ASSERT
+_TF-FSM @ _TF-CUR 0 0 1 FSM-TICK
+_TF-CUR @ _TF-IDLE @ T-ASSERT
 
 S" fsm:enter-not-called-when-no-trans" T-NAME
 _TF-ENTER-COUNT @ 0 T-ASSERT
@@ -221,8 +222,8 @@ _TF-FSM @ _TF-IDLE @ _TF-CHASE @ ' _TF-GUARD-ALWAYS FSM-TRANSITION
 0 _TF-LEAVE-COUNT !
 0 _TF-ENTER-COUNT !
 S" fsm:transition-fires" T-NAME
-_TF-FSM @ 0 0 1 FSM-TICK
-_TF-FSM @ FSM-CURRENT _TF-CHASE @ T-ASSERT
+_TF-FSM @ _TF-CUR 0 0 1 FSM-TICK
+_TF-CUR @ _TF-CHASE @ T-ASSERT
 
 S" fsm:leave-called-on-trans" T-NAME
 _TF-LEAVE-COUNT @ 1 T-ASSERT
@@ -240,25 +241,26 @@ _TF-FSM @ _TF-CHASE @ _TF-IDLE @ ' _TF-GUARD-CHASE FSM-TRANSITION
 \ Flag is false — should stay in chase
 0 _TF-SHOULD-CHASE !
 0 _TF-ENTER-COUNT !
-_TF-FSM @ 0 0 1 FSM-TICK
+_TF-FSM @ _TF-CUR 0 0 1 FSM-TICK
 S" fsm:cond-guard-stays" T-NAME
-_TF-FSM @ FSM-CURRENT _TF-CHASE @ T-ASSERT
+_TF-CUR @ _TF-CHASE @ T-ASSERT
 
 \ Set flag true — should transition back to idle
 -1 _TF-SHOULD-CHASE !
 0 _TF-ENTER-COUNT !
-_TF-FSM @ 0 0 1 FSM-TICK
+_TF-FSM @ _TF-CUR 0 0 1 FSM-TICK
 S" fsm:cond-guard-fires" T-NAME
-_TF-FSM @ FSM-CURRENT _TF-IDLE @ T-ASSERT
+_TF-CUR @ _TF-IDLE @ T-ASSERT
 
 \ --- Test: a guard ticks another machine mid-scan ---
 \ M1 has two transitions from its first state: a guard that ticks M2 and
 \ declines, then one that always fires.  M1 must reach its third state
 \ and M2 its second, with M2's tick callback run once.
 VARIABLE _TF-M1  VARIABLE _TF-M2
+VARIABLE _TF-C1  VARIABLE _TF-C2
 VARIABLE _TF-M2-TICKS  0 _TF-M2-TICKS !
 : _TF-M2-TICK  ( eid ecs dt -- )  DROP 2DROP 1 _TF-M2-TICKS +! ;
-: _TF-G-NESTS  ( eid ecs -- flag )  2DROP _TF-M2 @ 7 0 1 FSM-TICK 0 ;
+: _TF-G-NESTS  ( eid ecs -- flag )  2DROP _TF-M2 @ _TF-C2 7 0 1 FSM-TICK 0 ;
 FSM-NEW _TF-M1 !  FSM-NEW _TF-M2 !
 _TF-M1 @ S" a" 0 0 0 FSM-STATE DROP
 _TF-M1 @ S" b" 0 0 0 FSM-STATE DROP
@@ -268,15 +270,66 @@ _TF-M1 @ 0 2 ' _TF-GUARD-ALWAYS FSM-TRANSITION
 _TF-M2 @ S" x" 0 ' _TF-M2-TICK 0 FSM-STATE DROP
 _TF-M2 @ S" y" 0 ' _TF-M2-TICK 0 FSM-STATE DROP
 _TF-M2 @ 0 1 ' _TF-GUARD-ALWAYS FSM-TRANSITION
-_TF-M1 @ 0 FSM-START  _TF-M2 @ 0 FSM-START
-_TF-M1 @ 1 0 1 FSM-TICK
+_TF-M1 @ _TF-C1 1 0 0 FSM-START  _TF-M2 @ _TF-C2 7 0 0 FSM-START
+_TF-M1 @ _TF-C1 1 0 1 FSM-TICK
 S" fsm:nested-scan-outer-fires-next" T-NAME
-_TF-M1 @ FSM-CURRENT 2 T-ASSERT
+_TF-C1 @ 2 T-ASSERT
 S" fsm:nested-scan-inner-moved" T-NAME
-_TF-M2 @ FSM-CURRENT 1 T-ASSERT
+_TF-C2 @ 1 T-ASSERT
 S" fsm:nested-scan-inner-ticked-once" T-NAME
 _TF-M2-TICKS @ 1 T-ASSERT
 _TF-M1 @ FSM-FREE  _TF-M2 @ FSM-FREE
+
+\ --- Test: on-enter receives the entity ---
+VARIABLE _TF-SEEN-EID  0 _TF-SEEN-EID !
+: _TF-ENTER-EID  ( eid ecs -- )  DROP _TF-SEEN-EID ! ;
+FSM-NEW CONSTANT _TF-M3
+_TF-M3 S" only" ' _TF-ENTER-EID 0 0 FSM-STATE DROP
+VARIABLE _TF-C3
+_TF-M3 _TF-C3 31 0 0 FSM-START
+S" fsm:start-passes-entity" T-NAME
+_TF-SEEN-EID @ 31 T-ASSERT
+S" fsm:name" T-NAME
+_TF-M3 0 FSM-NAME S" only" COMPARE 0 T-ASSERT
+_TF-M3 FSM-FREE
+
+\ --- Test: one definition for two entities ---
+\ The guard moves even entities from idle to chase; entities 2 and 3
+\ share the definition and keep their states in cells of their own.
+: _TF-G-EVEN  ( eid ecs -- flag )  DROP 1 AND 0= ;
+FSM-NEW CONSTANT _TF-M4
+_TF-M4 S" idle" 0 0 0 FSM-STATE DROP
+_TF-M4 S" chase" 0 0 0 FSM-STATE DROP
+_TF-M4 0 1 ' _TF-G-EVEN FSM-TRANSITION
+VARIABLE _TF-E2  VARIABLE _TF-E3
+_TF-M4 _TF-E2 2 0 0 FSM-START  _TF-M4 _TF-E3 3 0 0 FSM-START
+_TF-M4 _TF-E2 2 0 1 FSM-TICK   _TF-M4 _TF-E3 3 0 1 FSM-TICK
+S" fsm:shared-definition-even-chases" T-NAME
+_TF-E2 @ 1 T-ASSERT
+S" fsm:shared-definition-odd-idles" T-NAME
+_TF-E3 @ 0 T-ASSERT
+_TF-M4 FSM-FREE
+
+\ --- Test: states and transitions grow as they are defined ---
+\ Twenty states in a ring, forty transitions: each state's first
+\ transition declines and its second moves on.
+FSM-NEW CONSTANT _TF-M5
+: _TF-RING  ( -- )
+    20 0 DO _TF-M5 S" ring" 0 0 0 FSM-STATE DROP LOOP
+    20 0 DO
+        _TF-M5 I I 1+ 20 MOD ['] _TF-GUARD-NEVER FSM-TRANSITION
+        _TF-M5 I I 1+ 20 MOD ['] _TF-GUARD-ALWAYS FSM-TRANSITION
+    LOOP ;
+_TF-RING
+VARIABLE _TF-C5
+_TF-M5 _TF-C5 0 0 0 FSM-START
+: _TF-GO-ROUND  25 0 DO _TF-M5 _TF-C5 0 0 1 FSM-TICK LOOP ;
+_TF-GO-ROUND
+S" fsm:twenty-states" T-NAME
+_TF-M5 FSM-STATES 20 T-ASSERT
+S" fsm:ring-after-25-ticks" T-NAME
+_TF-C5 @ 5 T-ASSERT
+_TF-M5 FSM-FREE
 
 \ --- Test: FSM-FREE ---
 S" fsm:free-no-crash" T-NAME

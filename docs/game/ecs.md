@@ -3,7 +3,8 @@
 Lightweight archetype-free ECS.  Entities are integer IDs (0-based)
 with generation counters to detect stale references.  Components are
 fixed-size byte arrays stored in parallel pools indexed by entity ID.
-Supports up to 16 component types per ECS instance.
+The component table grows as components register, so an ECS holds as
+many kinds of component as its creator registers.
 
 ```forth
 REQUIRE game/ecs.f
@@ -59,9 +60,10 @@ descriptor itself.
 ```
 
 Register a new component type of `size` bytes per entity.
-Allocates a data pool of `max-ents × size` bytes and an attached
-bitfield.  Returns the component index (0-based, sequential).
-ABORTs if 16 components are already registered.
+Allocates a zeroed data pool of `max-ents × size` bytes and an
+attached bitfield, and grows the component table when it is full.
+Returns the component index (0-based, sequential).  A component of
+size 0 has no pool: it marks the entities it is attached to.
 
 ---
 
@@ -208,22 +210,23 @@ Return the maximum entity capacity.
 
 ## Descriptor Layout
 
-### ECS Descriptor (40 bytes, 5 cells)
+### ECS Descriptor (48 bytes, 6 cells)
 
 | Offset | Field      | Description                           |
 |--------|------------|---------------------------------------|
 | +0     | max-ents   | Maximum entity slots                  |
 | +8     | alive      | Bitfield array (1 bit per entity)     |
 | +16    | gen        | Generation array (1 cell per entity)  |
-| +24    | comp-descs | Component descriptor array (max 16)   |
+| +24    | comp-descs | Component descriptor array            |
 | +32    | num-comps  | Number of registered components       |
+| +40    | comp-cap   | Descriptors the array has room for    |
 
 ### Component Descriptor (24 bytes, 3 cells)
 
 | Offset | Field     | Description                            |
 |--------|-----------|----------------------------------------|
 | +0     | comp-size | Byte size of one component instance    |
-| +8     | data      | Data array (max-ents × size bytes)     |
+| +8     | data      | Data array (max-ents × size bytes), 0 for size 0 |
 | +16    | attached  | Bitfield array (1 bit per entity)      |
 
 ---

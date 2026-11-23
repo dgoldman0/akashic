@@ -11,15 +11,16 @@
 \  another.  The callback receives the mover and the tile it struck:
 \    ( phys eid ecs tile-x tile-y tile-val -- )
 \
-\  Physics Descriptor (40 bytes, 5 cells):
+\  Physics Descriptor (48 bytes, 6 cells):
 \    +0   cmap        Collision map pointer
 \    +8   grav-x      Gravity X per tick (0 for top-down)
 \    +16  grav-y      Gravity Y per tick (0 for top-down)
 \    +24  on-collide  Callback XT or 0
 \    +32  one-way     One-way platform tile value (0 = disabled)
+\    +40  c-pos       The position component the moves read and write
 \
 \  Public API:
-\    TPHYS-NEW         ( cmap -- phys )
+\    TPHYS-NEW         ( cmap c-pos -- phys )
 \    TPHYS-FREE        ( phys -- )
 \    TPHYS-GRAVITY!    ( phys gx gy -- )
 \    TPHYS-ONE-WAY!    ( phys tile-val -- )
@@ -49,17 +50,19 @@ REQUIRE collide.f
 16 CONSTANT _TPHYS-O-GY
 24 CONSTANT _TPHYS-O-ONCOL  ( holds: tphys-collide )
 32 CONSTANT _TPHYS-O-ONEWAY
-40 CONSTANT _TPHYS-DESC-SZ
+40 CONSTANT _TPHYS-O-CPOS
+48 CONSTANT _TPHYS-DESC-SZ
 
 \ =====================================================================
 \  §2 — Constructor / Destructor
 \ =====================================================================
 
-: TPHYS-NEW  ( cmap -- phys )
+: TPHYS-NEW  ( cmap c-pos -- phys )
     _TPHYS-DESC-SZ ALLOCATE
     0<> ABORT" TPHYS-NEW: alloc"
     DUP _TPHYS-DESC-SZ 0 FILL
-    SWAP OVER _TPHYS-O-CMAP + ! ;
+    TUCK _TPHYS-O-CPOS + !
+    TUCK _TPHYS-O-CMAP + ! ;
 
 : TPHYS-FREE  ( phys -- )
     FREE ;
@@ -83,16 +86,16 @@ REQUIRE collide.f
 \  §4 — Movement Internals
 \ =====================================================================
 
-\ The mover's position, from its position component
+\ The mover's position component
+: _TPHYS-POS  ( phys eid ecs -- addr )
+    SWAP ROT _TPHYS-O-CPOS + @ ECS-GET
+    DUP 0= ABORT" TPHYS: no pos" ;
+
 : _TPHYS-POS@  ( phys eid ecs -- x y )
-    ROT DROP SWAP SYS-C-POS @ ECS-GET
-    DUP 0= ABORT" TPHYS: no pos"
-    DUP C-POS.X + @ SWAP C-POS.Y + @ ;
+    _TPHYS-POS DUP C-POS.X + @ SWAP C-POS.Y + @ ;
 
 : _TPHYS-POS!  ( phys eid ecs x y -- )
-    2>R ROT DROP SWAP SYS-C-POS @ ECS-GET
-    DUP 0= ABORT" TPHYS: no pos"
-    2R> ROT TUCK C-POS.Y + ! C-POS.X + ! ;
+    2>R _TPHYS-POS 2R> ROT TUCK C-POS.Y + ! C-POS.X + ! ;
 
 : _TPHYS-SOLID?  ( phys x y -- flag )
     ROT _TPHYS-O-CMAP + @ -ROT CMAP-SOLID? ;

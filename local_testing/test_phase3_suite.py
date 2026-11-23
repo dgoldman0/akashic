@@ -122,7 +122,8 @@ CONSTANT _T-C-SPR
 CONSTANT _T-C-VEL
 CONSTANT _T-C-POS
 
-_T-C-POS _T-C-VEL _T-C-HP _T-C-TMR SYS-BIND-COMPS
+\ Steering for the shared ECS, its wander generator seeded
+_T-C-POS _T-C-VEL _T-C-AI 12345 STEER-NEW CONSTANT _T-ST
 
 \ Helper: create entity at (x, y) with pos + vel
 : _T-MAKE-ENT  ( x y -- eid )
@@ -173,7 +174,7 @@ VARIABLE _TME-X  VARIABLE _TME-Y
     10 0 ?DO  _TP-CM 9 I 1 CMAP-SET LOOP ;    \ right col
 _TP-FILL-BORDERS
 
-_TP-CM TPHYS-NEW CONSTANT _TP-PH
+_TP-CM _T-C-POS TPHYS-NEW CONSTANT _TP-PH
 
 \ ── 1.1 Constructor ──
 
@@ -509,28 +510,28 @@ MLOG-BALANCED? T-TRUE
 5 5 _T-MAKE-ENT CONSTANT _ST-E0
 
 S" steer:seek-sets-dx" T-NAME
-_ST-E0 _T-ECS 8 5 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 8 5 STEER-SEEK
 _ST-E0 _T-ENT-DX 1 T-ASSERT
 
 S" steer:seek-sets-dy-zero" T-NAME
 _ST-E0 _T-ENT-DY 0 T-ASSERT
 
 S" steer:seek-diag" T-NAME
-_ST-E0 _T-ECS 8 8 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 8 8 STEER-SEEK
 _ST-E0 _T-ENT-DX 1 T-ASSERT
 
 S" steer:seek-diag-dy" T-NAME
 _ST-E0 _T-ENT-DY 1 T-ASSERT
 
 S" steer:seek-neg" T-NAME
-_ST-E0 _T-ECS 2 2 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 2 2 STEER-SEEK
 _ST-E0 _T-ENT-DX -1 T-ASSERT
 
 S" steer:seek-neg-dy" T-NAME
 _ST-E0 _T-ENT-DY -1 T-ASSERT
 
 S" steer:seek-same-pos" T-NAME
-_ST-E0 _T-ECS 5 5 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 5 5 STEER-SEEK
 _ST-E0 _T-ENT-DX 0 T-ASSERT
 
 S" steer:seek-same-pos-dy" T-NAME
@@ -541,14 +542,14 @@ _ST-E0 _T-ENT-DY 0 T-ASSERT
 5 5 _T-MAKE-ENT CONSTANT _ST-E1
 
 S" steer:flee-away" T-NAME
-_ST-E1 _T-ECS 3 3 STEER-FLEE
+_T-ST _ST-E1 _T-ECS 3 3 STEER-FLEE
 _ST-E1 _T-ENT-DX 1 T-ASSERT
 
 S" steer:flee-away-dy" T-NAME
 _ST-E1 _T-ENT-DY 1 T-ASSERT
 
 S" steer:flee-neg" T-NAME
-_ST-E1 _T-ECS 8 8 STEER-FLEE
+_T-ST _ST-E1 _T-ECS 8 8 STEER-FLEE
 _ST-E1 _T-ENT-DX -1 T-ASSERT
 
 S" steer:flee-neg-dy" T-NAME
@@ -559,8 +560,8 @@ _ST-E1 _T-ENT-DY -1 T-ASSERT
 5 5 _T-MAKE-ENT CONSTANT _ST-E2
 
 S" steer:wander-sets-vel" T-NAME
-42 STEER-SEED!
-_ST-E2 _T-ECS STEER-WANDER
+_T-C-POS _T-C-VEL _T-C-AI 42 STEER-NEW CONSTANT _T-ST42
+_T-ST42 _ST-E2 _T-ECS STEER-WANDER
 \ Velocity should be in {-1, 0, 1}
 _ST-E2 _T-ENT-DX ABS 2 < T-TRUE
 
@@ -570,13 +571,31 @@ _ST-E2 _T-ENT-DY ABS 2 < T-TRUE
 S" steer:wander-changes" T-NAME
 \ Run wander twice with different seed - at least one axis likely differs
 _ST-E2 _T-ENT-DX
-999 STEER-SEED!
-_ST-E2 _T-ECS STEER-WANDER
+_T-C-POS _T-C-VEL _T-C-AI 999 STEER-NEW CONSTANT _T-ST999
+_T-ST999 _ST-E2 _T-ECS STEER-WANDER
 _ST-E2 _T-ENT-DX
 _ST-E2 _T-ENT-DY
 ROT                    ( dy-now dx-now dx-before )
 \ Just verify velocity is still in range
 DROP ABS 2 < T-TRUE
+
+\ ── 3.3b A wander replays from its seed ──
+\ Two contexts seeded alike give the same eight steps, whatever another
+\ context does in between.
+: _W-RUN  ( steer -- signature )
+    0 SWAP 8 0 DO
+        DUP _ST-E2 _T-ECS STEER-WANDER
+        _ST-E2 _T-ENT-DX 1+ 3 * _ST-E2 _T-ENT-DY 1+ +
+        ROT 9 * + SWAP
+    LOOP DROP ;
+_T-C-POS _T-C-VEL _T-C-AI 77 STEER-NEW CONSTANT _T-STA
+_T-C-POS _T-C-VEL _T-C-AI 77 STEER-NEW CONSTANT _T-STB
+_T-STA _W-RUN CONSTANT _W-A
+_T-ST999 _W-RUN DROP
+S" steer:wander-replays-from-seed" T-NAME
+_T-STB _W-RUN _W-A T-ASSERT
+S" steer:wander-seeds-differ" T-NAME
+_T-ST42 _W-RUN _W-A <> T-TRUE
 
 \ ── 3.4 STEER-FOLLOW-PATH ──
 
@@ -590,7 +609,7 @@ CREATE _SFP-TEST-PATH
 1 1 _T-MAKE-ENT CONSTANT _ST-E3
 
 S" steer:follow-path-dx" T-NAME
-_ST-E3 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
+_T-ST _ST-E3 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
 _ST-E3 _T-ENT-DX 1 T-ASSERT
 
 S" steer:follow-path-dy" T-NAME
@@ -600,7 +619,7 @@ _ST-E3 _T-ENT-DY 0 T-ASSERT
 3 1 _T-MAKE-ENT CONSTANT _ST-E4
 
 S" steer:follow-path-at-end" T-NAME
-_ST-E4 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
+_T-ST _ST-E4 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
 _ST-E4 _T-ENT-DX 0 T-ASSERT
 
 S" steer:follow-path-at-end-dy" T-NAME
@@ -610,7 +629,7 @@ _ST-E4 _T-ENT-DY 0 T-ASSERT
 7 7 _T-MAKE-ENT CONSTANT _ST-E5
 
 S" steer:follow-path-off-path" T-NAME
-_ST-E5 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
+_T-ST _ST-E5 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
 _ST-E5 _T-ENT-DX 0 T-ASSERT
 
 S" steer:follow-path-off-path-dy" T-NAME
@@ -629,10 +648,9 @@ CREATE _SP-TEST-WPS
 _T-ECS _ST-E6 _T-C-AI ECS-ATTACH CONSTANT _ST-E6-AI
 0 _ST-E6-AI C-AI.STATE + !
 
-_T-C-AI STEER-BIND-AI
 
 S" steer:patrol-at-wp0-advances" T-NAME
-_ST-E6 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
+_T-ST _ST-E6 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
 \ Entity is at wp[0]=(2,2), should advance to wp[1]=(4,2), seek dx=+1
 _ST-E6 _T-ENT-DX 1 T-ASSERT
 
@@ -648,7 +666,7 @@ _T-ECS _ST-E7 _T-C-AI ECS-ATTACH CONSTANT _ST-E7-AI
 1 _ST-E7-AI C-AI.STATE + !     \ target wp[1] = (4,2)
 
 S" steer:patrol-seeks-wp" T-NAME
-_ST-E7 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
+_T-ST _ST-E7 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
 _ST-E7 _T-ENT-DX 1 T-ASSERT
 
 S" steer:patrol-seeks-wp-dy" T-NAME

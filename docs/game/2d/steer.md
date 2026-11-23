@@ -1,8 +1,15 @@
 # akashic-game-2d-steer — Steering Behaviors
 
-High-level movement patterns that write to the C-VEL component.
-Combine with `SYS-VELOCITY` for automatic position updates.
-Integrates with collision-map pathfinding and ECS AI state.
+Movement patterns that set an entity's velocity to one step. Each
+behaviour writes a dx and a dy of -1, 0 or +1 into the entity's velocity
+component, toward or away from its target; moving the entity is the
+caller's, as with `SYS-VELOCITY` or `TPHYS-MOVE`. The behaviours suit
+turn-based games, where a creature takes one tile a turn, and grid games
+that move every entity one tile at a time.
+
+A steering context holds the components the behaviours read and write
+and a seeded generator for wandering, so two worlds, or two kinds of
+creature, steer independently and a wander replays from its seed.
 
 ```forth
 REQUIRE game/2d/steer.f
@@ -14,11 +21,34 @@ REQUIRE game/2d/steer.f
 
 ## Table of Contents
 
+- [Contexts](#contexts)
 - [Basic Behaviors](#basic-behaviors)
 - [Path Following](#path-following)
 - [Patrol](#patrol)
-- [Configuration](#configuration)
 - [Quick Reference](#quick-reference)
+
+---
+
+## Contexts
+
+### STEER-NEW
+
+```
+( c-pos c-vel c-ai seed -- steer )
+```
+
+A steering context over the position, velocity and AI components of one
+ECS layout, with its wander generator seeded by `seed`. Every behaviour
+takes the context first. An entity without a position component is left
+alone, and one without a velocity component is read but not written.
+
+### STEER-FREE
+
+```
+( steer -- )
+```
+
+Free the context.
 
 ---
 
@@ -27,31 +57,28 @@ REQUIRE game/2d/steer.f
 ### STEER-SEEK
 
 ```
-( eid ecs target-x target-y -- )
+( steer eid ecs target-x target-y -- )
 ```
 
-Set the entity's velocity toward (target-x, target-y).  Each
-axis is set to -1, 0, or +1 (discrete signum).  If the entity
-is already at the target, velocity is set to (0, 0).
+One step toward (target-x, target-y): each axis is set to -1, 0, or
++1, the sign of the difference. At the target, velocity is (0, 0).
 
 ### STEER-FLEE
 
 ```
-( eid ecs threat-x threat-y -- )
+( steer eid ecs threat-x threat-y -- )
 ```
 
-Set velocity **away** from the threat position.  Opposite of
-STEER-SEEK.
+One step **away** from the threat position.
 
 ### STEER-WANDER
 
 ```
-( eid ecs -- )
+( steer eid ecs -- )
 ```
 
-Set a random velocity using the built-in LCG.  Each axis is
-independently set to -1, 0, or +1.  Seed the RNG with
-`STEER-SEED!` for reproducible results.
+A random step from the context's generator: each axis independently
+-1, 0, or +1. Two contexts seeded alike produce the same steps.
 
 ---
 
@@ -60,13 +87,11 @@ independently set to -1, 0, or +1.  Seed the RNG with
 ### STEER-FOLLOW-PATH
 
 ```
-( eid ecs path count -- )
+( steer eid ecs path count -- )
 ```
 
-Follow a waypoint path.  Finds the entity's current position
-in the path and seeks toward the **next** waypoint.  If the
-entity is at the last waypoint or not on the path, velocity is
-set to (0, 0).
+Find the entity's position on the path and step toward the **next**
+tile. At the path's last tile, or off the path, velocity is (0, 0).
 
 Path format: flat cell array of (x, y) pairs, as `ASTAR-PATH` gives
 it.
@@ -78,51 +103,29 @@ it.
 ### STEER-PATROL
 
 ```
-( eid ecs waypoints count -- )
+( steer eid ecs waypoints count -- )
 ```
 
-Autonomous patrol between waypoints.  Uses the entity's C-AI
-component (`C-AI.STATE` field) to track which waypoint the
-entity is heading toward.
+Patrol a loop of waypoints, keeping the index of the waypoint ahead in
+`C-AI.STATE` of the entity's AI component, the context's `c-ai`.
 
-- If the entity is **at** the current waypoint, the state
-  advances to the next waypoint (wrapping around to 0).
-- The entity then seeks toward the current target waypoint.
+- If the entity is **at** that waypoint, the index advances to the
+  next waypoint, wrapping around to 0.
+- The entity then steps toward the waypoint ahead.
 
-Requires `STEER-BIND-AI` to be called first to register the
-C-AI component ID.
-
----
-
-## Configuration
-
-### STEER-BIND-AI
-
-```
-( c-ai -- )
-```
-
-Register the component ID for C-AI so that `STEER-PATROL` can
-read and write the `C-AI.STATE` field.
-
-### STEER-SEED!
-
-```
-( n -- )
-```
-
-Seed the internal LCG used by `STEER-WANDER`.
+An entity without an AI component, or a loop of no waypoints, gets
+velocity (0, 0).
 
 ---
 
 ## Quick Reference
 
-| Word                | Stack Effect                            | Description             |
-|---------------------|-----------------------------------------|-------------------------|
-| `STEER-SEEK`        | `( eid ecs tx ty -- )`                  | Seek target             |
-| `STEER-FLEE`        | `( eid ecs tx ty -- )`                  | Flee from threat        |
-| `STEER-WANDER`      | `( eid ecs -- )`                        | Random movement         |
-| `STEER-FOLLOW-PATH` | `( eid ecs path count -- )`             | Follow waypoint path    |
-| `STEER-PATROL`      | `( eid ecs wps count -- )`              | Auto-patrol waypoints   |
-| `STEER-BIND-AI`     | `( c-ai -- )`                           | Register AI component   |
-| `STEER-SEED!`       | `( n -- )`                              | Seed wander RNG         |
+| Word                | Stack Effect                              | Description             |
+|---------------------|-------------------------------------------|-------------------------|
+| `STEER-NEW`         | `( c-pos c-vel c-ai seed -- steer )`      | Steering context        |
+| `STEER-FREE`        | `( steer -- )`                            | Free it                 |
+| `STEER-SEEK`        | `( steer eid ecs tx ty -- )`              | Step toward a target    |
+| `STEER-FLEE`        | `( steer eid ecs tx ty -- )`              | Step away from a threat |
+| `STEER-WANDER`      | `( steer eid ecs -- )`                    | Random step             |
+| `STEER-FOLLOW-PATH` | `( steer eid ecs path count -- )`         | Follow a path           |
+| `STEER-PATROL`      | `( steer eid ecs wps count -- )`          | Patrol waypoints        |

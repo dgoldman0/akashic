@@ -88,9 +88,15 @@ Size constant: `C-TAG-SZ` = 8.
 
 | Field     | Offset | Description    |
 |-----------|--------|----------------|
-| C-AI.STATE| +0     | FSM state      |
+| C-AI.STATE| +0     | Current state  |
 
 Size constant: `C-AI-SZ` = 8.
+
+The cell holds a state machine's current state, whose address
+`FSM-START` and `FSM-TICK` take, or the index of the waypoint
+`STEER-PATROL` heads for. An entity that needs both, or a behaviour
+tree's state block as well, gets an AI component of its own with a
+field for each.
 
 ---
 

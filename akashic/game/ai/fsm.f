@@ -7,14 +7,21 @@
 \  Transitions are guarded — a guard-xt is evaluated each tick to
 \  decide whether to fire.
 \
-\  FSM Descriptor (40 bytes, 5 cells):
+\  A machine is a shared definition: its states and transitions, which
+\  grow as they are defined.  Each entity keeps its current state in a
+\  cell of its own, usually a field of its AI component, and passes the
+\  cell's address to FSM-START and FSM-TICK, so one definition serves
+\  any number of entities.  A cell of -1 marks a machine not started.
+\  Ticks keep their place on the stacks, so a guard or a callback may
+\  tick another machine.
+\
+\  FSM Descriptor (48 bytes, 6 cells):
 \    +0   states      Array of state descriptors
 \    +8   n-states    Number of defined states
 \    +16  max-states  Capacity
 \    +24  transitions Array of transition descriptors
 \    +32  n-trans     Number of defined transitions
-\    +40  max-trans   Maximum transitions
-\    +48  current     Current state id (-1 = not started)
+\    +40  max-trans   Capacity
 \
 \  State Descriptor (40 bytes, 5 cells):
 \    +0   name-a      Name string address
@@ -32,9 +39,10 @@
 \    FSM-NEW         ( -- fsm )
 \    FSM-STATE       ( fsm name-a name-u on-enter on-tick on-leave -- state-id )
 \    FSM-TRANSITION  ( fsm from-id to-id guard-xt -- )
-\    FSM-START       ( fsm state-id -- )
-\    FSM-TICK        ( fsm eid ecs dt -- )
-\    FSM-CURRENT     ( fsm -- state-id )
+\    FSM-START       ( fsm cell eid ecs state-id -- )
+\    FSM-TICK        ( fsm cell eid ecs dt -- )
+\    FSM-NAME        ( fsm state-id -- name-a name-u )
+\    FSM-STATES      ( fsm -- n )
 \    FSM-FREE        ( fsm -- )
 \
 \  Prefix: FSM- (public), _FSM- (internal)
@@ -54,8 +62,7 @@ PROVIDED akashic-game-ai-fsm
 24 CONSTANT _FSM-O-TRANS
 32 CONSTANT _FSM-O-NTRANS
 40 CONSTANT _FSM-O-MAXTRANS
-48 CONSTANT _FSM-O-CURRENT
-56 CONSTANT _FSM-DESC-SZ
+48 CONSTANT _FSM-DESC-SZ
 
 ( kind: fsm-step xt( eid ecs -- ) )
 ( kind: fsm-tick xt( eid ecs dt -- ) )
@@ -75,10 +82,6 @@ PROVIDED akashic-game-ai-fsm
 16 CONSTANT _FSM-T-GUARD  ( holds: fsm-guard )
 24 CONSTANT _FSM-TRANS-SZ
 
-\ Defaults
-16 CONSTANT _FSM-DEF-STATES
-32 CONSTANT _FSM-DEF-TRANS
-
 \ =====================================================================
 \  §2 — Constructor / Destructor
 \ =====================================================================
@@ -87,91 +90,66 @@ PROVIDED akashic-game-ai-fsm
     _FSM-DESC-SZ ALLOCATE
     0<> ABORT" FSM-NEW: desc alloc"
     DUP _FSM-DESC-SZ 0 FILL
-    \ Allocate state array
-    _FSM-DEF-STATES _FSM-STATE-SZ * ALLOCATE
+    4 _FSM-STATE-SZ * ALLOCATE
     0<> ABORT" FSM-NEW: states alloc"
     OVER _FSM-O-STATES + !
-    _FSM-DEF-STATES OVER _FSM-O-MAXST + !
-    0 OVER _FSM-O-NSTATES + !
-    \ Allocate transition array
-    _FSM-DEF-TRANS _FSM-TRANS-SZ * ALLOCATE
+    4 OVER _FSM-O-MAXST + !
+    8 _FSM-TRANS-SZ * ALLOCATE
     0<> ABORT" FSM-NEW: trans alloc"
     OVER _FSM-O-TRANS + !
-    _FSM-DEF-TRANS OVER _FSM-O-MAXTRANS + !
-    0 OVER _FSM-O-NTRANS + !
-    \ Not started
-    -1 OVER _FSM-O-CURRENT + ! ;
+    8 OVER _FSM-O-MAXTRANS + ! ;
 
 : FSM-FREE  ( fsm -- )
     DUP _FSM-O-STATES + @ FREE
     DUP _FSM-O-TRANS + @ FREE
     FREE ;
 
+\ Double an array's room: its pointer at fsm+array, its capacity at
+\ fsm+cap, entries of size bytes.
+: _FSM-GROW  ( fsm array cap size -- )
+    >R >R OVER + SWAP R> + R>                    ( arr-addr cap-addr size )
+    OVER @ 2* TUCK *                             ( arr-addr cap-addr cap' bytes )
+    3 PICK @ SWAP RESIZE
+    0<> ABORT" FSM: alloc"                       ( arr-addr cap-addr cap' arr )
+    3 PICK !  SWAP !  DROP ;
+
 \ =====================================================================
 \  §3 — State Definition
-\ =====================================================================
-
-VARIABLE _FSM-TMP
-
-\ FSM-STATE ( fsm name-a name-u on-enter on-tick on-leave -- state-id )
-\   Define a new state.  Returns the state id (0-based index).
-VARIABLE _FSM-ST-FSM
-VARIABLE _FSM-ST-NA
-VARIABLE _FSM-ST-NU
-VARIABLE _FSM-ST-ENT
-VARIABLE _FSM-ST-TCK
-VARIABLE _FSM-ST-LV
-: FSM-STATE  ( fsm name-a name-u on-enter on-tick on-leave -- state-id )
-    _FSM-ST-LV ! _FSM-ST-TCK ! _FSM-ST-ENT !
-    _FSM-ST-NU ! _FSM-ST-NA ! _FSM-ST-FSM !
-    \ Check capacity
-    _FSM-ST-FSM @ _FSM-O-NSTATES + @
-    _FSM-ST-FSM @ _FSM-O-MAXST + @ >= ABORT" FSM-STATE: full"
-    \ Get slot address
-    _FSM-ST-FSM @ _FSM-O-NSTATES + @ _FSM-TMP !
-    _FSM-ST-FSM @ _FSM-O-STATES + @
-    _FSM-TMP @ _FSM-STATE-SZ * +     ( slot-addr )
-    DUP _FSM-STATE-SZ 0 FILL
-    _FSM-ST-NA @  OVER _FSM-S-NAMEA + !
-    _FSM-ST-NU @  OVER _FSM-S-NAMEU + !
-    _FSM-ST-ENT @ OVER _FSM-S-ENTER + !
-    _FSM-ST-TCK @ OVER _FSM-S-TICK  + !
-    _FSM-ST-LV @  SWAP _FSM-S-LEAVE + !
-    \ Increment count, return id
-    _FSM-ST-FSM @ _FSM-O-NSTATES + DUP @ 1+ SWAP !
-    _FSM-TMP @ ;
-
-\ =====================================================================
-\  §4 — Transition Definition
-\ =====================================================================
-
-VARIABLE _FSM-TR-FSM
-VARIABLE _FSM-TR-FROM
-VARIABLE _FSM-TR-TO
-VARIABLE _FSM-TR-GUARD
-: FSM-TRANSITION  ( fsm from-id to-id guard-xt -- )
-    _FSM-TR-GUARD ! _FSM-TR-TO ! _FSM-TR-FROM ! _FSM-TR-FSM !
-    \ Check capacity
-    _FSM-TR-FSM @ _FSM-O-NTRANS + @
-    _FSM-TR-FSM @ _FSM-O-MAXTRANS + @ >= ABORT" FSM-TRANSITION: full"
-    \ Get slot
-    _FSM-TR-FSM @ _FSM-O-NTRANS + @ _FSM-TMP !
-    _FSM-TR-FSM @ _FSM-O-TRANS + @
-    _FSM-TMP @ _FSM-TRANS-SZ * +     ( slot-addr )
-    _FSM-TR-FROM @  OVER _FSM-T-FROM  + !
-    _FSM-TR-TO @    OVER _FSM-T-TO    + !
-    _FSM-TR-GUARD @ SWAP _FSM-T-GUARD + !
-    _FSM-TR-FSM @ _FSM-O-NTRANS + DUP @ 1+ SWAP ! ;
-
-\ =====================================================================
-\  §5 — State Lookup Helper
 \ =====================================================================
 
 : _FSM-GET-STATE  ( fsm id -- state-addr )
     _FSM-STATE-SZ * SWAP _FSM-O-STATES + @ + ;
 
+\ FSM-STATE ( fsm name-a name-u on-enter on-tick on-leave -- state-id )
+\   Define a new state.  Returns the state id (0-based index).
+: FSM-STATE  ( fsm name-a name-u on-enter on-tick on-leave -- state-id )
+    5 PICK DUP _FSM-O-NSTATES + @ SWAP _FSM-O-MAXST + @ >= IF
+        5 PICK _FSM-O-STATES _FSM-O-MAXST _FSM-STATE-SZ _FSM-GROW
+    THEN
+    5 PICK DUP _FSM-O-NSTATES + @ _FSM-GET-STATE >R
+    R@ _FSM-S-LEAVE + !  R@ _FSM-S-TICK + !  R@ _FSM-S-ENTER + !
+    R@ _FSM-S-NAMEU + !  R> _FSM-S-NAMEA + !
+    DUP _FSM-O-NSTATES + @ SWAP _FSM-O-NSTATES + 1 SWAP +! ;
+
+: FSM-NAME  ( fsm state-id -- name-a name-u )
+    _FSM-GET-STATE DUP _FSM-S-NAMEA + @ SWAP _FSM-S-NAMEU + @ ;
+
+: FSM-STATES  ( fsm -- n )  _FSM-O-NSTATES + @ ;
+
 \ =====================================================================
-\  §6 — Start / Tick / Current
+\  §4 — Transition Definition
+\ =====================================================================
+
+: FSM-TRANSITION  ( fsm from-id to-id guard-xt -- )
+    3 PICK DUP _FSM-O-NTRANS + @ SWAP _FSM-O-MAXTRANS + @ >= IF
+        3 PICK _FSM-O-TRANS _FSM-O-MAXTRANS _FSM-TRANS-SZ _FSM-GROW
+    THEN
+    3 PICK DUP _FSM-O-NTRANS + @ _FSM-TRANS-SZ * SWAP _FSM-O-TRANS + @ +
+    >R  R@ _FSM-T-GUARD + !  R@ _FSM-T-TO + !  R> _FSM-T-FROM + !
+    _FSM-O-NTRANS + 1 SWAP +! ;
+
+\ =====================================================================
+\  §5 — Start / Tick
 \ =====================================================================
 
 \ A state's on-enter or on-leave, if it has one
@@ -181,52 +159,49 @@ VARIABLE _FSM-TR-GUARD
 : _FSM-LEAVE  ( eid ecs state -- )
     _FSM-S-LEAVE + @ ?DUP IF EXECUTE ELSE 2DROP THEN ;
 
-\ FSM-START ( fsm state-id -- )
-\   Enter initial state.  Calls on-enter for that state with 0 0.
-: FSM-START  ( fsm state-id -- )
-    2DUP SWAP _FSM-O-CURRENT + !
-    _FSM-GET-STATE 0 0 ROT _FSM-ENTER ;
+\ FSM-START ( fsm cell eid ecs state-id -- )
+\   Put the entity's machine, whose current state lives at cell, into
+\   state-id, and call that state's on-enter with eid and ecs.
+: FSM-START  ( fsm cell eid ecs state-id -- )
+    DUP 4 PICK !
+    4 PICK SWAP _FSM-GET-STATE _FSM-ENTER
+    2DROP ;
 
 \ Internal: leave the current state for to-id, calling on-leave and
 \ on-enter.
-: _FSM-DO-TRANSIT  ( fsm eid ecs to-id -- )
+: _FSM-DO-TRANSIT  ( fsm cell eid ecs to-id -- )
     >R
-    2DUP 4 PICK DUP _FSM-O-CURRENT + @ _FSM-GET-STATE _FSM-LEAVE
-    ROT R@ OVER _FSM-O-CURRENT + !               ( eid ecs fsm  R: to )
-    R> _FSM-GET-STATE _FSM-ENTER ;
+    2DUP 5 PICK 5 PICK @ _FSM-GET-STATE _FSM-LEAVE
+    R@ 3 PICK !
+    ROT DROP ROT R> _FSM-GET-STATE _FSM-ENTER ;
 
 \ Internal: fire the first transition from the current state whose
 \ guard passes, if any.  The scan keeps its place on the stack, so a
 \ guard may tick another machine.
-: _FSM-FIRE  ( fsm eid ecs -- )
-    2 PICK DUP _FSM-O-TRANS + @ SWAP _FSM-O-NTRANS + @   ( fsm eid ecs ta n )
+: _FSM-FIRE  ( fsm cell eid ecs -- )
+    3 PICK DUP _FSM-O-TRANS + @ SWAP _FSM-O-NTRANS + @   ( fsm cell eid ecs ta n )
     BEGIN DUP 0> WHILE
-        OVER _FSM-T-FROM + @ 5 PICK _FSM-O-CURRENT + @ = IF
+        OVER _FSM-T-FROM + @ 5 PICK @ = IF
             3 PICK 3 PICK 3 PICK _FSM-T-GUARD + @ EXECUTE IF
                 DROP _FSM-T-TO + @ _FSM-DO-TRANSIT EXIT
             THEN
         THEN
         1- SWAP _FSM-TRANS-SZ + SWAP
     REPEAT
-    2DROP 2DROP DROP ;
+    2DROP 2DROP 2DROP ;
 
-\ FSM-TICK ( fsm eid ecs dt -- )
-\   Evaluate all transitions from current state (first match wins),
-\   then call on-tick of the (possibly new) current state.  Nothing
-\   lives outside the stacks meanwhile, so callbacks may tick other
-\   machines.
-: FSM-TICK  ( fsm eid ecs dt -- )
-    3 PICK _FSM-O-CURRENT + @ -1 = IF 2DROP 2DROP EXIT THEN
-    >R 2 PICK 2 PICK 2 PICK _FSM-FIRE            ( fsm eid ecs  R: dt )
-    ROT DUP _FSM-O-CURRENT + @ _FSM-GET-STATE _FSM-S-TICK + @
+\ FSM-TICK ( fsm cell eid ecs dt -- )
+\   Evaluate all transitions from the entity's current state (first
+\   match wins), then call on-tick of the (possibly new) current state.
+\   A machine not started, its cell -1, does nothing.
+: FSM-TICK  ( fsm cell eid ecs dt -- )
+    3 PICK @ -1 = IF 2DROP 2DROP DROP EXIT THEN
+    >R 3 PICK 3 PICK 3 PICK 3 PICK _FSM-FIRE      ( fsm cell eid ecs  R: dt )
+    2SWAP @ _FSM-GET-STATE _FSM-S-TICK + @
     ?DUP IF R> SWAP EXECUTE ELSE 2DROP R> DROP THEN ;
 
-\ FSM-CURRENT ( fsm -- state-id )
-: FSM-CURRENT  ( fsm -- state-id )
-    _FSM-O-CURRENT + @ ;
-
 \ =====================================================================
-\  §7 — Concurrency Guards
+\  §6 — Concurrency Guards
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]

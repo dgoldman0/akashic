@@ -475,20 +475,20 @@ VARIABLE _SYS-A-COUNT   0 _SYS-A-COUNT !
 VARIABLE _SYS-B-COUNT   0 _SYS-B-COUNT !
 VARIABLE _SYS-ORDER
 
-: _SYS-A  ( ecs dt -- )
+: _SYS-A  ( runner dt -- )
     2DROP
     _SYS-A-COUNT @ 1+ _SYS-A-COUNT !
     1 _SYS-ORDER @ 10 * + _SYS-ORDER ! ;
 
-: _SYS-B  ( ecs dt -- )
+: _SYS-B  ( runner dt -- )
     2DROP
     _SYS-B-COUNT @ 1+ _SYS-B-COUNT !
     2 _SYS-ORDER @ 10 * + _SYS-ORDER ! ;
 
 \ Add B at priority 200, then A at priority 100
 \ A should run first despite being added second
-_SRUN ' _SYS-B 200 SYSRUN-ADD
-_SRUN ' _SYS-A 100 SYSRUN-ADD
+_SRUN ' _SYS-B 200 SYSRUN-ADD CONSTANT _SYS-B-H
+_SRUN ' _SYS-A 100 SYSRUN-ADD CONSTANT _SYS-A-H
 
 S" sys:count-after-add" T-NAME
 _SRUN SYSRUN-COUNT 2 T-ASSERT
@@ -511,7 +511,7 @@ _SYS-ORDER @ 12 T-ASSERT
 
 0 _SYS-A-COUNT !
 0 _SYS-B-COUNT !
-_SRUN 0 SYSRUN-DISABLE
+_SRUN _SYS-A-H SYSRUN-DISABLE
 _SRUN 1 SYSRUN-TICK
 
 S" sys:disabled-skipped" T-NAME
@@ -520,7 +520,7 @@ _SYS-A-COUNT @ 0 T-ASSERT
 S" sys:enabled-still-ran" T-NAME
 _SYS-B-COUNT @ 1 T-ASSERT
 
-_SRUN 0 SYSRUN-ENABLE
+_SRUN _SYS-A-H SYSRUN-ENABLE
 0 _SYS-A-COUNT !
 0 _SYS-B-COUNT !
 _SRUN 1 SYSRUN-TICK
@@ -534,18 +534,93 @@ _SYS-A-COUNT @ 1 T-ASSERT
 _SECS SYSRUN-NEW CONSTANT _SRUN-IN
 VARIABLE _SYS-IN-DT   0 _SYS-IN-DT !
 VARIABLE _SYS-OUT-DT  0 _SYS-OUT-DT !
-: _SYS-IN  ( ecs dt -- )  _SYS-IN-DT ! DROP ;
-: _SYS-NESTS  ( ecs dt -- )  2DROP _SRUN-IN 5 SYSRUN-TICK ;
-: _SYS-AFTER  ( ecs dt -- )  _SYS-OUT-DT ! DROP ;
-_SRUN-IN ' _SYS-IN 1 SYSRUN-ADD
+: _SYS-IN  ( runner dt -- )  _SYS-IN-DT ! DROP ;
+: _SYS-NESTS  ( runner dt -- )  2DROP _SRUN-IN 5 SYSRUN-TICK ;
+: _SYS-AFTER  ( runner dt -- )  _SYS-OUT-DT ! DROP ;
+_SRUN-IN ' _SYS-IN 1 SYSRUN-ADD DROP
 _SECS SYSRUN-NEW CONSTANT _SRUN-OUT
-_SRUN-OUT ' _SYS-NESTS 1 SYSRUN-ADD
-_SRUN-OUT ' _SYS-AFTER 2 SYSRUN-ADD
+_SRUN-OUT ' _SYS-NESTS 1 SYSRUN-ADD DROP
+_SRUN-OUT ' _SYS-AFTER 2 SYSRUN-ADD DROP
 _SRUN-OUT 3 SYSRUN-TICK
 S" sys:nested-tick-inner-step" T-NAME
 _SYS-IN-DT @ 5 T-ASSERT
 S" sys:nested-tick-outer-step" T-NAME
 _SYS-OUT-DT @ 3 T-ASSERT
+
+\ ── Tables grow as their creator registers ───────────────────
+\ Twenty components in one ECS, the last one usable
+8 ECS-NEW CONSTANT _GECS
+: _GECS-REG20  ( -- last )  0 20 0 DO DROP _GECS 8 ECS-REG-COMP LOOP ;
+_GECS-REG20 CONSTANT _GC20
+_GECS ECS-SPAWN CONSTANT _GE0
+S" ecs:twentieth-component-id" T-NAME
+_GC20 19 T-ASSERT
+S" ecs:twentieth-component-attaches" T-NAME
+55 _GECS _GE0 _GC20 ECS-ATTACH !  _GECS _GE0 _GC20 ECS-GET @ 55 T-ASSERT
+\ A component of size 0 marks entities without data
+_GECS 0 ECS-REG-COMP CONSTANT _GMARK
+_GECS _GE0 _GMARK ECS-ATTACH DROP
+S" ecs:size-0-component-marks" T-NAME
+_GECS _GE0 _GMARK ECS-HAS? T-TRUE
+
+\ Twenty systems in one runner all run; a handle still names its
+\ system after later additions of lower priority moved it.
+VARIABLE _GSUM  0 _GSUM !
+: _GSYS  ( runner dt -- )
+    2DROP 1 _GSUM +! ;
+_GECS SYSRUN-NEW CONSTANT _GRUN
+_GRUN ' _GSYS 50 SYSRUN-ADD CONSTANT _GH-FIRST
+: _GADD19  19 0 DO _GRUN ['] _GSYS 19 I - 3 * SYSRUN-ADD DROP LOOP ;
+_GADD19
+S" sys:twenty-systems" T-NAME
+_GRUN SYSRUN-COUNT 20 T-ASSERT
+_GRUN 1 SYSRUN-TICK
+S" sys:twenty-systems-ran" T-NAME
+_GSUM @ 20 T-ASSERT
+_GRUN _GH-FIRST SYSRUN-DISABLE  0 _GSUM !  _GRUN 1 SYSRUN-TICK
+S" sys:handle-names-its-system" T-NAME
+_GSUM @ 19 T-ASSERT
+\ The runner's context reaches its systems
+_GRUN 1234 SYSRUN-CTX!
+VARIABLE _GCTX  0 _GCTX !
+: _GSYS-CTX  ( runner dt -- )  DROP SYSRUN-CTX _GCTX ! ;
+_GRUN ' _GSYS-CTX 999 SYSRUN-ADD DROP
+_GRUN 1 SYSRUN-TICK
+S" sys:context-reaches-systems" T-NAME
+_GCTX @ 1234 T-ASSERT
+
+\ ── Two ECS instances with different layouts in one pass ─────
+\ ECS A registers position then velocity; ECS B a tag, then
+\ velocity, then position.  Runner A ticks runner B from a system, and
+\ each runner's SYS-VELOCITY moves its own entity.
+16 ECS-NEW CONSTANT _AECS
+_AECS C-POS-SZ ECS-REG-COMP CONSTANT _AC-POS
+_AECS C-VEL-SZ ECS-REG-COMP CONSTANT _AC-VEL
+16 ECS-NEW CONSTANT _BECS
+_BECS C-TAG-SZ ECS-REG-COMP DROP
+_BECS C-VEL-SZ ECS-REG-COMP CONSTANT _BC-VEL
+_BECS C-POS-SZ ECS-REG-COMP CONSTANT _BC-POS
+_AECS ECS-SPAWN CONSTANT _AE
+_BECS ECS-SPAWN CONSTANT _BE
+1 _AECS _AE _AC-VEL ECS-ATTACH C-VEL.DX + !
+_AECS _AE _AC-POS ECS-ATTACH DROP
+2 _BECS _BE _BC-VEL ECS-ATTACH C-VEL.DY + !
+_BECS _BE _BC-POS ECS-ATTACH DROP
+_AECS SYSRUN-NEW CONSTANT _ARUN
+_BECS SYSRUN-NEW CONSTANT _BRUN
+_ARUN _AC-POS _AC-VEL -1 -1 SYSRUN-BIND
+_BRUN _BC-POS _BC-VEL -1 -1 SYSRUN-BIND
+_BRUN ' SYS-VELOCITY 1 SYSRUN-ADD DROP
+: _TICK-B  ( runner dt -- )  NIP _BRUN SWAP SYSRUN-TICK ;
+_ARUN ' SYS-VELOCITY 1 SYSRUN-ADD DROP
+_ARUN ' _TICK-B 2 SYSRUN-ADD DROP
+_ARUN 3 SYSRUN-TICK
+S" sys:two-layouts-a-moved" T-NAME
+_AECS _AE _AC-POS ECS-GET C-POS.X + @ 3 T-ASSERT
+S" sys:two-layouts-b-moved" T-NAME
+_BECS _BE _BC-POS ECS-GET C-POS.Y + @ 6 T-ASSERT
+S" sys:two-layouts-b-tag-untouched" T-NAME
+_BECS _BE _BC-POS ECS-GET C-POS.X + @ 0 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Built-in System Tests: SYS-VELOCITY
@@ -555,8 +630,8 @@ _SYS-OUT-DT @ 3 T-ASSERT
 _VECS C-POS-SZ ECS-REG-COMP CONSTANT _VC-POS
 _VECS C-VEL-SZ ECS-REG-COMP CONSTANT _VC-VEL
 
-_VC-POS SYS-C-POS !
-_VC-VEL SYS-C-VEL !
+_VECS SYSRUN-NEW CONSTANT _VRUN
+_VRUN _VC-POS _VC-VEL -1 -1 SYSRUN-BIND
 
 _VECS ECS-SPAWN CONSTANT _VE0
 
@@ -571,7 +646,7 @@ _VECS _VE0 _VC-VEL ECS-ATTACH CONSTANT _VE0-V
 -2 _VE0-V C-VEL.DY + !
 
 \ Run velocity system with dt=1
-_VECS 1 SYS-VELOCITY
+_VRUN 1 SYS-VELOCITY
 
 S" vel:x-after-tick" T-NAME
 _VE0-P C-POS.X + @ 13 T-ASSERT
@@ -580,7 +655,7 @@ S" vel:y-after-tick" T-NAME
 _VE0-P C-POS.Y + @ 18 T-ASSERT
 
 \ Run again with dt=5
-_VECS 5 SYS-VELOCITY
+_VRUN 5 SYS-VELOCITY
 
 S" vel:x-after-5dt" T-NAME
 _VE0-P C-POS.X + @ 28 T-ASSERT
@@ -595,7 +670,8 @@ _VE0-P C-POS.Y + @ 8 T-ASSERT
 64 ECS-NEW CONSTANT _TMECS
 _TMECS C-TMR-SZ ECS-REG-COMP CONSTANT _TMC-TMR
 
-_TMC-TMR SYS-C-TMR !
+_TMECS SYSRUN-NEW CONSTANT _TMRUN
+_TMRUN -1 -1 -1 _TMC-TMR SYSRUN-BIND
 
 _TMECS ECS-SPAWN CONSTANT _TMEID
 
@@ -607,7 +683,7 @@ _TMECS _TMEID _TMC-TMR ECS-ATTACH CONSTANT _TM-ADDR
 ' _TMR-CALLBACK _TM-ADDR C-TMR.XT + !
 
 \ Tick 1: ticks should go from 3 to 2
-_TMECS 1 SYS-TIMER
+_TMRUN 1 SYS-TIMER
 
 S" tmr:ticks-after-1" T-NAME
 _TM-ADDR C-TMR.TICKS + @ 2 T-ASSERT
@@ -616,13 +692,13 @@ S" tmr:not-fired-yet" T-NAME
 _TMR-FIRED @ 0 T-ASSERT
 
 \ Tick 2: 2 → 1
-_TMECS 1 SYS-TIMER
+_TMRUN 1 SYS-TIMER
 
 S" tmr:ticks-after-2" T-NAME
 _TM-ADDR C-TMR.TICKS + @ 1 T-ASSERT
 
 \ Tick 3: 1 → 0, callback fires
-_TMECS 1 SYS-TIMER
+_TMRUN 1 SYS-TIMER
 
 S" tmr:ticks-after-3" T-NAME
 _TM-ADDR C-TMR.TICKS + @ 0 T-ASSERT
@@ -636,7 +712,8 @@ _TMR-FIRED @ 1 T-ASSERT
 
 32 ECS-NEW CONSTANT _HECS
 _HECS C-HP-SZ ECS-REG-COMP CONSTANT _HC-HP
-_HC-HP SYS-C-HP !
+_HECS SYSRUN-NEW CONSTANT _HRUN
+_HRUN -1 -1 _HC-HP -1 SYSRUN-BIND
 
 _HECS ECS-SPAWN CONSTANT _HE0
 _HECS ECS-SPAWN CONSTANT _HE1
@@ -653,7 +730,7 @@ _HECS _HE1 _HC-HP ECS-ATTACH CONSTANT _HE1-HP
 S" cull:both-alive-before" T-NAME
 _HECS _HE0 ECS-ALIVE? _HECS _HE1 ECS-ALIVE? AND T-TRUE
 
-_HECS 0 SYS-CULL-DEAD
+_HRUN 0 SYS-CULL-DEAD
 
 S" cull:healthy-survives" T-NAME
 _HECS _HE0 ECS-ALIVE? T-TRUE

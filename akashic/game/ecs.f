@@ -7,16 +7,21 @@
 \  are fixed-size byte arrays stored in parallel pools indexed by
 \  entity ID.
 \
-\  ECS Descriptor (40 bytes, 5 cells):
+\  The component table grows as components register, so an ECS holds
+\  as many kinds of component as its creator registers.
+\
+\  ECS Descriptor (48 bytes, 6 cells):
 \    +0   max-ents     Maximum entity slots
 \    +8   alive        Bitfield array (1 bit per entity)
 \    +16  gen          Generation array (1 cell per entity)
-\    +24  comp-descs   Array of component descriptors (up to 16)
+\    +24  comp-descs   Array of component descriptors
 \    +32  num-comps    Number of registered components
+\    +40  comp-cap     Descriptors the array has room for
 \
 \  Component Descriptor (24 bytes, 3 cells):
 \    +0   comp-size    Byte size of one component instance
-\    +8   data         Data array (max-ents × comp-size bytes)
+\    +8   data         Data array (max-ents × comp-size bytes), 0 for
+\                      a component of size 0, which marks entities only
 \    +16  attached     Bitfield array (1 bit per entity)
 \
 \  Public API:
@@ -51,14 +56,14 @@ PROVIDED akashic-game-ecs
 16 CONSTANT _ECS-O-GEN
 24 CONSTANT _ECS-O-COMPS
 32 CONSTANT _ECS-O-NCOMPS
-40 CONSTANT _ECS-DESC-SZ
+40 CONSTANT _ECS-O-CCAP
+48 CONSTANT _ECS-DESC-SZ
 
 0  CONSTANT _ECS-CO-SIZE
 8  CONSTANT _ECS-CO-DATA
 16 CONSTANT _ECS-CO-ATTACHED
 24 CONSTANT _ECS-COMP-SZ
 
-16 CONSTANT _ECS-MAX-COMPS
 
 \ =====================================================================
 \  §2 — Bitfield helpers
@@ -106,11 +111,10 @@ PROVIDED akashic-game-ecs
     0<> ABORT" ECS-NEW: gen alloc"
     DUP R@ 8 * 0 FILL
     OVER _ECS-O-GEN + !
-    _ECS-MAX-COMPS _ECS-COMP-SZ * ALLOCATE
+    8 _ECS-COMP-SZ * ALLOCATE
     0<> ABORT" ECS-NEW: comps alloc"
-    DUP _ECS-MAX-COMPS _ECS-COMP-SZ * 0 FILL
     OVER _ECS-O-COMPS + !
-    0 OVER _ECS-O-NCOMPS + !
+    8 OVER _ECS-O-CCAP + !
     R> DROP ;
 
 : _ECS-FREE-COMP  ( comps-base i -- )
@@ -133,29 +137,37 @@ PROVIDED akashic-game-ecs
 \  §4 — Component Registration
 \ =====================================================================
 
-VARIABLE _ECS-REG-TMP
+: _ECS-CDESC  ( ecs comp-id -- cdesc )
+    _ECS-COMP-SZ * SWAP _ECS-O-COMPS + @ + ;
 
+\ Double the component table's room.
+: _ECS-GROW-COMPS  ( ecs -- )
+    DUP _ECS-O-CCAP + @ 2*                        ( ecs cap )
+    OVER _ECS-O-COMPS + @ OVER _ECS-COMP-SZ * RESIZE
+    0<> ABORT" ECS: comps alloc"                  ( ecs cap comps )
+    2 PICK _ECS-O-COMPS + !
+    SWAP _ECS-O-CCAP + ! ;
+
+\ ECS-REG-COMP ( ecs size -- comp-id )
+\   A component of size bytes for every entity slot, zeroed; a size of
+\   0 marks entities without data.
 : ECS-REG-COMP  ( ecs size -- comp-id )
-    OVER _ECS-O-NCOMPS + @ _ECS-MAX-COMPS >= ABORT" ECS: max comps"
-    OVER _ECS-REG-TMP !
-    OVER _ECS-O-NCOMPS + @ >R
-    _ECS-REG-TMP @ _ECS-O-COMPS + @
-    R@ _ECS-COMP-SZ * +                  \ ( ecs size cdesc )
-    ROT DROP                             \ ( size cdesc )
+    0 MAX
+    OVER DUP _ECS-O-NCOMPS + @ SWAP _ECS-O-CCAP + @ >= IF
+        OVER _ECS-GROW-COMPS
+    THEN
+    OVER DUP _ECS-O-NCOMPS + @ _ECS-CDESC         ( ecs size cdesc )
     2DUP _ECS-CO-SIZE + !
-    _ECS-REG-TMP @ _ECS-O-MAX + @
-    2 PICK *
-    ALLOCATE
-    0<> ABORT" ECS: comp data alloc"
-    DUP _ECS-REG-TMP @ _ECS-O-MAX + @ 4 PICK * 0 FILL
+    OVER 3 PICK _ECS-O-MAX + @ *                  ( ecs size cdesc bytes )
+    ?DUP IF
+        DUP ALLOCATE 0<> ABORT" ECS: comp data alloc"
+        TUCK SWAP 0 FILL
+    ELSE
+        0
+    THEN
     OVER _ECS-CO-DATA + !
-    _ECS-REG-TMP @ _ECS-O-MAX + @
-    _ECS-BF-ALLOC
-    SWAP _ECS-CO-ATTACHED + !
-    DROP
-    _ECS-REG-TMP @ _ECS-O-NCOMPS +
-    DUP @ 1+ SWAP !
-    R> ;
+    2 PICK _ECS-O-MAX + @ _ECS-BF-ALLOC SWAP _ECS-CO-ATTACHED + !
+    DROP DUP _ECS-O-NCOMPS + @ SWAP _ECS-O-NCOMPS + 1 SWAP +! ;
 
 \ =====================================================================
 \  §5 — Entity Lifecycle
@@ -187,9 +199,6 @@ VARIABLE _ECS-REG-TMP
 \ =====================================================================
 \  §6 — Component Access
 \ =====================================================================
-
-: _ECS-CDESC  ( ecs comp-id -- cdesc )
-    _ECS-COMP-SZ * SWAP _ECS-O-COMPS + @ + ;
 
 \ The address of entity eid's instance of a component
 : _ECS-SLOT  ( cdesc eid -- addr )

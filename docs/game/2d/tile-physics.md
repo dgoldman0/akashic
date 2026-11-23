@@ -28,11 +28,13 @@ REQUIRE game/2d/tile-physics.f
 ### TPHYS-NEW
 
 ```
-( cmap -- phys )
+( cmap c-pos -- phys )
 ```
 
-Allocate a physics descriptor (40 bytes) bound to the given collision
-map.  Gravity is zero (top-down mode), callback is disabled,
+Allocate a physics descriptor (48 bytes) bound to the given collision
+map and to the position component `c-pos` that moves read and write,
+so two worlds with different component layouts each have physics of
+their own.  Gravity is zero (top-down mode), callback is disabled,
 one-way platforms are off.
 
 ### TPHYS-FREE
@@ -135,8 +137,9 @@ Returns TRUE if the tile directly below the entity is solid
 | +16    | 8    | grav-y      | Gravity Y per tick             |
 | +24    | 8    | on-collide  | Callback XT (0 = none)         |
 | +32    | 8    | one-way     | One-way tile value (0 = off)   |
+| +40    | 8    | c-pos       | Position component id          |
 
-Total: 40 bytes.
+Total: 48 bytes.
 
 ---
 
@@ -144,7 +147,7 @@ Total: 40 bytes.
 
 | Word               | Stack Effect                        | Description               |
 |--------------------|-------------------------------------|---------------------------|
-| `TPHYS-NEW`        | `( cmap -- phys )`                  | Create physics descriptor |
+| `TPHYS-NEW`        | `( cmap c-pos -- phys )`            | Create physics descriptor |
 | `TPHYS-FREE`       | `( phys -- )`                       | Free descriptor           |
 | `TPHYS-GRAVITY!`   | `( phys gx gy -- )`                | Set gravity vector        |
 | `TPHYS-ONE-WAY!`   | `( phys tile-val -- )`             | Set one-way tile value    |
