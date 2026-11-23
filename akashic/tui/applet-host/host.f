@@ -1246,6 +1246,10 @@ VARIABLE _AHTI-PAINT
             DUP >R
             R@ AHS.INST @ CINST.REVISION @ R@ AHS.SEEN-REV @ <> IF
                 -1 R@ AHS.DIRTY !
+                \ A shown child whose instance changed since its last
+                \ paint, as a reply that came between passes touches it,
+                \ is drawn in this pass too.
+                R@ AHS.RGN @ IF ASHELL-DIRTY! THEN
             THEN
             R@ AHS.DIRTY @
             R@ AHS.DESC @ APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND OR IF
