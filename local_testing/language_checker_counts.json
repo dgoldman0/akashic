@@ -1,12 +1,12 @@
 {
  "measured": "Akashic's library group, with GUARDED undefined, on MegaPad 7e015eaad40530520ed72d780d69c86c600e079c",
- "definitions": 44447,
- "inferred": 43269,
+ "definitions": 44448,
+ "inferred": 43270,
  "counts": {
   "finding: return stack: I reads a cell parked by >R, not a loop index": 3,
   "finding: return stack: R> takes a DO loop's control cells": 1,
   "finding: token effect": 1,
-  "mismatch": 186,
+  "mismatch": 184,
   "not inferred": 1178,
   "not inferred: CATCH of an input xt": 133,
   "not inferred: CATCH of an unknown xt": 19,

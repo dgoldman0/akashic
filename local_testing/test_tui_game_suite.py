@@ -533,6 +533,24 @@ _CAMT-CAM @ CAM-TICK
 S" cam:shake-dur-after-3-ticks" T-NAME
 _CAMT-CAM @ 80 + @ 7 T-ASSERT
 
+\ A tick draws its offsets once, so queries within it agree.
+S" cam:shake-queries-agree" T-NAME
+_CAMT-CAM @ CAM-X _CAMT-CAM @ CAM-X =
+_CAMT-CAM @ CAM-Y _CAMT-CAM @ CAM-Y = AND T-TRUE
+
+S" cam:shake-offset-within-amplitude" T-NAME
+\ Snapped to (30,30) with a 20 by 15 view, the camera stands at (20,23).
+_CAMT-CAM @ CAM-X 20 - DUP -2 >= SWAP 2 <= AND T-TRUE
+
+\ A zero amplitude stops the shake; queries then divide by nothing.
+S" cam:zero-amplitude-stops-shake" T-NAME
+_CAMT-CAM @ 0 10 CAM-SHAKE
+_CAMT-CAM @ 80 + @ 0=  _CAMT-CAM @ CAM-X 20 = AND T-TRUE
+
+S" cam:zero-amplitude-ticks" T-NAME
+_CAMT-CAM @ CAM-TICK
+_CAMT-CAM @ CAM-X 20 =  _CAMT-CAM @ CAM-Y 23 = AND T-TRUE
+
 \ --- Group G: lerp (fresh camera) ---
 200 150 30 20 CAM-NEW _CAMT-CAM !
 
@@ -545,6 +563,14 @@ _CAMT-CAM @ 32 + @ 11520 T-ASSERT
 
 S" cam:lerp-y-moves" T-NAME
 _CAMT-CAM @ 40 + @ 12800 T-ASSERT
+
+\ Close to its target a smoothed camera still moves one unit a tick.
+S" cam:lerp-near-target-steps-one" T-NAME
+_CAMT-CAM @ 48 + @ 1- _CAMT-CAM @ 32 + !
+_CAMT-CAM @ 56 + @ 1+ _CAMT-CAM @ 40 + !
+_CAMT-CAM @ CAM-TICK
+_CAMT-CAM @ 32 + @ _CAMT-CAM @ 48 + @ =
+_CAMT-CAM @ 40 + @ _CAMT-CAM @ 56 + @ = AND T-TRUE
 
 
 \ =====================================================================
