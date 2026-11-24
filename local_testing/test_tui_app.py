@@ -201,8 +201,10 @@ def test_shutdown_idempotent():
 def test_run_full():
     """APP-RUN-FULL calls init-xt, runs loop, shuts down."""
     check("run-full", [
-        # The init-xt posts QUIT so the loop exits immediately
-        ": _MY-INIT  ' TUI-EVT-QUIT TUI-EVT-POST ;",
+        # The init-xt posts QUIT so the loop exits immediately. Inside a
+        # definition the token is compiled with ['], since ' would parse
+        # its name from the input when _MY-INIT runs.
+        ": _MY-INIT  ['] TUI-EVT-QUIT TUI-EVT-POST ;",
         "' _MY-INIT 80 24 APP-RUN-FULL",
         '." EXITED" CR',
     ], "EXITED")
@@ -210,7 +212,7 @@ def test_run_full():
 def test_run_full_shutdown():
     """APP-RUN-FULL leaves _APP-INITED FALSE after completion."""
     check("run-full-shutdown", [
-        ": _MY-INIT2  ' TUI-EVT-QUIT TUI-EVT-POST ;",
+        ": _MY-INIT2  ['] TUI-EVT-QUIT TUI-EVT-POST ;",
         "' _MY-INIT2 80 24 APP-RUN-FULL",
         '." R=" _APP-INITED @ . CR',
     ], "R=0 ")
@@ -218,7 +220,7 @@ def test_run_full_shutdown():
 def test_run_full_alt_restore():
     """APP-RUN-FULL restores normal screen (ESC[?1049l emitted)."""
     check_raw("run-full-alt-restore", [
-        ": _MY-INIT3  ' TUI-EVT-QUIT TUI-EVT-POST ;",
+        ": _MY-INIT3  ['] TUI-EVT-QUIT TUI-EVT-POST ;",
         "' _MY-INIT3 80 24 APP-RUN-FULL",
     ], lambda raw: b'\x1b[?1049l' in raw)
 

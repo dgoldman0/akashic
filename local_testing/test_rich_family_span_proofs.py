@@ -9,6 +9,7 @@ queries, so each case shows both the answer and which route gave it.
 import pytest
 
 from test_rich_terminal_family_batch import Families
+from test_rich_terminal_shell_family_emit import NO_HEAP
 from test_rich_terminal_status_static import RICH, _clean
 
 PROVIDER = """
@@ -25,7 +26,7 @@ class SpanProofs(Families):
         # static engine has loaded (check-mode.f), and counts its shadow
         # check's comparisons (frame-shadow.f).
         self.runtime.evaluate(
-            (_clean((RICH / "frame-shadow.f").read_text()) + "\n" +
+            (NO_HEAP + _clean((RICH / "frame-shadow.f").read_text()) + "\n" +
              _clean((RICH / "shell-family-emit.f").read_text()) + PROVIDER).encode(),
             source_name="production-family-emit.f", step_budget=8_000_000)
         # The facade's storage-disjoint callback (offset 40) becomes PR-DISJOINT.

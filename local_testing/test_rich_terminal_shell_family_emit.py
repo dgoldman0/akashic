@@ -5,12 +5,21 @@ from test_rich_terminal_family_bridge import Bridge
 import test_rich_terminal_status_provider as stp
 from test_rich_terminal_status_static import RICH, _clean
 
+# The static engine runs without KDOS, so it has no heap. frame-shadow.f takes
+# ALLOCATE's and FREE's tokens when it loads, and both machines now refuse a
+# token for a word that does not exist. The shadow check stays off in these
+# cases, so an allocator that always refuses is all the file needs.
+NO_HEAP = """
+: ALLOCATE ( u -- addr ior ) DROP 0 -1 ;
+: FREE ( addr -- ) DROP ;
+"""
+
 
 class Emitter(Bridge):
     def __init__(self,backend):
         bridge_source = (RICH / "engine-apt1.f").read_text()
         # The emitter counts its shadow check's comparisons in frame-shadow.f.
-        emitter_source = (_clean((RICH / "frame-shadow.f").read_text()) + "\n" +
+        emitter_source = (NO_HEAP + _clean((RICH / "frame-shadow.f").read_text()) + "\n" +
                           _clean((RICH / "shell-family-emit.f").read_text()))
         def closure(source):
             result = _clean(source)
