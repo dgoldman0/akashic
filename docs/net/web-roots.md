@@ -40,8 +40,16 @@ with its origin, the place over the image's shipped files, just before it
 freezes the registry; a Desk without an origin has no shipped files and
 registers nothing. `MTRUST-WEB-ROOTS+` then admits the file only if it is
 exactly the pinned bundle; a changed file fails the composition, and Desk
-does not start without machine trust. An image built without the file adds no
-global anchors, so its public TLS fails closed.
+does not start without machine trust.
+
+The image tool ships the file with every image whose module closure holds
+`net/web-roots.f`, through its data-file map (`MODULE_DATA_FILES` in
+`toolchain/image/build.py`). The file stands at its path on the image's
+origin: the system volume in the shipping form, the boot volume otherwise. A
+boot composition that runs without Desk declares a place over the boot volume
+and registers the set itself before it freezes the registry, as the live
+Streams and Codex profiles and `test_web_roots.py` do. An image without the
+file adds no global anchors, so its public TLS fails closed.
 
 Loading costs about 250 KB while the registry composes: the file's bytes, the
 composed bundle and KDOS's copy. KDOS keeps about 155 KB afterwards, its copy
