@@ -32,7 +32,8 @@ PBKDF2-SHA256
 ```
 
 `PBKDF2-SHA256-WORKSPACE-SIZE` gives the workspace size for a derived key
-of `dk-u` bytes: 256 bytes plus 32 for each 32-byte block of the key. It
+of `dk-u` bytes: 320 bytes plus 32 for each 32-byte block of the key, with
+SHA-256's keyed states at today's size. It
 returns zero for a length below one or above RFC 8018's limit of
 2^32-1 blocks. The caller allocates that many bytes, keeps them at one
 address for the whole derivation, and leaves them alone between calls.
@@ -42,8 +43,9 @@ length, at least one iteration, an iteration count whose remaining total
 fits a cell, a workspace that SHA-256 may read and write, and a password
 and salt that do not overlap it. An empty password or salt is admitted, as
 the RFC allows. `BEGIN` then builds the two HMAC key blocks, hashing a
-password longer than 64 bytes first, and computes each block's first
-iteration. The workspace then holds everything the derivation needs; the
+password longer than 64 bytes first, makes each into a SHA-256 keyed state
+and wipes the block, and computes each output block's first iteration, all
+in one held SHA-256 transaction. The workspace then holds everything the derivation needs; the
 password and salt are not read again.
 
 `STEP` runs at most `budget` iterations and returns how many remain.
@@ -72,34 +74,40 @@ A hash failure inside `BEGIN` or `STEP` wipes the workspace and returns
 ## How an iteration runs, and what it costs
 
 Each iteration computes U = HMAC(P, U) and folds it into the block's running
-value. HMAC's inner and outer hashes each cover one 64-byte key block and
-one 32-byte value, so an iteration is four SHA-256 compressions on the BIOS
-engine. The workspace places each key block directly before the value it is
-hashed with, so each hash reads one 96-byte span.
+value. HMAC's inner and outer hashes each continue from a keyed state, the
+SHA-256 state after one 64-byte key block, with one 32-byte value. A step
+takes the SHA-256 transaction once, through `SHA256-WITH-TRANSACTION`, and
+runs its iterations with `SHA256-HELD-RESUME` (see
+[sha256.md](../math/sha256.md)). The step admits the workspace once on
+entry; the iterations then hash spans inside it that do not change.
 
-A step takes the SHA-256 transaction once, through
-`SHA256-WITH-TRANSACTION`, and runs its iterations with `SHA256-HELD-HASH`
-(see [sha256.md](../math/sha256.md)). The step admits the workspace once
-on entry; the iterations then hash spans inside it that do not change.
+On today's engine a keyed state is the key block itself, so each hash
+absorbs the block again and an iteration is four compressions; the
+workspace places each keyed state directly before the value hashed after
+it, so each hash reads one span. When the SHA-2 engine saves and loads its
+chaining state, as MegaPad's crypto-engines plan decides, a keyed state
+becomes that chaining state and an iteration two compressions, without a
+change to this module.
 
 Measured on the emulator on 2026-11-24, at the documented 100 MHz clock:
 
 | Work | Cycles | Seconds at 100 MHz |
 |---|---:|---:|
-| One iteration | 6,500 | 0.000065 |
-| 1,000 iterations in one step | 6,497,532 | 0.065 |
-| 1,000 iterations in ten steps of 100 | 6,592,235 | 0.066 |
-| `BEGIN` for a 32-byte key | 39,140 | 0.0004 |
-| RFC 7914's 80,000-iteration, 64-byte vector (160,000 iterations) | 1,037,995,153 | 10.4 |
+| One iteration | 6,633 | 0.000066 |
+| 1,000 iterations in one step | 6,632,532 | 0.066 |
+| 1,000 iterations in ten steps of 100 | 6,727,235 | 0.067 |
+| `BEGIN` for a 32-byte key | 22,003 | 0.0002 |
+| RFC 7914's 80,000-iteration, 64-byte vector (160,000 iterations) | 1,059,553,909 | 10.6 |
 
-At 100,000 iterations a 32-byte key takes about 6.5 seconds. Each step adds
-about 9,500 cycles for its admission and transaction, so steps of a few
+At 100,000 iterations a 32-byte key takes about 6.6 seconds. Each step adds
+about 10,500 cycles for its admission and transaction, so steps of a few
 thousand iterations keep that overhead under one part in a thousand while
 returning control every few hundredths of a second. The hardware work is
-about 5,800 cycles of each iteration; the rest is the step's bookkeeping. A
-SHA-256 engine that could resume from a saved key-block state would halve
-the compressions, and an iteration mode in the engine would remove the
-software round trips.
+about 6,060 cycles of each iteration, two held hashes of 96 bytes at about
+3,030 each; the rest is the step's bookkeeping. A SHA-256 engine that loads
+a saved chaining state would halve the compressions through the keyed
+states above, and an iteration mode in the engine would remove the software
+round trips.
 
 ## Tests
 

@@ -261,6 +261,50 @@ VARIABLE _s256t-held-mine
     _s256t-abc? _s256t-assert
     _s256t-stack ;
 
+\ A keyed state stands for a 64-byte first block: a resume equals the one
+\ hash of block || message, for a message right after the state, apart
+\ from it, or in two parts.
+CREATE _s256t-keyed 96 ALLOT        \ a keyed state, then a message
+CREATE _s256t-block 64 ALLOT
+CREATE _s256t-one 32 ALLOT
+CREATE _s256t-two 32 ALLOT
+CREATE _s256t-three 32 ALLOT
+VARIABLE _s256t-keyed-status
+
+: _s256t-keyed-body  ( -- )
+    _s256t-block _s256t-keyed SHA256-HELD-KEY _s256t-keyed-status !
+    _s256t-keyed _s256t-keyed 64 + 32 _s256t-one SHA256-HELD-RESUME
+        _s256t-keyed-status +!
+    _s256t-keyed _s256t-abc 3 _s256t-two SHA256-HELD-RESUME
+        _s256t-keyed-status +!
+    _s256t-keyed _s256t-abc 2 _s256t-abc 2 + 1 _s256t-three
+        SHA256-HELD-RESUME-2 _s256t-keyed-status +! ;
+
+: _s256t-test-keyed  ( -- )
+    _s256t-block 64 0x36 FILL
+    _s256t-keyed 96 0 FILL
+    _s256t-keyed 64 + 32 0x5C FILL
+    \ Outside a held transaction every keyed word refuses.
+    _s256t-block _s256t-keyed SHA256-HELD-KEY
+        SHA256-S-STATE = _s256t-assert
+    _s256t-keyed _s256t-abc 3 _s256t-two SHA256-HELD-RESUME
+        SHA256-S-STATE = _s256t-assert
+    _s256t-keyed _s256t-abc 2 _s256t-abc 2 + 1 _s256t-three
+        SHA256-HELD-RESUME-2 SHA256-S-STATE = _s256t-assert
+    SHA256-KEYED-SIZE 64 >= _s256t-assert
+    -1 _s256t-keyed-status !
+    ['] _s256t-keyed-body SHA256-WITH-TRANSACTION
+    _s256t-keyed-status @ 0= _s256t-assert
+    _s256t-block 64 _s256t-keyed 64 + 32 _s256t-digest SHA256-HASH-2
+        SHA256-S-OK = _s256t-assert
+    _s256t-one _s256t-digest SHA256-LEN _s256t-bytes= _s256t-assert
+    _s256t-block 64 _s256t-abc 3 _s256t-digest SHA256-HASH-2
+        SHA256-S-OK = _s256t-assert
+    _s256t-two _s256t-digest SHA256-LEN _s256t-bytes= _s256t-assert
+    _s256t-three _s256t-digest SHA256-LEN _s256t-bytes= _s256t-assert
+    _s256t-unowned? _s256t-assert
+    _s256t-stack ;
+
 : _S256T-RUN  ( -- )
     0 _s256t-fails !
     0 _s256t-checks !
@@ -273,6 +317,7 @@ VARIABLE _s256t-held-mine
     _s256t-test-rejections
     _s256t-test-reserved-aliases
     _s256t-test-held
+    _s256t-test-keyed
     _s256t-stack
     _s256t-fails @ 0= IF
         ." SHA256 SCOPED PASS " _s256t-checks @ . CR

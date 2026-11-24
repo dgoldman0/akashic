@@ -131,10 +131,10 @@ CREATE _pbkt-block 96 ALLOT
 : _pbkt-test-sizes  ( -- )
     0 PBKDF2-SHA256-WORKSPACE-SIZE 0= _pbkt-assert
     -1 PBKDF2-SHA256-WORKSPACE-SIZE 0= _pbkt-assert
-    1 PBKDF2-SHA256-WORKSPACE-SIZE 288 = _pbkt-assert
-    32 PBKDF2-SHA256-WORKSPACE-SIZE 288 = _pbkt-assert
-    33 PBKDF2-SHA256-WORKSPACE-SIZE 320 = _pbkt-assert
-    _pbkt-ws-u 320 = _pbkt-assert
+    1 PBKDF2-SHA256-WORKSPACE-SIZE 352 = _pbkt-assert
+    32 PBKDF2-SHA256-WORKSPACE-SIZE 352 = _pbkt-assert
+    33 PBKDF2-SHA256-WORKSPACE-SIZE 384 = _pbkt-assert
+    _pbkt-ws-u 384 = _pbkt-assert
     PBKDF2-SHA256-S-OK PBKDF2-SHA256-STATUS-VALID? _pbkt-assert
     PBKDF2-SHA256-S-CRYPTO PBKDF2-SHA256-STATUS-VALID? _pbkt-assert
     PBKDF2-SHA256-S-CRYPTO 1+ PBKDF2-SHA256-STATUS-VALID? 0= _pbkt-assert

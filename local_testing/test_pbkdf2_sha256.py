@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -24,7 +25,7 @@ import akashic_tui as harness  # noqa: E402
 
 
 PROFILE = "pbkdf2-sha256-contracts"
-IMAGE = Path("/tmp/akashic-pbkdf2-sha256-contracts.img")
+IMAGE = Path(tempfile.gettempdir()) / "akashic-pbkdf2-sha256-contracts.img"
 CONTRACT = LOCAL_TESTING / "pbkdf2-sha256-test.f"
 SOURCE = LOCAL_TESTING.parent / "akashic" / "security" / "pbkdf2-sha256.f"
 SHA256 = LOCAL_TESTING.parent / "akashic" / "math" / "sha256.f"
@@ -121,15 +122,21 @@ def _assert_source_contracts() -> None:
         "PBKDF2-SHA256-ABANDON",
     ):
         assert re.search(rf"(?m)^: {re.escape(word)}(?=\s)", source), word
-    # Iterations hash inside one held SHA-256 transaction per step; the key
-    # blocks and first U values use the public, self-qualifying words.
+    # Iterations resume from the two keyed states inside one held SHA-256
+    # transaction per step; BEGIN makes the states and the first U values
+    # inside one of its own.
     iterate = _word_body(source, "_PBK-ITERATE")
-    assert iterate.count("SHA256-HELD-HASH") == 2
-    assert iterate.count("+ 96") == 2
-    assert "SHA256-HASH" not in iterate.replace("SHA256-HELD-HASH", "")
+    assert iterate.count("SHA256-HELD-RESUME") == 2
+    assert "_PBK-INNER +" in iterate and "_PBK-OUTER +" in iterate
+    assert "SHA256-HASH" not in iterate
     assert "SHA256-WITH-TRANSACTION" in _word_body(source, "_PBK-RUN-HELD")
+    assert "SHA256-WITH-TRANSACTION" in _word_body(source,
+                                                   "_PBK-PREPARE-HELD")
+    keyed = _word_body(source, "_PBK-KEYED")
+    assert keyed.count("SHA256-HELD-KEY") == 2
     first = _word_body(source, "_PBK-FIRST")
-    assert "SHA256-HASH-3" in first and "SHA256-HASH\n" in first
+    assert "SHA256-HELD-RESUME-2" in first
+    assert "SHA256-HELD-RESUME\n" in first
     step = _word_body(source, "PBKDF2-SHA256-STEP")
     assert step.index("_PBK-LIVE?") < step.index("CATCH")
     assert step.count("_PBK-WIPE") == 2
@@ -137,7 +144,7 @@ def _assert_source_contracts() -> None:
     begin = _word_body(source, "PBKDF2-SHA256-BEGIN")
     assert begin.index("_PBK-ADMIT") < begin.index("0 FILL")
     assert begin.count("_PBK-WIPE") == 2
-    assert begin.rindex("_PBK-LIVE") > begin.rindex("_PBK-FIRST")
+    assert begin.rindex("_PBK-LIVE") > begin.rindex("_PBK-PREPARE-HELD")
     finish = _word_body(source, "PBKDF2-SHA256-FINISH")
     assert finish.index("MSPAN-OVERLAP?") < finish.index("MOVE")
     assert finish.rstrip().endswith("_PBK-WIPE PBKDF2-SHA256-S-OK")
@@ -147,6 +154,9 @@ def _assert_source_contracts() -> None:
     sha = SHA256.read_text(encoding="utf-8")
     assert re.search(r"(?m)^: SHA256-WITH-TRANSACTION\b", sha)
     assert re.search(r"(?m)^: SHA256-HELD-HASH(?=\s)", sha)
+    for word in ("SHA256-HELD-KEY", "SHA256-HELD-RESUME",
+                 "SHA256-HELD-RESUME-2"):
+        assert re.search(rf"(?m)^: {word}(?=\s)", sha), word
 
 
 def _report_cycles() -> None:

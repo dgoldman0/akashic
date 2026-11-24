@@ -23,6 +23,10 @@
 \    SHA256-WITH-TRANSACTION ( i*x xt -- j*x )
 \    SHA256-TRANSACTION-MINE? ( -- flag )
 \    SHA256-HELD-HASH    ( src len dst -- status )
+\    SHA256-KEYED-SIZE   ( -- u )
+\    SHA256-HELD-KEY     ( block keyed -- status )
+\    SHA256-HELD-RESUME  ( keyed msg msg-u dst -- status )
+\    SHA256-HELD-RESUME-2 ( keyed a1 u1 a2 u2 dst -- status )
 \    SHA256->HEX         ( src dst -- n )
 \    SHA256-.            ( addr -- )
 \    SHA256-COMPARE      ( a b -- flag )
@@ -449,3 +453,36 @@ CREATE _s256-held 8 ALLOT
         _S256-DROP3 SHA256-S-STATE EXIT
     THEN
     _S256-PREFIX-1 _S256-COMPLETE ;
+
+\ =====================================================================
+\  Keyed states: held hashes that share their first block
+\ =====================================================================
+\  HMAC hashes every message after one of two 64-byte key blocks.  A keyed
+\  state stands for such a block: SHA256-HELD-KEY makes one from the
+\  block, and SHA256-HELD-RESUME and SHA256-HELD-RESUME-2 hash a message
+\  of one or two parts as if it followed the block.  Here a keyed state is
+\  the block itself, and each hash absorbs it again.  Once the SHA-2 engine
+\  saves and loads its chaining state (MegaPad docs/crypto-engines-plan.md
+\  section 2), a keyed state becomes the chaining state after the block
+\  and a resume loads it, so each hash compresses only its message: these
+\  words and SHA256-KEYED-SIZE change, and their callers do not.  They run
+\  in a held transaction over spans their caller has admitted, and a
+\  message that directly follows its keyed state hashes as one span.
+
+64 CONSTANT SHA256-KEYED-SIZE
+
+: SHA256-HELD-KEY  ( block keyed -- status )
+    _S256-HELD? 0= IF 2DROP SHA256-S-STATE EXIT THEN
+    64 MOVE SHA256-S-OK ;
+
+: SHA256-HELD-RESUME  ( keyed msg msg-u dst -- status )
+    _S256-HELD? 0= IF _S256-DROP4 SHA256-S-STATE EXIT THEN
+    >R
+    2 PICK 64 + 2 PICK = IF
+        NIP 64 + R> _S256-PREFIX-1 _S256-COMPLETE EXIT
+    THEN
+    >R >R 64 R> R> R> _S256-PREFIX-2 _S256-COMPLETE ;
+
+: SHA256-HELD-RESUME-2  ( keyed a1 u1 a2 u2 dst -- status )
+    _S256-HELD? 0= IF _S256-DROP6 SHA256-S-STATE EXIT THEN
+    >R >R >R >R >R 64 R> R> R> R> R> _S256-PREFIX-3 _S256-COMPLETE ;

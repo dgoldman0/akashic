@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -16,7 +17,7 @@ import akashic_tui as harness  # noqa: E402
 
 
 PROFILE = "hmac-sha256-contracts"
-IMAGE = Path("/tmp/akashic-hmac-sha256-contracts.img")
+IMAGE = Path(tempfile.gettempdir()) / "akashic-hmac-sha256-contracts.img"
 CONTRACT = LOCAL_TESTING / "hmac-sha256-test.f"
 SOURCE = LOCAL_TESTING.parent / "akashic" / "math" / "hmac-sha256.f"
 

@@ -4,15 +4,17 @@
 \  Derives a key from a password and a salt with HMAC-SHA-256 as the
 \  pseudorandom function.  The iterations run in steps of a size the
 \  caller chooses, so an interactive owner such as Desk can draw between
-\  steps; no hardware transaction stays open between them.  Each iteration
-\  is four SHA-256 compressions on the BIOS engine: the two HMAC key blocks
-\  are fixed once at BEGIN, and each step takes the SHA-256 transaction
-\  once for its whole run.  A hardware iteration mode would replace the
-\  step's inner run behind the same words.
+\  steps; no hardware transaction stays open between them.  BEGIN makes
+\  the two HMAC key blocks into SHA-256 keyed states once, and each
+\  iteration resumes from them: four compressions on today's engine, two
+\  once the engine loads a saved chaining state, with no change here (see
+\  sha256.f).  Each step takes the SHA-256 transaction once for its whole
+\  run, and a hardware iteration mode would replace that run behind the
+\  same words.
 \
 \  All state lives in a caller-owned workspace sized from the derived
 \  key's length.  BEGIN reads the password and salt and keeps neither: the
-\  workspace holds the HMAC key blocks, the running values and the
+\  workspace holds the HMAC keyed states, the running values and the
 \  progress.  FINISH publishes the key and ABANDON gives the derivation
 \  up; both wipe the whole workspace, as does every failure once BEGIN has
 \  admitted its arguments.  The caller keeps the workspace at one address
@@ -50,10 +52,11 @@ REQUIRE ../utils/memory-span.f
 \ =====================================================================
 \  Workspace layout
 \ =====================================================================
-\  Header cells come first.  Each HMAC key block sits directly before the
-\  value it is hashed with, so an iteration's two hashes each read one
-\  96-byte span: ipad || U gives the inner hash V, and opad || V gives the
-\  next U.  One 32-byte running block T per output block follows.
+\  Header cells come first, then the key block BEGIN builds each pad in.
+\  Each keyed state sits directly before the value hashed after it, so on
+\  today's engine an iteration's two hashes each read one span: the inner
+\  state and U give V, the outer state and V give the next U.  One 32-byte
+\  running block T per output block follows.
 
   0 CONSTANT _PBK-MAGIC        \ _PBK-LIVE while a derivation runs
   8 CONSTANT _PBK-SIZE         \ the whole workspace's size
@@ -63,11 +66,12 @@ REQUIRE ../utils/memory-span.f
  40 CONSTANT _PBK-BLOCK        \ the block being iterated, from zero
  48 CONSTANT _PBK-DONE         \ iterations finished in that block
  56 CONSTANT _PBK-COUNTER      \ INT(i), big-endian, while beginning
- 64 CONSTANT _PBK-IPAD         \ key XOR 0x36, 64 bytes
-128 CONSTANT _PBK-U            \ the newest U, 32 bytes
-160 CONSTANT _PBK-OPAD         \ key XOR 0x5C, 64 bytes
-224 CONSTANT _PBK-V            \ the inner hash, 32 bytes
-256 CONSTANT _PBK-T            \ the running blocks
+ 64 CONSTANT _PBK-PAD          \ a key block while beginning, 64 bytes
+128 CONSTANT _PBK-INNER        \ the keyed state of key XOR 0x36
+_PBK-INNER SHA256-KEYED-SIZE + CONSTANT _PBK-U       \ the newest U
+_PBK-U 32 + CONSTANT _PBK-OUTER                      \ key XOR 0x5C's
+_PBK-OUTER SHA256-KEYED-SIZE + CONSTANT _PBK-V       \ the inner hash
+_PBK-V 32 + CONSTANT _PBK-T                          \ the running blocks
 
 0x31533246444B4250 CONSTANT _PBK-LIVE   \ "PBKDF2S1" in memory
 
@@ -83,6 +87,8 @@ REQUIRE ../utils/memory-span.f
 
 : _PBK-DROP8  ( x1 x2 x3 x4 x5 x6 x7 x8 -- )
     2DROP 2DROP 2DROP 2DROP ;
+
+: _PBK-DROP4  ( x1 x2 x3 x4 -- )  2DROP 2DROP ;
 
 : _PBK-WIPE  ( workspace -- )
     DUP _PBK-SIZE + @ 0 FILL ;
@@ -143,27 +149,35 @@ REQUIRE ../utils/memory-span.f
 \  Beginning: key blocks and each block's first U
 \ =====================================================================
 
-: _PBK-PADS  ( key key-u workspace -- )
-    DUP _PBK-IPAD + 64 0x36 FILL
-    DUP _PBK-OPAD + 64 0x5C FILL
+\ The key block key XOR mask in the workspace's pad.
+: _PBK-PAD!  ( key key-u mask workspace -- )
+    _PBK-PAD + DUP 64 3 PICK FILL NIP
     SWAP 0 ?DO
-        OVER I + C@
-        OVER _PBK-IPAD + I + DUP C@ 2 PICK XOR SWAP C!
-        OVER _PBK-OPAD + I + DUP C@ ROT XOR SWAP C!
+        OVER I + C@ OVER I + DUP C@ ROT XOR SWAP C!
     LOOP
     2DROP ;
 
+\ The inner and outer keyed states of a key of at most 64 bytes.
+: _PBK-KEYED  ( key key-u workspace -- status )
+    >R
+    2DUP 0x36 R@ _PBK-PAD!
+    R@ _PBK-PAD + R@ _PBK-INNER + SHA256-HELD-KEY ?DUP IF
+        NIP NIP R> DROP EXIT
+    THEN
+    0x5C R@ _PBK-PAD!
+    R@ _PBK-PAD + R@ _PBK-OUTER + SHA256-HELD-KEY
+    R> _PBK-PAD + 64 0 FILL ;
+
 \ A password longer than the 64-byte block is first hashed to 32 bytes,
-\ which the U slot holds until the pads are built.
+\ which the U slot holds until the keyed states are made.
 : _PBK-KEY  ( password password-u workspace -- status )
     OVER 64 > IF
-        >R R@ _PBK-U + SHA256-HASH
+        >R R@ _PBK-U + SHA256-HELD-HASH
         ?DUP IF R> DROP EXIT THEN
-        R@ _PBK-U + 32 R@ _PBK-PADS
-        R> _PBK-U + 32 0 FILL
-        0 EXIT
+        R@ _PBK-U + 32 R@ _PBK-KEYED
+        R> _PBK-U + 32 0 FILL EXIT
     THEN
-    _PBK-PADS 0 ;
+    _PBK-KEYED ;
 
 : _PBK-BE32!  ( u address -- )
     OVER 24 RSHIFT 255 AND OVER C!
@@ -176,16 +190,24 @@ REQUIRE ../utils/memory-span.f
 : _PBK-FIRST  ( salt salt-u workspace -- status )
     DUP _PBK-BLOCKS + @ 0 ?DO
         I 1+ OVER _PBK-COUNTER + _PBK-BE32!
-        DUP _PBK-IPAD + 64
-        4 PICK 4 PICK
-        4 PICK _PBK-COUNTER + 4
-        6 PICK _PBK-V + SHA256-HASH-3
+        DUP _PBK-INNER +
+        3 PICK 3 PICK
+        3 PICK _PBK-COUNTER + 4
+        5 PICK _PBK-V + SHA256-HELD-RESUME-2
         ?DUP IF NIP NIP NIP UNLOOP EXIT THEN
-        DUP _PBK-OPAD + 96
-        2 PICK _PBK-T + I 5 LSHIFT + SHA256-HASH
+        DUP _PBK-OUTER + OVER _PBK-V + 32
+        3 PICK _PBK-T + I 5 LSHIFT + SHA256-HELD-RESUME
         ?DUP IF NIP NIP NIP UNLOOP EXIT THEN
     LOOP
     2DROP DROP 0 ;
+
+\ The keyed states and every block's first U, in one held transaction.
+: _PBK-PREPARE  ( password password-u salt salt-u workspace -- status )
+    >R 2SWAP R@ _PBK-KEY ?DUP IF NIP NIP R> DROP EXIT THEN
+    R> _PBK-FIRST ;
+
+: _PBK-PREPARE-HELD  ( password password-u salt salt-u workspace -- status )
+    ['] _PBK-PREPARE SHA256-WITH-TRANSACTION ;
 
 : PBKDF2-SHA256-BEGIN
   ( password password-u salt salt-u iterations dk-u workspace -- status )
@@ -197,12 +219,10 @@ REQUIRE ../utils/memory-span.f
     TUCK _PBK-DK-U + !
     TUCK _PBK-ITERATIONS + !
     DUP _PBK-DK-U + @ 31 + 5 RSHIFT OVER _PBK-BLOCKS + !
-    >R 2SWAP R@ _PBK-KEY ?DUP IF
-        DROP 2DROP R> _PBK-WIPE PBKDF2-SHA256-S-CRYPTO EXIT
+    >R R@ ['] _PBK-PREPARE-HELD CATCH ?DUP IF
+        >R _PBK-DROP4 DROP R> R> _PBK-WIPE THROW
     THEN
-    R@ _PBK-FIRST IF
-        R> _PBK-WIPE PBKDF2-SHA256-S-CRYPTO EXIT
-    THEN
+    IF R> _PBK-WIPE PBKDF2-SHA256-S-CRYPTO EXIT THEN
     R@ _PBK-T + R@ _PBK-U + 32 MOVE
     0 R@ _PBK-BLOCK + !
     1 R@ _PBK-DONE + !
@@ -222,12 +242,12 @@ REQUIRE ../utils/memory-span.f
     LOOP
     2DROP ;
 
-\ One iteration: U = HMAC(P, U), then T ^= U.  Both hashes run inside the
-\ step's held SHA-256 transaction.
+\ One iteration: U = HMAC(P, U), then T ^= U.  Both hashes resume from a
+\ keyed state inside the step's held SHA-256 transaction.
 : _PBK-ITERATE  ( workspace -- status )
-    DUP _PBK-IPAD + 96 2 PICK _PBK-V + SHA256-HELD-HASH
+    DUP _PBK-INNER + OVER _PBK-U + 32 3 PICK _PBK-V + SHA256-HELD-RESUME
     ?DUP IF NIP EXIT THEN
-    DUP _PBK-OPAD + 96 2 PICK _PBK-U + SHA256-HELD-HASH
+    DUP _PBK-OUTER + OVER _PBK-V + 32 3 PICK _PBK-U + SHA256-HELD-RESUME
     ?DUP IF NIP EXIT THEN
     DUP _PBK-XOR-INTO-T
     1 SWAP _PBK-DONE + +!
