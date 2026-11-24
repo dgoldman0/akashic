@@ -118,12 +118,12 @@ unusable non-leaf certificate to be ignored only after its TLS entry bounds are
 validated. The leaf must parse, and every certificate required to reach the
 explicit anchor must remain supported and valid.
 
-`codex-live-tls` is an opt-in credential-free TAP profile that authenticates
+`codex-live-tls` is an opt-in credential-free live profile that authenticates
 both hosts without sending HTTP, a device code, a token, or an API key.
 `codex-live-auth` performs the native device-code request and continues polling;
-`desktop-codex-live` is the TAP-configured watchable Desk environment. All live
-profiles require an explicitly supplied `--nic-tap`; normal profiles attach no
-real network.
+`desktop-codex-live` is the networked watchable Desk environment. All live
+profiles require an explicitly supplied `--nic` (`slirp`, or `tap:IFNAME` for a
+TAP device); normal profiles attach no real network.
 
 The KDOS transport uses MegaPad's standard public ClientHello profile:
 TLS 1.3 AES-128-GCM/SHA-256, X25519, HTTP/1.1 ALPN, and the one signature

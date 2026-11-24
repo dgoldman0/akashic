@@ -162,7 +162,24 @@ The cycle-budget `smoke` loop remains emulator-only. The backend-neutral
 shared-session viewer journey is reached through `serve`, or through `accept`
 with `--backend simulator`. Sibling `akashic/` and `megapad/` checkouts are the
 normal defaults; set `MEGAPAD_ROOT` explicitly to select a different checkout.
-The simulator launcher does not accept `--nic-tap` or `--audio`.
+The simulator launcher does not accept `--audio`.
+
+`smoke` and `serve` take `--nic SPEC` and `--local-access`, which reach
+MegaPad's server as given: `--nic slirp` attaches the user-mode network,
+which needs no administrator rights and refuses the guest's packets to this
+computer and its local network unless `--local-access` is given, and `--nic
+tap:IFNAME` attaches a TAP device set up beforehand. The hybrid backend
+attaches no network card.
+
+`serve --debug-access` lets clients such as MegaPad's `session_ctl.py` read
+the guest's memory and dictionary, control its execution and write captures
+over the socket. Without it the server refuses those requests, since the
+guest's memory can hold keys and tokens, and serves the viewer as usual.
+`accept` starts its server with debugging access, since its journey reads
+the guest's state. `accept --attach` drives the session another program
+already serves on `--socket` instead, started with `--debug-access` under
+this account; the form and safe-mode options then say how that session was
+built, and the build's and the server's own options are refused.
 
 `smoke`, `serve` and `accept` take `--cores N` for full cores and
 `--clusters N` for micro-core clusters. Each profile names its default, which
@@ -190,9 +207,9 @@ and
 The September 8 limitations are preserved in
 [`evidence/rich-desktop-native-simulator-checkpoint-20260908.md`](evidence/rich-desktop-native-simulator-checkpoint-20260908.md).
 
-A live networking qualification additionally requires the local port setup;
-run that setup before attempting such a test rather than treating an
-unconfigured port as a permanently absent NIC.
+A live networking qualification needs a network card: `--nic slirp` needs no
+setup, while `--nic tap:IFNAME` needs its TAP device set up first ("Opt-In
+Live Network" below).
 
 Most smoke and served sessions use 128 MiB of emulated external memory by
 default.  The `desktop-apt1` rich profile uses an actual 320 MiB machine.  At
@@ -1174,7 +1191,7 @@ also intentionally opt-in and not yet recorded as passing:
 
 ```text
 python3 local_testing/akashic_tui.py smoke \
-  --profile desktop-streams-vertical --nic-tap mp64tap0 \
+  --profile desktop-streams-vertical --nic tap:mp64tap0 \
   --max-steps 9000000000 --timeout 300
 ```
 
@@ -1352,9 +1369,10 @@ show the first time, near four minutes on the simulator, so this check has a
 
 ## Opt-In Live Network
 
-The live profiles require a user-owned TAP interface. From the workspace root,
-the setup script creates or reuses `mp64tap0`, enables forwarding and
-masquerading, and then exits:
+The live profiles require a network card: `--nic slirp`, or `--nic
+tap:mp64tap0` on a user-owned TAP interface, which the runs recorded below
+used. From the workspace root, the setup script creates or reuses `mp64tap0`,
+enables forwarding and masquerading, and then exits:
 
 ```bash
 sudo local_testing/setup_codex_live.sh
@@ -1372,7 +1390,7 @@ extension-uniqueness and loader exception-cleanup hardening:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py smoke \
-  --profile streams-live-public --nic-tap mp64tap0 \
+  --profile streams-live-public --nic tap:mp64tap0 \
   --max-steps 5000000000 --timeout 300
 ```
 
@@ -1388,7 +1406,7 @@ native KDOS TLS stack but sends no application request:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py smoke \
-  --profile codex-live-tls --nic-tap mp64tap0 \
+  --profile codex-live-tls --nic tap:mp64tap0 \
   --max-steps 5000000000 --timeout 300
 ```
 
@@ -1408,7 +1426,7 @@ browser authorization run:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py serve \
-  --profile codex-live-auth --nic-tap mp64tap0 \
+  --profile codex-live-auth --nic tap:mp64tap0 \
   --socket /tmp/akashic-tui.sock
 ```
 
@@ -1430,7 +1448,7 @@ For native Codex account access after the credential-free gate passes:
 
 ```bash
 python3 local_testing/akashic_tui.py serve \
-  --profile desktop-codex-live --nic-tap mp64tap0 \
+  --profile desktop-codex-live --nic tap:mp64tap0 \
   --socket /tmp/akashic-tui.sock
 ```
 
@@ -1443,7 +1461,9 @@ python3 megapad/session_viewer.py \
   --title "Akashic TUI"
 ```
 
-The viewer and automation clients share the same guest. Control it with:
+The viewer and automation clients share the same guest. `session_ctl.py`'s
+commands other than `send`, `key`, `resize` and `shutdown` need a server
+started with `serve --debug-access`. Control it with:
 
 ```bash
 python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock status

@@ -123,7 +123,6 @@ from akashic_tui import (  # noqa: E402
     PLACES_BOOT_LINES,
     MP64FS_VFS_PLATFORM_MODULE,
     PROFILES,
-    PROVIDED_RE,
     REQUIRE_RE,
     SOURCE_ROOT,
     _coalesce_audited_forth_lines,
@@ -170,7 +169,11 @@ from diskutil import (  # noqa: E402
     PARENT_ROOT,
     pack_forth_source,
 )
-from toolchain.image.closure import dependency_markers, module_key  # noqa: E402
+from toolchain.image.closure import (  # noqa: E402
+    PROVIDED_RE,
+    dependency_markers,
+    module_key,
+)
 from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
@@ -1721,7 +1724,7 @@ def test_streams_vertical_binds_both_reviewed_live_providers() -> None:
         "https://foo-dogsquared.github.io/"
         "hugo-theme-more-contentful/feed.rss"
     )
-    assert profile.requires_tap
+    assert profile.requires_network
     assert "atproto/public-trust.f" in profile.roots
     assert "ATPUBLIC-TRUST-REGISTER" in profile.autoexec
     assert (
@@ -2289,7 +2292,9 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         cols=100,
         rows=32,
         ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
-        nic_tap=None,
+        nic=None,
+        local_access=False,
+        debug_access=False,
         audio=False,
         backend="emulator",
         semantic_step_budget=None,
@@ -2359,7 +2364,6 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         "--batch-steps",
         "--clusters",
         "--lanes",
-        "--nic-tap",
         "--audio",
         "--virtual-clock",
         "--host-profile",
@@ -2385,7 +2389,9 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         cols=280,
         rows=84,
         ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
-        nic_tap=None,
+        nic=None,
+        local_access=False,
+        debug_access=False,
         audio=False,
         backend="simulator",
         semantic_step_budget=123_456,
@@ -2395,16 +2401,28 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
     )
     execv.assert_called_once_with(sys.executable, command)
 
-    with pytest.raises(SystemExit, match="live local network port"):
-        _session_server_command(
-            "desktop-apt1",
-            image,
-            socket_path="/tmp/unused.sock",
-            cols=100,
-            rows=32,
-            backend="simulator",
-            nic_tap="mp64tap0",
+    # Network and debugging options reach MegaPad's server as given; it
+    # reads the network SPEC and refuses one its backend cannot attach.
+    for backend in ("simulator", "hybrid", "emulator"):
+        plain = _session_server_command(
+            "desktop-apt1", image, socket_path="/tmp/unused.sock",
+            cols=100, rows=32, backend=backend,
         )
+        passed = _session_server_command(
+            "desktop-apt1", image, socket_path="/tmp/unused.sock",
+            cols=100, rows=32, backend=backend,
+            nic="slirp", local_access=True, debug_access=True,
+        )
+        assert passed == plain + ["--nic", "slirp", "--local-access", "--debug-access"]
+    live = next(name for name, profile in PROFILES.items() if profile.requires_network)
+    with pytest.raises(SystemExit, match="requires --nic SPEC"):
+        _session_server_command(
+            live, image, socket_path="/tmp/unused.sock", cols=100, rows=32,
+        )
+    assert "--nic" in _session_server_command(
+        live, image, socket_path="/tmp/unused.sock", cols=100, rows=32,
+        nic="tap:mp64tap0",
+    )
     with pytest.raises(SystemExit, match="does not expose an audio sink"):
         _session_server_command(
             "desktop-apt1",
@@ -3811,6 +3829,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "cols": DESKTOP_ACCEPTANCE_COLS,
                 "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ext_mem_mib": 128,
+                # The journey reads the guest's state.
+                "debug_access": True,
                 "backend": "simulator",
                 "full_cores": None,
                 "clusters": None,
@@ -3855,6 +3875,119 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         assert "viewer journey failed" in output
     else:
         assert str(tmp_path / "manifest.json") in output
+
+
+def test_physical_acceptance_drives_a_session_another_program_serves(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    runner_calls = []
+
+    def run_acceptance(*args, **kwargs):
+        runner_calls.append((args, kwargs))
+        return SimpleNamespace(manifest_path=tmp_path / "manifest.json")
+
+    acceptance_module = ModuleType("rich_terminal_desktop_acceptance")
+    acceptance_module.PhysicalDesktopAcceptanceError = RuntimeError
+    acceptance_module.run_physical_desktop_acceptance = run_acceptance
+    monkeypatch.setitem(sys.modules, "rich_terminal_desktop_acceptance", acceptance_module)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("an attached journey starts no server")
+
+    monkeypatch.setattr("akashic_tui._session_server_command", refuse)
+    monkeypatch.setattr("akashic_tui.subprocess.Popen", refuse)
+    assert accept_physical_desktop(
+        None,
+        socket_path="/run/user/1000/fantasy-engine/desktop.sock",
+        cols=DESKTOP_ACCEPTANCE_COLS,
+        rows=DESKTOP_ACCEPTANCE_ROWS,
+        ext_mem_mib=128,
+        artifact_root=tmp_path / "evidence",
+        timeout=45.0,
+        font_path=None,
+        font_size=18,
+        action_delay=0.75,
+        hold_seconds=0.0,
+        user_volume=True,
+        attach=True,
+    )
+    [(args, kwargs)] = runner_calls
+    assert args == ("/run/user/1000/fantasy-engine/desktop.sock", tmp_path / "evidence")
+    assert kwargs["expected_server_pid"] is None
+    assert kwargs["user_volume"] is True
+    assert "Physical desktop acceptance: PASS" in capsys.readouterr().out
+
+
+def test_attach_refuses_the_options_of_the_build_and_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("an attached journey builds nothing")
+
+    monkeypatch.setattr("akashic_tui.build_image", refuse)
+    for option in (
+        ["--cores", "2"],
+        ["--screen-profile"],
+        ["--terminal-link-pace", "115200:16667"],
+        ["--shadow-check"],
+        ["--output", "desktop.img"],
+    ):
+        monkeypatch.setattr(sys, "argv", ["akashic_tui.py", "accept", "--attach", *option])
+        with pytest.raises(SystemExit) as stopped:
+            akashic_tui.main()
+        assert stopped.value.code == 2
+        assert f"{option[0]} belong to the build or the server" in capsys.readouterr().err
+
+
+def test_serve_and_smoke_take_the_network_and_debugging_options() -> None:
+    serve_args = _parser().parse_args(
+        ["serve", "--nic", "slirp", "--local-access", "--debug-access"]
+    )
+    assert (serve_args.nic, serve_args.local_access, serve_args.debug_access) == (
+        "slirp", True, True,
+    )
+    smoke_args = _parser().parse_args(["smoke", "--nic", "tap:mp64tap0"])
+    assert (smoke_args.nic, smoke_args.local_access) == ("tap:mp64tap0", False)
+    accept_args = _parser().parse_args(["accept", "--attach"])
+    assert accept_args.attach
+    for refused in (["accept", "--nic", "slirp"], ["smoke", "--debug-access"]):
+        with pytest.raises(SystemExit):
+            _parser().parse_args(refused)
+
+
+def test_smoke_attaches_the_network_megapad_names(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _from_bios(*_args, **kwargs):
+        captured.update(kwargs)
+        raise _Stop
+
+    image = Path("desktop-sandbox.img")
+    arguments = dict(cols=100, rows=32, max_steps=1, timeout=1.0)
+    with patch("akashic_tui.MachineSession.from_bios", side_effect=_from_bios):
+        with pytest.raises(_Stop):
+            smoke("desktop-sandbox", image, nic="slirp", local_access=True, **arguments)
+    assert captured["nic_backend"].name == "slirp, local access"
+    assert captured["realtime_clock"] is True
+    assert "[shared] network: slirp, local access" in capsys.readouterr().out
+
+    monkeypatch.setattr("nic_backends.tap_available", lambda _name: False)
+    with patch("akashic_tui.MachineSession.from_bios") as from_bios:
+        assert not smoke("desktop-sandbox", image, nic="tap:missing", **arguments)
+        assert not smoke("desktop-sandbox", image, local_access=True, **arguments)
+    from_bios.assert_not_called()
+    output = capsys.readouterr().out
+    assert "TAP device 'missing' does not exist" in output
+    assert "--local-access needs --nic slirp" in output
 
 
 def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:

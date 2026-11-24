@@ -12399,7 +12399,9 @@ def write_acceptance_manifest(
     return manifest_path
 
 
-def _connected_peer_pid(client: SessionClient) -> int:
+def _connected_peer(client: SessionClient) -> tuple[int, int]:
+    """The process id and user id of the server at the other end of CLIENT."""
+
     if not hasattr(socket, "SO_PEERCRED"):
         raise PhysicalDesktopAcceptanceError(
             "physical acceptance requires Unix SO_PEERCRED process binding"
@@ -12414,21 +12416,25 @@ def _connected_peer_pid(client: SessionClient) -> int:
         socket.SO_PEERCRED,
         struct.calcsize("3i"),
     )
-    peer_pid, _peer_uid, _peer_gid = struct.unpack("3i", credentials)
-    return peer_pid
+    peer_pid, peer_uid, _peer_gid = struct.unpack("3i", credentials)
+    return peer_pid, peer_uid
 
 
 def _connect(
     socket_path: str,
     deadline: float,
-    expected_server_pid: int,
+    expected_server_pid: int | None,
 ) -> SessionClient:
-    if (
+    """Connect to the session server on SOCKET_PATH, which must be the process
+    EXPECTED_SERVER_PID or, for a session another program serves (None), a
+    process of this account."""
+
+    if expected_server_pid is not None and (
         isinstance(expected_server_pid, bool)
         or not isinstance(expected_server_pid, int)
         or expected_server_pid <= 0
     ):
-        raise ValueError("expected_server_pid must be a positive process id")
+        raise ValueError("expected_server_pid must be a positive process id or None")
     last_error: OSError | None = None
     while time.monotonic() < deadline:
         client = SessionClient(
@@ -12442,8 +12448,15 @@ def _connect(
             client.close()
             time.sleep(0.05)
             continue
-        peer_pid = _connected_peer_pid(client)
-        if peer_pid != expected_server_pid:
+        peer_pid, peer_uid = _connected_peer(client)
+        if expected_server_pid is None:
+            if peer_uid != os.getuid():
+                client.close()
+                raise PhysicalDesktopAcceptanceError(
+                    f"shared-session socket belongs to process {peer_pid} of "
+                    f"user {peer_uid}, not to this account"
+                )
+        elif peer_pid != expected_server_pid:
             client.close()
             raise PhysicalDesktopAcceptanceError(
                 f"shared-session socket belongs to process {peer_pid}, not "
@@ -12483,7 +12496,7 @@ def run_physical_desktop_acceptance(
     socket_path: str,
     artifact_root: Path,
     *,
-    expected_server_pid: int,
+    expected_server_pid: int | None,
     cols: int,
     rows: int,
     ready_markers: tuple[str, ...],
@@ -12504,6 +12517,10 @@ def run_physical_desktop_acceptance(
     composes it and in the places of the user volume when USER_VOLUME says
     the image was built with it, or JOURNEY, such as one for Desk with a
     single applet.
+    EXPECTED_SERVER_PID is the server process the caller started, or None
+    for a session another program serves, whose server must then run under
+    this account; the server must grant debugging access either way, since
+    the journey reads the guest's state.
     SAFE_MODE is why the guest was asked to be in safe mode, "boot" or
     "config" (its system settings), or None: some frame before the journey
     ends must then show the warning notice that says so for that reason, in
@@ -12557,7 +12574,10 @@ def run_physical_desktop_acceptance(
     connect_started_ns = trace.now()
     try:
         client = _connect(socket_path, deadline, expected_server_pid)
-        trace.mark("session_connected", started_ns=connect_started_ns)
+        server_pid = _connected_peer(client)[0]
+        trace.mark(
+            "session_connected", started_ns=connect_started_ns, server_pid=server_pid
+        )
         try:
             import pygame
         except ImportError as exc:
@@ -13453,7 +13473,7 @@ def run_physical_desktop_acceptance(
                     "Akashic rich-terminal acceptance — PASS "
                     f"({fitted_font_size}px)"
                 )
-                hold_cpu_before = _process_cpu_seconds(expected_server_pid)
+                hold_cpu_before = _process_cpu_seconds(server_pid)
                 hold_started_ns = trace.now()
                 _keep_window_visible(
                     hold_seconds,
@@ -13462,7 +13482,7 @@ def run_physical_desktop_acceptance(
                 )
                 _record_idle_hold(
                     trace,
-                    expected_server_pid,
+                    server_pid,
                     hold_cpu_before,
                     hold_started_ns,
                 )

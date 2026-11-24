@@ -451,7 +451,9 @@ class Profile(ImageSpec):
     # keeps running.
     ready_markers: tuple[str, ...]
     stable_markers: tuple[str, ...]
-    requires_tap: bool = False
+    # The profile reaches real servers, so it runs only with a network card
+    # (--nic).
+    requires_network: bool = False
     failure_markers: tuple[str, ...] = ()
     smoke_max_steps: int | None = None
     smoke_timeout: float | None = None
@@ -18832,7 +18834,7 @@ _slp-run
         "STREAMS LIVE PUBLIC FAIL",
     ),
     linked=True,
-    requires_tap=True,
+    requires_network=True,
 )
 
 PROFILES["streams-persistence-contracts"] = Profile(
@@ -22678,7 +22680,7 @@ PROFILES["desktop-streams-vertical"] = Profile(
     ready_markers=PROFILES["desktop-streams"].ready_markers,
     stable_markers=("[Agent: offline]",),
     linked=True,
-    requires_tap=True,
+    requires_network=True,
     failure_markers=(
         "STREAMS VERTICAL AT TRUST FAIL",
         "STREAMS VERTICAL RSS TRUST FAIL",
@@ -22887,7 +22889,7 @@ PROFILES["desktop-codex-live"] = Profile(
     cold_source_codec=PROFILES["desktop-codex"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop-codex"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop-codex"].smoke_timeout,
-    requires_tap=True,
+    requires_network=True,
     total_sectors=PROFILES["desktop-codex"].total_sectors,
 )
 PROFILES["codex-live-tls"] = Profile(
@@ -22949,7 +22951,7 @@ CODEX-BACKEND-HOST _clt-backend _clt-connect
         "CODEX TLS BACKEND OK",
         "CODEX TLS LIVE PASS",
     ),
-    requires_tap=True,
+    requires_network=True,
     failure_markers=(
         "CODEX TLS CONFIG FAIL",
         "CODEX TLS TRUST FAIL",
@@ -23052,7 +23054,7 @@ _cla-run
 """,
     ready_markers=("CODEX AUTH CODE READY",),
     stable_markers=("CODEX AUTH CODE READY",),
-    requires_tap=True,
+    requires_network=True,
     failure_markers=(
         "CODEX AUTH TRUST FAIL",
         "CODEX AUTH CONFIG FAIL",
@@ -26690,8 +26692,6 @@ def build_image(
         user_volume=user_volume,
         user_volume_mib=user_volume_mib,
     )
-    if codex_auth_checkpoint is not None:
-        target.chmod(0o600)
     return target
 
 
@@ -27296,11 +27296,16 @@ def smoke(
     max_steps: int,
     timeout: float,
     ext_mem_mib: int | None = None,
-    nic_tap: str | None = None,
+    nic: str | None = None,
+    local_access: bool = False,
     backend: str = "emulator",
     full_cores: int | None = None,
     clusters: int | None = None,
 ) -> bool:
+    """Boot PROFILE_NAME's image in the emulator in this process and watch its
+    screen for the profile's markers.  NIC and LOCAL_ACCESS attach a network
+    card as MegaPad's servers' --nic and --local-access do."""
+
     try:
         profile, backend = _profile_backend(profile_name, backend)
         full_cores, clusters = _profile_machine_shape(
@@ -27327,23 +27332,26 @@ def smoke(
             "use the accept command"
         )
         return False
-    if profile.requires_tap and not nic_tap:
+    if profile.requires_network and not nic:
         print(
             f"Smoke {profile_name}: FAIL\n"
-            "  this opt-in live profile requires --nic-tap[=IFNAME]"
+            "  this opt-in live profile requires --nic SPEC"
         )
         return False
     nic_backend = None
-    if nic_tap:
-        from nic_backends import TAPBackend, tap_available
+    if nic is not None:
+        from nic_backends import backend_from_spec
+        from shared.session_options import report_network
 
-        if not tap_available(nic_tap):
-            print(
-                f"Smoke {profile_name}: FAIL\n"
-                f"  TAP device {nic_tap!r} does not exist or is not accessible"
-            )
+        try:
+            nic_backend = backend_from_spec(nic, local_access=local_access)
+        except ValueError as exc:
+            print(f"Smoke {profile_name}: FAIL\n  {exc}")
             return False
-        nic_backend = TAPBackend(tap_name=nic_tap)
+        report_network(nic_backend)
+    elif local_access:
+        print(f"Smoke {profile_name}: FAIL\n  --local-access needs --nic slirp")
+        return False
     started = time.perf_counter()
     total_steps = 0
     stop_reason = "budget"
@@ -27362,9 +27370,11 @@ def smoke(
         num_cores=full_cores,
         num_clusters=clusters,
         nic_backend=nic_backend,
-        realtime_clock=bool(nic_tap),
+        realtime_clock=nic_backend is not None,
         rtc_epoch_ms=(
-            SAMPLE_CLOCK_MS if profile.sample_date_clock and not nic_tap else None
+            SAMPLE_CLOCK_MS
+            if profile.sample_date_clock and nic_backend is None
+            else None
         ),
         rich_terminal=(
             profile.rich_terminal.configuration(cols, rows)
@@ -33172,6 +33182,20 @@ def _storage_unit_arguments(profile: Profile, image_path: Path) -> tuple[str, ..
     )
 
 
+def _passed_server_options(
+    nic: str | None, local_access: bool, debug_access: bool
+) -> list[str]:
+    """MegaPad's network and debugging options as given: the server reads
+    the network SPEC and refuses one its backend cannot attach."""
+
+    options = [] if nic is None else ["--nic", nic]
+    if local_access:
+        options.append("--local-access")
+    if debug_access:
+        options.append("--debug-access")
+    return options
+
+
 def _session_server_command(
     profile_name: str,
     image_path: Path,
@@ -33180,7 +33204,9 @@ def _session_server_command(
     cols: int,
     rows: int,
     ext_mem_mib: int | None = None,
-    nic_tap: str | None = None,
+    nic: str | None = None,
+    local_access: bool = False,
+    debug_access: bool = False,
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
@@ -33205,18 +33231,10 @@ def _session_server_command(
         or semantic_step_budget <= 0
     ):
         raise ValueError("semantic_step_budget must be a positive integer")
+    if profile.requires_network and not nic:
+        raise SystemExit(f"profile {profile_name!r} requires --nic SPEC")
+    passed = _passed_server_options(nic, local_access, debug_access)
     if backend in SEMANTIC_BACKENDS:
-        if profile.requires_tap:
-            raise SystemExit(
-                f"profile {profile_name!r} requires a configured live network "
-                f"port, which this {backend} launch does not attach"
-            )
-        if nic_tap:
-            raise SystemExit(
-                f"the {backend} launcher does not configure a live local "
-                "network port; live networking is deferred and will require "
-                "the port setup before qualification"
-            )
         if audio:
             raise SystemExit(
                 f"the semantic {backend} server does not expose an audio sink"
@@ -33249,14 +33267,11 @@ def _session_server_command(
             command.extend(
                 ("--semantic-step-budget", str(semantic_step_budget))
             )
+        command.extend(passed)
         return command
     if semantic_step_budget is not None:
         raise ValueError(
             "semantic_step_budget is available only with the semantic backends"
-        )
-    if profile.requires_tap and not nic_tap:
-        raise SystemExit(
-            f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
         )
     command = [
         *_megapad_launcher("emulator"),
@@ -33282,8 +33297,7 @@ def _session_server_command(
     ]
     command.extend(_rich_terminal_server_arguments(profile))
     command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
-    if nic_tap:
-        command.extend(("--nic-tap", nic_tap))
+    command.extend(passed)
     if audio:
         command.append("--audio")
     return command
@@ -33297,7 +33311,9 @@ def serve(
     cols: int,
     rows: int,
     ext_mem_mib: int | None = None,
-    nic_tap: str | None = None,
+    nic: str | None = None,
+    local_access: bool = False,
+    debug_access: bool = False,
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
@@ -33313,7 +33329,9 @@ def serve(
         cols=cols,
         rows=rows,
         ext_mem_mib=ext_mem_mib,
-        nic_tap=nic_tap,
+        nic=nic,
+        local_access=local_access,
+        debug_access=debug_access,
         audio=audio,
         backend=backend,
         semantic_step_budget=semantic_step_budget,
@@ -33325,7 +33343,7 @@ def serve(
 
 
 def accept_physical_desktop(
-    image_path: Path,
+    image_path: Path | None,
     *,
     profile_name: str = "desktop-apt1",
     socket_path: str,
@@ -33347,6 +33365,7 @@ def accept_physical_desktop(
     screen_profile: bool = False,
     safe_mode: str | None = None,
     user_volume: bool = False,
+    attach: bool = False,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
@@ -33354,7 +33373,13 @@ def accept_physical_desktop(
     each step runs under, in ARTIFACT_ROOT/screen-profile.  SAFE_MODE says
     why the guest is in safe mode, "boot" or "config", so the journey must
     see the notice that says so.  USER_VOLUME says the image was built with
-    the user volume, so the journey follows the shipping form's places."""
+    the user volume, so the journey follows the shipping form's places.
+
+    The harness serves IMAGE_PATH on SOCKET_PATH with debugging access,
+    since the journey reads the guest's state.  ATTACH instead drives the
+    session another program already serves there, started with
+    --debug-access under this account; IMAGE_PATH is then None, and the
+    server's options are that program's."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -33388,25 +33413,28 @@ def accept_physical_desktop(
             paced_link=terminal_link_pace is not None,
             user_volume=user_volume,
         )
-    command = _session_server_command(
-        profile_name,
-        image_path,
-        socket_path=socket_path,
-        cols=cols,
-        rows=rows,
-        ext_mem_mib=ext_mem_mib,
-        backend=backend,
-        full_cores=full_cores,
-        clusters=clusters,
-        terminal_link_pace=terminal_link_pace,
-        profile_dir=artifact_root / "screen-profile" if screen_profile else None,
-    )
-    server = subprocess.Popen(command)
+    server = None
+    if not attach:
+        command = _session_server_command(
+            profile_name,
+            image_path,
+            socket_path=socket_path,
+            cols=cols,
+            rows=rows,
+            ext_mem_mib=ext_mem_mib,
+            debug_access=True,
+            backend=backend,
+            full_cores=full_cores,
+            clusters=clusters,
+            terminal_link_pace=terminal_link_pace,
+            profile_dir=artifact_root / "screen-profile" if screen_profile else None,
+        )
+        server = subprocess.Popen(command)
     try:
         evidence = run_physical_desktop_acceptance(
             socket_path,
             artifact_root,
-            expected_server_pid=server.pid,
+            expected_server_pid=None if server is None else server.pid,
             cols=cols,
             rows=rows,
             ready_markers=ready_markers,
@@ -33426,7 +33454,7 @@ def accept_physical_desktop(
         print(f"Physical desktop acceptance: FAIL\n  {exc}")
         return False
     finally:
-        if server.poll() is None:
+        if server is not None and server.poll() is None:
             server.terminate()
             try:
                 server.wait(timeout=10.0)
@@ -35057,7 +35085,7 @@ _lrc-run
     ),
     linked=True,
     link_chunk_bytes=64 * 1024,
-    requires_tap=True,
+    requires_network=True,
     include_large_sample=False,
     initial_files=(
         (
@@ -35472,10 +35500,21 @@ def _parser() -> argparse.ArgumentParser:
             )
         if name in ("smoke", "serve"):
             command.add_argument(
-                "--nic-tap",
-                nargs="?",
-                const="mp64tap0",
-                help="attach a preconfigured Linux TAP device",
+                "--nic",
+                metavar="SPEC",
+                help=(
+                    "attach a network card, as MegaPad's servers' --nic: "
+                    "slirp, which needs no administrator rights, or "
+                    "tap:IFNAME for a TAP device set up beforehand"
+                ),
+            )
+            command.add_argument(
+                "--local-access",
+                action="store_true",
+                help=(
+                    "let the slirp network reach this computer and its "
+                    "local network, which it refuses otherwise"
+                ),
             )
         if name == "smoke":
             command.add_argument(
@@ -35498,9 +35537,29 @@ def _parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="attach MegaPad's optional pygame PCM16 playback sink",
             )
+            command.add_argument(
+                "--debug-access",
+                action="store_true",
+                help=(
+                    "let clients such as session_ctl.py read the guest's "
+                    "memory and dictionary, control its execution and write "
+                    "captures over the socket"
+                ),
+            )
         if name == "accept":
             command.add_argument(
                 "--socket", default="/tmp/akashic-tui-acceptance.sock"
+            )
+            command.add_argument(
+                "--attach",
+                action="store_true",
+                help=(
+                    "drive the session another program already serves on "
+                    "--socket, started with --debug-access under this "
+                    "account, instead of building and serving the profile; "
+                    "the form and safe-mode options then say what that "
+                    "session was built as"
+                ),
             )
             command.add_argument(
                 "--artifact-root",
@@ -35578,6 +35637,30 @@ def main() -> int:
             f"{args.backend} does not use the cycle-budget smoke loop; "
             "use serve or accept"
         )
+    attach = args.command == "accept" and args.attach
+    if attach:
+        # Another program built and serves the session.
+        given = [
+            option
+            for option, value in (
+                ("--output", args.output),
+                ("--codex-auth-checkpoint", args.codex_auth_checkpoint),
+                ("--shadow-check", args.shadow_check),
+                ("--every-frame-checks", args.every_frame_checks),
+                ("--keep-module-source", args.keep_module_source),
+                ("--ext-mem-mib", args.ext_mem_mib),
+                ("--cores", args.cores),
+                ("--clusters", args.clusters),
+                ("--terminal-link-pace", args.terminal_link_pace),
+                ("--screen-profile", args.screen_profile),
+            )
+            if value not in (None, False)
+        ]
+        if given:
+            parser.error(
+                f"{', '.join(given)} belong to the build or the server, which "
+                "--attach leaves to the program serving the session"
+            )
     system_volume, token_modules, user_volume = build_form(
         args.profile,
         linked=args.linked,
@@ -35585,7 +35668,7 @@ def main() -> int:
         token_modules=args.token_modules,
         user_volume=args.user_volume,
     )
-    image_path = build_image(
+    image_path = None if attach else build_image(
         args.profile,
         args.output,
         args.codex_auth_checkpoint,
@@ -35615,7 +35698,8 @@ def main() -> int:
             max_steps=max_steps,
             timeout=timeout,
             ext_mem_mib=ext_mem_mib,
-            nic_tap=args.nic_tap,
+            nic=args.nic,
+            local_access=args.local_access,
             backend=args.backend,
             full_cores=args.cores,
             clusters=args.clusters,
@@ -35649,6 +35733,7 @@ def main() -> int:
                 else None
             ),
             user_volume=user_volume,
+            attach=attach,
         ) else 1
     serve(
         args.profile,
@@ -35657,7 +35742,9 @@ def main() -> int:
         cols=args.cols,
         rows=args.rows,
         ext_mem_mib=ext_mem_mib,
-        nic_tap=args.nic_tap,
+        nic=args.nic,
+        local_access=args.local_access,
+        debug_access=args.debug_access,
         audio=args.audio,
         backend=args.backend,
         semantic_step_budget=args.semantic_step_budget,
