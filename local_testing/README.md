@@ -1146,10 +1146,10 @@ The Streams qualification path is intentionally split by boundary:
   Its launcher now uses the production online composition; no fixture, source,
   actor, or startup tile is preseeded.
 - `streams-multiprotocol-composition` is the focused no-network composition
-  gate for the reviewed vertical. It registers the public AT trust
-  contribution, imports the exact-host RSS trust artifact, configures the
-  authorized production syndication provider, and configures the production
-  public Bluesky provider.
+  gate for the reviewed vertical. It configures the authorized production
+  syndication provider and the production public Bluesky provider. It
+  registers no trust: the vertical verifies against the machine's global root
+  set, which Desk registers from its origin.
 - `desktop-streams-vertical` is the opt-in TAP-facing product journey. In one
   Desk-hosted Streams instance it fetches and visibly retains the reviewed RSS
   source, fetches a public Bluesky author feed through AT Protocol XRPC, then
@@ -1407,8 +1407,8 @@ authenticated TLS 1.3 `NewSessionTicket` messages without implementing or
 claiming session resumption; unsupported post-handshake messages still fail
 closed.
 
-The separate Codex TLS gate authenticates both source-pinned hosts with the
-native KDOS TLS stack but sends no application request:
+The separate Codex TLS gate authenticates both hosts with the native KDOS TLS
+stack but sends no application request:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py smoke \
@@ -1416,11 +1416,11 @@ python3 akashic/local_testing/akashic_tui.py smoke \
   --max-steps 5000000000 --timeout 300
 ```
 
-The Codex source provisions Google Trust Services WE1 as two exact-host
-anchors: `auth.openai.com` and `chatgpt.com`. It does not trust `openai.com`,
-`api.openai.com`, arbitrary subdomains, or unrelated services. The anchor is
-valid through 2029-02-20; certificate/algorithm rotation must be handled as an
-explicit reviewed update, not an automatic network download.
+Both hosts, `auth.openai.com` and `chatgpt.com`, verify against the machine's
+global root set (`docs/net/web-roots.md`). The gate declares a place over the
+boot volume and registers the set before it freezes the trust registry, as
+Desk does from its origin. Roots change only through the set's reviewed
+refresh, never through a network download.
 
 The live gate uses MegaPad's standards-only public ClientHello. Private
 MegaPad hybrid suites and groups are not offered to OpenAI endpoints. On

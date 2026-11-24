@@ -8,8 +8,9 @@ it does not decode JSON, mutate a feed model, commit Streams state, own an XIO
 service, or act as a general AT Protocol session.
 
 Ordinary `streams.f` depends only on the app-local `public-provider.f` seam.
-`bluesky-public.f` explicitly adapts this concrete provider into Streams;
-`public-trust.f` remains a separate boot-profile contribution.
+`bluesky-public.f` explicitly adapts this concrete provider into Streams. The
+provider supplies no TLS trust; the machine's does, as the next section
+describes.
 
 The fixed request is:
 
@@ -29,21 +30,15 @@ actor syntax before applying RFC 3986 unreserved-byte rules. Actor storage is
 2048 bytes, the encoded path is 7168 bytes, the complete request is 8192
 bytes, and the transient response body is capped at 256 KiB.
 
-## Trust contribution
+## Trust
 
-`akashic/atproto/public-trust.f` provides the reviewed native-TLS trust needed
-by this endpoint. Trusted boot code calls `ATPUBLIC-TRUST-REGISTER` before Desk
-freezes the machine trust registry. The contribution contains Let's Encrypt's
-active RSA-2048 YR1 and YR2 intermediates, sourced from its
-[certificate inventory](https://letsencrypt.org/certificates/), and gives each
-one the exact DNS scope `public.api.bsky.app` with subdomain matching disabled.
-It grants no trust to `bsky.app`, other AT Protocol hosts, or future providers.
-
-Both intermediates are present so ordinary YR1/YR2 leaf rotation does not
-require changing the machine image. Their validity ends on 2028-09-02; a later
-release must review and replace the contribution rather than downloading or
-expanding trust at runtime. Registration is explicit and idempotent. Provider
-construction does not register an anchor or mutate KDOS trust by itself.
+`public.api.bsky.app` verifies against the machine's
+[global root set](../net/web-roots.md), the NSS roots Desk registers with the
+machine trust registry from its origin before it freezes the registry. A boot
+composition without Desk registers the set itself, as the `streams-live-public`
+profile does. Provider construction registers no anchor and does not change
+KDOS trust. A scoped anchor binds its host exclusively, so a composition that
+pinned this host would take the place of the root set for it.
 
 ## Lifecycle and XIO boundary
 
@@ -102,8 +97,8 @@ covering request bytes, partial send/receive, HTTP admission, cooperative open,
 normal-close selection, XIO lifecycle, cancellation, and cleanup.
 `http-buffered` covers delayed asynchronous close, `tls-port` independently
 passes the native connector's phase, cancellation, and
-graceful-close/abort-fallback contracts, and `atproto-public-trust` checks
-anchor and registry contracts.
+graceful-close/abort-fallback contracts, and `test_tls_trust_contracts.py` and
+`test_web_roots.py` check the trust registry and the root set.
 
 These are deterministic offline gates. They do not establish that the complete
 public request succeeds through a real TAP interface, that Desk remains

@@ -174,8 +174,9 @@ CREATE _h256t-expected-empty
         HMAC-SHA256-S-ALIAS = _h256t-assert
     _h256t-unchanged? _h256t-assert
 
-    \ An admitted message that the BIOS cannot read must become the HMAC
-    \ layer's CRYPTO status without publishing a digest.
+    \ A message that runs past the end of memory is refused by the SHA
+    \ layer's span check before admission: CRYPTO, and neither the digest
+    \ nor the workspace changes.
     _h256t-digest-a HMAC-SHA256-DIGEST-SIZE 0xA5 FILL
     _h256t-workspace-a HMAC-SHA256-WORKSPACE-SIZE 0x5A FILL
     _h256t-snapshots
@@ -183,10 +184,7 @@ CREATE _h256t-expected-empty
         EXT-MEM-BASE EXT-MEM-SIZE + 1 - 2
         _h256t-digest-a _h256t-workspace-a HMAC-SHA256
         HMAC-SHA256-S-CRYPTO = _h256t-assert
-    _h256t-digest-a _h256t-digest-copy HMAC-SHA256-DIGEST-SIZE
-        _h256t-bytes= _h256t-assert
-    _h256t-workspace-a HMAC-SHA256-WORKSPACE-SIZE
-        _h256t-zero? _h256t-assert
+    _h256t-unchanged? _h256t-assert
     _h256t-stack ;
 
 : _h256t-test-clear  ( -- )
@@ -218,26 +216,22 @@ CREATE _h256t-expected-empty
         _h256t-zero? _h256t-assert
     _h256t-stack ;
 
+\ A store to an unmapped address is a bus fault, which no CATCH receives, so
+\ the publication's THROW comes from a word that raises one.  The wipe
+\ after it is FILL, which cannot THROW; that cleanup's freedom from CATCH is
+\ checked in the source by test_hmac_sha256.py.
+: _h256t-publish-throw  ( workspace -- workspace )
+    -780 THROW ;
+
 : _h256t-publication-throw  ( -- )
-    _h256t-workspace-a _H256-PUBLISH-CLEAR DROP ;
+    _h256t-workspace-a ['] _h256t-publish-throw _H256-PUBLISH-WITH DROP ;
 
 : _h256t-test-publication-throw-cleanup  ( -- )
     _h256t-workspace-a HMAC-SHA256-WORKSPACE-SIZE 0x5A FILL
-    EXT-MEM-BASE EXT-MEM-SIZE +
-        _h256t-workspace-a _H256.DIGEST !
     ['] _h256t-publication-throw CATCH
-        0<> _h256t-assert
+        -780 = _h256t-assert
     _h256t-workspace-a HMAC-SHA256-WORKSPACE-SIZE
         _h256t-zero? _h256t-assert
-    _h256t-stack ;
-
-: _h256t-cleanup-throw  ( -- )
-    EXT-MEM-BASE EXT-MEM-SIZE +
-        HMAC-SHA256-S-CRYPTO _H256-CLEAR-RETURN DROP ;
-
-: _h256t-test-cleanup-throw-propagates  ( -- )
-    ['] _h256t-cleanup-throw CATCH
-        0<> _h256t-assert
     _h256t-stack ;
 
 : _H256T-RUN  ( -- )
@@ -248,7 +242,6 @@ CREATE _h256t-expected-empty
     _h256t-test-rejections
     _h256t-test-compute-throw-cleanup
     _h256t-test-publication-throw-cleanup
-    _h256t-test-cleanup-throw-propagates
     _h256t-test-clear
     _h256t-stack
     _h256t-fails @ 0= IF

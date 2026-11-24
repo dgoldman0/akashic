@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -18,6 +19,8 @@ DEPS = LOCAL_TESTING / "cv-deps.f"
 FIXTURE = LOCAL_TESTING / "oauth2-session-vault-test.f"
 
 PHASE_MAX_STEPS = 180_000_000
+# The lifecycle image, in pytest's temporary folder under a test
+IMAGE = Path(tempfile.gettempdir()) / "akashic-oauth2-session-vault.img"
 PASS_MARKER = "OAUTH2 SESSION VAULT PASS"
 LOAD_STAGES = (
     ("dependencies", "OAUTH2 SESSION VAULT DEPS READY"),
@@ -184,7 +187,7 @@ def _run_lifecycle(timeout: float) -> int:
     )
 
     profile_name = "oauth2-session-vault"
-    image = Path("/tmp/akashic-oauth2-session-vault.img")
+    image = IMAGE
     harness.PROFILES[profile_name] = harness.Profile(
         roots=(),
         resources=(),
@@ -336,6 +339,20 @@ def main() -> int:
         print("OAUTH2 SESSION VAULT STATIC PASS")
         return 0
     return _run_lifecycle(args.timeout)
+
+
+def test_static(tmp_path: Path, monkeypatch) -> None:
+    """Check the static contracts."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--static-only")
+
+
+def test_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    """Run the guest session-vault lifecycle."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--lifecycle")
 
 
 if __name__ == "__main__":

@@ -200,18 +200,25 @@ CREATE _shac-media MTYPE-SIZE ALLOT
         _SCSYN-FORMAT-ALLOWED? 0= _shac-assert
     _shac-stack ;
 
-: _shac-test-default-deny  ( -- )
+: _shac-test-default-open  ( -- )
     HEAP-FREE-BYTES _shac-heap-before !
+    \ The reviewed-policy constructor still refuses a missing policy.
     0 _shac-policy STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED
         SCONF-S-INVALID = SWAP 0= AND _shac-assert
     HEAP-FREE-BYTES _shac-heap-before @ = _shac-assert
+    \ The default factory admits a syndication source by its kind alone.
     STREAMS-CONFIGURED-SYNDICATION-NEW _shac-capture-new
     _shac-source _shac-provider @ SCONF-CONFIGURE
+        SCONF-S-OK = _shac-assert
+    _shac-provider @ SCONF-REQUESTED$ NIP 0<> _shac-assert
+    _shac-release
+    \ The open policy refuses a missing target and any other kind.
+    _shac-source 0 0 STREAMS-SYNDICATION-OPEN? 0= _shac-assert
+    _shac-source _shac-variant STREAMS-SOURCE-SIZE MOVE
+    SSOURCE-KIND-PAGE _shac-variant SSOURCE.KIND !
+    STREAMS-CONFIGURED-SYNDICATION-NEW _shac-capture-new
+    _shac-variant _shac-provider @ SCONF-CONFIGURE
         SCONF-S-INVALID = _shac-assert
-    _shac-provider @ SCONF-REQUESTED$ OR 0= _shac-assert
-    _shac-provider @ SCONF-OUTCOME SCONF-O-NONE = _shac-assert
-    _shac-provider @ SCONF-RESULT-VALID? 0= _shac-assert
-    _shac-provider @ SCONF-CLEANUP-ERROR@ 0= _shac-assert
     _shac-release
     HEAP-FREE-BYTES _shac-heap-before @ = _shac-assert
     _shac-stack ;
@@ -351,7 +358,7 @@ CREATE _shac-media MTYPE-SIZE ALLOT
     _shac-build-source _shac-stack
     _shac-test-spans
     _shac-test-media
-    _shac-test-default-deny
+    _shac-test-default-open
     _shac-test-authorized
     _shac-test-throw
     _shac-fails @ 0= IF

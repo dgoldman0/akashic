@@ -20,23 +20,19 @@ akashic/tui/applets/agent/providers/codex/auth.f
 akashic/tui/applets/agent/providers/codex/model-catalog.f
 akashic/tui/applets/agent/providers/codex/provider.f
 akashic/tui/applets/agent/providers/codex/source.f
-akashic/tui/applets/agent/providers/codex/trust.f
 ```
 
 `source.f` owns the complete provider construction environment: OAuth state,
 separate KDOS TLS ports for authentication and model traffic, the bounded model
-catalog, shared Responses configuration, and provider lifetime. TLS trust is a
-separate boot contribution; constructing or freeing a source does not mutate
-machine trust. These renderer-free modules contain no TUI or emulator service,
+catalog, shared Responses configuration, and provider lifetime. Its hosts
+verify against the machine's global root set; constructing or freeing a source
+does not change machine trust. These renderer-free modules contain no TUI or emulator service,
 but remain Agent applet-owned code inside the Desk ecosystem.
 
 ```forth
 REQUIRE tui/applets/agent/providers/codex/source.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
 
 : USE-CODEX  ( -- )
-    CODEX-TRUST-REGISTER MTRUST-S-OK <>
-    ABORT" Codex trust registration failed"
     CODEX-SOURCE-NEW
     0<> ABORT" Codex source allocation failed"
     DESK-AGENT-SOURCE! ;
@@ -99,24 +95,21 @@ Gateway, policy, approval, and applet-owned capability handlers.
 
 ## Trust And Live Network
 
-The Codex trust module contributes the official Google Trust Services WE1
-certificate as two exact-host anchors for `auth.openai.com` and `chatgpt.com`.
-The embedded record includes its retrieval source, SHA-256 fingerprint,
-revision date, and 2029-02-20 expiry. It does not grant trust to `openai.com`,
-`api.openai.com`, arbitrary subdomains, or unrelated Google-hosted services.
+Both hosts, `auth.openai.com` and `chatgpt.com`, verify against the machine's
+[global root set](../../../net/web-roots.md): the NSS roots Desk registers with
+the [machine trust registry](../../../net/tls-trust-registry.md) from its
+origin before it freezes the registry, once, before exposing external I/O.
+The live profiles that run without Desk declare a place over the boot volume
+and register the set themselves before they freeze. The provider registers no
+anchor of its own, and the Codex source never installs or replaces a machine
+bundle. A scoped anchor binds its host exclusively, so a pin for either host
+would take the place of the root set for it.
 
-`CODEX-TRUST-REGISTER` registers that contribution with the
-[machine trust registry](../../../net/tls-trust-registry.md). Desk freezes all
-registered contributions once before exposing external I/O. Direct live Agent
-profiles perform the same register-then-freeze sequence explicitly; the Codex
-source never installs or replaces a machine bundle itself.
-
-This is a reviewed bootstrap profile, not a general WebPKI or unattended trust
-update system. Intermediate/algorithm rotation requires a reviewed release;
-signed updates and rollback protection remain release work. MegaPad permits an
-unusable non-leaf certificate to be ignored only after its TLS entry bounds are
-validated. The leaf must parse, and every certificate required to reach the
-explicit anchor must remain supported and valid.
+The root set changes with NSS releases, through the reviewed refresh its
+document describes; signed updates and rollback protection remain release
+work. MegaPad permits an unusable non-leaf certificate to be ignored only after
+its TLS entry bounds are validated. The leaf must parse, and every certificate
+required to reach a trusted root must remain supported and valid.
 
 `codex-live-tls` is an opt-in credential-free live profile that authenticates
 both hosts without sending HTTP, a device code, a token, or an API key.

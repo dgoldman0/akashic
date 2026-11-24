@@ -153,64 +153,6 @@ DESK_GATE0_DRAFT_LEGACY_FIXTURE = (
     DESK_GATE0_FIXTURE_ROOT / "draft-v1-legacy-r7.bin"
 ).read_bytes()
 
-
-def _reviewed_atproto_yr2_der() -> bytes:
-    """Return the reviewed YR2 DER already carried by the public ATProto gate."""
-    import base64
-    import hashlib
-
-    source = (SOURCE_ROOT / "atproto" / "public-trust.f").read_text(
-        encoding="utf-8"
-    )
-    start = source.index(": _APTR-DECODE-YR2")
-    end = source.index(
-        "_APTR-YR2 _APTR-YR2-SIZE _APTR-DECODE ;", start
-    )
-    fragments = re.findall(
-        r'S" ([A-Za-z0-9+/=]+)" _APTR-B64,', source[start:end]
-    )
-    certificate = base64.b64decode("".join(fragments), validate=True)
-    expected_digest = (
-        "238b85a0099c65b970477d5724f1a1d475ce5058cffe4efa8733899bdb863c47"
-    )
-    if (
-        len(certificate) != 1246
-        or hashlib.sha256(certificate).hexdigest() != expected_digest
-    ):
-        raise RuntimeError("reviewed ATProto YR2 certificate changed unexpectedly")
-    return certificate
-
-
-def _streams_live_exact_host_trust_artifact() -> bytes:
-    """Return the reviewed exact-host YR2 MPTA used by the live refresh gate."""
-    import hashlib
-    import struct
-
-    scope = b"foo-dogsquared.github.io"
-    intermediates = (_reviewed_atproto_yr2_der(),)
-    artifact = bytearray(b"MPTA" + struct.pack(">HHQ", 1, len(intermediates), 0))
-    for certificate in intermediates:
-        artifact.extend(struct.pack(">HHI", 0, len(scope), len(certificate)))
-        artifact.extend(scope)
-        artifact.extend(certificate)
-    artifact[8:16] = hashlib.sha3_256(artifact).digest()[:8]
-    return bytes(artifact)
-
-
-def _streams_live_exact_host_trust_leaf() -> bytes:
-    """Render the reviewed artifact as a local Forth data-only test leaf."""
-    artifact = _streams_live_exact_host_trust_artifact()
-    lines = [
-        "\\ Generated deterministic data for the opt-in live Streams gate.",
-        "PROVIDED streams-live-trust",
-        "CREATE _lrc-artifact",
-    ]
-    for offset in range(0, len(artifact), 16):
-        lines.append(
-            " ".join(f"0x{byte:02X} C," for byte in artifact[offset : offset + 16])
-        )
-    lines.append(f"{len(artifact)} CONSTANT _lrc-artifact-u")
-    return ("\n".join(lines) + "\n").encode("ascii")
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
@@ -2789,607 +2731,8 @@ _dx-run
         failure_markers=("DESK EXTERNAL IO FAIL",),
         linked=True,
         include_large_sample=False,
-        total_sectors=8192,
-    ),
-    "tls-trust-registry": Profile(
-        roots=("tui/applets/agent/providers/codex/trust.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - composed machine TLS trust contracts
-ENTER-USERLAND
-." [akashic] loading machine TLS trust contracts" CR
-REQUIRE tui/applets/agent/providers/codex/trust.f
-
-VARIABLE _tr-fails
-VARIABLE _tr-checks
-VARIABLE _tr-depth
-VARIABLE _tr-builder
-VARIABLE _tr-generation
-: _tr-assert  ( flag -- )
-    1 _tr-checks +!
-    0= IF 1 _tr-fails +! ." ASSERT " _tr-checks @ . CR THEN ;
-: _tr-stack  ( -- )
-    DEPTH DUP _tr-depth @ <> IF
-        ." STACK " _tr-depth @ . ."  -> " DUP . CR .S CR
-    THEN
-    _tr-depth @ = _tr-assert ;
-
-: _tr-extra-emit  ( builder context -- status )
-    DROP _tr-builder !
-    _CDTR-CERT 127 S" short.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" bad..example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" badflags.example" 2 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" auth.openai.com" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-CONFLICT = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" testing.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-OK = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" testing.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-CONFLICT = _tr-assert
-    MTRUST-S-OK ;
-
-: _tr-other-emit  ( builder context -- status )
-    2DROP MTRUST-S-OK ;
-
-: _tr-leak-emit  ( builder context -- leaked status )
-    2DROP 123 MTRUST-S-OK ;
-
-CREATE _tr-leak-contributor _MTC-SIZE ALLOT
-
-: _tr-run  ( -- )
-    0 _tr-fails ! 0 _tr-checks ! DEPTH _tr-depth !
-    TLS-TRUST-RESET
-    ['] _tr-leak-emit _tr-leak-contributor _MTC.EMIT-XT !
-    0 _tr-leak-contributor _MTC.CONTEXT !
-    _tr-leak-contributor _MTR-CALL-EMITTER
-        MTRUST-S-CONTRIBUTOR = _tr-assert
-    MTRUST-LAST-DETAIL@ MTRUST-D-EMITTER-STACK = _tr-assert
-    _tr-stack
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _tr-assert
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.trust" ['] _tr-extra-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.trust" ['] _tr-extra-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.empty-trust" ['] _tr-other-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.trust" ['] _tr-other-emit 0
-        MTRUST-REGISTER MTRUST-S-CONFLICT = _tr-assert
-    TLS-TRUST-COUNT @ 0= _tr-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tr-assert
-    MTRUST-FROZEN? _tr-assert
-    MTRUST-COUNT@ 3 = _tr-assert
-    TLS-TRUST-COUNT @ 3 = _tr-assert
-    TLS-TRUST-VERSION @ 1 = _tr-assert
-    MTRUST-GENERATION@ DUP _tr-generation ! 0<> _tr-assert
-    _MTRUST-DIGEST _MTR-BE64@ _tr-generation @ = _tr-assert
-    TLS-TRUST-GENERATION @ _tr-generation @ = _tr-assert
-    S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
-    S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
-    S" testing.example" 2 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
-    S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _tr-assert
-    S" auth.openai.com.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _tr-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tr-assert
-    CODEX-TRUST-REGISTER MTRUST-S-FROZEN = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" after-freeze.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _tr-generation @ 1+ TLS-TRUST-GENERATION !
-    MTRUST-FREEZE MTRUST-S-DIVERGED = _tr-assert
-    TLS-TRUST-GENERATION @ _tr-generation @ 1+ = _tr-assert
-    _tr-generation @ TLS-TRUST-GENERATION !
-    _tr-stack
-    _tr-fails @ 0= IF
-        ." TLS TRUST REGISTRY PASS " _tr-checks @ .
-    ELSE
-        ." TLS TRUST REGISTRY FAIL " _tr-fails @ . ."  / " _tr-checks @ .
-    THEN CR ;
-
-_tr-run
-""",
-        ready_markers=("TLS TRUST REGISTRY PASS",),
-        stable_markers=("TLS TRUST REGISTRY PASS",),
-        failure_markers=("TLS TRUST REGISTRY FAIL",),
-        include_large_sample=False,
-    ),
-    "tls-trust-mpta": Profile(
-        roots=("tui/applets/agent/providers/codex/trust.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - exact-host MPTA import contracts
-ENTER-USERLAND
-." [akashic] loading exact-host MPTA import contracts" CR
-REQUIRE tui/applets/agent/providers/codex/trust.f
-
-VARIABLE _tm-fails
-VARIABLE _tm-checks
-VARIABLE _tm-depth
-VARIABLE _tm-builder
-VARIABLE _tm-scope-a
-VARIABLE _tm-scope-u
-VARIABLE _tm-flags
-VARIABLE _tm-art-u
-VARIABLE _tm-record-u
-VARIABLE _tm-old-pos
-VARIABLE _tm-old-count
-VARIABLE _tm-generation
-
-CREATE _tm-art 4096 ALLOT
-CREATE _tm-digest 32 ALLOT
-CREATE _tm-old-output-digest 32 ALLOT
-CREATE _tm-output-digest 32 ALLOT
-CREATE _tm-empty-output-digest 32 ALLOT
-CREATE _tm-long-scope 254 ALLOT
-
-: _tm-assert  ( flag -- )
-    1 _tm-checks +!
-    0= IF 1 _tm-fails +! ." TM ASSERT " _tm-checks @ . CR THEN ;
-: _tm-stack  ( -- ) DEPTH _tm-depth @ = _tm-assert ;
-
-: _tm-be16!  ( value address -- )
-    >R DUP 8 RSHIFT 255 AND R@ C! 255 AND R> 1+ C! ;
-: _tm-be32!  ( value address -- )
-    >R
-    DUP 24 RSHIFT 255 AND R@ C!
-    DUP 16 RSHIFT 255 AND R@ 1+ C!
-    DUP 8 RSHIFT 255 AND R@ 2 + C!
-    255 AND R> 3 + C! ;
-
-: _tm-seal  ( -- )
-    _tm-art 8 + 8 0 FILL
-    _tm-art _tm-art-u @ _tm-digest SHA3-256-HASH
-    _tm-digest _tm-art 8 + 8 CMOVE ;
-
-: _tm-build-one  ( scope-a scope-u flags -- )
-    _tm-flags ! _tm-scope-u ! _tm-scope-a !
-    _tm-art 4096 0 FILL
-    _MTRUST-MPTA-MAGIC _tm-art 4 CMOVE
-    1 _tm-art 4 + _tm-be16!
-    1 _tm-art 6 + _tm-be16!
-    _tm-flags @ _tm-art 16 + _tm-be16!
-    _tm-scope-u @ _tm-art 18 + _tm-be16!
-    _CDTR-CERT-SIZE _tm-art 20 + _tm-be32!
-    _tm-scope-u @ IF
-        _tm-scope-a @ _tm-art 24 + _tm-scope-u @ CMOVE
-    THEN
-    _CDTR-CERT _tm-art 24 + _tm-scope-u @ + _CDTR-CERT-SIZE CMOVE
-    24 _tm-scope-u @ + _CDTR-CERT-SIZE + _tm-art-u !
-    _tm-seal ;
-
-: _tm-build-duplicate  ( -- )
-    S" duplicate.example" 0 _tm-build-one
-    _tm-art-u @ 16 - _tm-record-u !
-    _tm-art 16 + _tm-art _tm-art-u @ + _tm-record-u @ CMOVE
-    2 _tm-art 6 + _tm-be16!
-    _tm-record-u @ _tm-art-u +!
-    _tm-seal ;
-
-: _tm-build-two  ( -- )
-    S" first.example" 0 _tm-build-one
-    _tm-art-u @ 16 - _tm-record-u !
-    _tm-art 16 + _tm-art _tm-art-u @ + _tm-record-u @ CMOVE
-    S" other.example" _tm-art _tm-art-u @ + 8 + SWAP CMOVE
-    2 _tm-art 6 + _tm-be16!
-    _tm-record-u @ _tm-art-u +!
-    _tm-seal ;
-
-: _tm-snapshot  ( -- )
-    _tm-builder @ _MTB.POSITION @ _tm-old-pos !
-    _tm-builder @ _MTB.COUNT @ _tm-old-count !
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-old-output-digest SHA3-256-HASH ;
-
-: _tm-unchanged?  ( -- flag )
-    _tm-builder @ _MTB.POSITION @ _tm-old-pos @ =
-    _tm-builder @ _MTB.COUNT @ _tm-old-count @ = AND
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-output-digest SHA3-256-HASH
-    _tm-old-output-digest 32 _tm-output-digest 32 COMPARE 0= AND ;
-
-: _tm-expect  ( expected-status -- )
-    >R _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        R> = _tm-assert
-    _tm-unchanged? _tm-assert ;
-
-: _tm-cap-anchor  ( scope-a scope-u -- )
-    _CDTR-CERT _CDTR-CERT-SIZE 2SWAP 0 _tm-builder @ MTRUST-ANCHOR+
-        MTRUST-S-OK = _tm-assert ;
-
-: _tm-import-emit  ( builder context -- status )
-    DROP _tm-builder !
-    _CDTR-DECODE TLS-CERT-OK = _tm-assert
-
-    \ The public span predicates make exact adjacency safe and reject either
-    \ direction of one-byte overlap without dereferencing wrapping spans.
-    1000 16 1016 8 _MTRUST-RANGES-OVERLAP? 0= _tm-assert
-    1000 17 1016 8 _MTRUST-RANGES-OVERLAP? _tm-assert
-    1016 8 1000 17 _MTRUST-RANGES-OVERLAP? _tm-assert
-    -8 16 _MTRUST-SPAN-VALID? 0= _tm-assert
-
-    \ The active output allocation can never serve as its own import input,
-    \ and a null/stale builder is rejected before dereference.
-    _tm-snapshot
-    _tm-builder @ _MTB.BUFFER @ 16 _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-    _tm-snapshot
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @ + 1-
-        16 _tm-builder @ MTRUST-MPTA+ MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-    S" feeds.example" 0 _tm-build-one
-    _tm-snapshot
-    _tm-art _tm-art-u @ 0 MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-
-    \ Emitter-visible metadata is sealed before any duplicate scan or append.
-    \ Each malformed form remains byte-identical and is then restored so the
-    \ next independent case starts from the canonical empty builder.
-    S" feeds.example" 0 _tm-build-one
-    -1 _tm-builder @ _MTB.COUNT !
-    MTRUST-S-INVALID _tm-expect
-    0 _tm-builder @ _MTB.COUNT !
-    15 _tm-builder @ _MTB.POSITION !
-    MTRUST-S-INVALID _tm-expect
-    16 _tm-builder @ _MTB.POSITION !
-    _tm-snapshot
-    TLS-TRUST-BUNDLE-MAX 1+ _tm-builder @ _MTB.CAPACITY !
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    TLS-TRUST-BUNDLE-MAX _tm-builder @ _MTB.CAPACITY !
-    _tm-unchanged? _tm-assert
-    1 _tm-builder @ _MTB.COUNT !
-    MTRUST-S-INVALID _tm-expect
-    0 _tm-builder @ _MTB.COUNT !
-
-    \ All artifacts are internally self-identifying and exact.  Recompute
-    \ the digest after each structural mutation so these checks reach their
-    \ intended parser branch rather than merely failing the generation.
-    S" feeds.example" 0 _tm-build-one
-    88 _tm-art C! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    2 _tm-art 4 + _tm-be16! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    TLS-TRUST-MAX 1+ _tm-art 6 + _tm-be16! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    0 _tm-art 6 + _tm-be16! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    0 0 0 _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    S" bad..example" 0 _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" TTAF-SUBDOMAINS _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    _tm-long-scope 254 97 FILL
-    _tm-long-scope 254 0 _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    127 _tm-art 20 + _tm-be32! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    8193 _tm-art 20 + _tm-be32! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    _tm-art-u @ 1- _tm-art-u ! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    99 _tm-art _tm-art-u @ + C! 1 _tm-art-u +! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    _tm-art 8 + DUP C@ 1 XOR SWAP C!
-    MTRUST-S-INVALID _tm-expect
-
-    _tm-build-duplicate
-    MTRUST-S-CONFLICT _tm-expect
-
-    _tm-build-duplicate
-    S" Duplicate.Example" _tm-art 16 + _tm-record-u @ + 8 + SWAP CMOVE
-    _tm-seal
-    MTRUST-S-CONFLICT _tm-expect
-
-    \ White-box the append boundary after a successful full preflight.  A
-    \ second-record structural failure rolls back the already-appended first
-    \ record, and a same-shape post-hash mutation is caught by the second
-    \ generation check after copying.
-    _tm-build-two
-    _tm-art _MTBI-A ! _tm-art-u @ _MTBI-U !
-    _tm-builder @ _MTBI-BUILDER !
-    _MTBI-PREFLIGHT MTRUST-S-OK = _tm-assert
-    1 _tm-art 16 + _tm-record-u @ + _tm-be16!
-    _tm-snapshot
-    _MTBI-APPEND MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-
-    _tm-build-two
-    _tm-art _MTBI-A ! _tm-art-u @ _MTBI-U !
-    _tm-builder @ _MTBI-BUILDER !
-    _MTBI-PREFLIGHT MTRUST-S-OK = _tm-assert
-    _tm-art _tm-art-u @ + 1- DUP C@ 1 XOR SWAP C!
-    _tm-snapshot
-    _MTBI-APPEND MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-
-    \ Capacity refusal is also preflight-only.  Build eight structurally
-    \ valid distinct anchors, prove the import changes none of them, then
-    \ restore the canonical empty builder for the accepted artifact below.
-    S" capacity.example" 0 _tm-build-one
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-empty-output-digest SHA3-256-HASH
-    S" cap0.example" _tm-cap-anchor
-    S" cap1.example" _tm-cap-anchor
-    S" cap2.example" _tm-cap-anchor
-    S" cap3.example" _tm-cap-anchor
-    S" cap4.example" _tm-cap-anchor
-    S" cap5.example" _tm-cap-anchor
-    S" cap6.example" _tm-cap-anchor
-    S" cap7.example" _tm-cap-anchor
-    _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-CAPACITY = _tm-assert
-    _tm-unchanged? _tm-assert
-    _tm-builder @ _MTB.BUFFER @ 16 +
-        _tm-builder @ _MTB.POSITION @ 16 - 0 FILL
-    16 _tm-builder @ _MTB.POSITION !
-    0 _tm-builder @ _MTB.COUNT !
-    _tm-builder @ _MTB-STRUCTURE? _tm-assert
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-output-digest SHA3-256-HASH
-    _tm-empty-output-digest 32 _tm-output-digest 32 COMPARE 0=
-        _tm-assert
-
-    \ One valid two-host artifact qualifies the complete multi-record scan
-    \ and append path.  Reimport and mixed-case scope aliases are semantic
-    \ duplicate conflicts and change no output byte.
-    _tm-build-two
-    _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-OK = _tm-assert
-    _tm-builder @ _MTB.COUNT @ _tm-old-count @ 2 + = _tm-assert
-    _tm-builder @ _MTB.POSITION @ _tm-old-pos @
-        _tm-art-u @ 16 - + = _tm-assert
-    _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-CONFLICT = _tm-assert
-    _tm-unchanged? _tm-assert
-    S" FIRST.EXAMPLE" 0 _tm-build-one
-    MTRUST-S-CONFLICT _tm-expect
-    MTRUST-S-OK ;
-
-: _tm-run  ( -- )
-    0 _tm-fails ! 0 _tm-checks ! DEPTH _tm-depth !
-    TLS-TRUST-RESET
-    _CDTR-DECODE TLS-CERT-OK = _tm-assert
-    _tm-build-two
-    _tm-art 8 + _MTR-BE64@ DUP _tm-generation ! 0<> _tm-assert
-    _tm-art _tm-art-u @ _MTRUST-BUILDER MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    S" org.akashic.testing.exact-mpta" ['] _tm-import-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tm-assert
-    MTRUST-FROZEN? _tm-assert
-    MTRUST-COUNT@ 2 = _tm-assert
-    TLS-TRUST-COUNT @ 2 = _tm-assert
-    MTRUST-GENERATION@ _tm-generation @ = _tm-assert
-    S" first.example" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _tm-assert
-    S" other.example" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _tm-assert
-    S" sub.first.example" 0 TLS-TRUST@ _TLS-SCOPE-MATCH?
-        0= _tm-assert
-    S" first.example.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH?
-        0= _tm-assert
-    0 TLS-TRUST@ TTA-FLAGS + @ 0= _tm-assert
-    1 TLS-TRUST@ TTA-FLAGS + @ 0= _tm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tm-assert
-    _tm-art _tm-art-u @ _MTRUST-BUILDER MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    _tm-stack
-    _tm-fails @ 0= IF
-        ." TLS TRUST MPTA PASS " _tm-checks @ .
-    ELSE
-        ." TLS TRUST MPTA FAIL " _tm-fails @ . ."  / " _tm-checks @ .
-    THEN CR ;
-
-_tm-run
-""",
-        ready_markers=("TLS TRUST MPTA PASS",),
-        stable_markers=("TLS TRUST MPTA PASS",),
-        failure_markers=("TLS TRUST MPTA FAIL", "TM ASSERT"),
-        include_large_sample=False,
-    ),
-    "tls-trust-registry-error": Profile(
-        roots=("net/tls-trust-registry.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - nonthrowing trust contributor failure
-ENTER-USERLAND
-." [akashic] loading trust contributor error contract" CR
-REQUIRE net/tls-trust-registry.f
-
-VARIABLE _te-fails
-VARIABLE _te-checks
-VARIABLE _te-depth
-: _te-assert  ( flag -- )
-    1 _te-checks +!
-    0= IF 1 _te-fails +! ." ASSERT " _te-checks @ . CR THEN ;
-: _te-error  ( builder context -- status ) 2DROP -771 ;
-: _te-run  ( -- )
-    0 _te-fails ! 0 _te-checks ! DEPTH _te-depth !
-    1 TLS-TRUST-COUNT ! 1 TLS-TRUST-VERSION ! 99 TLS-TRUST-GENERATION !
-    S" org.akashic.testing.error" ['] _te-error 0
-        MTRUST-REGISTER MTRUST-S-OK = _te-assert
-    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _te-assert
-    MTRUST-LAST-DETAIL@ -771 = _te-assert
-    MTRUST-STATE@ MTRUST-STATE-FAILED = _te-assert
-    TLS-TRUST-COUNT @ 0= _te-assert
-    TLS-TRUST-VERSION @ 0= _te-assert
-    TLS-TRUST-GENERATION @ 0= _te-assert
-    S" org.akashic.testing.late" ['] _te-error 0
-        MTRUST-REGISTER MTRUST-S-STATE = _te-assert
-    MTRUST-FREEZE MTRUST-S-STATE = _te-assert
-    DEPTH _te-depth @ = _te-assert
-    _te-fails @ 0= IF
-        ." TLS TRUST ERROR PASS " _te-checks @ .
-    ELSE
-        ." TLS TRUST ERROR FAIL " _te-fails @ . ."  / " _te-checks @ .
-    THEN CR ;
-
-_te-run
-""",
-        ready_markers=("TLS TRUST ERROR PASS",),
-        stable_markers=("TLS TRUST ERROR PASS",),
-        failure_markers=("TLS TRUST ERROR FAIL",),
-        include_large_sample=False,
-    ),
-    "tls-trust-registry-throw": Profile(
-        roots=("net/tls-trust-registry.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - throwing trust contributor failure
-ENTER-USERLAND
-." [akashic] loading trust contributor throw contract" CR
-REQUIRE net/tls-trust-registry.f
-
-VARIABLE _tt-fails
-VARIABLE _tt-checks
-VARIABLE _tt-depth
-: _tt-assert  ( flag -- )
-    1 _tt-checks +!
-    0= IF 1 _tt-fails +! ." ASSERT " _tt-checks @ . CR THEN ;
-: _tt-throw  ( builder context -- status ) 2DROP -772 THROW 0 ;
-: _tt-run  ( -- )
-    0 _tt-fails ! 0 _tt-checks ! DEPTH _tt-depth !
-    S" org.akashic.testing.throw" ['] _tt-throw 0
-        MTRUST-REGISTER MTRUST-S-OK = _tt-assert
-    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _tt-assert
-    MTRUST-LAST-DETAIL@ -772 = _tt-assert
-    MTRUST-STATE@ MTRUST-STATE-FAILED = _tt-assert
-    TLS-TRUST-COUNT @ 0= _tt-assert
-    DEPTH _tt-depth @ = _tt-assert
-    _tt-fails @ 0= IF
-        ." TLS TRUST THROW PASS " _tt-checks @ .
-    ELSE
-        ." TLS TRUST THROW FAIL " _tt-fails @ . ."  / " _tt-checks @ .
-    THEN CR ;
-
-_tt-run
-""",
-        ready_markers=("TLS TRUST THROW PASS",),
-        stable_markers=("TLS TRUST THROW PASS",),
-        failure_markers=("TLS TRUST THROW FAIL",),
-        include_large_sample=False,
-    ),
-    "tls-trust-registry-builder": Profile(
-        roots=("net/tls-trust-registry.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - corrupt trust-builder contributor contract
-ENTER-USERLAND
-." [akashic] loading trust builder corruption contract" CR
-REQUIRE net/tls-trust-registry.f
-
-VARIABLE _tb-fails
-VARIABLE _tb-checks
-VARIABLE _tb-depth
-: _tb-assert  ( flag -- )
-    1 _tb-checks +!
-    0= IF 1 _tb-fails +! ." ASSERT " _tb-checks @ . CR THEN ;
-: _tb-corrupt  ( builder context -- status )
-    DROP DUP 15 SWAP _MTB.POSITION !
-    -1 SWAP _MTB.BUFFER ! MTRUST-S-OK ;
-: _tb-run  ( -- )
-    0 _tb-fails ! 0 _tb-checks ! DEPTH _tb-depth !
-    S" org.akashic.testing.builder-corruption" ['] _tb-corrupt 0
-        MTRUST-REGISTER MTRUST-S-OK = _tb-assert
-    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _tb-assert
-    MTRUST-LAST-DETAIL@ MTRUST-D-EMITTER-BUILDER = _tb-assert
-    MTRUST-STATE@ MTRUST-STATE-FAILED = _tb-assert
-    TLS-TRUST-COUNT @ 0= _tb-assert
-    TLS-TRUST-VERSION @ 0= _tb-assert
-    TLS-TRUST-GENERATION @ 0= _tb-assert
-    DEPTH _tb-depth @ = _tb-assert
-    _tb-fails @ 0= IF
-        ." TLS TRUST BUILDER PASS " _tb-checks @ .
-    ELSE
-        ." TLS TRUST BUILDER FAIL " _tb-fails @ . ."  / " _tb-checks @ .
-    THEN CR ;
-
-_tb-run
-""",
-        ready_markers=("TLS TRUST BUILDER PASS",),
-        stable_markers=("TLS TRUST BUILDER PASS",),
-        failure_markers=("TLS TRUST BUILDER FAIL",),
-        include_large_sample=False,
-    ),
-    "atproto-public-trust": Profile(
-        roots=("atproto/public-trust.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - scoped public Bluesky trust contract
-ENTER-USERLAND
-." [akashic] loading public Bluesky trust contract" CR
-REQUIRE atproto/public-trust.f
-
-VARIABLE _apt-fails
-VARIABLE _apt-checks
-VARIABLE _apt-depth
-: _apt-assert  ( flag -- )
-    1 _apt-checks +!
-    0= IF 1 _apt-fails +! ." ASSERT " _apt-checks @ . CR THEN ;
-: _apt-stack  ( -- ) DEPTH _apt-depth @ = _apt-assert ;
-
-: _apt-run  ( -- )
-    0 _apt-fails ! 0 _apt-checks ! DEPTH _apt-depth !
-    TLS-TRUST-RESET
-    _APTR-DECODE-YR1 MTRUST-S-OK = _apt-assert
-    _APTR-DECODE-YR2 MTRUST-S-OK = _apt-assert
-    _APTR-YR1 C@ 48 = _apt-assert
-    _APTR-YR2 C@ 48 = _apt-assert
-    _APTR-YR1 _APTR-YR1-SIZE _APTR-YR2 _APTR-YR2-SIZE COMPARE 0<> _apt-assert
-    ATPUBLIC-TRUST-REGISTER MTRUST-S-OK = _apt-assert
-    ATPUBLIC-TRUST-REGISTER MTRUST-S-OK = _apt-assert
-    TLS-TRUST-COUNT @ 0= _apt-assert
-    MTRUST-FREEZE MTRUST-S-OK = _apt-assert
-    MTRUST-FROZEN? _apt-assert
-    MTRUST-COUNT@ 2 = _apt-assert
-    TLS-TRUST-COUNT @ 2 = _apt-assert
-    TLS-TRUST-VERSION @ 1 = _apt-assert
-    TLS-TRUST-GENERATION @ 0<> _apt-assert
-    S" public.api.bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _apt-assert
-    S" PUBLIC.API.BSKY.APP" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _apt-assert
-    S" bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    S" api.bsky.app" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    S" evil.public.api.bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    S" public.api.bsky.app.evil" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    0 TLS-TRUST@ TTA-FLAGS + @ 0= _apt-assert
-    1 TLS-TRUST@ TTA-FLAGS + @ 0= _apt-assert
-    0 TLS-TRUST@ TTA-DESC + XC.PUB-ALGO + @ X509-ALG-RSA2048 = _apt-assert
-    1 TLS-TRUST@ TTA-DESC + XC.PUB-ALGO + @ X509-ALG-RSA2048 = _apt-assert
-    0 TLS-TRUST@ TTA-DESC + XC.FLAGS + @ XCF-CA AND 0<> _apt-assert
-    1 TLS-TRUST@ TTA-DESC + XC.FLAGS + @ XCF-CA AND 0<> _apt-assert
-    ATPUBLIC-TRUST-REGISTER MTRUST-S-FROZEN = _apt-assert
-    _apt-stack
-    _apt-fails @ 0= IF
-        ." ATPROTO PUBLIC TRUST PASS " _apt-checks @ .
-    ELSE
-        ." ATPROTO PUBLIC TRUST FAIL " _apt-fails @ . ."  / " _apt-checks @ .
-    THEN CR ;
-
-_apt-run
-""",
-        ready_markers=("ATPROTO PUBLIC TRUST PASS",),
-        stable_markers=("ATPROTO PUBLIC TRUST PASS",),
-        failure_markers=("ATPROTO PUBLIC TRUST FAIL",),
-        include_large_sample=False,
+        # Room beside the files Desk's closure ships, the root set among them.
+        total_sectors=16384,
     ),
     "http-buffered": Profile(
         roots=("net/http-buffered.f",),
@@ -7389,185 +6732,6 @@ _cc-run
 """,
         ready_markers=("CODEX CATALOG PASS",),
         stable_markers=("CODEX CATALOG PASS",),
-    ),
-    "codex-source": Profile(
-        roots=(
-            "tui/applets/agent/providers/codex/source.f",
-            "tui/applets/agent/providers/codex/trust.f",
-            "tui/applets/agent/runtime.f",
-        ),
-        resources=(),
-        autoexec=r"""\ autoexec.f - owned Codex provider source
-ENTER-USERLAND
-." [akashic] loading Codex provider source" CR
-REQUIRE tui/applets/agent/providers/codex/source.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
-REQUIRE tui/applets/agent/runtime.f
-
-VARIABLE _cm-fails
-VARIABLE _cm-checks
-VARIABLE _cm-depth
-VARIABLE _cm-source
-VARIABLE _cm-provider
-VARIABLE _cm-runtime
-VARIABLE _cm-trust-generation
-VARIABLE _cm-cancels
-VARIABLE _cm-closes
-VARIABLE _cm-failure-source
-VARIABLE _cm-auth-cancels
-VARIABLE _cm-model-cancels
-CREATE _cm-wire 4096 ALLOT
-CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
-CREATE _cm-session 256 ALLOT
-: _cm-assert  ( flag -- )
-    1 _cm-checks +!
-    0= IF 1 _cm-fails +! ." ASSERT " _cm-checks @ . CR THEN ;
-: _cm-stack  ( -- )
-    DEPTH DUP _cm-depth @ <> IF
-        ." STACK " _cm-depth @ . ." -> " DUP . CR .S CR
-    THEN
-    _cm-depth @ = _cm-assert ;
-
-: _cm-cancel  ( context -- ) DROP 1 _cm-cancels +! ;
-: _cm-close  ( context -- ) DROP 1 _cm-closes +! -792 THROW ;
-: _cm-auth-cancel-fail  ( context -- )
-    DROP 1 _cm-auth-cancels +! -795 THROW ;
-: _cm-auth-cancel-ok  ( context -- ) DROP 1 _cm-auth-cancels +! ;
-: _cm-model-cancel  ( context -- ) DROP 1 _cm-model-cancels +! ;
-: _cm-free-failure-source  ( -- ) _cm-failure-source @ CODEX-SOURCE-FREE ;
-
-: _cm-test-cancel-exhaustion  ( -- )
-    0 _cm-auth-cancels ! 0 _cm-model-cancels !
-    CODEX-SOURCE-NEW
-    DUP APSOURCE-S-OK = _cm-assert DROP _cm-failure-source !
-    ['] _cm-auth-cancel-fail
-    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT
-    KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-model-cancel
-    _cm-failure-source @ CODEX-SOURCE-MODEL-TRANSPORT
-    KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-free-failure-source CATCH
-    KDOSTLS-E-CLEANUP NEGATE = _cm-assert
-    _cm-auth-cancels @ 1 = _cm-assert
-    _cm-model-cancels @ 1 = _cm-assert
-    _cm-failure-source @ DUP APSOURCE.ID-A @ SWAP APSOURCE.ID-U @
-    S" org.akashic.agent.source.codex" STR-STR= _cm-assert
-
-    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS.PORT NIO-INIT
-    ['] _cm-auth-cancel-ok
-    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT
-    KDOSTLS.PORT NIO.CANCEL-XT !
-    _cm-failure-source @ CODEX-SOURCE-FREE
-    _cm-auth-cancels @ 2 = _cm-assert
-    _cm-model-cancels @ 1 = _cm-assert ;
-
-: _cm-run  ( -- )
-    0 _cm-fails ! 0 _cm-checks ! 0 _cm-cancels ! 0 _cm-closes !
-    DEPTH _cm-depth !
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
-    TLS-TRUST-COUNT @ 0= _cm-assert
-    CODEX-SOURCE-NEW
-    DUP APSOURCE-S-OK = _cm-assert DROP _cm-source !
-    ['] _cm-cancel _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT
-        KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-close _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT
-        KDOSTLS.PORT NIO.CLOSE-XT !
-    ['] _cm-cancel _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT
-        KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-close _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT
-        KDOSTLS.PORT NIO.CLOSE-XT !
-    TLS-TRUST-COUNT @ 0= _cm-assert
-    TLS-TRUST-GENERATION @ 0= _cm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _cm-assert
-    MTRUST-FROZEN? _cm-assert
-    MTRUST-GENERATION@ DUP 0<> _cm-assert
-    DUP _cm-trust-generation ! TLS-TRUST-GENERATION @ = _cm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _cm-assert
-    CODEX-TRUST-REGISTER MTRUST-S-FROZEN = _cm-assert
-    _cm-source @ CODEX-SOURCE-CONFIG OAIC-HOST
-    CODEX-BACKEND-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS-HOST
-    CODEX-AUTH-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT KDOSTLS-HOST
-    CODEX-BACKEND-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH AAUTH.METHODS @
-    AAUTH-M-DEVICE AND 0<> _cm-assert
-
-    _cm-source @ APSOURCE-PROVIDER-NEW
-    DUP OAIR-S-OK = _cm-assert DROP _cm-provider !
-    _cm-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
-    CODEX-PROVIDER-ID STR-STR= _cm-assert
-    _cm-provider @ APROV-AUTH
-    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH = _cm-assert
-    TLS-TRUST-COUNT @ 2 = _cm-assert
-    TLS-TRUST-VERSION @ 1 = _cm-assert
-    TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
-    S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
-    S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
-    S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
-    S" auth.openai.com.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
-    _cm-provider @ APROV-RUN-SETTINGS
-    _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
-    _cm-source @ CODEX-SOURCE-CATALOG CDMC.CONFIG @
-    _cm-provider @ OPENAI-PROVIDER-CONFIG = _cm-assert
-    \ A turn that names its model is configured from the catalog.
-    _cm-provider @ APROV.CONTEXT @ DUP OAIR-C.DESIGNATE-XT @
-    ['] CDMC-DESIGNATE = _cm-assert
-    OAIR-C.DESIGNATE-CONTEXT @ _cm-source @ CODEX-SOURCE-CATALOG = _cm-assert
-    _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
-    _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
-    _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
-    AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _cm-assert
-    _cm-runtime @ ARUNTIME-RUN-SETTINGS
-    _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
-    S" hello" _cm-runtime @ ARUNTIME-SEND 4 = _cm-assert
-
-    S" account-fixture"
-    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH AAUTH.ACCOUNT-ID CV-STRING!
-    0= _cm-assert
-    _cm-provider @ OPENAI-PROVIDER-CONFIG OAIC.FLAGS DUP @
-    OAIC-F-RESPONSES-LITE OR SWAP !
-    _cm-wire 4096 _cm-request HREQ-INIT HREQ-S-OK = _cm-assert
-    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
-    HREQ-S-OK = _cm-assert
-    _cm-session 256 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
-    _cm-provider @ OPENAI-PROVIDER-CONFIG _cm-session OAIR-S.CONFIG !
-    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
-    OAIR-S-OK = _cm-assert
-    _cm-wire _cm-request HREQ.LENGTH @
-    S" x-openai-internal-codex-responses-lite: true"
-    STR-STR-CONTAINS _cm-assert
-    \ The headers follow the session's own configuration, which a turn
-    \ naming its model has, not the provider's.
-    _cm-request HREQ-CLEAR
-    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
-    HREQ-S-OK = _cm-assert
-    _cm-source @ CODEX-SOURCE-CONFIG _cm-session OAIR-S.CONFIG !
-    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
-    OAIR-S-OK = _cm-assert
-    _cm-wire _cm-request HREQ.LENGTH @
-    S" x-openai-internal-codex-responses-lite: true"
-    STR-STR-CONTAINS 0= _cm-assert
-    _cm-runtime @ ARUNTIME-FREE
-    _cm-provider @ APROV-FREE
-    _cm-source @ APSOURCE-FREE
-    _cm-cancels @ 2 = _cm-assert
-    _cm-closes @ 0= _cm-assert
-    TLS-TRUST-COUNT @ 2 = _cm-assert
-    TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
-    _cm-test-cancel-exhaustion
-    _cm-stack
-    _cm-fails @ 0= IF
-        ." CODEX SOURCE PASS " _cm-checks @ .
-    ELSE
-        ." CODEX SOURCE FAIL " _cm-fails @ . ." / " _cm-checks @ .
-    THEN CR ;
-
-_cm-run
-""",
-        ready_markers=("CODEX SOURCE PASS",),
-        stable_markers=("CODEX SOURCE PASS",),
     ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
@@ -18548,14 +17712,16 @@ _slc-run
 PROFILES["streams-live-public"] = Profile(
     roots=(
         "tui/applets/streams/bluesky-public.f",
-        "atproto/public-trust.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - credential-free public Streams qualification
 ENTER-USERLAND
 ." [akashic] loading public Streams qualification" CR
 REQUIRE tui/applets/streams/bluesky-public.f
-REQUIRE atproto/public-trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 
 VARIABLE _slp-inst
 VARIABLE _slp-state
@@ -18638,15 +17804,28 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
         -1 THROW
     THEN ;
 
+: _slp-trust-fail  ( reason-a reason-u -- )
+    ." STREAMS LIVE PUBLIC TRUST FAIL " TYPE CR -1 THROW ;
+
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _slp-roots  ( -- )
+    S" boot" PLACES-VOLUME IF S" volume" _slp-trust-fail THEN
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE
+        IF S" place" _slp-trust-fail THEN
+    PLSET-NEW IF S" set" _slp-trust-fail THEN >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT IF S" grant" _slp-trust-fail THEN
+    WEB-ROOTS-REGISTER DUP MTRUST-S-OK <> IF
+        ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
+    THEN DROP ;
+
 : _slp-exercise  ( -- )
     10 64 0 2 IP-SET
     10 64 0 1 GW-IP IP!
     255 255 255 0 NET-MASK IP!
     8 8 8 8 DNS-SERVER-IP IP!
 
-    ATPUBLIC-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-        ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
-    THEN DROP
+    _slp-roots
     MTRUST-FREEZE DUP MTRUST-S-OK <> IF
         ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
     THEN DROP
@@ -22597,10 +21776,11 @@ _STREAMS_VERTICAL_FEED_URL = (
     "hugo-theme-more-contentful/feed.rss"
 )
 _STREAMS_VERTICAL_ACTOR = "did:plc:z72i7hdynmk6r22z27h6tvur"
+# The vertical's narrow syndication policy.  It registers no trust and does not
+# freeze the registry: Desk registers the machine's global root set from its
+# origin while the registry is open and freezes it itself, and the public
+# hosts verify against that set.
 _STREAMS_VERTICAL_COMPOSITION = r"""
-REQUIRE atproto/public-trust.f
-REQUIRE local_testing/streams-live-trust.f
-
 VARIABLE _dsv-source
 VARIABLE _dsv-target
 
@@ -22626,28 +21806,12 @@ VARIABLE _dsv-target
 : _dsv-syndication-factory  ( -- provider status )
     ['] _dsv-syndication-authorized? 0
         STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED ;
-
-: _dsv-syndication-trust  ( builder context -- status )
-    DROP _lrc-artifact _lrc-artifact-u ROT MTRUST-MPTA+ ;
-
-ATPUBLIC-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-    ." STREAMS VERTICAL AT TRUST FAIL status=" . CR TX-FLUSH ABORT
-THEN DROP
-S" org.akashic.trust.streams-vertical-syndication"
-    ['] _dsv-syndication-trust 0 MTRUST-REGISTER
-    DUP MTRUST-S-OK <> IF
-        ." STREAMS VERTICAL RSS TRUST FAIL status=" . CR TX-FLUSH ABORT
-    THEN DROP
-MTRUST-FREEZE DUP MTRUST-S-OK <> IF
-    ." STREAMS VERTICAL TRUST FREEZE FAIL status=" . CR TX-FLUSH ABORT
-THEN DROP
 """
 
 PROFILES["desktop-streams-vertical"] = Profile(
     roots=(
         "tui/applets/desk/desk.f",
         "tui/applets/streams/streams-online.f",
-        "atproto/public-trust.f",
     ),
     resources=PROFILES["desktop-streams"].resources,
     autoexec=(
@@ -22678,26 +21842,12 @@ PROFILES["desktop-streams-vertical"] = Profile(
     stable_markers=("[Agent: offline]",),
     linked=True,
     requires_network=True,
-    failure_markers=(
-        "STREAMS VERTICAL AT TRUST FAIL",
-        "STREAMS VERTICAL RSS TRUST FAIL",
-        "STREAMS VERTICAL TRUST FREEZE FAIL",
-    ),
-    initial_files=(
-        (
-            "local_testing/streams-live-trust.f",
-            _streams_live_exact_host_trust_leaf(),
-        ),
-    ),
     include_large_sample=False,
     total_sectors=PROFILES["desktop-streams"].total_sectors,
 )
 
 PROFILES["streams-multiprotocol-composition"] = Profile(
-    roots=(
-        "tui/applets/streams/streams-online.f",
-        "atproto/public-trust.f",
-    ),
+    roots=("tui/applets/streams/streams-online.f",),
     resources=(),
     autoexec=(
         r"""\ autoexec.f - deterministic Streams multiprotocol composition
@@ -22767,15 +21917,6 @@ _dsvc-run
     failure_markers=(
         "STREAMS MULTIPROTOCOL ASSERT",
         "STREAMS MULTIPROTOCOL COMPOSITION FAIL",
-        "STREAMS VERTICAL AT TRUST FAIL",
-        "STREAMS VERTICAL RSS TRUST FAIL",
-        "STREAMS VERTICAL TRUST FREEZE FAIL",
-    ),
-    initial_files=(
-        (
-            "local_testing/streams-live-trust.f",
-            _streams_live_exact_host_trust_leaf(),
-        ),
     ),
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
@@ -22893,7 +22034,8 @@ PROFILES["codex-live-tls"] = Profile(
     roots=(
         "tui/applets/agent/providers/codex/auth.f",
         "tui/applets/agent/providers/codex/config.f",
-        "tui/applets/agent/providers/codex/trust.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
         "net/transports/kdos-tls.f",
     ),
     resources=(),
@@ -22902,7 +22044,8 @@ ENTER-USERLAND
 ." [akashic] loading Codex live TLS gate" CR
 REQUIRE tui/applets/agent/providers/codex/auth.f
 REQUIRE tui/applets/agent/providers/codex/config.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 REQUIRE net/transports/kdos-tls.f
 
 CREATE _clt-auth KDOSTLS-SIZE ALLOT
@@ -22924,14 +22067,24 @@ VARIABLE _clt-adapter
     THEN DROP
     _clt-adapter @ KDOSTLS.PORT NIO-CLOSE ;
 
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _clt-roots  ( -- )
+    S" boot" PLACES-VOLUME ABORT" CODEX TLS TRUST FAIL volume"
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE
+    ABORT" CODEX TLS TRUST FAIL place"
+    PLSET-NEW ABORT" CODEX TLS TRUST FAIL set" >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT ABORT" CODEX TLS TRUST FAIL grant"
+    WEB-ROOTS-REGISTER DUP MTRUST-S-OK <> IF
+        ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP ;
+
 10 64 0 2 IP-SET
 10 64 0 1 GW-IP IP!
 255 255 255 0 NET-MASK IP!
 8 8 8 8 DNS-SERVER-IP IP!
 
-CODEX-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-    ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
-THEN DROP
+_clt-roots
 MTRUST-FREEZE DUP MTRUST-S-OK <> IF
     ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
 THEN DROP
@@ -22958,7 +22111,8 @@ CODEX-BACKEND-HOST _clt-backend _clt-connect
 PROFILES["codex-live-auth"] = Profile(
     roots=(
         "tui/applets/agent/providers/codex/auth.f",
-        "tui/applets/agent/providers/codex/trust.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
         "net/transports/kdos-tls.f",
     ),
     resources=(),
@@ -22966,7 +22120,8 @@ PROFILES["codex-live-auth"] = Profile(
 ENTER-USERLAND
 ." [akashic] loading Codex live authentication probe" CR
 REQUIRE tui/applets/agent/providers/codex/auth.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 REQUIRE net/transports/kdos-tls.f
 
 CREATE _cla-tls KDOSTLS-SIZE ALLOT
@@ -23000,15 +22155,25 @@ VARIABLE _cla-code-shown
     _cla-auth CDA.AUTH AAUTH.USER-CODE DUP CV-DATA@ SWAP CV-LEN@ TYPE CR
     ." Waiting for browser authorization..." CR TX-FLUSH ;
 
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _cla-roots  ( -- )
+    S" boot" PLACES-VOLUME ABORT" CODEX AUTH TRUST FAIL volume"
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE
+    ABORT" CODEX AUTH TRUST FAIL place"
+    PLSET-NEW ABORT" CODEX AUTH TRUST FAIL set" >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT ABORT" CODEX AUTH TRUST FAIL grant"
+    WEB-ROOTS-REGISTER DUP MTRUST-S-OK <> IF
+        ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP ;
+
 : _cla-run  ( -- )
     0 _cla-polls ! 0 _cla-code-shown !
     10 64 0 2 IP-SET
     10 64 0 1 GW-IP IP!
     255 255 255 0 NET-MASK IP!
     8 8 8 8 DNS-SERVER-IP IP!
-    CODEX-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-        ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
-    THEN DROP
+    _cla-roots
     MTRUST-FREEZE DUP MTRUST-S-OK <> IF
         ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
     THEN DROP
@@ -34497,7 +33662,8 @@ _dst-run
     ),
     linked=True,
     include_large_sample=False,
-    total_sectors=8192,
+    # Room beside the files Desk's closure ships, the root set among them.
+    total_sectors=16384,
 )
 
 
@@ -34711,6 +33877,8 @@ PROFILES["streams-configured-refresh-live"] = Profile(
         "net/tls-trust-registry.f",
         "tui/applets/streams/refresh-owner.f",
         "tui/applets/streams/syndication-http.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - live exact-host configured refresh qualification
@@ -34719,7 +33887,8 @@ ENTER-USERLAND
 REQUIRE net/tls-trust-registry.f
 REQUIRE tui/applets/streams/refresh-owner.f
 REQUIRE tui/applets/streams/syndication-http.f
-REQUIRE local_testing/streams-live-trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 
 VARIABLE _lrc-checks
 VARIABLE _lrc-depth
@@ -34756,8 +33925,14 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
     THEN
     DEPTH _lrc-depth @ = _lrc-assert ;
 
-: _lrc-trust-emit  ( builder context -- status )
-    DROP _lrc-artifact _lrc-artifact-u ROT MTRUST-MPTA+ ;
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _lrc-roots  ( -- )
+    S" boot" PLACES-VOLUME 0= _lrc-assert
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE 0= _lrc-assert
+    PLSET-NEW 0= _lrc-assert >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT 0= _lrc-assert
+    WEB-ROOTS-REGISTER MTRUST-S-OK = _lrc-assert ;
 
 : _lrc-authorize  ( exact-source canonical-target context -- allowed? )
     _lrc-auth-policy ! _lrc-auth-target ! _lrc-auth-source !
@@ -34894,9 +34069,7 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
 
 : _lrc-exercise  ( -- )
     DEPTH _lrc-depth !
-    S" org.akashic.trust.streams-syndication-live"
-        ['] _lrc-trust-emit 0 MTRUST-REGISTER
-        MTRUST-S-OK = _lrc-assert
+    _lrc-roots
     MTRUST-FREEZE DUP _lrc-status ! MTRUST-S-OK <> IF
         ." STREAMS CONFIGURED REFRESH LIVE TRUST FAIL status=" _lrc-status @ .
         ."  detail=" MTRUST-LAST-DETAIL@ . CR TX-FLUSH
@@ -34996,12 +34169,6 @@ _lrc-run
     link_chunk_bytes=64 * 1024,
     requires_network=True,
     include_large_sample=False,
-    initial_files=(
-        (
-            "local_testing/streams-live-trust.f",
-            _streams_live_exact_host_trust_leaf(),
-        ),
-    ),
 )
 
 

@@ -77,6 +77,7 @@ REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/job.f
 REQUIRE ../../../net/tls-trust-registry.f
+REQUIRE ../../../net/web-roots.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
@@ -1871,6 +1872,15 @@ VARIABLE _DMC-CANDIDATE
     DUP _DINI-INST ! _DESK-USE-STATE
     DESK-CONTEXT DUP 0= ABORT" desk: no active Practice Context"
     _DINI-CONTEXT !
+    \ The global root set ships with the image's files; Desk adds it to
+    \ the machine's trust as it composes it.  Without an origin there are
+    \ no shipped files, and so no global anchors.
+    MTRUST-STATE@ MTRUST-STATE-OPEN = IF
+        _DINI-INST @ CINST-ORIGIN ?DUP IF
+            WEB-ROOTS-REGISTER MTRUST-S-OK <>
+            ABORT" desk: web root registration failed"
+        THEN
+    THEN
     MTRUST-FREEZE MTRUST-S-OK <>
     ABORT" desk: machine TLS trust unavailable"
     _DESK-XIO-INIT XIO-S-OK <>

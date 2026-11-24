@@ -1,18 +1,27 @@
 \ =====================================================================
 \  tls-trust-registry.f - One composed machine TLS trust bundle
 \ =====================================================================
-\  Trusted boot code registers bounded contribution emitters.  The machine
-\  owner invokes every emitter into one scratch MPTA image and loads KDOS
-\  exactly once before external I/O is exposed.  There is deliberately no
-\  thaw or live-update path.  A trusted emitter may also import one reviewed
-\  exact-host MPTA artifact transactionally with MTRUST-MPTA+; ordinary
-\  applet code never receives the active builder.
+\  Trusted boot code registers contribution emitters.  The machine owner
+\  invokes every emitter into one MPTA version 2 image, grown to what they
+\  contribute, and loads KDOS exactly once before external I/O is exposed.
+\  There is deliberately no thaw or live-update path, and ordinary applet
+\  code never receives the active builder.
+\
+\  Two kinds of record reach the builder.  MTRUST-ANCHOR+ adds a scoped
+\  anchor, a private root that binds the hosts its scope names.
+\  MTRUST-WEB-ROOTS+ adds the global root set, only as the exact bundle
+\  whose SHA-256 web-roots/web-roots-pin.f pins: the roots NSS trusts for
+\  TLS servers, generated from NSS's certdata.txt with Mozilla's distrust
+\  dates and NSS's imposed name constraints.  No other path adds a global
+\  anchor.
 \ =====================================================================
 
 PROVIDED akashic-net-tls-trust-registry
 
 REQUIRE ../math/sha3.f
+REQUIRE ../math/sha256.f
 REQUIRE ../utils/memory-span.f
+REQUIRE web-roots/web-roots-pin.f
 
 0 CONSTANT MTRUST-S-OK
 1 CONSTANT MTRUST-S-INVALID
@@ -32,8 +41,9 @@ REQUIRE ../utils/memory-span.f
 2 CONSTANT MTRUST-STATE-FROZEN
 3 CONSTANT MTRUST-STATE-FAILED
 
-8 CONSTANT MTRUST-CONTRIBUTOR-MAX
 96 CONSTANT MTRUST-CONTRIBUTOR-ID-CAPACITY
+18 CONSTANT _MTRUST-RECORD-HEADER      \ flags, scope, constraints, cert, date
+4096 CONSTANT _MTRUST-FIRST-CAPACITY   \ grows by doubling
 
 0x4252544D CONSTANT _MTRUST-BUILDER-MAGIC  \ "MTRB" in memory
 
@@ -61,33 +71,33 @@ REQUIRE ../utils/memory-span.f
 : _MTB.POSITION  ( builder -- a ) _MTB-POSITION + ;
 : _MTB.COUNT     ( builder -- a ) _MTB-COUNT + ;
 
-CREATE _MTRUST-CONTRIBUTORS
-    _MTC-SIZE MTRUST-CONTRIBUTOR-MAX * ALLOT
 CREATE _MTRUST-BUILDER MTRUST-BUILDER-SIZE ALLOT
 CREATE _MTRUST-DIGEST 32 ALLOT
-CREATE _MTRUST-MPTA-MAGIC
-    77 C, 80 C, 84 C, 65 C,             \ "MPTA"
-CREATE _MTRUST-MPTA-ZERO8 8 ALLOT
-CREATE _MTRUST-MPTA-DIGEST 32 ALLOT
+CREATE _MTRUST-ROOTS-DIGEST 32 ALLOT
 
 _MTRUST-BUILDER MTRUST-BUILDER-SIZE 0 FILL
-_MTRUST-MPTA-ZERO8 8 0 FILL
 
 VARIABLE _MTRUST-STATE
+VARIABLE _MTRUST-CONTRIBUTORS        \ the table, grown by doubling
+VARIABLE _MTRUST-CONTRIBUTOR-CAP
 VARIABLE _MTRUST-CONTRIBUTOR-N
 VARIABLE _MTRUST-GENERATION
 VARIABLE _MTRUST-ANCHOR-N
 VARIABLE _MTRUST-LAST-STATUS
 VARIABLE _MTRUST-LAST-DETAIL
 VARIABLE _MTRUST-BUFFER
+VARIABLE _MTRUST-ROOTS-IN            \ the root set joined this build
 
 MTRUST-STATE-OPEN _MTRUST-STATE !
+0 _MTRUST-CONTRIBUTORS !
+0 _MTRUST-CONTRIBUTOR-CAP !
 0 _MTRUST-CONTRIBUTOR-N !
 0 _MTRUST-GENERATION !
 0 _MTRUST-ANCHOR-N !
 MTRUST-S-OK _MTRUST-LAST-STATUS !
 0 _MTRUST-LAST-DETAIL !
 0 _MTRUST-BUFFER !
+0 _MTRUST-ROOTS-IN !
 
 : MTRUST-STATE@       ( -- state ) _MTRUST-STATE @ ;
 : MTRUST-FROZEN?      ( -- flag ) MTRUST-STATE@ MTRUST-STATE-FROZEN = ;
@@ -97,17 +107,33 @@ MTRUST-S-OK _MTRUST-LAST-STATUS !
 : MTRUST-LAST-DETAIL@ ( -- detail ) _MTRUST-LAST-DETAIL @ ;
 
 : _MTRUST-CONTRIBUTOR@  ( index -- contributor )
-    _MTC-SIZE * _MTRUST-CONTRIBUTORS + ;
+    _MTC-SIZE * _MTRUST-CONTRIBUTORS @ + ;
 
 VARIABLE _MTRR-ID-A
 VARIABLE _MTRR-ID-U
 VARIABLE _MTRR-EMIT-XT
 VARIABLE _MTRR-CONTEXT
+VARIABLE _MTRR-NEW
 
 : _MTRR-ID-MATCH?  ( contributor -- flag )
     DUP _MTC.ID-U @ _MTRR-ID-U @ <> IF DROP 0 EXIT THEN
     DUP _MTC.ID SWAP _MTC.ID-U @
     _MTRR-ID-A @ _MTRR-ID-U @ COMPARE 0= ;
+
+\ Room for one more contributor: the table doubles, from eight.
+: _MTRR-ROOM  ( -- status )
+    _MTRUST-CONTRIBUTOR-N @ _MTRUST-CONTRIBUTOR-CAP @ < IF
+        MTRUST-S-OK EXIT
+    THEN
+    _MTRUST-CONTRIBUTOR-CAP @ 2* 8 MAX
+    DUP _MTC-SIZE * ALLOCATE IF 2DROP MTRUST-S-CAPACITY EXIT THEN
+    _MTRR-NEW !
+    _MTRUST-CONTRIBUTORS @ ?DUP IF
+        DUP _MTRR-NEW @ _MTRUST-CONTRIBUTOR-N @ _MTC-SIZE * CMOVE FREE
+    THEN
+    _MTRR-NEW @ _MTRUST-CONTRIBUTORS !
+    _MTRUST-CONTRIBUTOR-CAP !
+    MTRUST-S-OK ;
 
 \ Register one trusted preboot emitter.  Repeating the same ID, callback,
 \ and context is idempotent; reusing an ID for different code is rejected.
@@ -137,9 +163,7 @@ VARIABLE _MTRR-CONTEXT
         THEN
         DROP
     LOOP
-    _MTRUST-CONTRIBUTOR-N @ MTRUST-CONTRIBUTOR-MAX >= IF
-        MTRUST-S-CAPACITY EXIT
-    THEN
+    _MTRR-ROOM ?DUP IF EXIT THEN
     _MTRUST-CONTRIBUTOR-N @ _MTRUST-CONTRIBUTOR@ >R
     _MTRR-ID-U @ R@ _MTC.ID-U !
     _MTRR-EMIT-XT @ R@ _MTC.EMIT-XT !
@@ -161,17 +185,40 @@ VARIABLE _MTR-BE64-A
     _MTR-BE64-A ! 0
     8 0 DO 8 LSHIFT _MTR-BE64-A @ I + C@ OR LOOP ;
 
+\ The length of the record at addr, from its header.
+: _MTR-RECORD-U  ( addr -- u )
+    DUP 2 + _MTR-BE16@ OVER 4 + _MTR-BE16@ +
+    SWAP 6 + _MTR-BE32@ + _MTRUST-RECORD-HEADER + ;
+
 : _MTB-INIT  ( buffer capacity builder -- )
     >R
     _MTRUST-BUILDER-MAGIC R@ _MTB.MAGIC !
     R@ _MTB.CAPACITY ! R@ _MTB.BUFFER !
     16 R@ _MTB.POSITION !
     0 R@ _MTB.COUNT !
-    R@ _MTB.BUFFER @ R@ _MTB.CAPACITY @ 0 FILL
+    R@ _MTB.BUFFER @ 16 0 FILL
     R> DROP ;
 
 : _MTB-FINI  ( builder -- )
     MTRUST-BUILDER-SIZE 0 FILL ;
+
+VARIABLE _MTBR-NEED
+VARIABLE _MTBR-NEW
+VARIABLE _MTBR-CAP
+
+\ Room for need more bytes: the buffer doubles, or grows to the need.
+: _MTB-ROOM  ( need builder -- status )
+    >R
+    R@ _MTB.POSITION @ + DUP _MTBR-NEED !
+    R@ _MTB.CAPACITY @ <= IF R> DROP MTRUST-S-OK EXIT THEN
+    R@ _MTB.CAPACITY @ 2* _MTBR-NEED @ MAX _MTBR-CAP !
+    _MTBR-CAP @ ALLOCATE IF DROP R> DROP MTRUST-S-CAPACITY EXIT THEN
+    _MTBR-NEW !
+    R@ _MTB.BUFFER @ _MTBR-NEW @ R@ _MTB.POSITION @ CMOVE
+    R@ _MTB.BUFFER @ FREE
+    _MTBR-NEW @ DUP R@ _MTB.BUFFER ! _MTRUST-BUFFER !
+    _MTBR-CAP @ R> _MTB.CAPACITY !
+    MTRUST-S-OK ;
 
 : _MTB-C,  ( byte builder -- )
     DUP >R _MTB.BUFFER @ R@ _MTB.POSITION @ + C!
@@ -189,6 +236,11 @@ VARIABLE _MTR-BE64-A
     DUP 8 RSHIFT 255 AND R@ _MTB-C,
     255 AND R> _MTB-C, ;
 
+: _MTB-U64,  ( value builder -- )
+    >R
+    DUP 32 RSHIFT R@ _MTB-U32,
+    0xFFFFFFFF AND R> _MTB-U32, ;
+
 VARIABLE _MTBB-A
 VARIABLE _MTBB-U
 VARIABLE _MTBB-B
@@ -198,16 +250,6 @@ VARIABLE _MTBB-B
     _MTBB-A @ _MTBB-B @ _MTB.BUFFER @
     _MTBB-B @ _MTB.POSITION @ + _MTBB-U @ CMOVE
     _MTBB-U @ _MTBB-B @ _MTB.POSITION +! ;
-
-VARIABLE _MTBD-CERT-A
-VARIABLE _MTBD-CERT-U
-VARIABLE _MTBD-SCOPE-A
-VARIABLE _MTBD-SCOPE-U
-VARIABLE _MTBD-FLAGS
-VARIABLE _MTBD-BUILDER
-VARIABLE _MTBD-POS
-VARIABLE _MTBD-RECORD-SCOPE-U
-VARIABLE _MTBD-RECORD-CERT-U
 
 VARIABLE _MTRD-A1
 VARIABLE _MTRD-U1
@@ -229,47 +271,34 @@ VARIABLE _MTRD-U2
     -1 ;
 
 VARIABLE _MTBV-BUILDER
-VARIABLE _MTBV-SCAN-POS
-VARIABLE _MTBV-RECORD-U
-VARIABLE _MTBV-SCOPE-U
-VARIABLE _MTBV-CERT-U
+VARIABLE _MTBV-POS
+VARIABLE _MTBV-END
 
+\ The builder's metadata and every record it holds are in bounds.
 : _MTB-STRUCTURE?  ( builder -- flag )
     _MTBV-BUILDER !
-    _MTBV-BUILDER @ _MTB.CAPACITY @ TLS-TRUST-BUNDLE-MAX <> IF
-        0 EXIT
-    THEN
-    _MTBV-BUILDER @ _MTB.COUNT @
-    DUP 0< SWAP TLS-TRUST-MAX > OR IF 0 EXIT THEN
+    _MTBV-BUILDER @ _MTB.BUFFER @ 0= IF 0 EXIT THEN
     _MTBV-BUILDER @ _MTB.POSITION @
-    DUP 16 < SWAP _MTBV-BUILDER @ _MTB.CAPACITY @ > OR IF
-        0 EXIT
-    THEN
-    16 _MTBV-SCAN-POS !
+    DUP 16 < SWAP _MTBV-BUILDER @ _MTB.CAPACITY @ > OR IF 0 EXIT THEN
+    _MTBV-BUILDER @ _MTB.COUNT @ DUP 0< SWAP 65535 > OR IF 0 EXIT THEN
+    _MTBV-BUILDER @ _MTB.BUFFER @ DUP 16 + _MTBV-POS !
+    _MTBV-BUILDER @ _MTB.POSITION @ + _MTBV-END !
     _MTBV-BUILDER @ _MTB.COUNT @ 0 ?DO
-        _MTBV-BUILDER @ _MTB.POSITION @ _MTBV-SCAN-POS @ - 8 < IF
+        _MTBV-END @ _MTBV-POS @ - _MTRUST-RECORD-HEADER < IF
             0 UNLOOP EXIT
         THEN
-        _MTBV-BUILDER @ _MTB.BUFFER @ _MTBV-SCAN-POS @ + >R
-        R@ _MTR-BE16@ TTAF-SUBDOMAINS INVERT AND IF
-            R> DROP 0 UNLOOP EXIT
+        _MTBV-POS @ _MTR-BE16@ TTAF-SUBDOMAINS INVERT AND IF
+            0 UNLOOP EXIT
         THEN
-        R@ 2 + _MTR-BE16@ DUP _MTBV-SCOPE-U !
-        DUP 0= SWAP 253 > OR IF R> DROP 0 UNLOOP EXIT THEN
-        R@ 4 + _MTR-BE32@ DUP _MTBV-CERT-U !
-        DUP 128 < SWAP 8192 > OR IF R> DROP 0 UNLOOP EXIT THEN
-        8 _MTBV-SCOPE-U @ + _MTBV-CERT-U @ +
-            DUP _MTBV-RECORD-U !
-        _MTBV-BUILDER @ _MTB.POSITION @ _MTBV-SCAN-POS @ - > IF
-            R> DROP 0 UNLOOP EXIT
+        _MTBV-POS @ 2 + _MTR-BE16@ 253 > IF 0 UNLOOP EXIT THEN
+        _MTBV-POS @ 6 + _MTR-BE32@ DUP 1 < SWAP 8192 > OR IF
+            0 UNLOOP EXIT
         THEN
-        R@ 8 + _MTBV-SCOPE-U @ 0 DNS-NAME-VALID? 0= IF
-            R> DROP 0 UNLOOP EXIT
-        THEN
-        R> DROP
-        _MTBV-RECORD-U @ _MTBV-SCAN-POS +!
+        _MTBV-POS @ _MTR-RECORD-U
+        DUP _MTBV-END @ _MTBV-POS @ - > IF DROP 0 UNLOOP EXIT THEN
+        _MTBV-POS +!
     LOOP
-    _MTBV-SCAN-POS @ _MTBV-BUILDER @ _MTB.POSITION @ = ;
+    _MTBV-POS @ _MTBV-END @ = ;
 
 : _MTRUST-ACTIVE-BUILDER?  ( -- flag )
     _MTRUST-STATE @ MTRUST-STATE-BUILDING <> IF 0 EXIT THEN
@@ -279,27 +308,39 @@ VARIABLE _MTBV-CERT-U
     _MTRUST-BUILDER _MTB.BUFFER @ _MTRUST-BUFFER @ <> IF 0 EXIT THEN
     _MTRUST-BUILDER _MTB-STRUCTURE? ;
 
+\ The builder argument is the active builder of a composition in progress.
+: _MTRUST-BUILDER-OK?  ( builder -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    _MTRUST-BUILDER <> IF 0 EXIT THEN
+    _MTRUST-ACTIVE-BUILDER? ;
+
+VARIABLE _MTBD-CERT-A
+VARIABLE _MTBD-CERT-U
+VARIABLE _MTBD-SCOPE-A
+VARIABLE _MTBD-SCOPE-U
+VARIABLE _MTBD-FLAGS
+VARIABLE _MTBD-POS
+
+\ A scoped record with the same flags, scope (ignoring ASCII case) and
+\ certificate bytes is already in the builder.
 : _MTB-EXACT-DUPLICATE?  ( cert-a cert-u scope-a scope-u flags builder -- flag )
-    _MTBD-BUILDER ! _MTBD-FLAGS ! _MTBD-SCOPE-U ! _MTBD-SCOPE-A !
+    >R _MTBD-FLAGS ! _MTBD-SCOPE-U ! _MTBD-SCOPE-A !
     _MTBD-CERT-U ! _MTBD-CERT-A !
-    _MTBD-BUILDER @ _MTB.BUFFER @ 16 + _MTBD-POS !
-    _MTBD-BUILDER @ _MTB.COUNT @ 0 ?DO
-        _MTBD-POS @ 2 + _MTR-BE16@ _MTBD-RECORD-SCOPE-U !
-        _MTBD-POS @ 4 + _MTR-BE32@ _MTBD-RECORD-CERT-U !
+    R@ _MTB.BUFFER @ 16 + _MTBD-POS !
+    R> _MTB.COUNT @ 0 ?DO
         _MTBD-POS @ _MTR-BE16@ _MTBD-FLAGS @ =
-        _MTBD-RECORD-SCOPE-U @ _MTBD-SCOPE-U @ = AND
-        _MTBD-RECORD-CERT-U @ _MTBD-CERT-U @ = AND IF
-            _MTBD-POS @ 8 + _MTBD-RECORD-SCOPE-U @
+        _MTBD-POS @ 2 + _MTR-BE16@ _MTBD-SCOPE-U @ = AND
+        _MTBD-POS @ 6 + _MTR-BE32@ _MTBD-CERT-U @ = AND IF
+            _MTBD-POS @ _MTRUST-RECORD-HEADER + _MTBD-SCOPE-U @
             _MTBD-SCOPE-A @ _MTBD-SCOPE-U @ _MTR-DNS-IEQUAL? IF
-                _MTBD-POS @ 8 + _MTBD-RECORD-SCOPE-U @ +
-                _MTBD-RECORD-CERT-U @
-                _MTBD-CERT-A @ _MTBD-CERT-U @ COMPARE 0= IF
+                _MTBD-POS @ _MTRUST-RECORD-HEADER + _MTBD-SCOPE-U @ +
+                _MTBD-POS @ 4 + _MTR-BE16@ +
+                _MTBD-CERT-U @ _MTBD-CERT-A @ _MTBD-CERT-U @ COMPARE 0= IF
                     -1 UNLOOP EXIT
                 THEN
             THEN
         THEN
-        _MTBD-POS @ 8 + _MTBD-RECORD-SCOPE-U @ +
-        _MTBD-RECORD-CERT-U @ + _MTBD-POS !
+        _MTBD-POS @ _MTR-RECORD-U _MTBD-POS +!
     LOOP
     0 ;
 
@@ -309,22 +350,15 @@ VARIABLE _MTBA-SCOPE-A
 VARIABLE _MTBA-SCOPE-U
 VARIABLE _MTBA-FLAGS
 VARIABLE _MTBA-BUILDER
-VARIABLE _MTBA-NEEDED
 
-\ Append one scoped anchor to a scratch builder.  This performs bounded
-\ structural checks; KDOS remains the authoritative X.509/CA validator at
-\ the single final load boundary.
+\ Append one scoped anchor, a private root that binds the hosts its scope
+\ names, to the active builder.  This performs bounded structural checks;
+\ KDOS remains the authoritative X.509/CA validator at the single final
+\ load boundary.
 : MTRUST-ANCHOR+  ( cert-a cert-u scope-a scope-u flags builder -- status )
     _MTBA-BUILDER ! _MTBA-FLAGS ! _MTBA-SCOPE-U ! _MTBA-SCOPE-A !
     _MTBA-CERT-U ! _MTBA-CERT-A !
-    _MTBA-BUILDER @ 0= IF MTRUST-S-INVALID EXIT THEN
-    _MTBA-BUILDER @ _MTRUST-BUILDER <>
-    _MTRUST-STATE @ MTRUST-STATE-BUILDING <> OR
-    _MTBA-BUILDER @ _MTB.BUFFER @ _MTRUST-BUFFER @ <> OR
-    IF MTRUST-S-INVALID EXIT THEN
-    _MTBA-BUILDER @ _MTB.MAGIC @ _MTRUST-BUILDER-MAGIC <>
-    IF MTRUST-S-INVALID EXIT THEN
-    _MTBA-BUILDER @ _MTB-STRUCTURE? 0= IF MTRUST-S-INVALID EXIT THEN
+    _MTBA-BUILDER @ _MTRUST-BUILDER-OK? 0= IF MTRUST-S-INVALID EXIT THEN
     _MTBA-CERT-A @ 0= _MTBA-CERT-U @ 128 < OR
     _MTBA-CERT-U @ 8192 > OR IF MTRUST-S-INVALID EXIT THEN
     _MTBA-SCOPE-A @ 0= _MTBA-SCOPE-U @ 0> 0= OR
@@ -332,239 +366,82 @@ VARIABLE _MTBA-NEEDED
     _MTBA-FLAGS @ TTAF-SUBDOMAINS INVERT AND IF MTRUST-S-INVALID EXIT THEN
     _MTBA-SCOPE-A @ _MTBA-SCOPE-U @ 0 DNS-NAME-VALID? 0=
     IF MTRUST-S-INVALID EXIT THEN
-    _MTBA-BUILDER @ _MTB.COUNT @ TLS-TRUST-MAX >=
-    IF MTRUST-S-CAPACITY EXIT THEN
+    _MTBA-BUILDER @ _MTB.COUNT @ 65535 >= IF MTRUST-S-CAPACITY EXIT THEN
     _MTBA-CERT-A @ _MTBA-CERT-U @
     _MTBA-SCOPE-A @ _MTBA-SCOPE-U @ _MTBA-FLAGS @ _MTBA-BUILDER @
     _MTB-EXACT-DUPLICATE? IF MTRUST-S-CONFLICT EXIT THEN
-    8 _MTBA-SCOPE-U @ + _MTBA-CERT-U @ + DUP _MTBA-NEEDED !
-    _MTBA-BUILDER @ _MTB.POSITION @ +
-    _MTBA-BUILDER @ _MTB.CAPACITY @ > IF MTRUST-S-CAPACITY EXIT THEN
+    _MTRUST-RECORD-HEADER _MTBA-SCOPE-U @ + _MTBA-CERT-U @ +
+    _MTBA-BUILDER @ _MTB-ROOM ?DUP IF EXIT THEN
     _MTBA-FLAGS @ _MTBA-BUILDER @ _MTB-U16,
     _MTBA-SCOPE-U @ _MTBA-BUILDER @ _MTB-U16,
+    0 _MTBA-BUILDER @ _MTB-U16,
     _MTBA-CERT-U @ _MTBA-BUILDER @ _MTB-U32,
+    0 _MTBA-BUILDER @ _MTB-U64,
     _MTBA-SCOPE-A @ _MTBA-SCOPE-U @ _MTBA-BUILDER @ _MTB-BYTES,
     _MTBA-CERT-A @ _MTBA-CERT-U @ _MTBA-BUILDER @ _MTB-BYTES,
     1 _MTBA-BUILDER @ _MTB.COUNT +!
     MTRUST-S-OK ;
 
 \ =====================================================================
-\  Transactional exact-host MPTA contribution import
+\  The global root set
 \ =====================================================================
-\  MTRUST-MPTA+ is deliberately narrower than TLS-TRUST-LOAD.  It accepts a
-\  reviewed MPTA v1 artifact only from an emitter while the private machine
-\  builder is active, and only when every record has a nonempty exact DNS
-\  scope and flags zero.  Thus a run-specific feed artifact cannot smuggle a
-\  global or include-subdomains WebPKI root into the composed snapshot.
-\
-\  The artifact generation is a deterministic content/corruption tag:
-\  SHA3-256 over the exact artifact with header bytes 8..15 treated as zero,
-\  truncated to the first 64 bits.  It is not a signature, trust decision, or
-\  rollback counter.  The caller owns the input bytes and must keep them
-\  immutable and quiescent until this call returns.
-\
-\  Preflight parses the complete artifact, checks every duplicate and bound,
-\  and rejects overlap with the active output allocation before appending any
-\  byte.  The append pass nevertheless retains an explicit rollback so an
-\  unexpected invariant failure cannot leave a partial contribution behind.
+\  MTRUST-WEB-ROOTS+ ( bundle-a bundle-u builder -- status ) adds the
+\  pinned root set's records, once per composition: the bundle must be
+\  exactly WEB-ROOTS-BYTES long, hash to WEB-ROOTS-SHA256, and hold
+\  WEB-ROOTS-COUNT global records.  The caller keeps the bytes in place
+\  for the call.
 
-: _MTRUST-SPAN-VALID?  ( address length -- flag )
-    OVER 0= IF 2DROP 0 EXIT THEN
-    MSPAN-NONWRAPPING? ;
+VARIABLE _MTWR-A
+VARIABLE _MTWR-U
+VARIABLE _MTWR-BUILDER
+VARIABLE _MTWR-POS
+VARIABLE _MTWR-END
 
-: _MTRUST-RANGES-OVERLAP?  ( a1 u1 a2 u2 -- flag )
-    2OVER _MTRUST-SPAN-VALID? 0= IF
-        2DROP 2DROP 0 EXIT
-    THEN
-    2DUP _MTRUST-SPAN-VALID? 0= IF
-        2DROP 2DROP 0 EXIT
-    THEN
-    MSPAN-OVERLAP? ;
-
-VARIABLE _MTBI-A
-VARIABLE _MTBI-U
-VARIABLE _MTBI-BUILDER
-VARIABLE _MTBI-N
-VARIABLE _MTBI-POS
-VARIABLE _MTBI-RECORD-U
-VARIABLE _MTBI-SCOPE-U
-VARIABLE _MTBI-CERT-U
-VARIABLE _MTBI-OLD-POS
-VARIABLE _MTBI-OLD-COUNT
-VARIABLE _MTBI-STATUS
-VARIABLE _MTBI-LEFT-POS
-VARIABLE _MTBI-RIGHT-POS
-VARIABLE _MTBI-SCAN-POS
-VARIABLE _MTBI-LEFT-A
-VARIABLE _MTBI-RIGHT-A
-VARIABLE _MTBI-LEFT-SCOPE-U
-VARIABLE _MTBI-LEFT-CERT-U
-VARIABLE _MTBI-RESULT
-
-: _MTBI-RECORD-A  ( position -- record-a ) _MTBI-A @ + ;
-
-: _MTBI-RECORD-PARSE  ( position -- status )
-    DUP _MTBI-U @ > IF DROP MTRUST-S-INVALID EXIT THEN
-    _MTBI-U @ OVER - 8 < IF DROP MTRUST-S-INVALID EXIT THEN
-    DUP _MTBI-RECORD-A >R
-    R@ _MTR-BE16@ IF R> DROP DROP MTRUST-S-INVALID EXIT THEN
-    R@ 2 + _MTR-BE16@ DUP _MTBI-SCOPE-U !
-    DUP 0= SWAP 253 > OR IF R> DROP DROP MTRUST-S-INVALID EXIT THEN
-    R@ 4 + _MTR-BE32@ DUP _MTBI-CERT-U !
-    DUP 128 < SWAP 8192 > OR IF R> DROP DROP MTRUST-S-INVALID EXIT THEN
-    8 _MTBI-SCOPE-U @ + _MTBI-CERT-U @ + DUP _MTBI-RECORD-U !
-    _MTBI-U @ 2 PICK - > IF R> DROP DROP MTRUST-S-INVALID EXIT THEN
-    R@ 8 + _MTBI-SCOPE-U @ 0 DNS-NAME-VALID? 0= IF
-        R> DROP DROP MTRUST-S-INVALID EXIT
-    THEN
-    R> DROP DROP MTRUST-S-OK ;
-
-: _MTBI-RECORD=  ( left-position right-position -- flag )
-    _MTBI-RIGHT-POS ! _MTBI-LEFT-POS !
-    _MTBI-LEFT-POS @ _MTBI-RECORD-A _MTBI-LEFT-A !
-    _MTBI-RIGHT-POS @ _MTBI-RECORD-A _MTBI-RIGHT-A !
-    _MTBI-LEFT-A @ _MTR-BE16@
-        _MTBI-RIGHT-A @ _MTR-BE16@ <> IF 0 EXIT THEN
-    _MTBI-LEFT-A @ 2 + _MTR-BE16@ DUP _MTBI-LEFT-SCOPE-U !
-        _MTBI-RIGHT-A @ 2 + _MTR-BE16@ <> IF 0 EXIT THEN
-    _MTBI-LEFT-A @ 4 + _MTR-BE32@ DUP _MTBI-LEFT-CERT-U !
-        _MTBI-RIGHT-A @ 4 + _MTR-BE32@ <> IF 0 EXIT THEN
-    _MTBI-LEFT-A @ 8 + _MTBI-LEFT-SCOPE-U @
-        _MTBI-RIGHT-A @ 8 + _MTBI-LEFT-SCOPE-U @ _MTR-DNS-IEQUAL? 0= IF
-        0 EXIT
-    THEN
-    _MTBI-LEFT-A @ 8 + _MTBI-LEFT-SCOPE-U @ + _MTBI-LEFT-CERT-U @
-    _MTBI-RIGHT-A @ 8 + _MTBI-LEFT-SCOPE-U @ + _MTBI-LEFT-CERT-U @
-        COMPARE 0= ;
-
-: _MTBI-EARLIER-DUPLICATE?  ( index position -- flag )
-    _MTBI-POS !
-    16 _MTBI-SCAN-POS !
-    0 ?DO
-        _MTBI-SCAN-POS @ _MTBI-POS @ _MTBI-RECORD= IF
-            -1 UNLOOP EXIT
+\ Every record of the pinned bundle is global and in bounds.
+: _MTWR-RECORDS?  ( -- flag )
+    _MTWR-A @ 16 + _MTWR-POS !
+    _MTWR-A @ _MTWR-U @ + _MTWR-END !
+    WEB-ROOTS-COUNT 0 ?DO
+        _MTWR-END @ _MTWR-POS @ - _MTRUST-RECORD-HEADER < IF
+            0 UNLOOP EXIT
         THEN
-        _MTBI-SCAN-POS @ _MTBI-RECORD-PARSE DROP
-        _MTBI-RECORD-U @ _MTBI-SCAN-POS +!
+        _MTWR-POS @ _MTR-BE16@ _MTWR-POS @ 2 + _MTR-BE16@ OR IF
+            0 UNLOOP EXIT
+        THEN
+        _MTWR-POS @ _MTR-RECORD-U
+        DUP _MTWR-END @ _MTWR-POS @ - > IF DROP 0 UNLOOP EXIT THEN
+        _MTWR-POS +!
     LOOP
-    0 ;
+    _MTWR-POS @ _MTWR-END @ = ;
 
-: _MTBI-BUILDER-DUPLICATE?  ( position -- flag )
-    _MTBI-RECORD-A >R
-    R@ 8 + _MTBI-SCOPE-U @ + _MTBI-CERT-U @
-    R@ 8 + _MTBI-SCOPE-U @ 0 _MTBI-BUILDER @
-    _MTB-EXACT-DUPLICATE?
-    R> DROP ;
-
-: _MTBI-GENERATION?  ( -- flag )
-    SHA3-256-BEGIN
-    _MTBI-A @ 8 SHA3-256-ADD
-    _MTRUST-MPTA-ZERO8 8 SHA3-256-ADD
-    _MTBI-A @ 16 + _MTBI-U @ 16 - SHA3-256-ADD
-    _MTRUST-MPTA-DIGEST SHA3-256-END
-    _MTBI-A @ 8 + _MTR-BE64@
-    _MTRUST-MPTA-DIGEST _MTR-BE64@ = ;
-
-: _MTBI-PREFLIGHT  ( -- status )
-    _MTBI-A @ _MTBI-U @ _MTRUST-SPAN-VALID? 0= IF
+: MTRUST-WEB-ROOTS+  ( bundle-a bundle-u builder -- status )
+    _MTWR-BUILDER ! _MTWR-U ! _MTWR-A !
+    COREID IF MTRUST-S-INVALID EXIT THEN
+    _MTWR-BUILDER @ _MTRUST-BUILDER-OK? 0= IF MTRUST-S-INVALID EXIT THEN
+    _MTRUST-ROOTS-IN @ IF MTRUST-S-CONFLICT EXIT THEN
+    _MTWR-A @ 0= _MTWR-U @ WEB-ROOTS-BYTES <> OR IF
         MTRUST-S-INVALID EXIT
     THEN
-    _MTBI-U @ 16 < _MTBI-U @ TLS-TRUST-BUNDLE-MAX > OR IF
+    _MTWR-A @ _MTWR-U @ MSPAN-NONWRAPPING? 0= IF MTRUST-S-INVALID EXIT THEN
+    _MTWR-A @ _MTWR-U @ _MTRUST-ROOTS-DIGEST SHA256-HASH IF
+        MTRUST-S-PLATFORM EXIT
+    THEN
+    _MTRUST-ROOTS-DIGEST 32 WEB-ROOTS-SHA256 32 COMPARE IF
         MTRUST-S-INVALID EXIT
     THEN
-    _MTBI-BUILDER @ 0= IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-BUILDER @ _MTRUST-BUILDER <> IF MTRUST-S-INVALID EXIT THEN
-    _MTRUST-STATE @ MTRUST-STATE-BUILDING <> IF
+    _MTWR-A @ 4 + _MTR-BE16@ TLS-TRUST-FORMAT <>
+    _MTWR-A @ 6 + _MTR-BE16@ WEB-ROOTS-COUNT <> OR IF
         MTRUST-S-INVALID EXIT
     THEN
-    _MTBI-BUILDER @ _MTB.MAGIC @ _MTRUST-BUILDER-MAGIC <>
-    _MTBI-BUILDER @ _MTB.BUFFER @ _MTRUST-BUFFER @ <> OR IF
-        MTRUST-S-INVALID EXIT
-    THEN
-    _MTBI-BUILDER @ _MTB-STRUCTURE? 0= IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-A @ _MTBI-U @
-    _MTBI-BUILDER @ _MTB.BUFFER @ _MTBI-BUILDER @ _MTB.CAPACITY @
-    _MTRUST-RANGES-OVERLAP? IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-A @ _MTBI-U @ _MTRUST-MPTA-DIGEST 32
-        _MTRUST-RANGES-OVERLAP? IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-A @ _MTBI-U @ _MTRUST-MPTA-ZERO8 8
-        _MTRUST-RANGES-OVERLAP? IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-A @ 4 _MTRUST-MPTA-MAGIC 4 COMPARE IF
-        MTRUST-S-INVALID EXIT
-    THEN
-    _MTBI-A @ 4 + _MTR-BE16@ 1 <> IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-A @ 6 + _MTR-BE16@ DUP _MTBI-N !
-    DUP 0= SWAP TLS-TRUST-MAX > OR IF MTRUST-S-INVALID EXIT THEN
-    _MTBI-N @ TLS-TRUST-MAX
-        _MTBI-BUILDER @ _MTB.COUNT @ - > IF MTRUST-S-CAPACITY EXIT THEN
-    _MTBI-U @ 16 - _MTBI-BUILDER @ _MTB.CAPACITY @
-        _MTBI-BUILDER @ _MTB.POSITION @ - > IF
+    _MTRUST-BUILDER _MTB.COUNT @ WEB-ROOTS-COUNT + 65535 > IF
         MTRUST-S-CAPACITY EXIT
     THEN
-    _MTBI-GENERATION? 0= IF MTRUST-S-INVALID EXIT THEN
-    16 _MTBI-POS !
-    _MTBI-N @ 0 ?DO
-        _MTBI-POS @ _MTBI-RECORD-PARSE ?DUP IF UNLOOP EXIT THEN
-        I _MTBI-POS @ _MTBI-EARLIER-DUPLICATE? IF
-            MTRUST-S-CONFLICT UNLOOP EXIT
-        THEN
-        \ The earlier-record scan uses the shared bounded parser.  Restore
-        \ the current record fields before comparing with composed anchors
-        \ and advancing the current cursor.
-        _MTBI-POS @ _MTBI-RECORD-PARSE DROP
-        _MTBI-POS @ _MTBI-BUILDER-DUPLICATE? IF
-            MTRUST-S-CONFLICT UNLOOP EXIT
-        THEN
-        _MTBI-RECORD-U @ _MTBI-POS +!
-    LOOP
-    _MTBI-POS @ _MTBI-U @ <> IF MTRUST-S-INVALID EXIT THEN
+    _MTWR-RECORDS? 0= IF MTRUST-S-INVALID EXIT THEN
+    _MTWR-U @ 16 - _MTWR-BUILDER @ _MTB-ROOM ?DUP IF EXIT THEN
+    _MTWR-A @ 16 + _MTWR-U @ 16 - _MTWR-BUILDER @ _MTB-BYTES,
+    WEB-ROOTS-COUNT _MTWR-BUILDER @ _MTB.COUNT +!
+    -1 _MTRUST-ROOTS-IN !
     MTRUST-S-OK ;
-
-: _MTBI-ROLLBACK  ( -- )
-    _MTBI-BUILDER @ _MTB.POSITION @ _MTBI-OLD-POS @ > IF
-        _MTBI-BUILDER @ _MTB.BUFFER @ _MTBI-OLD-POS @ +
-        _MTBI-BUILDER @ _MTB.POSITION @ _MTBI-OLD-POS @ - 0 FILL
-    THEN
-    _MTBI-OLD-POS @ _MTBI-BUILDER @ _MTB.POSITION !
-    _MTBI-OLD-COUNT @ _MTBI-BUILDER @ _MTB.COUNT ! ;
-
-: _MTBI-APPEND-BODY  ( -- status )
-    16 _MTBI-POS !
-    _MTBI-N @ 0 ?DO
-        _MTBI-POS @ _MTBI-RECORD-PARSE ?DUP IF UNLOOP EXIT THEN
-        _MTBI-POS @ _MTBI-RECORD-A >R
-        R@ 8 + _MTBI-SCOPE-U @ + _MTBI-CERT-U @
-        R@ 8 + _MTBI-SCOPE-U @ 0 _MTBI-BUILDER @ MTRUST-ANCHOR+
-        ?DUP IF
-            R> DROP UNLOOP EXIT
-        THEN
-        R> DROP
-        _MTBI-RECORD-U @ _MTBI-POS +!
-    LOOP
-    MTRUST-S-OK ;
-
-: _MTBI-APPEND-CALL  ( -- )
-    _MTBI-APPEND-BODY DUP _MTBI-RESULT !
-    MTRUST-S-OK = IF
-        \ Recheck caller-owned bytes after copying so an ordinary mutation
-        \ during the call cannot silently detach output from the content tag.
-        _MTBI-GENERATION? 0= IF MTRUST-S-INVALID _MTBI-RESULT ! THEN
-    THEN ;
-
-: _MTBI-APPEND  ( -- status )
-    _MTBI-BUILDER @ _MTB.POSITION @ _MTBI-OLD-POS !
-    _MTBI-BUILDER @ _MTB.COUNT @ _MTBI-OLD-COUNT !
-    MTRUST-S-INVALID _MTBI-RESULT !
-    ['] _MTBI-APPEND-CALL CATCH ?DUP IF
-        _MTBI-ROLLBACK THROW
-    THEN
-    _MTBI-RESULT @ DUP IF _MTBI-ROLLBACK THEN ;
-
-: MTRUST-MPTA+  ( bundle-a bundle-u builder -- status )
-    COREID IF 2DROP DROP MTRUST-S-INVALID EXIT THEN
-    _MTBI-BUILDER ! _MTBI-U ! _MTBI-A !
-    _MTBI-PREFLIGHT ?DUP IF EXIT THEN
-    _MTBI-APPEND ;
 
 VARIABLE _MTRCE-CONTRIBUTOR
 VARIABLE _MTRCE-STATUS
@@ -597,7 +474,7 @@ VARIABLE _MTRCE-DEPTH
 : _MTR-BUILD-HEADER  ( -- )
     _MTRUST-BUFFER @ >R
     77 R@ C! 80 R@ 1+ C! 84 R@ 2 + C! 65 R@ 3 + C!
-    0 R@ 4 + C! 1 R@ 5 + C!
+    TLS-TRUST-FORMAT DUP 8 RSHIFT 255 AND R@ 4 + C! 255 AND R@ 5 + C!
     _MTRUST-BUILDER _MTB.COUNT @ DUP 8 RSHIFT 255 AND R@ 6 + C!
     255 AND R@ 7 + C!
     R@ 8 + 8 0 FILL
@@ -613,12 +490,12 @@ VARIABLE _MTR-LOAD-STATUS
     TLS-TRUST-LOAD _MTR-LOAD-STATUS ! ;
 
 : _MTR-KDOS-MATCH?  ( -- flag )
-    TLS-TRUST-VERSION @ 1 =
+    TLS-TRUST-VERSION @ TLS-TRUST-FORMAT =
     TLS-TRUST-COUNT @ _MTRUST-ANCHOR-N @ = AND
     TLS-TRUST-GENERATION @ _MTRUST-GENERATION @ = AND ;
 
 : _MTR-FREEZE-BUILD  ( -- status )
-    _MTRUST-BUFFER @ TLS-TRUST-BUNDLE-MAX _MTRUST-BUILDER _MTB-INIT
+    _MTRUST-BUFFER @ _MTRUST-FIRST-CAPACITY _MTRUST-BUILDER _MTB-INIT
     _MTRUST-CONTRIBUTOR-N @ 0 ?DO
         I _MTRUST-CONTRIBUTOR@ _MTR-CALL-EMITTER ?DUP IF UNLOOP EXIT THEN
         _MTRUST-ACTIVE-BUILDER? 0= IF
@@ -662,7 +539,8 @@ VARIABLE _MTR-FREEZE-RESULT
     THEN
     MTRUST-STATE-BUILDING _MTRUST-STATE !
     0 _MTRUST-GENERATION ! 0 _MTRUST-ANCHOR-N ! 0 _MTRUST-LAST-DETAIL !
-    TLS-TRUST-BUNDLE-MAX ALLOCATE DUP IF
+    0 _MTRUST-ROOTS-IN !
+    _MTRUST-FIRST-CAPACITY ALLOCATE DUP IF
         2DROP
         TLS-TRUST-RESET
         MTRUST-STATE-FAILED _MTRUST-STATE !

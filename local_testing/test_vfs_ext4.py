@@ -92464,7 +92464,18 @@ def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
         in allocated
     )
     assert "DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated
-    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN" in allocated
+    # A BLOCK_UNINIT group answers from the bitmap it stands for, in which
+    # its static metadata is allocated, before any read of the medium's
+    # zeroed bitmap; it never answers every block free, as it once did.
+    uninit_block = (
+        "_EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF\n"
+        "        _EXT4-BA-BLOCK @ _EXT4-BA-GROUP @ _EXT4-BA-CTX @\n"
+        "        _EXT4-UNINIT-BLOCK-SET? EXIT\n"
+        "    THEN"
+    )
+    assert uninit_block in allocated
+    assert allocated.index(uninit_block) < allocated.index("_EXT4-READ-BLOCK")
+    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE" not in allocated
 
     assert allocated_range.count("_EXT4-GROUP-BLOCK-COUNT") == 1
     assert (
@@ -92482,10 +92493,23 @@ def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
     )
     assert (
         "_EXT4-RAR-GROUP-BLOCKS @\n"
-        "        _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ "
+        "            _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ "
         "BITSET-ALL-SET?"
         in allocated_range
     )
+    # A run in a BLOCK_UNINIT group is checked block by block against the
+    # bitmap the group stands for, instead of being refused outright, and
+    # its zeroed bitmap is never read.
+    uninit, medium = allocated_range.split(
+        "_EXT4-BG-BLOCK-UNINIT AND IF", 1
+    )[1].split("ELSE", 1)
+    assert (
+        "DROP _EXT4-RAR-CURRENT @ _EXT4-RAR-CHUNK @\n"
+        "            _EXT4-RAR-GROUP @ _EXT4-RAR-CTX @ _EXT4-UNINIT-RANGE-SET?\n"
+        "            ?DUP IF NIP EXIT THEN"
+    ) in uninit
+    assert "_EXT4-CORRUPT" not in uninit and "_EXT4-READ-BLOCK" not in uninit
+    assert "_EXT4-RAR-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN" in medium
     assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated_range
     assert "0= IF _EXT4-RAR-DETAIL @ _EXT4-CORRUPT EXIT THEN" in (
         allocated_range

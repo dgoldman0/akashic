@@ -215,7 +215,6 @@ class ImageSpec:
 # making each native KDOS transport pull in the one canonical system module.
 MEGAPAD_NETWORKING_CONSUMERS = frozenset(
     {
-        "tui/applets/agent/providers/codex/trust.f",
         "atproto/public-author-feed.f",
         "net/http.f",
         "net/tls-trust-registry.f",
@@ -228,6 +227,13 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
     }
 )
 MEGAPAD_NETWORKING_BOOT_LINE = "REQUIRE networking.f"
+# Data files a module reads from its origin at run time.  Every image whose
+# module closure holds the module carries them at these paths, beside the
+# profile's own resources: net/web-roots.f reads the pinned global TLS root
+# set (docs/net/web-roots.md).
+MODULE_DATA_FILES: dict[str, tuple[str, ...]] = {
+    "net/web-roots.f": ("net/web-roots/web-roots.mpta",),
+}
 MEGAPAD_RICH_TERMINAL_MODULE = "rich-terminal.f"
 MEGAPAD_RICH_TERMINAL_BOOT_LINE = (
     f"REQUIRE {MEGAPAD_RICH_TERMINAL_MODULE}"
@@ -2265,6 +2271,9 @@ def build(
             "be enabled together"
         )
     resources = set(profile.resources)
+    resources.update(
+        path for module in modules for path in MODULE_DATA_FILES.get(module, ())
+    )
     # With both volumes the origin is the system volume, which then holds
     # the profile's resources and initial files in the boot volume's place.
     origin_resources: tuple[str, ...] = ()

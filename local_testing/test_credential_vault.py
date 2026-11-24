@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
+import tempfile
 from pathlib import Path
 
 
@@ -22,6 +24,8 @@ VFS_SNAPSHOT = (
 )
 LIFECYCLE_DEPS = LOCAL_TESTING / "cv-deps.f"
 LIFECYCLE_FIXTURE = LOCAL_TESTING / "cv-life.f"
+# The lifecycle image, in pytest's temporary folder under a test
+IMAGE = Path(tempfile.gettempdir()) / "akashic-credential-vault-life.img"
 
 
 def _word_body(source: str, name: str) -> str:
@@ -1305,13 +1309,11 @@ def _lifecycle_source() -> bytes:
 
 
 def _run_lifecycle(timeout: float) -> int:
-    import sys
-
     sys.path.insert(0, str(LOCAL_TESTING))
     import akashic_tui as harness
 
     profile = "credential-vault-life"
-    image = Path("/tmp/akashic-credential-vault-life.img")
+    image = IMAGE
     marker = "CREDENTIAL VAULT LIFE PASS"
     harness.PROFILES[profile] = harness.Profile(
         roots=(),
@@ -1376,6 +1378,20 @@ def main() -> int:
         print("CREDENTIAL VAULT STATIC PASS")
         return 0
     return _run_lifecycle(args.timeout)
+
+
+def test_static(tmp_path: Path, monkeypatch) -> None:
+    """Check the source, dependency geometry and documentation."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--static-only")
+
+
+def test_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    """Run the guest composition lifecycle."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--lifecycle")
 
 
 if __name__ == "__main__":

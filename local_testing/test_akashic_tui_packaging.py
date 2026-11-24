@@ -174,12 +174,16 @@ from toolchain.image.closure import (  # noqa: E402
     dependency_markers,
     module_key,
 )
+from toolchain.image.build import MODULE_DATA_FILES  # noqa: E402
 from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
 )
 from shared.session_options import link_pace  # noqa: E402
 
+
+# The global TLS root set, which net/web-roots.f reads from its image's origin.
+(WEB_ROOTS_BUNDLE,) = MODULE_DATA_FILES["net/web-roots.f"]
 
 LIBRARY_RENDERER_FREE_PROFILES = (
     "library-projection-owner-contracts",
@@ -1614,7 +1618,7 @@ def test_ordinary_streams_excludes_public_network_composition() -> None:
     assert "tui/applets/streams/public-provider.f" in modules
     assert "tui/applets/streams/bluesky-public.f" not in modules
     assert "atproto/public-author-feed.f" not in modules
-    assert "atproto/public-trust.f" not in modules
+    assert "net/web-roots.f" not in modules
     assert "net/transports/kdos-tls.f" not in modules
     assert not _requires_megapad_networking(closure)
 
@@ -1663,7 +1667,7 @@ def test_explicit_bluesky_composition_still_does_not_supply_trust() -> None:
     assert "tui/applets/streams/streams.f" in modules
     assert "atproto/public-author-feed.f" in modules
     assert "net/transports/kdos-tls.f" in modules
-    assert "atproto/public-trust.f" not in modules
+    assert "net/web-roots.f" not in modules
     assert _requires_megapad_networking(closure)
 
 
@@ -1726,8 +1730,11 @@ def test_streams_vertical_binds_both_reviewed_live_providers() -> None:
         "hugo-theme-more-contentful/feed.rss"
     )
     assert profile.requires_network
-    assert "atproto/public-trust.f" in profile.roots
-    assert "ATPUBLIC-TRUST-REGISTER" in profile.autoexec
+    # The vertical supplies no trust of its own and leaves the registry open:
+    # Desk registers the global root set from its origin and freezes it.
+    assert "MTRUST-REGISTER" not in profile.autoexec
+    assert "MTRUST-FREEZE" not in profile.autoexec
+    assert "net/web-roots.f" in dependency_closure(profile.roots)
     assert (
         "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED" in profile.autoexec
     )
@@ -3188,7 +3195,8 @@ def test_a_user_volume_build_puts_samples_in_documents_and_shipped_files_on_the_
     profile's initial files are files it ships for its own code to read:
     with both volumes the system volume is the origin, and they stand there,
     at their paths, where the Streams check reads its feed through its
-    origin, and nowhere on the boot volume."""
+    origin, and nowhere on the boot volume.  So do the data files of the
+    modules in its closure, the global root set among them."""
 
     tool_dir = _pinned_ext4_tools()
     picture = akashic_tui.SAMPLE_DAMAGED_NAME
@@ -3210,11 +3218,17 @@ def test_a_user_volume_build_puts_samples_in_documents_and_shipped_files_on_the_
         system_volume=True, user_volume=True,
     )
     boot = MP64FS(bytearray(image.read_bytes()))
-    assert PurePosixPath(fixture).name not in {entry.name for entry in boot.list_files()}
+    boot_names = {entry.name for entry in boot.list_files()}
+    assert PurePosixPath(fixture).name not in boot_names
+    assert PurePosixPath(WEB_ROOTS_BUNDLE).name not in boot_names
     held = _system_volume_files(
-        akashic_tui.system_image_path(image), (fixture,), tool_dir, tmp_path / "dump"
+        akashic_tui.system_image_path(image), (fixture, WEB_ROOTS_BUNDLE),
+        tool_dir, tmp_path / "dump",
     )
     assert held[fixture] == content
+    # The data file of a module in the closure stands there too: Desk reads
+    # the global root set from its origin.
+    assert held[WEB_ROOTS_BUNDLE] == (SOURCE_ROOT / WEB_ROOTS_BUNDLE).read_bytes()
 
 
 def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:
@@ -4085,6 +4099,12 @@ def test_complete_desktop_uses_stored_checked_source_on_32_mib_mp64fs(
     info = filesystem.info()
     assert info["total_sectors"] == 65536
     assert info["free_sectors"] * 512 >= 1 << 20
+    # Desk reads the global root set from its origin, here the boot volume,
+    # at the path the data-file map gives it.
+    bundle = PurePosixPath(WEB_ROOTS_BUNDLE)
+    assert filesystem.read_file(
+        bundle.name, parent=filesystem.resolve_path(str(bundle.parent))
+    ) == (SOURCE_ROOT / WEB_ROOTS_BUNDLE).read_bytes()
     assert filesystem.read_file("networking.f") == pack_forth_source(
         (MEGAPAD_ROOT / "networking.f").read_bytes()
     )

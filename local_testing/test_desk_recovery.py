@@ -10,7 +10,9 @@ profile queues a reader applet, which records whether its places are all
 read-only, and an applet with the Agent's component id.  It checks what
 Desk composed, that the applet catalog is read-only, that a launch of the
 Agent is refused with DESK-LAUNCH-E-RECOVERY, and that Desk's teardown
-returns the stack depth, heap and extended memory it found.
+returns the stack depth, heap and extended memory it found.  Machine trust
+is composed first, as a boot composition composes it, since KDOS keeps the
+global root set for the boot.
 
 The profile runs through the harness's smoke command, on the emulator, with
 its captures (screen text, cells, PNG and the raw transcript) under
@@ -134,6 +136,17 @@ _DESK-FILL-DESC
 ' _dr-desk-init DESK-DESC APP.INIT-XT !
 _dr-app-r DESK-QUEUE-LAUNCH
 _dr-app-a DESK-QUEUE-LAUNCH
+
+\ The machine's trust, composed before the baseline as a boot composition
+\ composes it: the global root set read from the origin, then the freeze.
+\ KDOS keeps the root set for the boot, so the balance measures only what
+\ Desk takes and gives back; Desk then finds the registry frozen.
+: _dr-machine-trust  ( -- )
+    PLACES-DEFAULT DUP 0= ABORT" DESK RECOVERY FAIL no places"
+    PLSET-ORIGIN DUP 0= ABORT" DESK RECOVERY FAIL no origin"
+    WEB-ROOTS-REGISTER MTRUST-S-OK <> ABORT" DESK RECOVERY FAIL root set"
+    MTRUST-FREEZE MTRUST-S-OK <> ABORT" DESK RECOVERY FAIL machine trust" ;
+_dr-machine-trust
 
 VARIABLE _dr-depth
 VARIABLE _dr-heap
