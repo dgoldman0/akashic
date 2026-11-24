@@ -7,15 +7,18 @@
 \ HRES admits only absolute HTTPS targets and same-origin redirects.  The
 \ KDOSTLS default address policy admits public IPv4 destinations.
 \
-\ Construction is fail-closed.  A trusted composition supplies one pure
-\ authorization callback with stack effect
+\ A composition supplies one pure authorization callback with stack effect
 \
 \   ( exact-source canonical-target context -- allowed? )
 \
-\ The callback associates a reviewed provisioning decision with the complete
-\ source snapshot and canonical host/port.  It is invoked once while
-\ CONFIGURE is still side-effect-free and again for every physical bind.
-\ Ordinary Streams never receives this callback or its immutable policy.
+\ It is invoked once while CONFIGURE is still side-effect-free and again for
+\ every physical bind; an exception counts as a refusal.  Ordinary Streams
+\ never receives this callback or its immutable policy.  The default
+\ factory's policy, STREAMS-SYNDICATION-OPEN?, admits every syndication
+\ source: the machine trusts the global TLS root set, so each feed's host
+\ proves itself with its own certificate chain, and HRES and the address
+\ policy still bound what is fetched.  A composition may pass a narrower
+\ reviewed policy to STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED.
 \
 \ The provider performs bounded wire admission only.  Feed decoding,
 \ observation deduplication, and durable mutation remain caller work after
@@ -577,13 +580,12 @@ VARIABLE _SCSNEW-AUTH-CONTEXT
     THEN DROP
     _SCSNEW-P @ SCONF-S-OK ;
 
-: _SCSYN-DENY-AUTH  ( source target context -- allowed? )
-    2DROP DROP 0 ;
+: STREAMS-SYNDICATION-OPEN?  ( source target context -- allowed? )
+    DROP HTARGET-VALID? 0= IF DROP 0 EXIT THEN
+    DUP STREAMS-SOURCE-VALID? 0= IF DROP 0 EXIT THEN
+    SSOURCE.KIND @ SSOURCE-KIND-SYNDICATION = ;
 
-\ The no-argument factory remains useful as a fail-closed composition seam.
-\ It can allocate and release a provider, but no source can pass CONFIGURE.
-\ A live configured-source composition must install a factory that calls the
-\ authorized constructor with its own immutable reviewed policy.
+\ The default factory: a provider under the open policy.
 : STREAMS-CONFIGURED-SYNDICATION-NEW  ( -- provider status )
-    ['] _SCSYN-DENY-AUTH 0
+    ['] STREAMS-SYNDICATION-OPEN? 0
         STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED ;
