@@ -432,10 +432,13 @@ child. Final Desk teardown drains any remaining operation before unbinding the
 machine singleton.
 
 Before creating that service or publishing any interoperability endpoint, Desk
-freezes the machine TLS trust registry. Reviewed provider/network modules must
-register their scoped contributions before Desk activation; source constructors
-and applet launch do not modify trust. Desk teardown unbinds external I/O but
-does not reset or thaw the accepted machine snapshot.
+freezes the machine TLS trust registry. Just before the freeze, when it has an
+origin, it registers the global root set, which the registry reads from that
+origin as it composes ([web-roots.md](../../../net/web-roots.md)); a
+registration or composition that fails stops Desk. Modules that pin a private root must register their scoped
+contributions before Desk activation; source constructors and applet launch do
+not modify trust. Desk teardown unbinds external I/O but does not reset or thaw
+the accepted machine snapshot.
 
 Desk closes every retained resource session before entering one dispatch-
 quiesced teardown boundary which cancels requests, deactivates the owner, and
