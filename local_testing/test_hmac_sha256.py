@@ -60,6 +60,10 @@ def _assert_source_contracts() -> None:
     ]
     clear_return = source[
         source.index(": _H256-CLEAR-RETURN") :
+        source.index(": _H256-PUBLISH-WITH")
+    ]
+    publish_with = source[
+        source.index(": _H256-PUBLISH-WITH") :
         source.index(": _H256-PUBLISH-CLEAR")
     ]
     publish_clear_start = source.index(": _H256-PUBLISH-CLEAR")
@@ -92,15 +96,16 @@ def _assert_source_contracts() -> None:
     assert "HMAC-SHA256-WORKSPACE-SIZE 0 FILL" in clear_return
     assert "CATCH" not in clear_return
     assert "HMAC-SHA256-S-CRYPTO" not in clear_return
-    assert "CATCH" in publish_clear
-    assert publish_clear.count(
+    assert "CATCH" in publish_with
+    assert publish_with.count(
         "HMAC-SHA256-WORKSPACE-SIZE 0 FILL"
     ) == 2
-    assert publish_clear.index("CATCH") < publish_clear.index(
+    assert publish_with.index("CATCH") < publish_with.index(
         "HMAC-SHA256-WORKSPACE-SIZE 0 FILL"
-    ) < publish_clear.index("R> THROW")
-    assert "R> THROW" in publish_clear
-    assert "HMAC-SHA256-S-CRYPTO" not in publish_clear
+    ) < publish_with.index("R> THROW")
+    assert "R> THROW" in publish_with
+    assert "HMAC-SHA256-S-CRYPTO" not in publish_with
+    assert "['] _H256-PUBLISH _H256-PUBLISH-WITH" in publish_clear
     assert public.index("_H256-COMPUTE-CALL") < public.index(
         "_H256-PUBLISH-CLEAR"
     )
@@ -148,6 +153,13 @@ def main() -> int:
         ext_mem_mib=128,
     )
     return 0 if ok else 1
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """Run the contract script under pytest."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":

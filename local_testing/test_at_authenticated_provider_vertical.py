@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
 
 
 PROFILE = "at-authenticated-provider-vertical"
-IMAGE = Path("/tmp/akashic-at-authenticated-provider-vertical.img")
+IMAGE = Path(tempfile.gettempdir()) / "akashic-at-authenticated-provider-vertical.img"
 BOOT_MARKER = "AT AUTH PROVIDER USERLAND READY"
 PASS_MARKER = "AT AUTH PROVIDER VERTICAL PASS"
 MAX_PHASE_STEPS = 180_000_000
@@ -752,7 +753,7 @@ def _run_vertical(timeout: float) -> int:
         linked=LINKED,
         megapad_networking=NEEDS_NETWORKING,
         include_large_sample=False,
-        total_sectors=8192,
+        total_sectors=16384,
     )
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
@@ -836,6 +837,20 @@ def main() -> int:
         print("AT AUTH PROVIDER STATIC PASS")
         return 0
     return _run_vertical(args.timeout)
+
+
+def test_static(tmp_path: Path, monkeypatch) -> None:
+    """Check the provider's static contracts."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--static-only")
+
+
+def test_vertical(tmp_path: Path, monkeypatch) -> None:
+    """Run the staged one-core provider gate."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch, "--vertical")
 
 
 if __name__ == "__main__":
