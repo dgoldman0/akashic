@@ -323,11 +323,14 @@ def _check(path: Path, raw: bytes, data: dict[str, object]) -> Configuration:
 
 
 def summary(configuration: Configuration) -> dict[str, object]:
-    """What CONFIGURATION says, as JSON-ready values."""
+    """What CONFIGURATION says, as JSON-ready values, with the digests a
+    build records in its manifest's built_from, so a caller can tell whether
+    a build is current."""
 
     return {
         "path": str(configuration.path),
         "sha256": configuration.sha256,
+        "documents_sha256": _digest(documents(configuration)),
         "title": configuration.title,
         "description": configuration.description,
         "entries": list(configuration.entries),

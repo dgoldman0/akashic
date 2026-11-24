@@ -252,7 +252,10 @@ def test_the_command_line_checks_a_file(tmp_path, capsys):
     path = tmp_path / "configuration.toml"
     path.write_text(MINIMAL, encoding="utf-8")
     assert main(["check", str(path)]) == 0
-    assert json.loads(capsys.readouterr().out)["entries"] == ["pad"]
+    checked = json.loads(capsys.readouterr().out)
+    assert checked["entries"] == ["pad"]
+    assert checked["sha256"] == config.read(path).sha256
+    assert checked["documents_sha256"] == config._digest({})
     path.write_text(MINIMAL + "[sound]\n", encoding="utf-8")
     assert main(["check", str(path)]) == 1
     assert "unknown table sound" in capsys.readouterr().err
@@ -287,6 +290,8 @@ def test_a_configuration_builds_its_volumes_and_manifest(tmp_path):
     assert manifest["storage"]["user"] == "machine-user.img"
     assert manifest["built_from"]["components"] == {"akashic": "0" * 40}
     assert manifest["built_from"]["configuration"]["sha256"] == config.read(path).sha256
+    checked = config.summary(config.read(path))
+    assert manifest["built_from"]["configuration"]["documents_sha256"] == checked["documents_sha256"]
     assert user_image_path(image).stat().st_size == 16 << 20
 
     from diskutil import MP64FS
