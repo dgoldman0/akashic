@@ -1,9 +1,11 @@
 # Repairing the game library and building a first game on it — plan, 2026-11-22
 
-Status: Accepted, 2026-11-23. The game is Folio Watch, and section 5 records
-the eight decisions. Stages 0 to 3 are done, and stage 4's skeleton runs in
-Desk; the stages follow section 4 in order, each reported before the next one starts. The work runs alongside the
-first release and stays off its critical path.
+Status: Accepted, 2026-11-23; paused after stage 4, 2026-11-24. The game is
+Folio Watch, and section 5 records the eight decisions. Stages 0 to 4 are
+done and on main. The game is unlikely to ship in the first release, so the
+work waits while the release comes first, and its look needs a stronger
+direction before stage 5 starts. Section 6 records where the work stands and
+the questions it leaves open.
 
 Related: the library's evaluation and the test-health catalogue of 2026-11-22
 (`~/.cache/fantasy-engine/notes/game-library-evaluation-20261122.md`,
@@ -730,6 +732,48 @@ keep reusing canonical type numbers under the practice that fd761ec4 made
 safe for partial drawers. A `WDG-T-NEW ( -- type )` in `widget.f`, with those
 panels moved to it, belongs to the next Desk cleanup. Cost: 0.5 to 1 hour when
 taken.
+
+## 6. Where the work stands, paused 2026-11-24
+
+**Built.** Stages 1 to 3 repaired the logic half: teardown, nested behaviour
+trees, a symmetric shadowcast for the fog, re-entrant callbacks, A\* that
+always finds the cheapest path and reruns cheaply, ECS instances with their
+own bindings, saves that replace their file through a place, and rooms
+written as text maps. Stage 4 added `tui/game/board.f`, a board over the
+canonical text grid, and Folio Watch's skeleton in `tui/applets/folio/`: one
+room, an archivist who moves a tile a turn, the fog as the hand lamp's light,
+and nights saved and loaded. It retired the terminal half, which the tag
+`archive/game-terminal-half-550fbf48-20261123` keeps. Desk runs the game
+alone as the `desktop-apt1-folio` profile, with a physical journey of its
+own.
+
+**The look.** The skeleton's plain glyphs are underwhelming, and the
+proposal in [folio-watch.md](folio-watch.md) falls short of what the game
+needs even in its rich mock-up: warm and cool tones, flicker, tiles that
+fill the pane and two-cell tile art do not yet make the archive look like a
+place. The game needs a stronger visual direction before stage 5 builds on
+any of it.
+
+**Questions for when the work resumes.**
+
+1. What the look needs beyond the proposal, and which general features of
+   canonical widgets or the rich renderer carry it within the rich-terminal
+   rules: semantics on the wire, representation in the renderer, a complete
+   CELL fallback, and no game-only drawing API. The proposal's five choices
+   (its section 10) wait on that answer.
+2. What a move costs on the current BIOS. Stage 4 measured about 37 million
+   emulator cycles against decision 3's budget of 15 million, before
+   MegaPad 42e09564 inlined constants, variables and common primitives,
+   which roughly halves most Forth code's cycles. Stage 4b (a partial drawer
+   for `TGRID`, validating only changed items), a faster proof that items'
+   keys are unique when they already increase, and a rich capture that
+   trusts an unchanged bound model are each decided against that new
+   figure.
+3. Whether `save.f` moves onto `cbor.f`, which now checks its input
+   (Akashic 443880be), so the library keeps one CBOR codec.
+4. Whether a blocked step should skip its redraw. Walking into a shelf
+   redraws an unchanged board today, and the producer then resends the
+   whole frame.
 
 ## Appendix A. Measurements
 

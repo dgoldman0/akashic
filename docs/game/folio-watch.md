@@ -1,7 +1,10 @@
 # Folio Watch — visual design
 
-Status: Proposed, 2026-11-23. Nothing in this document is accepted or built.
-Section 10 lists the choices it asks the author to make.
+Status: Proposed, 2026-11-23, and not accepted. Even in the rich mock-up, the
+look it proposes falls short of what the game needs, so a stronger visual
+direction comes before any of it is built ([the plan's](GAME-LIBRARY-PLAN.md)
+section 6, where the game work is paused). Nothing in this document is built.
+Section 10 lists the choices it asked for, which wait on that direction.
 
 This document will hold Folio Watch's design, as section 3.1 of the
 [plan](GAME-LIBRARY-PLAN.md) provides. This first part proposes how the game
