@@ -1,0 +1,2 @@
+: SQUARE DUP * ;
+9 SQUARE .

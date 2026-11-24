@@ -1,11 +1,12 @@
 """The Desktop's sample documents: the notes and lists a person keeps.
 
-A Desktop image built with --system-volume or --user-volume carries these
-beside the other samples (akashic_tui._sample_files).  The Desktop is Desk
-with Pad and File Explorer.  Each document is a short plain text or Markdown
-file that Pad opens and File Explorer previews, the Markdown ones as
-documents.  None holds a date or a link, so an image's copy is the same on
-every day and no preview leads to a file that is absent.
+generate_desktop_samples.py writes them into assets/samples/desktop beside
+the other samples, and a Desktop image built with --system-volume or
+--user-volume carries them from there (akashic_tui._sample_files).  The
+Desktop is Desk with Pad and File Explorer.  Each document is a short plain
+text or Markdown file that Pad opens and File Explorer previews, the
+Markdown ones as documents.  None holds a date or a link, so an image's copy
+is the same on every day and no preview leads to a file that is absent.
 
 They ship in the list File Explorer opens on.  With the system volume that
 is the boot volume's root, which the modules have left for the system

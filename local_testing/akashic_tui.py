@@ -24,9 +24,8 @@ import uuid
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path, PurePosixPath
-
 
 
 AKASHIC_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +37,15 @@ if str(AKASHIC_ROOT) not in sys.path:
 from toolchain.image.closure import REQUIRE_RE  # noqa: E402
 from toolchain.image.megapad import MEGAPAD_ROOT, SOURCE_ROOT  # noqa: E402
 OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
+# The Desktop's sample files, which local_testing/generate_desktop_samples.py
+# writes.  Every image takes its samples from here (_sample_files).
+DESKTOP_SAMPLES = AKASHIC_ROOT / "assets" / "samples" / "desktop"
+
+
+def _desktop_sample(name: str) -> bytes:
+    return (DESKTOP_SAMPLES / name).read_bytes()
+
+
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
@@ -252,7 +260,6 @@ from rich_terminal import DriverStatus, TerminalState  # noqa: E402
 from rich_terminal import text_rules  # noqa: E402
 import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
-import qoi_codec  # noqa: E402
 import sample_documents  # noqa: E402
 import sample_pdf  # noqa: E402
 import styled_text  # noqa: E402
@@ -13742,26 +13749,16 @@ WORLDS-RUN
 }
 
 
-# The image's sample day: today, as the build's clock reads it in UTC.  The
-# sample daybook.md holds four records of it, and a profile whose applet
-# shows "today" from them starts its clock on that day
-# (Profile.sample_date_clock).
-_SAMPLE_DAY = datetime.now(timezone.utc).date()
-SAMPLE_DATE = _SAMPLE_DAY.isoformat()
+# The sample daybook.md holds four records of one day, SAMPLE_DATE, and a
+# profile whose applet shows "today" from them starts its clock at noon UTC
+# on that day (Profile.sample_date_clock), so its images are the same on
+# every day.
+DAYBOOK_SAMPLE = _desktop_sample("daybook.md")
+SAMPLE_DATE = re.search(rb"\d{4}-\d{2}-\d{2}", DAYBOOK_SAMPLE).group().decode()
 # Noon UTC on SAMPLE_DATE, in milliseconds since the Unix epoch.
 SAMPLE_CLOCK_MS = int(
-    datetime(
-        _SAMPLE_DAY.year, _SAMPLE_DAY.month, _SAMPLE_DAY.day, 12, tzinfo=timezone.utc
-    ).timestamp()
-    * 1000
+    datetime.fromisoformat(f"{SAMPLE_DATE}T12:00:00+00:00").timestamp() * 1000
 )
-DAYBOOK_SAMPLE = (
-    "# Daybook\n\n"
-    f"- {SAMPLE_DATE} 09:30 | Project review\n"
-    f"- [ ] {SAMPLE_DATE} | Plan the next release\n"
-    f"- [x] {SAMPLE_DATE} | Morning walk\n"
-    f"> {SAMPLE_DATE} | Keep the system small and legible\n"
-).encode()
 
 
 # Desk with Daybook, for Daybook's reminders in the CELL terminal.  The boot
@@ -26307,117 +26304,25 @@ _ssoc-run
     include_large_sample=False,
 )
 
-LARGE_SAMPLE = b"".join(
-    f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries.\n".encode()
-    for line in range(1, 49)
-)
-
-GRID_SAMPLE = (
-    "Item,Qty,Price,Total\n"
-    '"Paper, A4",3,12,=B2*C2\n'
-    "Ink,2,25,=B3*C3\n"
-    "Subtotal,,,=SUM(D2:D3)\n"
-).encode()
-
-def _sample_picture() -> bytes:
-    """An evening sky over two hills with a low sun, 160 by 100 pixels, as
-    QOI.  Integer arithmetic keeps its bytes the same on every host.  The
-    corners are rounded with transparent and half-transparent pixels, so a
-    viewer's background and blending show."""
-
-    width, height = 160, 100
-    rows = []
-    for y in range(height):
-        row = []
-        for x in range(width):
-            r = 30 + 200 * y // 70
-            g = 40 + 110 * y // 70
-            b = 120 - 50 * y // 70
-            dx, dy = x - 112, y - 60
-            if dx * dx + dy * dy < 16 * 16:
-                r, g, b = 255, 214, 96
-            hill = 66 + (abs(x % 64 - 32) * 3) // 8 - x // 20
-            if y >= hill:
-                r, g, b = 26, 70 + (y - hill) * 2, 44
-            r, g, b = (min(255, max(0, value)) for value in (r, g, b))
-            cx, cy = min(x, width - 1 - x), min(y, height - 1 - y)
-            alpha = 255
-            if cx < 8 and cy < 8:
-                distance = (8 - cx) ** 2 + (8 - cy) ** 2
-                alpha = 0 if distance > 80 else 128 if distance > 48 else 255
-            row.append((r, g, b, alpha))
-        rows.append(row)
-    return qoi_codec.encode(rows)
-
-
+# File Explorer's sample picture and Markdown guide.
 SAMPLE_PICTURE_NAME = "sunset.qoi"
-SAMPLE_PICTURE = _sample_picture()
-
-# A Markdown document with every kind of block, links to its own headings
-# and to other files, and the sample picture as a figure, long enough to
-# scroll in File Explorer's preview.
+SAMPLE_PICTURE = _desktop_sample(SAMPLE_PICTURE_NAME)
 SAMPLE_DOCUMENT_NAME = "guide.md"
-SAMPLE_DOCUMENT = """# A guide to Akashic
+SAMPLE_DOCUMENT = _desktop_sample(SAMPLE_DOCUMENT_NAME)
 
-Akashic is a library of Forth modules for **MegaPad**. This guide is a
-*Markdown* document, which File Explorer shows as a document: headings,
-lists, quotes, code and pictures, with the text wrapped to the preview.
-
-- [Notes](notes.md), another document
-- [Pictures](#pictures), just below
-- [The end](#the-end)
-
-## Pictures
-
-![An evening sky over two hills](sunset.qoi)
-
-The picture above is sunset.qoi, from the same folder.
-
-## Lists
-
-1. Select a file in File Explorer.
-2. Its preview shows it the way its kind is shown.
-3. A link to a file selects that file and previews it.
-
-- A bullet
-  - inside another
-    - and one more
-
-## Quotes
-
-> A quote with **strong** words and `code` in it.
->
-> - and a list inside the quote
-
-## Code
-
-```
-: SQUARE  ( n -- n*n )  DUP * ;
-9 SQUARE .
-```
-
----
-
-## Reading
-
-- The wheel scrolls a document three rows a turn.
-- A link to a heading, such as [Lists](#lists), scrolls to it.
-- A link to a file selects that file and shows it here.
-
-## The end
-
-Back to [the top](#a-guide-to-akashic), or see the [example](example.f) in
-Forth.
-""".encode()
-
+# The text samples every image carries.
 SAMPLE_FILES = {
-    "welcome.txt": b"Welcome to Akashic.\nThis file is editable in Pad.\n",
-    "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
-    "large.txt": LARGE_SAMPLE,
-    "daybook.md": DAYBOOK_SAMPLE,
-    styled_text.NOTES_NAME: styled_text.NOTES_MD,
-    "grid.csv": GRID_SAMPLE,
+    name: _desktop_sample(name)
+    for name in (
+        "welcome.txt",
+        "example.f",
+        "large.txt",
+        "daybook.md",
+        styled_text.NOTES_NAME,
+        "grid.csv",
+    )
 }
+LARGE_SAMPLE = SAMPLE_FILES["large.txt"]
 
 DESK_MODULE = "tui/applets/desk/desk.f"
 PAD_MODULE = "tui/applets/pad/pad.f"
@@ -26430,14 +26335,15 @@ def _sample_files(
     own: tuple[tuple[str, bytes], ...] = (),
     documents: bool = False,
 ) -> dict[str, bytes]:
-    """The sample files an image carries: the text samples, which every
-    image has, and OWN, the samples its profile adds (Profile.sample_files).
-    One with File Explorer, the viewer that shows them, has the sample
-    picture, document and PDFs as well (sample_pdf.py).
+    """The sample files an image carries, from DESKTOP_SAMPLES: the text
+    samples, which every image has, and OWN, the samples its profile adds
+    (Profile.sample_files).  One with File Explorer, the viewer that shows
+    them, has the sample picture, document and PDFs as well (named by
+    sample_pdf.py).
 
     A Desktop, Desk with Pad to write in and File Explorer to list what is
-    written, also has the notes and lists a person keeps
-    (sample_documents.py) when DOCUMENTS says its build has room for them:
+    written, also has the notes and lists a person keeps (named by
+    sample_documents.py) when DOCUMENTS says its build has room for them:
     a build with the system volume, whose boot volume then holds few
     chunks, or one with the user volume, whose documents place holds every
     sample.  Nothing else makes the folder File Explorer opens on a list
@@ -26453,11 +26359,13 @@ def _sample_files(
             {
                 SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
                 SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
-                **sample_pdf.SAMPLES,
+                **{name: _desktop_sample(name) for name in sample_pdf.SAMPLES},
             }
         )
         if documents and DESK_MODULE in modules and PAD_MODULE in modules:
-            samples.update(sample_documents.SAMPLES)
+            samples.update(
+                {name: _desktop_sample(name) for name in sample_documents.SAMPLES}
+            )
     for name, content in own:
         if name in samples:
             raise RuntimeError(
@@ -35413,7 +35321,8 @@ def _parser() -> argparse.ArgumentParser:
             help=(
                 "put the profile's modules on an ext4 system volume as plain "
                 "files and load them from it; the boot image then holds what "
-                "mounts that volume (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
+                "mounts that volume (needs e2fsprogs: the pinned copy that "
+                "AKASHIC_E2FSPROGS_TOOL_DIR names, or this computer's own)"
             ),
         )
         command.add_argument(
@@ -35443,7 +35352,9 @@ def _parser() -> argparse.ArgumentParser:
                 "build a fresh ext4 user volume beside the boot image, attach "
                 "it as the fourth storage unit, and declare the shipping "
                 "form's places: documents and records there, records the "
-                "home, and a read-only origin (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
+                "home, and a read-only origin (needs e2fsprogs: the pinned "
+                "copy that AKASHIC_E2FSPROGS_TOOL_DIR names, or this "
+                "computer's own)"
             ),
         )
         command.add_argument(

@@ -251,9 +251,10 @@ The rich Desktop, `desktop-apt1`, and Desk with one applet, the
 asked for the linked one. The shipping form is three options that the
 sections below describe: the modules in their token form (`--token-modules`)
 on the ext4 system volume (`--system-volume`), and the user volume with the
-shipping form's places (`--user-volume`). Its build needs the pinned
-e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR` names, and it boots the image once
-in the simulator to record the token forms. `--linked` builds the linked form
+shipping form's places (`--user-volume`). Its build takes the pinned
+e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR` names, as the tests do, or else
+this computer's own from 1.47.0 on, and it boots the image once in the
+simulator to record the token forms. `--linked` builds the linked form
 instead: the modules in linked chunks on the boot volume, with one place over
 it, as these profiles built before the canonical journey passed in the
 shipping form (places slice 9, [`docs/utils/fs/places.md`](../docs/utils/fs/places.md)).
@@ -315,8 +316,9 @@ python3 local_testing/physical_desktop_acceptance.py --linked --system-volume \
   --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
 ```
 
-The build needs the pinned e2fsprogs of the ext4 fixtures; it stops before
-writing anything when `AKASHIC_E2FSPROGS_TOOL_DIR` does not name them. The
+The build takes the pinned e2fsprogs of the ext4 fixtures that
+`AKASHIC_E2FSPROGS_TOOL_DIR` names, or else this computer's own from 1.47.0
+on; it stops before writing anything when it finds neither. The
 option is part of the shipping form, which the Desktop's profiles build by
 default; any other profile, or one given `--linked`, has it only when it is
 given. With the user volume as well, the boot image's resources and samples
@@ -327,11 +329,11 @@ Explorer needs a listing at least three rows longer than the 35 its table
 shows there. A linked Desktop's 53 source chunks supply those rows in its
 root without the step naming them; with the modules on the system volume the
 boot volume's root lists nine chunks. A Desktop built with the option, or with
-the user volume, therefore carries the sample documents
-(`sample_documents.py`), thirty short notes and lists in text and Markdown,
-in the list File Explorer opens on: with the option alone the boot volume's
-root, and with the user volume its documents place. Nothing else makes either
-list long, and the documents stand for what a person keeps there. The
+the user volume, therefore carries the sample documents, thirty short notes
+and lists in text and Markdown (`sample_documents.py`), in the list File
+Explorer opens on: with the option alone the boot volume's root, and with
+the user volume its documents place. Nothing else makes either list long,
+and the documents stand for what a person keeps there. The
 documents place sets their number. It holds the samples and the documents,
 41 files, which is the table's 35 rows, a detent and a detent to spare, with
 the journey's pointer file in the first view and rows to spare above and
@@ -457,8 +459,15 @@ the pinned profile's features, and holds two folders, `/documents` and
 boot volume then holds none of: the text samples, `large.txt` among them,
 with File Explorer the sample picture, document and PDFs, a check's own
 picture such as the photograph of `--applet photo`, and on a Desktop the
-sample documents. The build checks the volume with the pinned `e2fsck` and
-needs the same `AKASHIC_E2FSPROGS_TOOL_DIR` as `--system-volume`.
+sample documents. Every sample comes from `assets/samples/desktop`, which
+`generate_desktop_samples.py` writes and `test_desktop_samples.py` keeps
+current; a configuration names the same folder as its user volume's first
+documents. The build checks the volume with `e2fsck` and takes the same
+e2fsprogs as `--system-volume`. A user volume from e2fsprogs 1.47.0 marks
+the block groups that hold superblock backups BLOCK_UNINIT, which the ext4
+driver fails to write, so the build refuses one and says so. A build keeps a
+user volume that is already there, unless asked for a fresh one, as the
+harness asks on every build.
 
 The profile then loads `utils/fs/user-volume.f` with the ext4 driver, in its
 linked chunks or from the system volume, and its `autoexec.f` mounts the
