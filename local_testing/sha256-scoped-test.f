@@ -206,6 +206,61 @@ CREATE _s256t-copy   SHA256-LEN ALLOT
     _s256t-unowned? _s256t-assert
     _s256t-stack ;
 
+\ Held hashes run only inside SHA256-WITH-TRANSACTION, which owns both
+\ boundaries for the whole run and releases them afterwards.
+VARIABLE _s256t-held-status
+VARIABLE _s256t-held-mine
+
+: _s256t-held-body  ( -- )
+    SHA256-TRANSACTION-MINE? _s256t-held-mine !
+    _s256t-abc 3 _s256t-digest SHA256-HELD-HASH
+    _s256t-held-status !
+    \ A second complete hash in the same transaction reuses it.
+    _s256t-held-status @ SHA256-S-OK = IF
+        _s256t-abc 3 _s256t-copy SHA256-HELD-HASH
+        _s256t-held-status !
+    THEN ;
+
+\ An exception inside the run propagates after the run has cleared the
+\ BIOS context and released both boundaries.
+: _s256t-held-throw-body  ( -- )
+    SHA256-INIT DROP
+    _s256t-abc 3 SHA256-UPDATE DROP
+    -4242 THROW ;
+
+: _s256t-held-throw  ( -- )
+    ['] _s256t-held-throw-body SHA256-WITH-TRANSACTION ;
+
+: _s256t-test-held  ( -- )
+    \ Outside a held transaction the word refuses without hashing.
+    _s256t-digest SHA256-LEN 0xA5 FILL
+    _s256t-snapshot
+    _s256t-abc 3 _s256t-digest SHA256-HELD-HASH
+        SHA256-S-STATE = _s256t-assert
+    _s256t-unchanged? _s256t-assert
+    SHA256-TRANSACTION-MINE? 0= _s256t-assert
+    _s256-held @ 0= _s256t-assert
+
+    0 _s256t-held-status ! 0 _s256t-held-mine !
+    _s256t-copy SHA256-LEN 0 FILL
+    ['] _s256t-held-body SHA256-WITH-TRANSACTION
+    _s256t-held-mine @ _s256t-assert
+    _s256t-held-status @ SHA256-S-OK = _s256t-assert
+    _s256t-abc? _s256t-assert
+    _s256t-copy _s256t-expected-abc SHA256-LEN
+        _s256t-bytes= _s256t-assert
+    _s256t-unowned? _s256t-assert
+    _s256-held @ 0= _s256t-assert
+
+    ['] _s256t-held-throw CATCH -4242 = _s256t-assert
+    _s256t-unowned? _s256t-assert
+    _s256-held @ 0= _s256t-assert
+    \ The cleared context takes a fresh hash.
+    _s256t-abc 3 _s256t-digest SHA256-HASH
+        SHA256-S-OK = _s256t-assert
+    _s256t-abc? _s256t-assert
+    _s256t-stack ;
+
 : _S256T-RUN  ( -- )
     0 _s256t-fails !
     0 _s256t-checks !
@@ -217,6 +272,7 @@ CREATE _s256t-copy   SHA256-LEN ALLOT
     _s256t-test-compare
     _s256t-test-rejections
     _s256t-test-reserved-aliases
+    _s256t-test-held
     _s256t-stack
     _s256t-fails @ 0= IF
         ." SHA256 SCOPED PASS " _s256t-checks @ . CR

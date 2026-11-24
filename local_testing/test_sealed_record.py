@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -17,6 +18,9 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
+
+# The folder for the suites' images (pytest's temporary folder under a test)
+IMAGE_DIR = Path(tempfile.gettempdir())
 
 
 SOURCE = LOCAL_TESTING.parent / "akashic" / "security" / "sealed-record.f"
@@ -279,7 +283,7 @@ def main() -> int:
     )
     for name, fixture, entry, marker in selected:
         profile = f"sealed-record-{name}"
-        image = Path(f"/tmp/akashic-sealed-record-{name}.img")
+        image = IMAGE_DIR / f"akashic-sealed-record-{name}.img"
         harness.PROFILES[profile] = harness.Profile(
             roots=("security/sealed-record.f",),
             resources=(),
@@ -318,6 +322,14 @@ def main() -> int:
         if not ok:
             return 1
     return 0
+
+
+
+def test_contracts(tmp_path: Path, monkeypatch) -> None:
+    """Run the contract script under pytest."""
+    from contract_script import run_as_test
+
+    run_as_test(sys.modules[__name__], tmp_path, monkeypatch)
 
 
 if __name__ == "__main__":
