@@ -246,9 +246,7 @@
   "composition_roots": [
     {
       "module": "tui/desk-apt1.f",
-      "applet_imports": [
-        "tui/applets/desk/desk.f"
-      ],
+      "applet_imports": ["tui/applets/desk/desk.f"],
       "purpose": "Optional rich-terminal Desk boot composition: binds the unchanged Desk applet to the generic APT-1 engine and UIDL adapter so no applet imports the rich terminal. Loaded only by the desktop-apt1 autoexec; no module may import it."
     }
   ],
@@ -590,15 +588,7 @@
       "replacement_requirement": "delivered in L12: reserve the tallest mutation path and next application-root page inside the current physical arena, publishing a physical checkpoint when the next mutation would not fit",
       "status": "resolved",
       "target_landing": "L12",
-      "evidence_symbols": [
-        "_LIBPIX-ARENA-TX-PAGE-MAX",
-        "_LIBPIX-ARENA-ACTIVATE",
-        "_LIBPIX-STAGING-MUTATION-PAGES",
-        "_LIBPIX-STAGE-NEXT-ROOM?",
-        "_LIBPIX-STAGE-PUBLISH",
-        "_LIBPIX-STAGE-FINAL-PUBLISH",
-        "_LIBPACOM-ROOT-ARENA"
-      ]
+      "evidence_symbols": ["_LIBPIX-ARENA-TX-PAGE-MAX", "_LIBPIX-ARENA-ACTIVATE", "_LIBPIX-STAGING-MUTATION-PAGES", "_LIBPIX-STAGE-NEXT-ROOM?", "_LIBPIX-STAGE-PUBLISH", "_LIBPIX-STAGE-FINAL-PUBLISH", "_LIBPACOM-ROOT-ARENA"]
     },
     {
       "id": "streams.observation-checkpoint",
@@ -610,10 +600,7 @@
       "replacement_requirement": "retain only as frozen compatibility evidence until SR6 retirement; derive any future operational persistence from the SR2 flow and delivery semantics in SR3, never from the superseded observation corpus",
       "status": "superseded-compatibility",
       "target_landing": "L13",
-      "evidence_symbols": [
-        "_OSTORE-ENCODE-PAYLOAD",
-        "_STREAMS-OBSERVATION-STORE-SAVE"
-      ]
+      "evidence_symbols": ["_OSTORE-ENCODE-PAYLOAD", "_STREAMS-OBSERVATION-STORE-SAVE"]
     },
     {
       "id": "agent.conversation-snapshot",
@@ -624,11 +611,7 @@
       "scale_risk": "append/load cost and memory grow with the complete retained conversation",
       "replacement_requirement": "paged records, ranged content, and indexed conversation access",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "ATHREAD-ENCODE-SIZE",
-        "ATHREAD-ENCODE",
-        "ATHREAD-DECODE"
-      ]
+      "evidence_symbols": ["ATHREAD-ENCODE-SIZE", "ATHREAD-ENCODE", "ATHREAD-DECODE"]
     },
     {
       "id": "daybook.document-parse",
@@ -639,11 +622,7 @@
       "scale_risk": "the full journal is reparsed and materialized",
       "replacement_requirement": "chunked text or indexed entry records with date/tag indexes",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_DB-PARSE-FILE",
-        "_DB-LOAD",
-        "_DB-NTH-IN-KIND"
-      ]
+      "evidence_symbols": ["_DB-PARSE-FILE", "_DB-LOAD", "_DB-NTH-IN-KIND"]
     },
     {
       "id": "daybook.automation-store",
@@ -654,12 +633,7 @@
       "scale_risk": "every reminder change and every firing rewrites, verifies and rechecks the whole store",
       "replacement_requirement": "paged schedule and occurrence records on persistence/ once reminder counts make whole-file commits slow",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "DBAS-COMMIT",
-        "_DBAS-ENCODE-FILE",
-        "_DBAS-VALIDATE",
-        "_DBAS-LOAD"
-      ]
+      "evidence_symbols": ["DBAS-COMMIT", "_DBAS-ENCODE-FILE", "_DBAS-VALIDATE", "_DBAS-LOAD"]
     },
     {
       "id": "pad.open-documents",
@@ -670,11 +644,7 @@
       "scale_risk": "large documents and many tabs consume fixed whole-buffer slots",
       "replacement_requirement": "per-document piece/gap state, ranged VFS I/O, and incremental search",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_PAD-FIND-BUFFER",
-        "_PAD-LOAD-FILE",
-        "_PAD-SEARCH-NEXT-OPEN"
-      ]
+      "evidence_symbols": ["_PAD-FIND-BUFFER", "_PAD-LOAD-FILE", "_PAD-SEARCH-NEXT-OPEN"]
     },
     {
       "id": "fexplorer.directory-sort",
@@ -685,10 +655,7 @@
       "scale_risk": "large directories sort quadratically",
       "replacement_requirement": "paged directory source with stable IDs and scalable ordering",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_FEXP-SORT-LIST",
-        "_FEXP-SWAP-ROWS"
-      ]
+      "evidence_symbols": ["_FEXP-SORT-LIST", "_FEXP-SWAP-ROWS"]
     },
     {
       "id": "grid.fixed-sheet",
@@ -699,10 +666,7 @@
       "scale_risk": "sparse or large sheets pay dense storage and hard row/column ceilings",
       "replacement_requirement": "sparse tiled cells and dependency-indexed incremental recalculation",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_GRID-SCAN-CSV",
-        "_GRID-PARSE-CSV"
-      ]
+      "evidence_symbols": ["_GRID-SCAN-CSV", "_GRID-PARSE-CSV"]
     },
     {
       "id": "desk.host-catalogs",
@@ -713,11 +677,7 @@
       "scale_risk": "launch, lookup, and layout work grow through repeated linear scans",
       "replacement_requirement": "indexed host slots plus explicit visible order and incremental layout",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_DESK-INSTALLED-FIND",
-        "_DESK-SERVICE-FIND",
-        "DESK-RELAYOUT"
-      ]
+      "evidence_symbols": ["_DESK-INSTALLED-FIND", "_DESK-SERVICE-FIND", "DESK-RELAYOUT"]
     },
     {
       "id": "runtime.component-registry",
@@ -728,10 +688,7 @@
       "scale_risk": "lookup latency and hard capacity grow with the complete registry",
       "replacement_requirement": "caller-sized indexed registries",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "CREG-TYPE-FIND",
-        "CREG-INST-FIND"
-      ]
+      "evidence_symbols": ["CREG-TYPE-FIND", "CREG-INST-FIND"]
     },
     {
       "id": "runtime.resource-registry",
@@ -742,10 +699,7 @@
       "scale_risk": "resource resolution scans the complete live registry",
       "replacement_requirement": "caller-sized identity index",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_RREG-FIND-ID",
-        "_RREG-CINST-FIND"
-      ]
+      "evidence_symbols": ["_RREG-FIND-ID", "_RREG-CINST-FIND"]
     },
     {
       "id": "interop.request-bus",
@@ -756,11 +710,7 @@
       "scale_risk": "independent buses contend through process-global guards and cannot express caller-selected backpressure",
       "replacement_requirement": "per-instance queues/guards with explicit capacity and bounded scheduling",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "CBUS-POST",
-        "CBUS-DISPATCH",
-        "_CBUS-DISPATCH-GUARD"
-      ]
+      "evidence_symbols": ["CBUS-POST", "CBUS-DISPATCH", "_CBUS-DISPATCH-GUARD"]
     },
     {
       "id": "interop.resource-owner-pool",
@@ -771,11 +721,7 @@
       "scale_risk": "very large simultaneous owner sets still scan caller storage and high-rate acquisition/release across independent pools still contends, though request dispatch is independent of registry and pool cardinality",
       "replacement_requirement": "add caller-supplied slot/lease indexes and per-pool lifecycle workspaces only when measured concurrent-owner or lifecycle throughput exceeds the bounded design",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "_ROPOOL-SLOT-FIND-RAW",
-        "_ROPOOL-HANDLER-BEGIN-LOCKED",
-        "_ROPOOL-HANDLER-END-LOCKED"
-      ]
+      "evidence_symbols": ["_ROPOOL-SLOT-FIND-RAW", "_ROPOOL-HANDLER-BEGIN-LOCKED", "_ROPOOL-HANDLER-END-LOCKED"]
     },
     {
       "id": "uidl.document",
@@ -786,11 +732,7 @@
       "scale_risk": "large UI documents hit aggregate limits and repeated linear lookup",
       "replacement_requirement": "per-instance arenas with indexed IDs and bounded render caches",
       "target_landing": "deferred",
-      "evidence_symbols": [
-        "UIDL-PARSE",
-        "_UDL-ID-FIND",
-        "UIDL-BY-ID"
-      ]
+      "evidence_symbols": ["UIDL-PARSE", "_UDL-ID-FIND", "UIDL-BY-ID"]
     }
   ],
   "capacities": [
