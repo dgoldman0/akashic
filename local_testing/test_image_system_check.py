@@ -147,6 +147,8 @@ def emulator_applet() -> dict:
         '." CODE " DICT-MACHINE-CODE? . ." SYSTEM " IMG-VERIFY-SYSTEM . CR',
         f'_t-buf {len(PROJECT)} S" /hello.toml" _t-put',
         f'_t-buf {SOURCE_AT} + {len(SOURCE)} S" /hello.f" _t-put',
+        # As a host does once the user allowed the install.
+        'S" /hello.toml" _t-place @ ABUILD-ASK DROP -1 ABUILD-ANSWER',
         'S" /hello.toml" _t-place @ ABUILD-INSTALL _t-status ! _t-entry !',
         '." BUILD " _t-status @ . CR',
         '." MPATH " ABUILD-INSTALLED-PATH TYPE ."  ;" CR',
@@ -201,6 +203,8 @@ def test_a_build_is_refused_before_a_file_is_read_or_source_compiled(simulator):
     _put(simulator, "/hello.f", SOURCE)
     text = _run(simulator, [
         "HERE LATEST",
+        # As a host does once the user allowed the install.
+        'S" /hello.toml" _t-place @ ABUILD-ASK DROP -1 ABUILD-ANSWER',
         'S" /hello.toml" _t-place @ ABUILD-INSTALL _t-status ! _t-entry !',
         '." STATUS " _t-status @ . ." ENTRY " _t-entry @ .',
         '." DETAIL " ABUILD-LAST-DETAIL . ." LAST " ABUILD-LAST-STATUS . CR',
@@ -208,6 +212,7 @@ def test_a_build_is_refused_before_a_file_is_read_or_source_compiled(simulator):
         '." ROWS " _t-cat @ ACAT-COUNT . ." INSTALLED " ABUILD-INSTALLED-PATH NIP . CR',
         '." COMPILED " [DEFINED] HELLO-ENTRY . ." RELOC " _RELOC-ACTIVE @ . CR',
         # A project that is not there gets the same answer, not an I/O error.
+        'S" /absent.toml" _t-place @ ABUILD-ASK DROP -1 ABUILD-ANSWER',
         'S" /absent.toml" _t-place @ ABUILD-INSTALL ." ABSENT " . . CR',
         '." DEPTH " DEPTH . CR',
     ])

@@ -562,6 +562,19 @@ dispatch returns.
   Agent records as cancelled because Desk shut down. Desk itself offers no
   command that closes it; the question guards any close that comes.
 
+## The install question
+
+Something that installs an applet asks the applet builder first
+([app-builder.md](../../app-builder.md#the-question-before-an-install)),
+since an installed applet is native code with the machine's full authority.
+While the builder holds a question, Desk opens its install screen
+(`install-surface.f`) as soon as no other screen or prompt is open, ahead of
+the sandbox's and the schedules' questions. The screen names the project and
+shows the builder's statement of what installing means; its rows are Cancel,
+then Install, so Enter alone cancels, and so does Esc. The screen answers the
+builder itself and closes, and it closes unanswered if its asker withdraws the
+question.
+
 ## The keyring
 
 Desk keeps the machine's passphrase keyring

@@ -188,7 +188,12 @@ This is deliberately named Find in Open Buffers: it does not imply a recursive
 VFS or project-directory search.
 
 Build & Install treats the active saved file as a project manifest and saves
-dirty named buffers before invoking the checked trusted-local builder. A
+dirty named buffers, then asks the checked trusted-local builder to allow the
+install. Desk shows that question with what installing native code means,
+Cancel first; the output pane says Pad is waiting for the answer. Once the
+answer allows it, Pad's tick builds and installs the project it asked about,
+from its own copy of the path; a refusal leaves the output pane saying the
+install was cancelled, and closing Pad withdraws a question still waiting. A
 compile failure retains the validated manifest source path together with the
 evaluator's line, column, token, and throw diagnostics after dictionary
 rollback. The output pane shows that location, and F4 opens or focuses its

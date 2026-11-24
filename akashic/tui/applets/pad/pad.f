@@ -218,6 +218,12 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-BUF-CNT
 \ Set when the user agreed to discard unsaved changes and close, so the
 \ close Pad then asks for goes ahead.
 _PAD-CURRENT-STATE CMP-CELL: _PAD-DISCARD-ARMED
+\ A Build & Install this instance asked the applet builder to allow: the
+\ project's path, a copy, and its place, until the answer comes.
+_PAD-CURRENT-STATE CMP-CELL: _PAD-BUILD-ASKED
+_PAD-CURRENT-STATE CMP-CELL: _PAD-BUILD-PLACE
+_PAD-CURRENT-STATE CMP-CELL: _PAD-BUILD-PATH-U
+_PAD-CURRENT-STATE MFT-PATH-MAX CMP-FIELD: _PAD-BUILD-PATH
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ARENA
 
 \ ---- Textarea allocation buffer (GB is always bound, so minimal) ----
@@ -1771,8 +1777,34 @@ VARIABLE _PBUILD-DIAG-U
         DROP S" A content-address collision was detected; no file was replaced."
         _PAD-OUTPUT-APPEND EXIT
     THEN
+    DUP ABUILD-E-UNCONFIRMED = IF
+        DROP S" Nothing was built: the install was not allowed."
+        _PAD-OUTPUT-APPEND EXIT
+    THEN
     DROP S" Build failed safely before the catalog commit."
     _PAD-OUTPUT-APPEND ;
+
+\ An install builds native code that runs with the machine's full
+\ authority, so Pad asks the applet builder first and builds only once the
+\ user allows it in Desk's question (_PAD-BUILD-TICK).  Pad keeps a copy
+\ of the project's path while the question waits.
+: _PAD-BUILD-ASK  ( path-a path-u place -- )
+    2 PICK 2 PICK 2 PICK ABUILD-ASK ?DUP IF
+        >R DROP 2DROP
+        R> ABUILD-E-BUSY = IF
+            S" Another install is waiting for its answer"
+        ELSE
+            S" This project cannot be installed"
+        THEN
+        2DUP _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL _PAD-OUTPUT-SHOW
+        2600 ASHELL-TOAST-WARNING EXIT
+    THEN
+    _PAD-BUILD-PLACE !
+    MFT-PATH-MAX MIN DUP _PAD-BUILD-PATH-U !  _PAD-BUILD-PATH SWAP MOVE
+    -1 _PAD-BUILD-ASKED !
+    S" Waiting for the install to be allowed in Desk's question"
+        _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
+    _PAD-OUTPUT-SHOW ;
 
 : _PAD-DO-BUILD-INSTALL  ( elem -- )
     DROP
@@ -1793,6 +1825,12 @@ VARIABLE _PBUILD-DIAG-U
     S" Build & Install" _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL
     _PAD-ACTIVE @ _PAD-BUF-ENTRY
     DUP _PBE-FNAME-A + @ OVER _PBE-FNAME-L + @ ROT _PBE-PLACE + @
+    _PAD-BUILD-ASK ;
+
+\ The answer came, and the user allowed it: build and install the project
+\ asked about.
+: _PAD-BUILD-RUN  ( -- )
+    _PAD-BUILD-PATH _PAD-BUILD-PATH-U @ _PAD-BUILD-PLACE @
     ABUILD-INSTALL _PBUILD-STATUS ! _PBUILD-ENTRY !
     _PBUILD-STATUS @ 0= IF
         S" Installed: " _PAD-OUTPUT-APPEND
@@ -1813,6 +1851,25 @@ VARIABLE _PBUILD-DIAG-U
         S" Build & Install failed" 2600 ASHELL-TOAST-ERROR
     THEN
     _PAD-OUTPUT-SHOW ;
+
+: _PAD-BUILD-FORGET  ( -- )
+    0 _PAD-BUILD-ASKED !  0 _PAD-BUILD-PLACE !
+    _PAD-BUILD-PATH MFT-PATH-MAX 0 FILL  0 _PAD-BUILD-PATH-U ! ;
+
+\ Follows the question this instance asked: allowed, it builds; refused,
+\ it says so; withdrawn, it forgets it.
+: _PAD-BUILD-TICK  ( -- )
+    _PAD-BUILD-ASKED @ 0= IF EXIT THEN
+    ABUILD-QUESTION@ CASE
+        ABUILD-Q-ALLOWED OF _PAD-BUILD-RUN _PAD-BUILD-FORGET ENDOF
+        ABUILD-Q-REFUSED OF
+            ABUILD-WITHDRAW _PAD-BUILD-FORGET
+            S" Not installed: the install was cancelled"
+                _PAD-OUTPUT-APPEND _PAD-OUTPUT-NL _PAD-OUTPUT-SHOW
+            S" Install cancelled" 1600 ASHELL-TOAST
+        ENDOF
+        ABUILD-Q-NONE OF _PAD-BUILD-FORGET ENDOF
+    ENDCASE ;
 
 \ A close question names its buffer; it closes only while still open.
 : _PAD-CLOSE-TAB-CONFIRMED  ( confirmed? index -- )
@@ -2636,6 +2693,7 @@ VARIABLE _PSW-BYTE
 
 : PAD-TICK-CB  ( instance -- )
     _PAD-ACTIVATE
+    _PAD-BUILD-TICK
     _PAD-UPDATE-STATUS ;
 
 \ =====================================================================
@@ -2659,6 +2717,8 @@ VARIABLE _PSW-BYTE
 
 : PAD-SHUTDOWN-CB  ( instance -- )
     _PAD-ACTIVATE
+    \ A question this instance asked goes with it.
+    _PAD-BUILD-ASKED @ IF ABUILD-WITHDRAW _PAD-BUILD-FORGET THEN
     \ Unbind from textarea
     _PAD-UNBIND
 

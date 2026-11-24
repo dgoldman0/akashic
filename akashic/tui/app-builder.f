@@ -8,8 +8,20 @@
 \  Immutable content-addressed image and installed-manifest files are
 \  published first.  The durable catalog upsert is the final commit point.
 \
+\  An applet built here is native code that runs with the machine's full
+\  authority, so ABUILD-INSTALL builds only a project the user allowed:
+\  the caller asks with ABUILD-ASK, the system's host shows
+\  ABUILD-STATEMENT for the question ABUILD-ASKING names and answers with
+\  ABUILD-ANSWER, and the caller then installs, which uses up the answer.
+\
 \  Public API:
 \    ABUILD-CATALOG!       ( catalog -- )
+\    ABUILD-STATEMENT      ( -- a u )
+\    ABUILD-ASK            ( project-path-a project-path-u place -- status )
+\    ABUILD-ASKING         ( -- project-path-a project-path-u place | 0 0 0 )
+\    ABUILD-ANSWER         ( allowed? -- )
+\    ABUILD-QUESTION@      ( -- state )
+\    ABUILD-WITHDRAW       ( -- )
 \    ABUILD-INSTALL        ( project-path-a project-path-u place -- entry status )
 \    ABUILD-LAST-STATUS    ( -- status )
 \    ABUILD-LAST-DETAIL    ( -- detail )
@@ -63,6 +75,7 @@ REQUIRE ../math/sha3.f
 -212 CONSTANT ABUILD-E-CATALOG
 -213 CONSTANT ABUILD-E-THROW
 -214 CONSTANT ABUILD-E-UNSUPPORTED
+-215 CONSTANT ABUILD-E-UNCONFIRMED   \ the user has not allowed this install
 
 4096   CONSTANT ABUILD-MANIFEST-MAX
 524288 CONSTANT ABUILD-SOURCE-MAX
@@ -447,8 +460,92 @@ VARIABLE _ab-entry-xt
     0 _ab-fd ! 0 _abr-buf !
     0 _ab-image-path-u ! 0 _ab-manifest-path-u ! 0 _ab-source-path-u ! ;
 
+\ ---------------------------------------------------------------------
+\ The install question
+\ ---------------------------------------------------------------------
+\  One question waits at a time.  ASKING holds the project's path and
+\  place until the host answers; an answer stands until the install uses
+\  it up or the caller withdraws the question.
+
+0 CONSTANT ABUILD-Q-NONE
+1 CONSTANT ABUILD-Q-ASKING
+2 CONSTANT ABUILD-Q-ALLOWED
+3 CONSTANT ABUILD-Q-REFUSED
+
+\ What the host shows the user before an install.  The source loader takes
+\ a line of at most 255 bytes, so the text is put together at load time
+\ from pieces that fit.
+: _AB-STATEMENT-1$  ( -- a u )
+    S" Installing builds this project into a native applet. " ;
+: _AB-STATEMENT-2$  ( -- a u )
+    S" A native applet runs with this machine's full authority: it can read " ;
+: _AB-STATEMENT-3$  ( -- a u )
+    S" and change every file, use every signed-in account and reach the " ;
+: _AB-STATEMENT-4$  ( -- a u )
+    S" network, and the sandbox does not hold it. Install only code you trust." ;
+_AB-STATEMENT-1$ NIP _AB-STATEMENT-2$ NIP + _AB-STATEMENT-3$ NIP +
+    _AB-STATEMENT-4$ NIP + CONSTANT _AB-STATEMENT-SIZE
+CREATE _ab-statement _AB-STATEMENT-SIZE ALLOT
+VARIABLE _ab-statement-u
+0 _ab-statement-u !
+: _AB-STATEMENT+  ( a u -- )
+    DUP >R _ab-statement _ab-statement-u @ + SWAP MOVE
+    R> _ab-statement-u +! ;
+_AB-STATEMENT-1$ _AB-STATEMENT+  _AB-STATEMENT-2$ _AB-STATEMENT+
+_AB-STATEMENT-3$ _AB-STATEMENT+  _AB-STATEMENT-4$ _AB-STATEMENT+
+
+: ABUILD-STATEMENT  ( -- a u )  _ab-statement _ab-statement-u @ ;
+
+VARIABLE _ab-q-state
+VARIABLE _ab-q-place
+VARIABLE _ab-q-path-u
+CREATE _ab-q-path MFT-PATH-MAX ALLOT
+ABUILD-Q-NONE _ab-q-state !
+
+\ Asks to install the project at PATH in PLACE.  BUSY while another
+\ question waits or an install runs; BOUNDS for a path no manifest takes.
+: ABUILD-ASK  ( project-path-a project-path-u place -- status )
+    _ab-busy @ _ab-q-state @ ABUILD-Q-ASKING = OR IF
+        DROP 2DROP ABUILD-E-BUSY EXIT
+    THEN
+    OVER 1 < 2 PICK MFT-PATH-MAX > OR IF DROP 2DROP ABUILD-E-BOUNDS EXIT THEN
+    _ab-q-place !  DUP _ab-q-path-u !  _ab-q-path SWAP CMOVE
+    ABUILD-Q-ASKING _ab-q-state !  ABUILD-S-OK ;
+
+\ The question waiting for the user's answer, or 0 0 0.
+: ABUILD-ASKING  ( -- project-path-a project-path-u place | 0 0 0 )
+    _ab-q-state @ ABUILD-Q-ASKING = IF
+        _ab-q-path _ab-q-path-u @ _ab-q-place @
+    ELSE
+        0 0 0
+    THEN ;
+
+\ The user's answer to the waiting question; without one it does nothing.
+: ABUILD-ANSWER  ( allowed? -- )
+    _ab-q-state @ ABUILD-Q-ASKING <> IF DROP EXIT THEN
+    IF ABUILD-Q-ALLOWED ELSE ABUILD-Q-REFUSED THEN _ab-q-state ! ;
+
+\ NONE, ASKING, ALLOWED or REFUSED.
+: ABUILD-QUESTION@  ( -- state )  _ab-q-state @ ;
+
+\ Withdraws the question, answered or not.
+: ABUILD-WITHDRAW  ( -- )
+    ABUILD-Q-NONE _ab-q-state !  0 _ab-q-place !
+    _ab-q-path MFT-PATH-MAX 0 FILL  0 _ab-q-path-u ! ;
+
+\ Whether the user allowed installing the project at PATH in PLACE.
+: _AB-ALLOWED?  ( project-path-a project-path-u place -- flag )
+    _ab-q-state @ ABUILD-Q-ALLOWED <> IF DROP 2DROP 0 EXIT THEN
+    _ab-q-place @ <> IF 2DROP 0 EXIT THEN
+    _ab-q-path _ab-q-path-u @ COMPARE 0= ;
+
+\ Builds and installs the project the user allowed, using up the answer.
 : ABUILD-INSTALL  ( project-path-a project-path-u place -- entry status )
     _ab-busy @ IF DROP 2DROP 0 ABUILD-E-BUSY EXIT THEN
+    2 PICK 2 PICK 2 PICK _AB-ALLOWED? 0= IF
+        DROP 2DROP 0 ABUILD-E-UNCONFIRMED EXIT
+    THEN
+    ABUILD-WITHDRAW
     _ab-place ! _ab-path-u ! _ab-path-a !
     _AB-RESET-OP -1 _ab-busy !
     ['] _AB-INSTALL-BODY CATCH

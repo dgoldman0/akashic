@@ -20876,12 +20876,18 @@ CREATE _pkg-writer-small 4 ALLOT
     THEN
     _pkg-inst @ CINST-FREE 0 _pkg-inst ! ;
 
+\ Installs the project at PATH as a host does once the user allowed it.
+: _pkg-install  ( path-a path-u -- entry status )
+    2DUP _pkg-place @ ABUILD-ASK ABUILD-S-OK = _pkg-assert
+    -1 ABUILD-ANSWER
+    _pkg-place @ ABUILD-INSTALL ;
+
 : _pkg-bad-build  ( -- )
-    S" /bad.toml" _pkg-place @ ABUILD-INSTALL
+    S" /bad.toml" _pkg-install
     ABUILD-E-COMPILE = SWAP 0= AND _pkg-assert ;
 
 : _pkg-throw-build  ( -- )
-    S" /throw.toml" _pkg-place @ ABUILD-INSTALL _pkg-status ! _pkg-entry !
+    S" /throw.toml" _pkg-install _pkg-status ! _pkg-entry !
     _pkg-status @ ABUILD-E-COMPILE <>
     ABUILD-LAST-DETAIL EVAL-S-THROW <> OR
     ABUILD-EVAL-THROW -777 <> OR IF
@@ -20910,7 +20916,11 @@ CREATE _pkg-writer-small 4 ALLOT
 
     _pkg-test-builder-writer
 
-    S" /hello.toml" _pkg-place @ ABUILD-INSTALL _pkg-status ! _pkg-entry !
+    \ No install runs before the user allows it.
+    S" /hello.toml" _pkg-place @ ABUILD-INSTALL
+    ABUILD-E-UNCONFIRMED = SWAP 0= AND _pkg-assert
+    _pkg-cat @ ACAT-COUNT 0= _pkg-assert
+    S" /hello.toml" _pkg-install _pkg-status ! _pkg-entry !
     _pkg-status @ ABUILD-S-OK = _pkg-assert
     _pkg-entry @ 0<> _pkg-assert
     ABUILD-SOURCE-PATH S" /hello.f" COMPARE 0= _pkg-assert
@@ -32129,6 +32139,14 @@ def smoke(
             ):
                 return
             session.send_key("ctrl+shift+b")
+            # Desk asks before an install; its rows are Cancel, then Install.
+            if not wait_screen(
+                "Install an applet?",
+                "Desk did not ask before installing the trusted-local applet",
+            ):
+                return
+            session.send_key("down")
+            session.send_key("enter")
             if not wait_screen(
                 "Applet installed",
                 "Pad did not build and install the trusted-local applet",

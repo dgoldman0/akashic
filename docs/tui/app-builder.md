@@ -22,9 +22,42 @@ The project's manifest and its source are read in PLACE, the place the
 project is in. The image and the installed manifest are published in the
 catalog's place (`ACAT-PLACE`), where the loader reads them.
 
+`ABUILD-INSTALL` builds only a project the user allowed (see [The question
+before an install](#the-question-before-an-install)); without an allowed
+answer for that project and place it returns `0 ABUILD-E-UNCONFIRMED` before it
+reads a file.
+
 On success, `entry` is the resulting app-catalog entry and `status` is `ABUILD-S-OK`. The pointer is owned by the catalog and remains stable only until the next catalog mutation. On failure, the builder returns `0 status` and owns no result buffers.
 
 The module is synchronous and non-reentrant. A recursive or concurrent call returns `ABUILD-E-BUSY`. Callers must also respect the owner-context requirements of source evaluation and dictionary-image construction.
+
+## The question before an install
+
+An applet the builder installs is native code. It runs with the machine's
+full authority, can read and change every file, use every signed-in account
+and reach the network, and the sandbox does not hold it. So the builder holds
+one question at a time, and installs only a project its user allowed:
+
+```forth
+ABUILD-STATEMENT  ( -- a u )
+ABUILD-ASK        ( project-path-a project-path-u place -- status )
+ABUILD-ASKING     ( -- project-path-a project-path-u place | 0 0 0 )
+ABUILD-ANSWER     ( allowed? -- )
+ABUILD-QUESTION@  ( -- state )
+ABUILD-WITHDRAW   ( -- )
+```
+
+A caller asks with `ABUILD-ASK`, which keeps a copy of the project's path and
+its place, and answers `ABUILD-E-BUSY` while another question waits or an
+install runs, and `ABUILD-E-BOUNDS` for a path no manifest takes. The
+system's host shows `ABUILD-STATEMENT` for the question `ABUILD-ASKING` names
+and answers with `ABUILD-ANSWER`: Desk's install question does this. The
+question's state, `ABUILD-QUESTION@`, is then `ABUILD-Q-ALLOWED` or
+`ABUILD-Q-REFUSED`, and the caller follows it. `ABUILD-INSTALL` for the
+project and place allowed uses the answer up before it builds; an install
+for any other project, or with no allowed answer, is refused. A refused
+question stays until its caller withdraws it, and a caller that goes away
+withdraws its question.
 
 ## Build and install pipeline
 
@@ -123,5 +156,6 @@ so callers that need a longer lifetime must copy it.
 | -212 | `ABUILD-E-CATALOG` | catalog upsert or result lookup failed |
 | -213 | `ABUILD-E-THROW` | an unexpected throw occurred outside checked source evaluation |
 | -214 | `ABUILD-E-UNSUPPORTED` | this system's dictionary holds no machine code, so it cannot build an image; nothing was read or compiled |
+| -215 | `ABUILD-E-UNCONFIRMED` | the user has not allowed installing this project; nothing was read or compiled |
 
 Unexpected throws are caught, reported as `ABUILD-E-THROW`, and followed by normal cleanup. If cleanup itself cannot discard an otherwise live image build, the builder reports `ABUILD-E-IMAGE` when no earlier error was already established.

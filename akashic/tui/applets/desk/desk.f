@@ -91,6 +91,7 @@ REQUIRE ../../../interop/resource-owners.f
 REQUIRE sandbox-surface.f
 REQUIRE schedule-surface.f
 REQUIRE keyring-surface.f
+REQUIRE install-surface.f
 
 \ =====================================================================
 \  §1 — Host Slot Compatibility Views
@@ -850,6 +851,7 @@ VARIABLE _DLB-H
     DUP SBXS-OVERLAY? IF SBXS-BOX TRUE EXIT THEN
     DUP SCHS-OVERLAY? IF SCHS-BOX TRUE EXIT THEN
     DUP KRS-OVERLAY? IF KRS-BOX TRUE EXIT THEN
+    DUP KIS-OVERLAY? IF KIS-BOX TRUE EXIT THEN
     DROP FALSE ;
 
 VARIABLE _DPO-SA
@@ -3001,6 +3003,9 @@ _DESK-LAUNCHER-DESC-SETUP
     _DESK-SCREEN-SLOT ?DUP 0= IF EXIT THEN
     DUP _SL-INST @ ?DUP 0= IF DROP EXIT THEN
     OVER _SL-DESC @ KRS-OVERLAY? IF NIP _DESK-KEYRING-SCREEN-SERVICE EXIT THEN
+    OVER _SL-DESC @ KIS-OVERLAY? IF
+        NIP KIS-SERVICE IF _DESK-SCREEN-CLOSE THEN EXIT
+    THEN
     SWAP _SL-DESC @ SBXS-OVERLAY? IF
         SBXS-SERVICE
     ELSE
@@ -3230,12 +3235,23 @@ VARIABLE _DESK-KEYRING-NOTE-U
         ENDOF
     ENDCASE ;
 
-\ Services the open screen, or opens one a component or Daybook asks
-\ for: the sandbox's access prompt first, then a schedule's approval.
+\ Opens the question before an install, which the applet builder holds
+\ until it is answered (install-surface.f).
+: _DESK-SHOW-INSTALL-QUESTION  ( -- )
+    KIS-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
+    ['] _DESK-LAUNCHER-STYLE R> KIS-BIND
+    ASHELL-DIRTY! ;
+
+\ Services the open screen, or opens one something asks for: the question
+\ before an install first, then the sandbox's access prompt, then a
+\ schedule's approval.
 : _DESK-SCREENS-TICK  ( -- )
     _DESK-SCREEN-ID @ IF _DESK-SCREEN-SERVICE EXIT THEN
     _DESK-LAUNCHER-ID @ IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-ACTIVE? IF EXIT THEN THEN
+    ABUILD-QUESTION@ ABUILD-Q-ASKING = IF _DESK-SHOW-INSTALL-QUESTION EXIT THEN
     _DESK-SBOX-READY? IF
         _DESK-SANDBOX @ SBOX-CAPABILITY-ASK ?DUP IF _DESK-SHOW-SBOX-ACCESS EXIT THEN
     THEN
