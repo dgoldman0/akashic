@@ -170,7 +170,7 @@ from diskutil import (  # noqa: E402
     PARENT_ROOT,
     pack_forth_source,
 )
-from forth_dependencies import dependency_markers, module_key  # noqa: E402
+from toolchain.image.closure import dependency_markers, module_key  # noqa: E402
 from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,

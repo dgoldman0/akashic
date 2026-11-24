@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_textarea import (
     AKASHIC_ROOT,
     BIOS_PATH,

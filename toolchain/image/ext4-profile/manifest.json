@@ -32,7 +32,7 @@
       "LC_ALL": "C",
       "TZ": "UTC",
       "E2FSPROGS_FAKE_TIME": "1704067200",
-      "MKE2FS_CONFIG": "{repo}/local_testing/fixtures/ext4-profile/mke2fs.conf"
+      "MKE2FS_CONFIG": "{repo}/toolchain/image/ext4-profile/mke2fs.conf"
     },
     "mke2fs_config_sha256": "9e7b22a404e44d07cc74d07b38e39308ec305f75dbf177ddaee773431bad211e",
     "mkfs_argv": [

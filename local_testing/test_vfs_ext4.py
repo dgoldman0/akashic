@@ -26,7 +26,7 @@ if str(LOCAL_TESTING) not in sys.path:
 import test_vfs_fat as fat_harness  # noqa: E402
 import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
 import machine_backends  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from machine_backends import Printed  # noqa: E402
 from native_forth import load_sources, module_source  # noqa: E402
 from system import HBW_SIZE as EMULATOR_HBW_SIZE  # noqa: E402

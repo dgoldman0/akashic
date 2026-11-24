@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 import qoi_codec
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_media import _gradient, _scaled
 from test_uidl_collection_snapshot import (
     AK, COLOR_ABI_STUBS, KDOS_PATH, STYLE_ABI_STUBS, _load_forth_lines,

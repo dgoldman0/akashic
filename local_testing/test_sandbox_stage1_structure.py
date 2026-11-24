@@ -16,7 +16,7 @@ POLICY_PATH = LOCAL_TESTING / "refactor_architecture.json"
 
 sys.path.insert(0, str(LOCAL_TESTING))
 
-from forth_dependencies import (  # noqa: E402
+from toolchain.image.closure import (  # noqa: E402
     PROVIDED_RE,
     dependency_closure,
     module_key,

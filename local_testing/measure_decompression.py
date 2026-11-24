@@ -37,7 +37,8 @@ from PIL import Image  # noqa: E402
 import akashic_tui  # noqa: E402
 import qoi_codec  # noqa: E402
 import test_png  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the Akashic root
+from toolchain.image.closure import dependency_order  # noqa: E402
 from simulator.platform import create_address_space  # noqa: E402
 from simulator.runtime import MegaForthRuntime  # noqa: E402
 from test_inflate import _text, _zlib  # noqa: E402

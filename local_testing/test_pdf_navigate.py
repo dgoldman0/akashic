@@ -24,7 +24,7 @@ import subprocess
 
 import pytest
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_pdf_file import write_pdf
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from simulator.platform import create_address_space

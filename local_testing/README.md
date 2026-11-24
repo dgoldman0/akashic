@@ -577,7 +577,7 @@ profile's general release gates remain open.
 
 The ext4 format contract is pinned in
 `docs/utils/fs/ext4-compatibility-profile.md` and mirrored by the
-machine-readable `fixtures/ext4-profile/manifest.json`.  It requires one
+machine-readable `toolchain/image/ext4-profile/manifest.json`.  It requires one
 source-built e2fsprogs v1.47.4 prefix; ambient `PATH` tools are deliberately
 rejected.  Generate the four geometry images plus the supplemental
 `read-side-1k-i256` image and run the profile gates with:

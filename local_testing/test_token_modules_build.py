@@ -37,7 +37,7 @@ from akashic_tui import (
     dependency_order,
 )
 from diskutil import FLAG_SYSTEM, FTYPE_FORTH, MP64FS
-from forth_dependencies import PROVIDED_RE
+from toolchain.image.closure import PROVIDED_RE
 from shared.boot_identity import boot_identity
 from shared.token_form import is_token_file, unpack_token_file
 from tests.token_module_cases import OTHER_SYSTEM, RECORDED_SOURCES, record

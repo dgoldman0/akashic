@@ -18,7 +18,7 @@ import zlib
 
 import pytest
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_pdf_cmap import XELATEX
 from test_pdf_file import stream_object, write_pdf
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines

@@ -102,7 +102,7 @@ Desktop without the user volume is unchanged.
 
 The volume is made by the pinned e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR`
 names, with the ext4 fixtures' profile
-(`local_testing/fixtures/ext4-profile/manifest.json`): 4 KiB blocks, 256-byte
+(`toolchain/image/ext4-profile/manifest.json`): 4 KiB blocks, 256-byte
 inodes, a 4 MiB journal and the feature set the driver is qualified against.
 Its UUID and directory hash seed derive from the modules' paths and digests,
 and its times are the profile's fixed time, so the same sources give the same

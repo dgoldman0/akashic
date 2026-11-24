@@ -11,7 +11,7 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
-from forth_dependencies import dependency_closure  # noqa: E402
+from toolchain.image.closure import dependency_closure  # noqa: E402
 from refactor_inventory import (  # noqa: E402
     MUTABLE_DEFINITION_KINDS,
     SOURCE_ROOT,

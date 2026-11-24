@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 
 
 AKASHIC_ROOT = Path(__file__).resolve().parents[1]

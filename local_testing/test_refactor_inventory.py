@@ -12,7 +12,7 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
-from forth_dependencies import (
+from toolchain.image.closure import (
     MODULE_KEY_BYTES,
     PROVIDED_RE,
     REQUIRE_RE,
@@ -87,7 +87,7 @@ def test_shared_dependency_grammar_matches_kdos_ascii_space_rules() -> None:
 
 def test_packaging_harness_uses_the_shared_dependency_core() -> None:
     harness = (LOCAL_TESTING / "akashic_tui.py").read_text(encoding="utf-8")
-    assert "from forth_dependencies import (" in harness
+    assert "from toolchain.image.closure import (" in harness
     assert "_external_module_sources" not in harness
     assert "return _shared_dependency_closure(" in harness
     assert "return _shared_dependency_order(" in harness

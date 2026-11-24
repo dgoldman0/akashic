@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from simulator.platform import create_address_space
 from simulator.runtime import MegaForthRuntime

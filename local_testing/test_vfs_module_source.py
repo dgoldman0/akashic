@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import generate_ext4_profile_fixtures as ext4_fixture_generator
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from diskutil import FTYPE_FORTH, MP64FS
 from simulator.platform import create_address_space

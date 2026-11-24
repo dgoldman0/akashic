@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from diskutil import FTYPE_TEXT, MP64FS
 from simulator.platform import create_address_space
