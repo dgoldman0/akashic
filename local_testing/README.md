@@ -463,11 +463,8 @@ sample documents. Every sample comes from `assets/samples/desktop`, which
 `generate_desktop_samples.py` writes and `test_desktop_samples.py` keeps
 current; a configuration names the same folder as its user volume's first
 documents. The build checks the volume with `e2fsck` and takes the same
-e2fsprogs as `--system-volume`. A user volume from e2fsprogs 1.47.0 marks
-the block groups that hold superblock backups BLOCK_UNINIT, which the ext4
-driver fails to write, so the build refuses one and says so. A build keeps a
-user volume that is already there, unless asked for a fresh one, as the
-harness asks on every build.
+e2fsprogs as `--system-volume`. A build keeps a user volume that is already
+there, unless asked for a fresh one, as the harness asks on every build.
 
 The profile then loads `utils/fs/user-volume.f` with the ext4 driver, in its
 linked chunks or from the system volume, and its `autoexec.f` mounts the

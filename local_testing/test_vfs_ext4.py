@@ -90147,6 +90147,11 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         ),
         ": _EXT4-BUILD-UNINIT-BLOCK-BITMAP  ( group buffer ctx -- ior )",
         ": _EXT4-BUILD-UNINIT-INODE-BITMAP  ( buffer ctx -- ior )",
+        ": _EXT4-UNINIT-BLOCK-SET?  ( block group ctx -- set? ior )",
+        (
+            ": _EXT4-UNINIT-RANGE-SET?  "
+            "( first count group ctx -- set? ior )"
+        ),
     )
     service_names = (
         "_EXT4-GROUP-BLOCK-COUNT",
@@ -90159,6 +90164,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-BLOCK-ALLOCATED?",
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP",
         "_EXT4-BUILD-UNINIT-INODE-BITMAP",
+        "_EXT4-UNINIT-RANGE-SET?",
     )
     for definition in service_definitions:
         assert bitmap.splitlines().count(definition) == 1
@@ -90202,11 +90208,18 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-UB-FIRST",
         "_EXT4-UB-COUNT",
         "_EXT4-UB-SPAN",
+        "_EXT4-US-BLOCK",
+        "_EXT4-US-GROUP",
+        "_EXT4-US-CTX",
+        "_EXT4-UR-FIRST",
+        "_EXT4-UR-COUNT",
+        "_EXT4-UR-GROUP",
+        "_EXT4-UR-CTX",
         "_EXT4-UI-BUF",
         "_EXT4-UI-CTX",
         "_EXT4-UI-BYTES",
     }
-    assert len(private_cells) == 31
+    assert len(private_cells) == 38
     assert all(cell not in facade for cell in private_cells)
     for removed in (
         "_EXT4-BBC-BUFFER",
@@ -90243,6 +90256,8 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
     block_loader = word_body(bitmap_executable, "_EXT4-LOAD-BLOCK-BITMAP")
     inode_loader = word_body(bitmap_executable, "_EXT4-LOAD-INODE-BITMAP")
     allocated = word_body(bitmap_executable, "_EXT4-BLOCK-ALLOCATED?")
+    uninit_block = word_body(bitmap_executable, "_EXT4-UNINIT-BLOCK-SET?")
+    uninit_range = word_body(bitmap_executable, "_EXT4-UNINIT-RANGE-SET?")
     uninit_inodes = word_body(
         bitmap_executable, "_EXT4-BUILD-UNINIT-INODE-BITMAP"
     )
@@ -90309,7 +90324,25 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         assert "_EXT4-CRC@" not in loader
 
     assert "_EXT4-GROUP-BLOCK-COUNT" in allocated
-    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN" in allocated
+    # A BLOCK_UNINIT group answers from the bitmap it stands for, whose set
+    # bits are its static metadata, with the group's descriptor loaded.
+    assert (
+        "_EXT4-BG-BLOCK-UNINIT AND IF _EXT4-BA-BLOCK @ _EXT4-BA-GROUP @ "
+        "_EXT4-BA-CTX @ _EXT4-UNINIT-BLOCK-SET? EXIT THEN"
+    ) in allocated
+    assert allocated.index("_EXT4-LOAD-DESC") < allocated.index(
+        "_EXT4-UNINIT-BLOCK-SET?"
+    )
+    assert uninit_block.index("_EXT4-SPARSE-GROUP?") < (
+        uninit_block.index("_EXT4-BACKUP-END")
+    ) < uninit_block.index("_EXT4-GD.BLOCK-BITMAP-LO")
+    assert "_EXT4-GD-SPAN @ U<" in uninit_block
+    assert "_EXT4-READ-BLOCK" not in uninit_block
+    assert "_EXT4-LOAD-DESC" not in uninit_block
+    assert uninit_range.count("_EXT4-LOAD-DESC") == 1
+    assert uninit_range.index("_EXT4-LOAD-DESC") < uninit_range.index(
+        "_EXT4-UNINIT-BLOCK-SET?"
+    )
     assert "_EXT4-LOAD-BLOCK-BITMAP" not in allocated
     assert (
         "_EXT4-BA-GROUP-BLOCKS @ _EXT4-BA-INDEX @ BITSET-TEST?"
@@ -90353,6 +90386,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 4,
         "_EXT4-LOAD-INODE-BITMAP": 11,
         "_EXT4-BUILD-UNINIT-INODE-BITMAP": 1,
+        "_EXT4-UNINIT-RANGE-SET?": 1,
         "_EXT4-BLOCK-BITMAP-CRC": 8,
         "_EXT4-INODE-BITMAP-CRC": 11,
     }

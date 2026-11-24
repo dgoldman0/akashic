@@ -496,6 +496,8 @@ VARIABLE _EXT4-RAR-GROUP-BLOCKS
         _EXT4-RAR-INDEX @ _EXT4-RAR-GROUP-BLOCKS @ U< 0= IF
             EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
         THEN
+        _EXT4-RAR-GROUP-BLOCKS @ _EXT4-RAR-INDEX @ -
+        _EXT4-RAR-REMAIN @ MIN _EXT4-RAR-CHUNK !
         _EXT4-RAR-GROUP @ _EXT4-RAR-CTX @ _EXT4-SR-GROUP-FACTS 0= IF
             _EXT4-RAR-GROUP @ _EXT4-RAR-CTX @ _EXT4-LOAD-DESC
             ?DUP IF EXIT THEN
@@ -503,15 +505,19 @@ VARIABLE _EXT4-RAR-GROUP-BLOCKS
             _EXT4-GD.BLOCK-BITMAP-LO + L@ _EXT4-GD-FLAGS @
         THEN
         _EXT4-BG-BLOCK-UNINIT AND IF
-            DROP _EXT4-RAR-DETAIL @ _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-RAR-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-        _EXT4-RAR-GROUP-BLOCKS @ _EXT4-RAR-INDEX @ -
-        _EXT4-RAR-REMAIN @ MIN _EXT4-RAR-CHUNK !
-        _EXT4-RAR-CTX @ _EXT4-C.BLOCK +
-        _EXT4-RAR-GROUP-BLOCKS @
-        _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ BITSET-ALL-SET? 0= IF
-            DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+            \ The bitmap a BLOCK_UNINIT group stands for allocates only the
+            \ group's static metadata, such as the reserved descriptor
+            \ blocks the resize inode maps in a sparse group.
+            DROP _EXT4-RAR-CURRENT @ _EXT4-RAR-CHUNK @
+            _EXT4-RAR-GROUP @ _EXT4-RAR-CTX @ _EXT4-UNINIT-RANGE-SET?
+            ?DUP IF NIP EXIT THEN
+        ELSE
+            _EXT4-RAR-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+            _EXT4-RAR-CTX @ _EXT4-C.BLOCK +
+            _EXT4-RAR-GROUP-BLOCKS @
+            _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ BITSET-ALL-SET? 0= IF
+                DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+            THEN
         THEN
         0= IF _EXT4-RAR-DETAIL @ _EXT4-CORRUPT EXIT THEN
         _EXT4-RAR-CHUNK @ DUP _EXT4-RAR-CURRENT +!
@@ -563,9 +569,10 @@ VARIABLE _EXT4-BM-INODE-SPAN
         THEN
     THEN
     \ An uninitialized block bitmap has no authoritative ownership bits yet.
-    \ Descriptor validation already bounds its reserved metadata locations;
-    \ ordinary inode pointers into such a group remain rejected by the shared
-    \ allocation helper.
+    \ Descriptor validation already bounds its reserved metadata locations.
+    \ The shared allocation helper counts only the group's static metadata
+    \ as allocated, so the resize inode's reserved descriptor blocks pass and
+    \ ordinary inode pointers into such a group remain rejected.
     _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF 0 EXIT THEN
     _EXT4-BM-BLOCK-BITMAP @ EXT4-D-BITMAP-CHECKSUM _EXT4-BM-CTX @
     _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN

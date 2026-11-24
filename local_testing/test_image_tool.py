@@ -254,36 +254,3 @@ def test_a_build_takes_the_pin_when_it_is_named(tmp_path, monkeypatch):
         (tmp_path / "host", E2FSPROGS_MINIMUM),
     ]
 
-
-def test_sparse_super_puts_backups_in_groups_0_1_and_powers_of_3_5_7():
-    groups = [group for group in range(60) if image_ext4._has_backup(group, True)]
-    assert groups == [0, 1, 3, 5, 7, 9, 25, 27, 49]
-    assert all(image_ext4._has_backup(group, False) for group in range(10))
-
-
-@needs_pinned_e2fsprogs
-def test_a_user_volume_with_uninitialized_backup_groups_is_refused(tmp_path, monkeypatch):
-    target = tmp_path / "image.img"
-    build(APP_SHELL_SPEC, target, name="volume", user_volume=True, user_volume_mib=16)
-    user = user_image_path(target)
-    assert image_ext4.uninitialized_backup_groups(user) == []
-
-    # Group 1 holds a backup; mark it BLOCK_UNINIT as e2fsprogs 1.47.0 does.
-    superblock = image_ext4.read_superblock(user)
-    flags = (
-        (superblock["first_data_block"] + 1) * superblock["block_size"]
-        + superblock["group_descriptor_size"]
-        + 0x12
-    )
-    with user.open("r+b") as volume:
-        volume.seek(flags)
-        value = int.from_bytes(volume.read(2), "little")
-        volume.seek(flags)
-        volume.write((value | 0x2).to_bytes(2, "little"))
-    assert image_ext4.uninitialized_backup_groups(user) == [1]
-
-    monkeypatch.setattr(image_ext4, "uninitialized_backup_groups", lambda image: [1, 3, 5])
-    with pytest.raises(RuntimeError, match="groups 1, 3, 5 hold superblock backups"):
-        build(APP_SHELL_SPEC, target, name="volume", user_volume=True,
-              user_volume_mib=16, fresh_user_volume=True)
-    assert not user.exists()

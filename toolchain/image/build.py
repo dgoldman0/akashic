@@ -1402,9 +1402,9 @@ def system_volume_geometry(
 
 # The e2fsprogs release that brought orphan_file, which the profile uses.
 # This computer's own 1.47.0 builds the same system volume as the pinned
-# 1.47.4.  It marks the user volume's block groups that hold superblock
-# backups BLOCK_UNINIT, which Akashic's ext4 driver fails to write, so a
-# build refuses a user volume that has them (_build_user_image).
+# 1.47.4.  Its user volume differs only in marking the block groups that hold
+# superblock backups BLOCK_UNINIT, which the ext4 driver takes as it takes
+# any uninitialized group.
 E2FSPROGS_MINIMUM = (1, 47, 0)
 
 
@@ -1789,19 +1789,6 @@ def _build_user_image(
         staged=staged,
         what="the user volume",
     )
-    from . import ext4 as ext4_profile
-
-    uninitialized = ext4_profile.uninitialized_backup_groups(target)
-    if uninitialized:
-        target.unlink()
-        raise RuntimeError(
-            "the user volume's block groups "
-            + ", ".join(map(str, uninitialized))
-            + " hold superblock backups yet are marked BLOCK_UNINIT, as "
-            "e2fsprogs 1.47.0 marks them, and Akashic's ext4 driver fails to "
-            "write such a volume; build it with e2fsprogs 1.47.4, named by "
-            "AKASHIC_E2FSPROGS_TOOL_DIR"
-        )
     return {
         "path": target,
         "bytes": volume_bytes,

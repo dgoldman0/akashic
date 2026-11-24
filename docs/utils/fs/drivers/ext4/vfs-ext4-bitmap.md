@@ -4,11 +4,12 @@
 public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade rather than
 this source unit directly.
 
-The unit owns ten stack services: canonical block- and inode-group counts,
-the exact physical interval for a block group, block- and inode-bitmap CRC
-calculation, authenticated block- and inode-bitmap loading, the bitmaps a
-`BLOCK_UNINIT` and an `INODE_UNINIT` group stand for, and the raw
-single-block allocation predicate. It depends directly on
+The unit owns twelve stack services: canonical block- and inode-group
+counts, the exact physical interval for a block group, block- and
+inode-bitmap CRC calculation, authenticated block- and inode-bitmap loading,
+the bitmaps a `BLOCK_UNINIT` and an `INODE_UNINIT` group stand for, the bits
+of the former for one block and for a run, and the single-block allocation
+predicate. It depends directly on
 [`vfs-ext4-admission.f`](vfs-ext4-admission.md),
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md), and the generic checked
 `bitset.f` layer. It has no callback or execution-token dependency on later
@@ -48,13 +49,26 @@ the rest. It reads neither the medium nor a descriptor; the facade's inode
 allocation checks the group's descriptor and uses the result as the raw
 bitmap of such a group.
 
-`_EXT4-BLOCK-ALLOCATED?` intentionally remains a narrower raw predicate. It
-validates physical and exact group geometry, but returns `FALSE 0` for
-`BLOCK_UNINIT`; facade-owned require wrappers decide when that negative result
-is corruption and also enforce mutation-owner alias policy. It therefore does
-not delegate to the stricter authenticated block-bitmap loader.
+`_EXT4-UNINIT-BLOCK-SET?` answers whether one block of a `BLOCK_UNINIT`
+group, whose descriptor is loaded, is set in the bitmap the group stands for,
+as the kernel's `ext4_init_block_bitmap` sets it: the backup superblock,
+descriptor table and reserved descriptor blocks of a sparse group, and the
+group's own bitmaps and inode table where they lie in it. It reads nothing.
+The builder above also sets a bitmap or inode table that another group's
+descriptor places in the group, which mke2fs never leaves in an uninitialized
+group, so this answer is never the more permissive. `_EXT4-UNINIT-RANGE-SET?`
+loads the group's descriptor once and answers for a run. e2fsprogs 1.47.0
+marks the groups that hold superblock backups `BLOCK_UNINIT`, and the resize
+inode maps their reserved descriptor blocks, so the ownership proof's walk of
+that inode relies on these answers.
 
-All 31 GBC/GIC/GBR/LBB/LIB/UB/UI/BA scratch cells are private. The two CRC
+`_EXT4-BLOCK-ALLOCATED?` validates physical and exact group geometry and
+answers from the medium's bitmap, or for a `BLOCK_UNINIT` group from
+`_EXT4-UNINIT-BLOCK-SET?`. Facade-owned require wrappers decide when a
+negative result is corruption and also enforce mutation-owner alias policy.
+It does not delegate to the stricter authenticated block-bitmap loader.
+
+All 38 GBC/GIC/GBR/LBB/LIB/UB/US/UR/UI/BA scratch cells are private. The two CRC
 calculators are stack-direct, so their former four scratch cells are gone.
 Mount-wide bitmap validation remains in the facade because it composes CRC
 evidence with allocation ownership and group accounting, but its duplicate CRC

@@ -152,47 +152,6 @@ def _u32(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
 
 
-def _has_backup(group: int, sparse_super: bool) -> bool:
-    """Whether GROUP holds a superblock backup: every group without
-    sparse_super, else groups 0 and 1 and the powers of 3, 5 and 7."""
-
-    if not sparse_super or group < 2:
-        return True
-    for base in (3, 5, 7):
-        power = base
-        while power < group:
-            power *= base
-        if power == group:
-            return True
-    return False
-
-
-def uninitialized_backup_groups(image: Path) -> list[int]:
-    """The block groups of IMAGE that hold a superblock backup yet carry
-    BLOCK_UNINIT.  e2fsprogs 1.47.0 marks them so; the pinned 1.47.4 does
-    not."""
-
-    superblock = read_superblock(image)
-    block_size = superblock["block_size"]
-    descriptor = (
-        superblock["group_descriptor_size"]
-        if superblock["feature_incompat"] & 0x80
-        else 32
-    )
-    sparse_super = bool(superblock["feature_ro_compat"] & 0x1)
-    table = (superblock["first_data_block"] + 1) * block_size
-    with image.open("rb") as source:
-        source.seek(table)
-        descriptors = source.read(superblock["group_count"] * descriptor)
-    block_uninit = 0x2
-    return [
-        group
-        for group in range(superblock["group_count"])
-        if _has_backup(group, sparse_super)
-        and _u16(descriptors, group * descriptor + 0x12) & block_uninit
-    ]
-
-
 def read_superblock(image: Path) -> dict[str, Any]:
     with image.open("rb") as source:
         source.seek(1024)
