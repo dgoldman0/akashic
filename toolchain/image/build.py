@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import struct
 import subprocess
@@ -22,7 +23,7 @@ import tempfile
 import time
 import uuid
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -1289,14 +1290,14 @@ def settings_image_path(image_path: Path) -> Path:
     return image_path.with_name(f"{image_path.stem}-settings{image_path.suffix}")
 
 
-def _settings_image_for(profile: Profile, image_path: Path) -> Path | None:
+def _settings_image_for(profile: ImageSpec, image_path: Path) -> Path | None:
     """The settings image a launch of PROFILE's IMAGE_PATH attaches, or None
     for a profile with no system settings."""
 
     return settings_image_path(image_path) if profile.settings_files else None
 
 
-def _build_settings_image(profile: Profile, target: Path, *, safe_mode: bool) -> Path:
+def _build_settings_image(profile: ImageSpec, target: Path, *, safe_mode: bool) -> Path:
     """Write PROFILE's settings disk beside TARGET: its system settings
     files on an MP64FS volume.  SAFE_MODE writes Desk's settings asking for
     safe mode."""
@@ -1311,7 +1312,7 @@ def _build_settings_image(profile: Profile, target: Path, *, safe_mode: bool) ->
             text = text.replace("safe-mode = false\n", "safe-mode = true\n")
         fs.inject_file(Path(relative).name, text.encode("utf-8"), ftype=FTYPE_TEXT)
     settings = settings_image_path(target)
-    fs.save(settings)
+    fs.save(_private_file(settings))
     return settings
 
 
@@ -1399,29 +1400,87 @@ def system_volume_geometry(
     return -(-volume // mib) * mib, groups, groups * group_inodes
 
 
-def _system_volume_toolchain() -> tuple[dict, dict[str, str], dict]:
-    """The ext4 fixtures' profile, its pinned environment and the verified
-    pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names: what a system
-    volume is built with.  A build asks for them before it writes anything."""
+# The e2fsprogs release that brought orphan_file, which the profile uses.
+# This computer's own 1.47.0 builds the same system volume as the pinned
+# 1.47.4.  It marks the user volume's block groups that hold superblock
+# backups BLOCK_UNINIT, which Akashic's ext4 driver fails to write, so a
+# build refuses a user volume that has them (_build_user_image).
+E2FSPROGS_MINIMUM = (1, 47, 0)
+
+
+# Where e2fsprogs lives on most systems, searched after the PATH, which an
+# ordinary account's often leaves out.
+HOST_TOOL_FOLDERS = ("/usr/sbin", "/sbin")
+
+
+def _host_e2fsprogs(manifest: dict) -> Path:
+    """The folder of this computer's own e2fsprogs tools."""
 
     from . import ext4 as ext4_profile
 
-    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
-    if not tool_dir_value:
-        raise RuntimeError(
-            "--system-volume and --user-volume build ext4 images with the "
-            "pinned e2fsprogs; set AKASHIC_E2FSPROGS_TOOL_DIR to the folder "
-            "that holds them"
-        )
+    required = manifest["authorities"]["e2fsprogs"]["required_tools"]
+    # The first folder that holds every tool: another program's lone mke2fs,
+    # such as Android's platform tools carry, comes first on some paths.
+    folders = os.environ.get("PATH", "").split(os.pathsep) + list(HOST_TOOL_FOLDERS)
+    for entry in folders:
+        if entry and all(os.access(Path(entry) / tool, os.X_OK) for tool in required):
+            return Path(entry).resolve()
+    raise ext4_profile.ProfileError(
+        "building ext4 volumes needs e2fsprogs "
+        + ".".join(map(str, E2FSPROGS_MINIMUM))
+        + " or later (" + ", ".join(required) + "), which this computer lacks"
+    )
+
+
+def _system_volume_toolchain() -> tuple[dict, dict[str, str], dict]:
+    """The ext4 profile, its environment and the checked e2fsprogs a volume
+    is built with: the pinned copy that AKASHIC_E2FSPROGS_TOOL_DIR names, as
+    tests build with, or else this computer's own from E2FSPROGS_MINIMUM on.
+    A build asks for them before it writes anything."""
+
+    from . import ext4 as ext4_profile
+
     manifest_path = ext4_profile.DEFAULT_MANIFEST
     manifest = ext4_profile.load_manifest(manifest_path)
-    tool_dir = Path(tool_dir_value).resolve()
-    env = ext4_profile.pinned_environment(manifest, tool_dir, manifest_path)
+    configured = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
     try:
-        tools = ext4_profile.verify_toolchain(manifest, tool_dir, env)
+        if configured:
+            tool_dir, minimum = Path(configured).resolve(), None
+        else:
+            tool_dir, minimum = _host_e2fsprogs(manifest), E2FSPROGS_MINIMUM
+        env = ext4_profile.pinned_environment(manifest, tool_dir, manifest_path)
+        tools = ext4_profile.verify_toolchain(manifest, tool_dir, env, minimum=minimum)
     except ext4_profile.ProfileError as error:
         raise RuntimeError(str(error)) from error
     return manifest, env, tools
+
+
+def _private_folder(path: Path) -> Path:
+    """PATH as a folder, each folder the build creates on the way open to
+    the user's own account alone.  A folder that is already there keeps its
+    mode, since it is the user's."""
+
+    missing = []
+    folder = path
+    while not folder.exists():
+        missing.append(folder)
+        folder = folder.parent
+    for folder in reversed(missing):
+        folder.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
+    return path
+
+
+def _private_file(path: Path) -> Path:
+    """PATH as a file only the user's own account can read or write, made
+    empty when missing.  A file written over afterwards keeps that mode."""
+
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
+    return path
 
 
 def _write_ext4_image(
@@ -1472,8 +1531,9 @@ def _write_ext4_image(
             )
         return result
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as image:
+    _private_folder(target.parent)
+    with _private_file(target).open("r+b") as image:
+        image.truncate(0)
         image.truncate(volume_bytes)
     # The profile's arguments end with the image and its block count.  The
     # inode count goes before them: mke2fs would otherwise scale a group's
@@ -1729,6 +1789,19 @@ def _build_user_image(
         staged=staged,
         what="the user volume",
     )
+    from . import ext4 as ext4_profile
+
+    uninitialized = ext4_profile.uninitialized_backup_groups(target)
+    if uninitialized:
+        target.unlink()
+        raise RuntimeError(
+            "the user volume's block groups "
+            + ", ".join(map(str, uninitialized))
+            + " hold superblock backups yet are marked BLOCK_UNINIT, as "
+            "e2fsprogs 1.47.0 marks them, and Akashic's ext4 driver fails to "
+            "write such a volume; build it with e2fsprogs 1.47.4, named by "
+            "AKASHIC_E2FSPROGS_TOOL_DIR"
+        )
     return {
         "path": target,
         "bytes": volume_bytes,
@@ -1769,7 +1842,7 @@ def _token_form(
     return with_boot_id(form, boot_id, source_beside=source_beside)
 
 
-def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
+def _boot_in_simulator(image_path: Path, profile: ImageSpec, *, recorder=None):
     """Boot IMAGE_PATH in MegaPad's simulator, on the profile's full cores,
     until its boot script has run, and return the runtime.  RECORDER, a token
     recorder, is attached before KDOS loads.  A profile without a session
@@ -1836,7 +1909,7 @@ def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
     return runtime
 
 
-def _record_token_files(image_path: Path, profile: Profile) -> dict[str, bytes]:
+def _record_token_files(image_path: Path, profile: ImageSpec) -> dict[str, bytes]:
     """Boot IMAGE_PATH from source in MegaPad's simulator with its token
     recorder attached, and return each loaded source file's token form by
     the SHA-256 of its text.
@@ -1858,6 +1931,62 @@ def _record_token_files(image_path: Path, profile: Profile) -> dict[str, bytes]:
         except TokenFormError:
             continue
     return token_files
+
+
+def session_manifest_path(image_path: Path) -> Path:
+    """The session manifest written beside the boot disk's IMAGE_PATH."""
+
+    return image_path.with_name(f"{image_path.stem}-session.json")
+
+
+SESSION_MANIFEST_FORMAT = 1
+
+
+def _write_session_manifest(
+    spec: ImageSpec,
+    target: Path,
+    *,
+    name: str,
+    backend: str,
+    settings: Path | None,
+    system: bool,
+    user: bool,
+    built_from: Mapping[str, object] | None,
+) -> Path:
+    """Write what a server needs to run TARGET's images: each storage unit's
+    image by file name, the machine's memory and cores, the boot's backend,
+    and the rich terminal's policies; and BUILT_FROM, what the caller built
+    them from, as given."""
+
+    rich = spec.rich_terminal
+    manifest = {
+        "format": SESSION_MANIFEST_FORMAT,
+        "name": name,
+        "backend": backend,
+        "storage": {
+            "boot": target.name,
+            "settings": None if settings is None else settings.name,
+            "system": system_image_path(target).name if system else None,
+            "user": user_image_path(target).name if user else None,
+        },
+        "machine": {
+            "ram_kib": DEFAULT_RAM_KIB,
+            "ext_mem_mib": spec.default_ext_mem_mib,
+            "vram_mib": DEFAULT_VRAM_MIB,
+            "full_cores": spec.full_cores,
+            "clusters": spec.clusters,
+        },
+        "rich_terminal": None if rich is None else {
+            "policy": rich.host_policy.to_dict(),
+            "retained_policy": (
+                None if rich.retained_policy is None else rich.retained_policy.to_dict()
+            ),
+        },
+        "built_from": None if built_from is None else dict(built_from),
+    }
+    path = _private_file(session_manifest_path(target))
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return path
 
 
 # What build() asks its caller for the files a person works with:
@@ -1886,6 +2015,9 @@ def build(
     keep_module_source: bool = False,
     user_volume: bool = False,
     user_volume_mib: int = USER_VOLUME_DEFAULT_MIB,
+    fresh_user_volume: bool = False,
+    session_manifest: bool = False,
+    built_from: Mapping[str, object] | None = None,
 ) -> Path:
     """Build SPEC's boot image at TARGET and the images of its other disks
     beside it, for BACKEND.  NAME names the image in errors and the report.
@@ -1922,8 +2054,20 @@ def build(
     records being the home.  With a system volume as well, the spec's
     resources and initial files move onto the system volume, the origin's
     volume.  Every sample, the large one included, moves into the user
-    volume's documents, and the boot volume keeps none.
+    volume's documents, and the boot volume keeps none.  A user volume that
+    is already there is kept as it is, documents and all, unless
+    FRESH_USER_VOLUME asks for a new one; FRESH_USER_VOLUME also removes a
+    user volume beside an image built without one.
+
+    Every file the build writes can be read and written by the user's own
+    account alone.  SESSION_MANIFEST writes beside the images what a server
+    needs to run them (:func:`session_manifest_path`), with BUILT_FROM, what
+    the caller built SPEC from, such as its components' commits and its
+    configuration's digest, as given.  The build runs no program to find
+    them, since the caller knows them.
     """
+    if built_from is not None and not session_manifest:
+        raise ValueError("built_from goes into the session manifest; ask for one")
     if keep_module_source and not (token_modules and system_volume):
         raise ValueError(
             "keeping module source beside token files needs a system volume "
@@ -2249,7 +2393,7 @@ def build(
     )
 
     target = Path(target).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    _private_folder(target.parent)
 
     fs = MP64FS(total_sectors=profile.total_sectors)
     fs.format()
@@ -2378,7 +2522,7 @@ def build(
     if large_sample:
         fs.delete_file(".growth-hole-1")
         fs.delete_file(".growth-hole-2")
-    fs.save(target)
+    fs.save(_private_file(target))
     settings = (
         _build_settings_image(profile, target, safe_mode=settings_safe_mode)
         if profile.settings_files
@@ -2401,18 +2545,28 @@ def build(
     )
     if system is None:
         system_image_path(target).unlink(missing_ok=True)
+    # The user volume holds the user's own documents and records, so a build
+    # keeps one that is there unless asked for a fresh one.
+    user_path = user_image_path(target)
+    kept_user = user_volume and user_path.exists() and not fresh_user_volume
     user = (
         _build_user_image(
-            user_image_path(target),
+            user_path,
             user_volume_mib << 20,
             system_volume_toolchain,
             documents=user_documents,
         )
-        if user_volume
+        if user_volume and not kept_user
         else None
     )
-    if user is None:
-        user_image_path(target).unlink(missing_ok=True)
+    if not user_volume and fresh_user_volume:
+        user_path.unlink(missing_ok=True)
+    if session_manifest:
+        _write_session_manifest(
+            spec, target, name=name, backend=backend,
+            settings=settings, system=system is not None, user=user_volume,
+            built_from=built_from,
+        )
 
     info = fs.info()
     if info["free_sectors"] * 512 < profile.minimum_free_bytes:
@@ -2488,6 +2642,7 @@ def build(
             if system is not None
             else ""
         )
+        + (f"\n  user volume: {user_path}, kept as it was" if kept_user else "")
         + (
             f"\n  user volume: {user['path']}, ext4, {user['bytes']:,} bytes "
             f"in {USER_VOLUME_BLOCK_BYTES}-byte blocks, {user['groups']} groups, "

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import struct
 import uuid
 import subprocess
@@ -89,9 +90,20 @@ def pinned_environment(
     return values
 
 
+_VERSION = r"(\d+)\.(\d+)\.(\d+)"
+
+
 def verify_toolchain(
-    manifest: dict[str, Any], tool_dir: Path, env: dict[str, str]
+    manifest: dict[str, Any],
+    tool_dir: Path,
+    env: dict[str, str],
+    *,
+    minimum: tuple[int, int, int] | None = None,
 ) -> dict[str, dict[str, str]]:
+    """The profile's e2fsprogs tools in TOOL_DIR, each checked: at the
+    pinned version, or with MINIMUM at any version from MINIMUM on, linked to
+    the library of its own version."""
+
     tool_dir = tool_dir.resolve()
     expected_banner = manifest["authorities"]["e2fsprogs"]["version_banner"]
     expected_library = "Using EXT2FS Library version 1.47.4"
@@ -100,14 +112,27 @@ def verify_toolchain(
     for name in manifest["authorities"]["e2fsprogs"]["required_tools"]:
         executable = tool_dir / name
         if not executable.is_file() or not os.access(executable, os.X_OK):
-            raise ProfileError(f"missing executable pinned tool: {executable}")
+            raise ProfileError(f"missing executable e2fsprogs tool: {executable}")
         result = _run([str(executable), "-V"], env=env)
         banner = (result.stdout + result.stderr).strip()
-        if f"{name} {expected_banner}" not in banner:
+        if minimum is not None:
+            tool = re.search(re.escape(name) + " " + _VERSION, banner)
+            library = re.search("Using EXT2FS Library version " + _VERSION, banner)
+            version = tuple(map(int, tool.groups())) if tool else None
+            if version is None or version < minimum:
+                raise ProfileError(
+                    f"{executable} is not e2fsprogs {'.'.join(map(str, minimum))} "
+                    f"or later:\n{banner}"
+                )
+            if library is None or tuple(map(int, library.groups())) != version:
+                raise ProfileError(
+                    f"{executable} is not linked to its own libext2fs:\n{banner}"
+                )
+        elif f"{name} {expected_banner}" not in banner:
             raise ProfileError(
                 f"{executable} is not pinned {name} {expected_banner}:\n{banner}"
             )
-        if expected_library not in banner:
+        elif expected_library not in banner:
             raise ProfileError(
                 f"{executable} is not linked to pinned libext2fs 1.47.4:\n{banner}"
             )
@@ -125,6 +150,47 @@ def _u16(data: bytes, offset: int) -> int:
 
 def _u32(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
+
+
+def _has_backup(group: int, sparse_super: bool) -> bool:
+    """Whether GROUP holds a superblock backup: every group without
+    sparse_super, else groups 0 and 1 and the powers of 3, 5 and 7."""
+
+    if not sparse_super or group < 2:
+        return True
+    for base in (3, 5, 7):
+        power = base
+        while power < group:
+            power *= base
+        if power == group:
+            return True
+    return False
+
+
+def uninitialized_backup_groups(image: Path) -> list[int]:
+    """The block groups of IMAGE that hold a superblock backup yet carry
+    BLOCK_UNINIT.  e2fsprogs 1.47.0 marks them so; the pinned 1.47.4 does
+    not."""
+
+    superblock = read_superblock(image)
+    block_size = superblock["block_size"]
+    descriptor = (
+        superblock["group_descriptor_size"]
+        if superblock["feature_incompat"] & 0x80
+        else 32
+    )
+    sparse_super = bool(superblock["feature_ro_compat"] & 0x1)
+    table = (superblock["first_data_block"] + 1) * block_size
+    with image.open("rb") as source:
+        source.seek(table)
+        descriptors = source.read(superblock["group_count"] * descriptor)
+    block_uninit = 0x2
+    return [
+        group
+        for group in range(superblock["group_count"])
+        if _has_backup(group, sparse_super)
+        and _u16(descriptors, group * descriptor + 0x12) & block_uninit
+    ]
 
 
 def read_superblock(image: Path) -> dict[str, Any]:

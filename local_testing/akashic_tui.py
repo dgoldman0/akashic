@@ -26691,6 +26691,7 @@ def build_image(
         keep_module_source=keep_module_source,
         user_volume=user_volume,
         user_volume_mib=user_volume_mib,
+        fresh_user_volume=True,
     )
     return target
 

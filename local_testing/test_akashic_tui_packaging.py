@@ -495,6 +495,7 @@ def test_image_paths_reject_file_directory_aliases() -> None:
         _validate_image_paths(
             {"collision", "collision/child.f"},
             ["collision"],
+            sample_names=frozenset(),
         )
 
 
@@ -3247,12 +3248,18 @@ def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:
     assert 2 < deepest <= limit
 
 
-def test_system_volume_build_asks_for_the_pinned_tools_first(
+def test_system_volume_build_asks_for_its_tools_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Without the pinned tools named, a build takes this computer's own
+    # e2fsprogs, and one that finds none is refused.
+    import toolchain.image.build as image_build
+
     monkeypatch.delenv("AKASHIC_E2FSPROGS_TOOL_DIR", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
+    monkeypatch.setattr(image_build, "HOST_TOOL_FOLDERS", ())
     target = tmp_path / "desktop.img"
-    with pytest.raises(RuntimeError, match="AKASHIC_E2FSPROGS_TOOL_DIR"):
+    with pytest.raises(RuntimeError, match="needs e2fsprogs 1.47.0 or later"):
         build_image("desktop-apt1", target, system_volume=True)
     # Nothing was written: no boot image waits for a volume that is absent.
     assert not target.exists()
