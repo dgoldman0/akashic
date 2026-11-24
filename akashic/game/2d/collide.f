@@ -14,6 +14,7 @@
 \
 \  Public API — Collision Map:
 \    CMAP-NEW        ( w h -- cmap )           Allocate collision map
+\    CMAP-NEW?       ( w h -- cmap ior )       The same, answering failure
 \    CMAP-FREE       ( cmap -- )               Free collision map
 \    CMAP-SET        ( cmap col row val -- )    Set tile collision value
 \    CMAP-GET        ( cmap col row -- val )    Get tile collision value
@@ -21,6 +22,7 @@
 \    CMAP-SOLID?     ( cmap col row -- flag )   Is tile non-passable?
 \    CMAP-W          ( cmap -- w )              Get width
 \    CMAP-H          ( cmap -- h )              Get height
+\    CMAP-DATA       ( cmap -- addr )           Tile bytes, row by row
 \
 \  Public API — Geometric Primitives:
 \    PT-IN-RECT?     ( px py rx ry rw rh -- flag )
@@ -45,20 +47,22 @@ PROVIDED akashic-game-2d-collide
 \  §2 — Collision Map Constructor / Destructor
 \ =====================================================================
 
+\ CMAP-NEW? ( w h -- cmap ior )
+\   A map of w by h tiles, all 0 (passable), or 0 and the ior of the
+\   allocation that failed.  Both sizes must be at least 1.
+: CMAP-NEW?  ( w h -- cmap ior )
+    _CMAP-DESC-SIZE ALLOCATE ?DUP IF >R DROP 2DROP 0 R> EXIT THEN
+    >R 2DUP * ALLOCATE ?DUP IF                    ( w h data ior  R: desc )
+        >R DROP 2DROP R> R> FREE 0 SWAP EXIT
+    THEN
+    R@ _CMAP-O-DATA + !  R@ _CMAP-O-H + !  R@ _CMAP-O-W + !
+    R@ _CMAP-O-DATA + @  R@ _CMAP-O-W + @ R@ _CMAP-O-H + @ *  0 FILL
+    R> 0 ;
+
+\ CMAP-NEW ( w h -- cmap )
+\   CMAP-NEW? for a caller that cannot go on without the map.
 : CMAP-NEW  ( w h -- cmap )
-    2DUP *                             ( w h size )
-    >R                                 ( w h  R: size )
-    _CMAP-DESC-SIZE ALLOCATE 0<> ABORT" CMAP-NEW: desc alloc"
-    >R                                 ( w h  R: size desc )
-    SWAP R@ _CMAP-O-W + !             ( h  R: size desc )
-    R@ _CMAP-O-H + !                  ( R: size desc )
-    R> R>                              ( desc size )
-    ALLOCATE 0<> ABORT" CMAP-NEW: data alloc"
-    OVER _CMAP-O-DATA + !             ( desc )
-    \ Zero-fill data (all passable)
-    DUP DUP _CMAP-O-DATA + @          ( desc desc data )
-    SWAP DUP _CMAP-O-W + @ SWAP _CMAP-O-H + @ *   ( desc data size )
-    0 FILL ;
+    CMAP-NEW? ABORT" CMAP-NEW: alloc" ;
 
 : CMAP-FREE  ( cmap -- )
     DUP _CMAP-O-DATA + @ FREE
@@ -70,6 +74,12 @@ PROVIDED akashic-game-2d-collide
 
 : CMAP-W  ( cmap -- w )  _CMAP-O-W + @ ;
 : CMAP-H  ( cmap -- h )  _CMAP-O-H + @ ;
+
+\ CMAP-DATA ( cmap -- addr )
+\   The tile bytes, width × height of them, row by row; the byte of tile
+\   (col,row) is at addr + row × width + col.  The address stays the same
+\   for the map's life.
+: CMAP-DATA  ( cmap -- addr )  _CMAP-O-DATA + @ ;
 
 \ _CMAP-ADDR ( cmap col row -- addr )
 \   Byte address = data + row * width + col.
@@ -142,11 +152,13 @@ VARIABLE _CA-X2  VARIABLE _CA-Y2  VARIABLE _CA-W2  VARIABLE _CA-H2
 REQUIRE ../../concurrency/guard.f
 GUARD _cmap-guard
 
+' CMAP-NEW?  CONSTANT _cmap-new-q-xt
 ' CMAP-NEW   CONSTANT _cmap-new-xt
 ' CMAP-FREE  CONSTANT _cmap-free-xt
 ' CMAP-SET   CONSTANT _cmap-set-xt
 ' CMAP-FILL  CONSTANT _cmap-fill-xt
 
+: CMAP-NEW?  _cmap-new-q-xt _cmap-guard WITH-GUARD ;
 : CMAP-NEW   _cmap-new-xt   _cmap-guard WITH-GUARD ;
 : CMAP-FREE  _cmap-free-xt  _cmap-guard WITH-GUARD ;
 : CMAP-SET   _cmap-set-xt   _cmap-guard WITH-GUARD ;

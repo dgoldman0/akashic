@@ -916,6 +916,16 @@ ADJACENT_DESK_APPLETS = (
         ready=("WORLDS / RESERVOIR FACILITY",),
         stable=("WORLDS / RESERVOIR FACILITY",),
     ),
+    # Folio Watch, the game library's first game, ships its room as a text
+    # map in its origin; no configuration composes it yet.
+    DeskApplet(
+        "folio",
+        "tui/applets/folio/folio.f",
+        ("tui/applets/folio/folio.uidl", "tui/applets/folio/reading-room.map"),
+        "FOLIO-ENTRY",
+        ready=("Night", "Help"),
+        stable=("Night",),
+    ),
 )
 _DESK_AGENT_PROVIDER = "tui/applets/agent/providers/devtools/scripted.f"
 
@@ -15148,6 +15158,7 @@ PROFILES["desktop-apt1"] = replace(
 # Desktop journey runs as regression.
 DESKTOP_APT1_APPLETS = (
     "pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
+    "folio",
 )
 # Development checks beyond one applet: Desk with Pad on a terminal with
 # little room for retained text, Desk with File Explorer showing a real

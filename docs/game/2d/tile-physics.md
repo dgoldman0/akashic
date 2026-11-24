@@ -28,11 +28,13 @@ REQUIRE game/2d/tile-physics.f
 ### TPHYS-NEW
 
 ```
-( cmap -- phys )
+( cmap c-pos -- phys )
 ```
 
-Allocate a physics descriptor (40 bytes) bound to the given collision
-map.  Gravity is zero (top-down mode), callback is disabled,
+Allocate a physics descriptor (48 bytes) bound to the given collision
+map and to the position component `c-pos` that moves read and write,
+so two worlds with different component layouts each have physics of
+their own.  Gravity is zero (top-down mode), callback is disabled,
 one-way platforms are off.
 
 ### TPHYS-FREE
@@ -74,12 +76,16 @@ disable one-way platforms.
 ```
 
 Register a collision callback.  The callback is called whenever
-movement is blocked by a solid tile:
+movement is blocked by a solid tile, with the mover and the tile it
+struck:
 
 ```
-xt signature: ( eid tile-x tile-y tile-val -- )
+xt signature: ( phys eid ecs tile-x tile-y tile-val -- )
 ```
 
+A move keeps its mover and position on the stacks, so the callback may
+move other entities with `TPHYS-MOVE`, through the same physics or
+another; the mover's own move finishes afterwards from where it stood.
 Set XT to 0 to disable callbacks.
 
 ---
@@ -131,8 +137,9 @@ Returns TRUE if the tile directly below the entity is solid
 | +16    | 8    | grav-y      | Gravity Y per tick             |
 | +24    | 8    | on-collide  | Callback XT (0 = none)         |
 | +32    | 8    | one-way     | One-way tile value (0 = off)   |
+| +40    | 8    | c-pos       | Position component id          |
 
-Total: 40 bytes.
+Total: 48 bytes.
 
 ---
 
@@ -140,7 +147,7 @@ Total: 40 bytes.
 
 | Word               | Stack Effect                        | Description               |
 |--------------------|-------------------------------------|---------------------------|
-| `TPHYS-NEW`        | `( cmap -- phys )`                  | Create physics descriptor |
+| `TPHYS-NEW`        | `( cmap c-pos -- phys )`            | Create physics descriptor |
 | `TPHYS-FREE`       | `( phys -- )`                       | Free descriptor           |
 | `TPHYS-GRAVITY!`   | `( phys gx gy -- )`                | Set gravity vector        |
 | `TPHYS-ONE-WAY!`   | `( phys tile-val -- )`             | Set one-way tile value    |

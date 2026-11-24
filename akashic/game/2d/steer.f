@@ -2,191 +2,179 @@
 \  akashic/game/2d/steer.f — Steering Behaviors
 \ =====================================================================
 \
-\  High-level movement patterns that write to the C-VEL component.
-\  Combine with SYS-VELOCITY for automatic position updates.
+\  Movement patterns that set an entity's velocity to one step: each
+\  behaviour writes a dx and a dy of -1, 0 or 1 into the entity's
+\  velocity component, toward or away from its target, and moving the
+\  entity is left to the caller, as with SYS-VELOCITY or TPHYS-MOVE.
+\
+\  A steering context holds the components the behaviours read and
+\  write and a seeded generator for wandering, so two worlds, or two
+\  kinds of creature, steer independently and a wander replays from
+\  its seed.
+\
+\  Steering Context (32 bytes, 4 cells):
+\    +0   c-pos       Position component id
+\    +8   c-vel       Velocity component id
+\    +16  c-ai        AI component id; patrol keeps its waypoint index
+\                     at C-AI.STATE
+\    +24  rng         The wander generator's state
 \
 \  Public API:
-\    STEER-SEEK          ( eid ecs target-x target-y -- )
-\    STEER-FLEE          ( eid ecs threat-x threat-y -- )
-\    STEER-WANDER        ( eid ecs -- )
-\    STEER-FOLLOW-PATH   ( eid ecs path count -- )
-\    STEER-PATROL        ( eid ecs waypoints count -- )
-\    STEER-BIND-AI       ( c-ai -- )   set component ID for patrol
-\    STEER-SEED!         ( n -- )       seed the wander RNG
+\    STEER-NEW           ( c-pos c-vel c-ai seed -- steer )
+\    STEER-FREE          ( steer -- )
+\    STEER-SEEK          ( steer eid ecs target-x target-y -- )
+\    STEER-FLEE          ( steer eid ecs threat-x threat-y -- )
+\    STEER-WANDER        ( steer eid ecs -- )
+\    STEER-FOLLOW-PATH   ( steer eid ecs path count -- )
+\    STEER-PATROL        ( steer eid ecs waypoints count -- )
 \
 \  Path / waypoint format:
-\    Array of cell pairs:  arr[i*2] = x, arr[i*2+1] = y.
-\    Compatible with ASTAR-FIND output.
+\    Array of cell pairs:  arr[i*2] = x, arr[i*2+1] = y, as
+\    ASTAR-PATH gives a path.
+\
+\  An entity without a position component is left alone.
 \
 \  Prefix: STEER- (public), _ST- (internal)
 \  Provider: akashic-game-2d-steer
-\  Dependencies: ecs.f, components.f, systems.f
+\  Dependencies: ecs.f, components.f
 
 PROVIDED akashic-game-2d-steer
 
 REQUIRE ../ecs.f
 REQUIRE ../components.f
-REQUIRE ../systems.f
 
 \ =====================================================================
-\  §1 — Configuration
+\  §1 — Context
 \ =====================================================================
 
-VARIABLE _ST-C-AI      \ AI component ID (for patrol state)
+0  CONSTANT _ST-O-CPOS
+8  CONSTANT _ST-O-CVEL
+16 CONSTANT _ST-O-CAI
+24 CONSTANT _ST-O-RNG
+32 CONSTANT _ST-DESC-SZ
 
-: STEER-BIND-AI  ( c-ai -- )  _ST-C-AI ! ;
+: STEER-NEW  ( c-pos c-vel c-ai seed -- steer )
+    _ST-DESC-SZ ALLOCATE
+    0<> ABORT" STEER-NEW: alloc"
+    TUCK _ST-O-RNG + !
+    TUCK _ST-O-CAI + !
+    TUCK _ST-O-CVEL + !
+    TUCK _ST-O-CPOS + ! ;
+
+: STEER-FREE  ( steer -- )  FREE ;
 
 \ =====================================================================
 \  §2 — Internal Helpers
 \ =====================================================================
 
-VARIABLE _ST-EID   VARIABLE _ST-ECS
-VARIABLE _ST-PX    VARIABLE _ST-PY      \ entity position
-VARIABLE _ST-TX    VARIABLE _ST-TY      \ target position
+\ The entity's position, if it has one
+: _ST-POS  ( steer eid ecs -- x y true | false )
+    SWAP ROT _ST-O-CPOS + @ ECS-GET
+    ?DUP IF DUP C-POS.X + @ SWAP C-POS.Y + @ TRUE ELSE FALSE THEN ;
 
-\ Load entity position into _ST-PX / _ST-PY.
-\ Also stores eid/ecs for later use by _ST-WRITE-VEL.
-: _ST-LOAD-POS  ( eid ecs -- ok? )
-    _ST-ECS !  _ST-EID !
-    _ST-ECS @ _ST-EID @ SYS-C-POS @ ECS-GET
-    DUP 0= IF DROP 0 EXIT THEN
-    DUP C-POS.X + @ _ST-PX !
-    C-POS.Y + @ _ST-PY !
-    -1 ;
+\ Write dx dy into the entity's velocity, if it has one
+: _ST-VEL!  ( steer eid ecs dx dy -- )
+    2>R SWAP ROT _ST-O-CVEL + @ ECS-GET
+    ?DUP IF 2R> ROT TUCK C-VEL.DY + ! C-VEL.DX + ! ELSE 2R> 2DROP THEN ;
 
 \ Signum:  n → -1 | 0 | 1
 : _ST-SIGN  ( n -- -1|0|1 )
     DUP 0> IF DROP 1 EXIT THEN
     0< IF -1 ELSE 0 THEN ;
 
-\ Write dx dy to the entity's C-VEL component.
-: _ST-WRITE-VEL  ( dx dy -- )
-    _ST-ECS @ _ST-EID @ SYS-C-VEL @ ECS-GET
-    DUP 0= IF DROP 2DROP EXIT THEN
-    >R
-    R@ C-VEL.DY + !
-    R> C-VEL.DX + ! ;
+\ One step from (px,py) toward (tx,ty), written as the velocity
+: _ST-TOWARD  ( steer eid ecs px py tx ty -- )
+    ROT - _ST-SIGN >R SWAP - _ST-SIGN R> _ST-VEL! ;
+
+\ The context's generator: the same linear congruence as before
+: _ST-RAND  ( steer -- n )
+    DUP _ST-O-RNG + @ 1103515245 * 12345 + TUCK SWAP _ST-O-RNG + ! ;
 
 \ =====================================================================
-\  §3 — STEER-SEEK
+\  §3 — Seek and flee
 \ =====================================================================
 
-: STEER-SEEK  ( eid ecs target-x target-y -- )
-    _ST-TY !  _ST-TX !
-    _ST-LOAD-POS 0= IF EXIT THEN
-    _ST-TX @ _ST-PX @ - _ST-SIGN
-    _ST-TY @ _ST-PY @ - _ST-SIGN
-    _ST-WRITE-VEL ;
+: STEER-SEEK  ( steer eid ecs target-x target-y -- )
+    2>R 2 PICK 2 PICK 2 PICK _ST-POS 0= IF 2R> 2DROP 2DROP DROP EXIT THEN
+    2R> _ST-TOWARD ;
+
+: STEER-FLEE  ( steer eid ecs threat-x threat-y -- )
+    2>R 2 PICK 2 PICK 2 PICK _ST-POS 0= IF 2R> 2DROP 2DROP DROP EXIT THEN
+    2R> ROT SWAP - _ST-SIGN >R - _ST-SIGN R> _ST-VEL! ;
 
 \ =====================================================================
-\  §4 — STEER-FLEE
+\  §4 — Wander
 \ =====================================================================
 
-: STEER-FLEE  ( eid ecs threat-x threat-y -- )
-    _ST-TY !  _ST-TX !
-    _ST-LOAD-POS 0= IF EXIT THEN
-    _ST-PX @ _ST-TX @ - _ST-SIGN
-    _ST-PY @ _ST-TY @ - _ST-SIGN
-    _ST-WRITE-VEL ;
+: STEER-WANDER  ( steer eid ecs -- )
+    2 PICK 2 PICK 2 PICK _ST-POS 0= IF 2DROP DROP EXIT THEN
+    2DROP
+    2 PICK _ST-RAND ABS 3 MOD 1-
+    3 PICK _ST-RAND ABS 3 MOD 1-
+    _ST-VEL! ;
 
 \ =====================================================================
-\  §5 — STEER-WANDER
+\  §5 — Follow a path
 \ =====================================================================
 
-VARIABLE _ST-RNG
-12345 _ST-RNG !
-
-: _ST-RAND  ( -- n )
-    _ST-RNG @ 1103515245 * 12345 +
-    DUP _ST-RNG ! ;
-
-: STEER-SEED!  ( n -- )  _ST-RNG ! ;
-
-: STEER-WANDER  ( eid ecs -- )
-    _ST-LOAD-POS 0= IF EXIT THEN
-    _ST-RAND ABS 3 MOD 1-
-    _ST-RAND ABS 3 MOD 1-
-    _ST-WRITE-VEL ;
-
-\ =====================================================================
-\  §6 — STEER-FOLLOW-PATH
-\ =====================================================================
-
-VARIABLE _SFP-PATH   VARIABLE _SFP-CNT
-
-: _SFP-PATH-X  ( idx -- x )  2* CELLS _SFP-PATH @ + @ ;
-: _SFP-PATH-Y  ( idx -- y )  2* 1+ CELLS _SFP-PATH @ + @ ;
-
-: STEER-FOLLOW-PATH  ( eid ecs path count -- )
-    _SFP-CNT !  _SFP-PATH !
-    _ST-LOAD-POS 0= IF EXIT THEN
-    \ Scan path for current position; seek toward next step
-    _SFP-CNT @ 1- 0 ?DO
-        I _SFP-PATH-X _ST-PX @ =
-        I _SFP-PATH-Y _ST-PY @ = AND IF
-            I 1+ _SFP-PATH-X _ST-PX @ - _ST-SIGN
-            I 1+ _SFP-PATH-Y _ST-PY @ - _ST-SIGN
-            _ST-WRITE-VEL
-            UNLOOP EXIT
+\ Seek the tile after the entity's place on the path; stop at the end
+\ of the path or off it.
+: STEER-FOLLOW-PATH  ( steer eid ecs path count -- )
+    2>R 2 PICK 2 PICK 2 PICK _ST-POS 0= IF 2R> 2DROP 2DROP DROP EXIT THEN
+    2R>                                           ( steer eid ecs px py path count )
+    1- 0 MAX 0 ?DO
+        DUP I 2* CELLS + @ 3 PICK =
+        OVER I 2* 1+ CELLS + @ 3 PICK = AND IF
+            I 1+ 2* CELLS + DUP @ SWAP CELL+ @
+            _ST-TOWARD UNLOOP EXIT
         THEN
     LOOP
-    \ Not on path or already at goal — stop
-    0 0 _ST-WRITE-VEL ;
+    DROP 2DROP 0 0 _ST-VEL! ;
 
 \ =====================================================================
-\  §7 — STEER-PATROL
+\  §6 — Patrol
 \ =====================================================================
 \
-\  Cycles through waypoints.  Uses C-AI.STATE to persist the
-\  current waypoint index per entity.  Call STEER-BIND-AI once
-\  with the AI component ID before use.
+\  Cycles through waypoints, keeping the current waypoint's index at
+\  C-AI.STATE of the entity's AI component.
 
-VARIABLE _SP-WPS   VARIABLE _SP-CNT   VARIABLE _SP-IDX
+: _ST-AI  ( steer eid ecs -- addr|0 )
+    SWAP ROT _ST-O-CAI + @ ECS-GET ;
 
-: _SP-WP-X  ( idx -- x )  2* CELLS _SP-WPS @ + @ ;
-: _SP-WP-Y  ( idx -- y )  2* 1+ CELLS _SP-WPS @ + @ ;
-
-: STEER-PATROL  ( eid ecs waypoints count -- )
-    _SP-CNT !  _SP-WPS !
-    _ST-LOAD-POS 0= IF EXIT THEN
-    \ Read current waypoint index from AI component
-    _ST-ECS @ _ST-EID @ _ST-C-AI @ ECS-GET
-    DUP 0= IF DROP 0 0 _ST-WRITE-VEL EXIT THEN
-    ( ai-addr )
-    DUP C-AI.STATE + @ _SP-IDX !
-    \ If at current waypoint, advance to next
-    _SP-IDX @ _SP-WP-X _ST-PX @ =
-    _SP-IDX @ _SP-WP-Y _ST-PY @ = AND IF
-        _SP-IDX @ 1+ _SP-CNT @ MOD _SP-IDX !
-        _SP-IDX @ OVER C-AI.STATE + !
+: STEER-PATROL  ( steer eid ecs waypoints count -- )
+    DUP 1 < IF 2DROP 0 0 _ST-VEL! EXIT THEN
+    2>R 2 PICK 2 PICK 2 PICK _ST-POS 0= IF 2R> 2DROP 2DROP DROP EXIT THEN
+    4 PICK 4 PICK 4 PICK _ST-AI                   ( steer eid ecs px py ai|0 )
+    ?DUP 0= IF 2DROP 2R> 2DROP 0 0 _ST-VEL! EXIT THEN
+    C-AI.STATE + DUP @                            ( steer eid ecs px py cell idx )
+    2R@ DROP OVER 2* CELLS + DUP @ SWAP CELL+ @   ( ... cell idx wx wy )
+    4 PICK = SWAP 5 PICK = AND IF
+        1+ R@ MOD 2DUP SWAP !
     THEN
-    DROP  \ drop ai-addr
-    \ Seek toward current waypoint
-    _SP-IDX @ _SP-WP-X _ST-PX @ - _ST-SIGN
-    _SP-IDX @ _SP-WP-Y _ST-PY @ - _ST-SIGN
-    _ST-WRITE-VEL ;
+    NIP 2R> DROP SWAP 2* CELLS + DUP @ SWAP CELL+ @
+    _ST-TOWARD ;
 
 \ =====================================================================
-\  §8 — Concurrency Guards
+\  §7 — Concurrency Guards
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../../concurrency/guard.f
 GUARD _steer-guard
 
-' STEER-BIND-AI     CONSTANT _steer-bind-xt
+' STEER-NEW         CONSTANT _steer-new-xt
+' STEER-FREE        CONSTANT _steer-free-xt
 ' STEER-SEEK        CONSTANT _steer-seek-xt
 ' STEER-FLEE        CONSTANT _steer-flee-xt
 ' STEER-WANDER      CONSTANT _steer-wander-xt
-' STEER-SEED!       CONSTANT _steer-seed-xt
 ' STEER-FOLLOW-PATH CONSTANT _steer-fpath-xt
 ' STEER-PATROL      CONSTANT _steer-patrol-xt
 
-: STEER-BIND-AI     _steer-bind-xt   _steer-guard WITH-GUARD ;
+: STEER-NEW         _steer-new-xt    _steer-guard WITH-GUARD ;
+: STEER-FREE        _steer-free-xt   _steer-guard WITH-GUARD ;
 : STEER-SEEK        _steer-seek-xt   _steer-guard WITH-GUARD ;
 : STEER-FLEE        _steer-flee-xt   _steer-guard WITH-GUARD ;
 : STEER-WANDER      _steer-wander-xt _steer-guard WITH-GUARD ;
-: STEER-SEED!       _steer-seed-xt   _steer-guard WITH-GUARD ;
 : STEER-FOLLOW-PATH _steer-fpath-xt  _steer-guard WITH-GUARD ;
 : STEER-PATROL      _steer-patrol-xt _steer-guard WITH-GUARD ;
 [THEN] [THEN]

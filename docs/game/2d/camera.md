@@ -35,7 +35,7 @@ REQUIRE game/2d/camera.f
 ( world-w world-h view-w view-h -- cam )
 ```
 
-Allocate a 96-byte camera descriptor.  Stores the world bounds
+Allocate a 112-byte camera descriptor.  Stores the world bounds
 and viewport dimensions.  Initial position is (0, 0), smooth
 factor is 0 (instant movement).
 
@@ -86,9 +86,10 @@ instant; otherwise, lerp interpolation is applied.
 ( cam amplitude duration -- )
 ```
 
-Start a screen shake effect.  `amplitude` is the maximum
-pixel offset, `duration` is the number of ticks the shake
-lasts.  The amplitude decays linearly over the duration.
+Start a screen shake.  For the next `duration` ticks, each
+`CAM-TICK` draws an offset of up to `amplitude` tiles on each
+axis, from `-amplitude/2` to just under `amplitude - amplitude/2`.
+An amplitude or a duration below 1 stops any shake.
 
 ---
 
@@ -130,7 +131,9 @@ movement; higher values produce smoother, slower following.
 ```
 
 Advance the camera one frame.  Applies lerp toward the target
-position, decays shake, and clamps to world bounds.
+position, moving at least one unit a tick while the two differ,
+draws this tick's shake offsets or clears them when the shake is
+over, and clamps to world bounds.
 
 ---
 
@@ -143,7 +146,8 @@ position, decays shake, and clamps to world bounds.
 ```
 
 Return the current camera X position as an integer
-(fixed-point ÷ 256).
+(fixed-point ÷ 256), plus this tick's shake offset.  Queries change
+nothing, so every query within a tick returns the same view.
 
 ### CAM-Y
 
@@ -152,13 +156,13 @@ Return the current camera X position as an integer
 ```
 
 Return the current camera Y position as an integer
-(fixed-point ÷ 256).
+(fixed-point ÷ 256), plus this tick's shake offset.
 
 ---
 
 ## Descriptor Layout
 
-96 bytes (12 cells):
+112 bytes (14 cells):
 
 ```
 Offset  Size  Field
@@ -175,6 +179,8 @@ Offset  Size  Field
 +72       8  shake-amp   Shake amplitude
 +80       8  shake-dur   Shake duration (ticks remaining)
 +88       8  shake-seed  PRNG seed for shake offset
++96       8  shake-x     This tick's shake offset, X
++104      8  shake-y     This tick's shake offset, Y
 ```
 
 ---

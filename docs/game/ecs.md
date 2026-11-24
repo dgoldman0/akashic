@@ -3,7 +3,8 @@
 Lightweight archetype-free ECS.  Entities are integer IDs (0-based)
 with generation counters to detect stale references.  Components are
 fixed-size byte arrays stored in parallel pools indexed by entity ID.
-Supports up to 16 component types per ECS instance.
+The component table grows as components register, so an ECS holds as
+many kinds of component as its creator registers.
 
 ```forth
 REQUIRE game/ecs.f
@@ -59,9 +60,10 @@ descriptor itself.
 ```
 
 Register a new component type of `size` bytes per entity.
-Allocates a data pool of `max-ents × size` bytes and an attached
-bitfield.  Returns the component index (0-based, sequential).
-ABORTs if 16 components are already registered.
+Allocates a zeroed data pool of `max-ents × size` bytes and an
+attached bitfield, and grows the component table when it is full.
+Returns the component index (0-based, sequential).  A component of
+size 0 has no pool: it marks the entities it is attached to.
 
 ---
 
@@ -106,7 +108,10 @@ Return TRUE if entity `eid` is currently alive.
 
 Mark entity `eid` as having component `comp-id` and return
 the address of its component data slot.  The caller writes
-component fields at offsets from this address.
+component fields at offsets from this address.  A component
+attached anew starts zeroed, whatever an entity that held the
+slot before left there; attaching one already attached returns
+its data unchanged.
 
 ### ECS-DETACH
 
@@ -138,34 +143,39 @@ Return TRUE if entity `eid` has component `comp-id` attached.
 
 ## Iteration
 
+Each iteration keeps its ECS, descriptors, token and context on the
+data stack, under the callback's arguments, so a callback may
+iterate again, over the same ECS or another, and may kill the
+entity it was given.  The context cell `ctx` reaches every call
+unchanged, so a caller hands its state to the callback without a
+global.
+
 ### ECS-EACH
 
 ```
-( ecs comp-id xt -- )
+( ecs comp-id xt ctx -- )
 ```
 
 Call `xt` for every alive entity that has `comp-id` attached.
 The callback signature is:
 
 ```
-xt: ( eid comp-addr -- )
+xt: ( eid comp-addr ctx -- )
 ```
 
 ### ECS-EACH2
 
 ```
-( ecs c1 c2 xt -- )
+( ecs c1 c2 xt ctx -- )
 ```
 
 Call `xt` for every alive entity that has **both** `c1` and `c2`
-attached.  The callback receives:
+attached.  The callback receives the two addresses in the
+components' order:
 
 ```
-xt: ( eid c2-addr c1-addr -- )
+xt: ( eid c1-addr c2-addr ctx -- )
 ```
-
-> **Note:** addresses are pushed in reverse argument order — `c2`
-> address first, then `c1`.
 
 ---
 
@@ -200,22 +210,23 @@ Return the maximum entity capacity.
 
 ## Descriptor Layout
 
-### ECS Descriptor (40 bytes, 5 cells)
+### ECS Descriptor (48 bytes, 6 cells)
 
 | Offset | Field      | Description                           |
 |--------|------------|---------------------------------------|
 | +0     | max-ents   | Maximum entity slots                  |
 | +8     | alive      | Bitfield array (1 bit per entity)     |
 | +16    | gen        | Generation array (1 cell per entity)  |
-| +24    | comp-descs | Component descriptor array (max 16)   |
+| +24    | comp-descs | Component descriptor array            |
 | +32    | num-comps  | Number of registered components       |
+| +40    | comp-cap   | Descriptors the array has room for    |
 
 ### Component Descriptor (24 bytes, 3 cells)
 
 | Offset | Field     | Description                            |
 |--------|-----------|----------------------------------------|
 | +0     | comp-size | Byte size of one component instance    |
-| +8     | data      | Data array (max-ents × size bytes)     |
+| +8     | data      | Data array (max-ents × size bytes), 0 for size 0 |
 | +16    | attached  | Bitfield array (1 bit per entity)      |
 
 ---
@@ -234,8 +245,8 @@ Return the maximum entity capacity.
 | `ECS-DETACH`   | `( ecs eid cid -- )`             | Detach component         |
 | `ECS-GET`      | `( ecs eid cid -- addr\|0 )`    | Get component or 0       |
 | `ECS-HAS?`     | `( ecs eid cid -- ? )`           | Has component?           |
-| `ECS-EACH`     | `( ecs cid xt -- )`              | Iterate one component    |
-| `ECS-EACH2`    | `( ecs c1 c2 xt -- )`           | Iterate two components   |
+| `ECS-EACH`     | `( ecs cid xt ctx -- )`          | Iterate one component    |
+| `ECS-EACH2`    | `( ecs c1 c2 xt ctx -- )`        | Iterate two components   |
 | `ECS-COUNT`    | `( ecs -- n )`                   | Count alive entities     |
 | `ECS-GEN`      | `( ecs eid -- gen )`             | Get generation           |
 | `ECS-MAX`      | `( ecs -- n )`                   | Get max capacity         |

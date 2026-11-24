@@ -9,9 +9,10 @@
 \  All coordinates are integers (tile units).  Smooth follow uses
 \  fixed-point interpolation with 8-bit fraction (256 = 1.0).
 \
-\  Shake uses a simple decaying random offset.
+\  Shake offsets the view by a random amount, drawn once a tick while
+\  the shake lasts, so every query in a tick sees the same view.
 \
-\  Camera Descriptor (96 bytes, 12 cells):
+\  Camera Descriptor (112 bytes, 14 cells):
 \    +0   world-w     World width (tiles)
 \    +8   world-h     World height (tiles)
 \    +16  view-w      Viewport width (columns visible)
@@ -24,6 +25,8 @@
 \    +72  shake-amp   Current shake amplitude
 \    +80  shake-dur   Remaining shake ticks
 \    +88  shake-seed  PRNG state for shake offset
+\    +96  shake-x     This tick's shake offset, X
+\    +104 shake-y     This tick's shake offset, Y
 \
 \  Public API:
 \    CAM-NEW      ( world-w world-h view-w view-h -- cam )
@@ -60,7 +63,9 @@ PROVIDED akashic-game-2d-camera
 72 CONSTANT _CAM-O-SHAKE-AMP
 80 CONSTANT _CAM-O-SHAKE-DUR
 88 CONSTANT _CAM-O-SHAKE-SEED
-96 CONSTANT _CAM-DESC-SZ
+96 CONSTANT _CAM-O-SHAKE-X
+104 CONSTANT _CAM-O-SHAKE-Y
+112 CONSTANT _CAM-DESC-SZ
 
 \ =====================================================================
 \  §2 — Constructor / Destructor
@@ -99,17 +104,8 @@ PROVIDED akashic-game-2d-camera
 \  §4 — Follow / Snap
 \ =====================================================================
 
-\ Internal: center target so that (tx,ty) is at the viewport center.
-\ Stores as fixed-point ×256.
-: _CAM-CENTER  ( cam tx ty -- )
-    SWAP                                 ( cam ty tx )
-    2 PICK _CAM-O-VW + @ 2 / -          ( cam ty tx' )
-    256 *                                ( cam ty tx-fp )
-    2 PICK _CAM-O-TX + !                ( cam ty )
-    SWAP _CAM-O-VH + @ 2 / -            ( ty' )
-    256 * SWAP _CAM-O-TY + ! ;
-
-\ Wrong — need cam for TY store.  Redo:
+\ Aim the camera so that (tx,ty) comes to the viewport's centre, stored
+\ as fixed-point ×256.
 : CAM-FOLLOW  ( cam target-x target-y -- )
     >R >R DUP R> R>                      ( cam cam tx ty )
     SWAP                                 ( cam cam ty tx )
@@ -135,7 +131,14 @@ PROVIDED akashic-game-2d-camera
 \  §5 — Shake
 \ =====================================================================
 
+\ CAM-SHAKE ( cam amplitude duration -- )
+\   Shake by up to amplitude tiles for duration ticks.  An amplitude or
+\   a duration below 1 stops any shake.
 : CAM-SHAKE  ( cam amplitude duration -- )
+    OVER 1 < OVER 1 < OR IF
+        2DROP 0 OVER _CAM-O-SHAKE-DUR + !
+        0 OVER _CAM-O-SHAKE-X + !  0 SWAP _CAM-O-SHAKE-Y + ! EXIT
+    THEN
     2 PICK _CAM-O-SHAKE-DUR + !
     SWAP _CAM-O-SHAKE-AMP + ! ;
 
@@ -146,6 +149,12 @@ PROVIDED akashic-game-2d-camera
     DUP 17 RSHIFT XOR
     DUP 5 LSHIFT XOR
     DUP ROT _CAM-O-SHAKE-SEED + ! ;
+
+\ An offset in [-amp/2, amp - amp/2), from the generator.
+: _CAM-OFFSET  ( cam -- n )
+    DUP _CAM-RAND 1 RSHIFT
+    OVER _CAM-O-SHAKE-AMP + @ MOD
+    SWAP _CAM-O-SHAKE-AMP + @ 2 / - ;
 
 \ =====================================================================
 \  §6 — Tick
@@ -171,37 +180,32 @@ PROVIDED akashic-game-2d-camera
     2DUP > IF NIP ELSE DROP THEN
     SWAP _CAM-O-Y + ! ;
 
+\ One axis of the follow: step = (target - pos) × smooth / 256, at least
+\ one unit toward the target while the two differ.
+: _CAM-STEP  ( target pos smooth -- step )
+    >R - DUP R> * 256 /
+    DUP IF NIP EXIT THEN
+    DROP DUP 0> IF DROP 1 EXIT THEN
+    0< IF -1 ELSE 0 THEN ;
+
 : CAM-TICK  ( cam -- )
     DUP _CAM-O-SMOOTH + @ 0= IF
         \ Instant follow: snap to target
         DUP _CAM-O-TX + @ OVER _CAM-O-X + !
         DUP _CAM-O-TY + @ OVER _CAM-O-Y + !
     ELSE
-        \ Lerp: x += (target - x) * smooth / 256
-        DUP _CAM-O-TX + @ OVER _CAM-O-X + @ -
-        OVER _CAM-O-SMOOTH + @ * 256 /
-        DUP 0= IF                       \ ensure at least ±1 pixel movement
-            DROP
-            OVER _CAM-O-TX + @ OVER _CAM-O-X + @ -
-            DUP 0> IF DROP 1 ELSE
-            DUP 0< IF DROP -1 ELSE DROP 0 THEN THEN
-        THEN
-        OVER _CAM-O-X + @ + OVER _CAM-O-X + !
-        \ Same for Y
-        DUP _CAM-O-TY + @ OVER _CAM-O-Y + @ -
-        OVER _CAM-O-SMOOTH + @ * 256 /
-        DUP 0= IF
-            DROP
-            OVER _CAM-O-TY + @ OVER _CAM-O-Y + @ -
-            DUP 0> IF DROP 1 ELSE
-            DUP 0< IF DROP -1 ELSE DROP 0 THEN THEN
-        THEN
-        OVER _CAM-O-Y + @ + OVER _CAM-O-Y + !
+        DUP _CAM-O-TX + @ OVER _CAM-O-X + @ 2 PICK _CAM-O-SMOOTH + @
+        _CAM-STEP OVER _CAM-O-X + +!
+        DUP _CAM-O-TY + @ OVER _CAM-O-Y + @ 2 PICK _CAM-O-SMOOTH + @
+        _CAM-STEP OVER _CAM-O-Y + +!
     THEN
-    \ Decay shake
+    \ Draw this tick's shake offsets, or clear them when the shake is over
     DUP _CAM-O-SHAKE-DUR + @ 0> IF
-        DUP _CAM-O-SHAKE-DUR + @
-        1- OVER _CAM-O-SHAKE-DUR + !
+        DUP _CAM-OFFSET OVER _CAM-O-SHAKE-X + !
+        DUP _CAM-OFFSET OVER _CAM-O-SHAKE-Y + !
+        -1 OVER _CAM-O-SHAKE-DUR + +!
+    ELSE
+        0 OVER _CAM-O-SHAKE-X + !  0 OVER _CAM-O-SHAKE-Y + !
     THEN
     \ Clamp to world bounds
     _CAM-CLAMP ;
@@ -210,26 +214,13 @@ PROVIDED akashic-game-2d-camera
 \  §7 — Queries
 \ =====================================================================
 
-\ Return effective camera position (integer tiles) including shake offset.
+\ Return effective camera position (integer tiles) including this
+\ tick's shake offset.  Queries change nothing.
 : CAM-X  ( cam -- x )
-    DUP _CAM-O-X + @ 256 /              ( cam x )
-    OVER _CAM-O-SHAKE-DUR + @ 0> IF
-        OVER _CAM-RAND
-        OVER _CAM-O-SHAKE-AMP + @ MOD
-        OVER _CAM-O-SHAKE-AMP + @ 2 / -
-        +                                ( cam x' )
-    THEN
-    NIP ;
+    DUP _CAM-O-X + @ 256 / SWAP _CAM-O-SHAKE-X + @ + ;
 
 : CAM-Y  ( cam -- y )
-    DUP _CAM-O-Y + @ 256 /
-    OVER _CAM-O-SHAKE-DUR + @ 0> IF
-        OVER _CAM-RAND
-        OVER _CAM-O-SHAKE-AMP + @ MOD
-        OVER _CAM-O-SHAKE-AMP + @ 2 / -
-        +
-    THEN
-    NIP ;
+    DUP _CAM-O-Y + @ 256 / SWAP _CAM-O-SHAKE-Y + @ + ;
 
 \ =====================================================================
 \  §8 — Concurrency Guards

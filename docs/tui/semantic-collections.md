@@ -5,7 +5,14 @@ payloads for a canonical reusable widget that exposes a `TEXT_AREA`,
 `TEXT_GRID`, `TABSET` with nested `TAB` values, `ITEM_VIEW` (a list, tree,
 table, sections, or cards), or `DOCUMENT`. It does not register a provider
 or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
-Production applets must not import this module or construct these payloads.
+Production applets do not import this module. An applet that shows a canonical
+text grid builds that grid's `TEXT_GRID` entry with this module's builders,
+which `widgets/text-grid.f` brings with it, as the caller-owned model
+`TGRID-BIND` validates; Grid and Daybook do. It builds no other payload and
+takes no snapshot, discovery or terminal authority.
+`local_testing/test_applet_rich_terminal_boundary.py` checks both: an applet
+whose code names a `USCOL-` word must require `widgets/text-grid.f` and call
+`TGRID-BIND`.
 
 The module owns its entry header, status vocabulary, builders, validators, and
 conservative storage-disjoint query, and depends only on UTF-8, the text

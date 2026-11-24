@@ -52,8 +52,10 @@ local_testing/*
 !local_testing/test_app_shell.py
 !local_testing/test_app_compositor.py
 !local_testing/ROADMAP-tui-apps.md
-!local_testing/test_game_suite.py
-!local_testing/test_phase6_suite.py
+!local_testing/test_game_2d_suite.py
+!local_testing/test_game_save.py
+!local_testing/test_game_map.py
+!local_testing/test_game_board.py
 !local_testing/README.md
 !local_testing/akashic_tui.py
 !local_testing/agent_transcript.py
@@ -228,6 +230,7 @@ local_testing/*
 !local_testing/generate_unicode_text_tables.py
 !local_testing/forth_snapshot.py
 !local_testing/forth_disk.py
+!local_testing/game_models.py
 !local_testing/qoi_codec.py
 !local_testing/test_qoi.py
 !local_testing/test_media.py

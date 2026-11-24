@@ -3835,6 +3835,133 @@ class SoundLabAloneJourney(_AppletJourney):
         return self._done("soundlab-landmarks-moved", offer)
 
 
+# Folio Watch alone on Desk: its taskbar button, the room's width in tiles,
+# and the question that loading over unsaved turns asks.
+FOLIO_ALONE_FOCUS_MARKER = "[1:Folio Watc*]"
+FOLIO_ROOM_WIDTH = 24
+FOLIO_LOAD_QUESTION = "Load the saved night and lose this one's unsaved turns?"
+FOLIO_LOAD = "Load"
+
+
+class FolioAloneJourney(_AppletJourney):
+    """Desk with Folio Watch: its board goes out as a text grid whose
+    current item is the archivist, a key and a rich PLACE each take a turn,
+    and a saved night loads back over unsaved turns.
+
+    The board is one TEXT_GRID, each tile an item keyed by its map position,
+    y * width + x + 1.  Right steps the archivist a tile east.  A PLACE on
+    the tile two rows below makes it the grid's primary item, and the
+    archivist takes the path's first step toward it, one row down.  Ctrl+S
+    saves the night; a step east leaves it unsaved, and Ctrl+O asks before
+    it loads the saved night over that turn.  Loading puts the archivist
+    back where the save found it, and CELL draws the archivist throughout.
+    """
+
+    focus_marker = FOLIO_ALONE_FOCUS_MARKER
+    (READY, STEPPED, PLACED, SAVED, MOVED, ASKED, LOADED) = range(7)
+
+    def __init__(self, ready_markers):
+        super().__init__(ready_markers)
+        self._start = None
+        self._target = None
+
+    @property
+    def final_stage(self) -> int:
+        return self.LOADED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, "@")
+
+    @staticmethod
+    def _key(x: int, y: int) -> int:
+        return y * FOLIO_ROOM_WIDTH + x + 1
+
+    @staticmethod
+    def _tile(key: int) -> tuple[int, int]:
+        return (key - 1) % FOLIO_ROOM_WIDTH, (key - 1) // FOLIO_ROOM_WIDTH
+
+    def _archivist(self, projection, bounds):
+        """The board and the archivist's tile on it, or None."""
+
+        boards = _collection_claims_in(projection, ControlKind.TEXT_GRID, bounds)
+        if len(boards) != 1:
+            return None
+        board = boards[0]
+        if len(board.current_item_keys) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"Folio Watch's board marks {len(board.current_item_keys)} tiles current"
+            )
+        return board, self._tile(board.current_item_keys[0])
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        found = self._archivist(projection, bounds)
+        dialog = _dialog_claim(projection, FOLIO_LOAD_QUESTION, bounds)
+        if self.stage == self.ASKED:
+            if dialog is None:
+                return self._wait("Folio Watch's question before it loads")
+            button = dialog.button(FOLIO_LOAD)
+            if button is None or not button.content.destructive:
+                raise PhysicalDesktopAcceptanceError(
+                    "Folio Watch's question does not offer a destructive Load"
+                )
+            identity = button.identity
+            return self._step(
+                "folio-load-asked", "activate_button",
+                f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+                self.LOADED, offer, generation, sender)
+        if dialog is not None:
+            return self._wait("Folio Watch's question to close")
+        if found is None:
+            return self._wait("Folio Watch's board as one text grid")
+        board, (x, y) = found
+        if self.stage == self.READY:
+            _require_cell_text_in(offer, "@", bounds, _WHERE)
+            self._start = (x, y)
+            return self._step("folio-board-shown", "send_key", "right",
+                              self.STEPPED, offer, generation, sender)
+        sx, sy = self._start
+        if self.stage == self.STEPPED:
+            if (x, y) != (sx + 1, sy):
+                return self._wait("the archivist a tile east")
+            if not _status_shows(projection, "Turn 1", bounds):
+                return self._wait("the status at turn 1")
+            self._target = self._key(x, y + 2)
+            return self._step("folio-stepped-east", "text_place",
+                              self._text_value(board, self._target, 0),
+                              self.PLACED, offer, generation, sender)
+        if self.stage == self.PLACED:
+            if (x, y) != (sx + 1, sy + 1):
+                return self._wait("the archivist a step toward the placed tile")
+            if board.primary_key != self._target:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the placed tile {self._target} is not the board's primary item"
+                )
+            return self._step("folio-walked-toward-place", "send_key", "ctrl+s",
+                              self.SAVED, offer, generation, sender)
+        if self.stage == self.SAVED:
+            if not _status_shows(projection, "Turn 2  |  Saved", bounds):
+                return self._wait("the status saved at turn 2")
+            return self._step("folio-night-saved", "send_key", "right",
+                              self.MOVED, offer, generation, sender)
+        if self.stage == self.MOVED:
+            if (x, y) != (sx + 2, sy + 1):
+                return self._wait("the archivist a tile east of the save")
+            if not _status_shows(projection, "Turn 3  |  Unsaved", bounds):
+                return self._wait("the status unsaved at turn 3")
+            return self._step("folio-moved-after-save", "send_key", "ctrl+o",
+                              self.ASKED, offer, generation, sender)
+        if (x, y) != (sx + 1, sy + 1):
+            return self._wait("the archivist back where the night was saved")
+        if not _status_shows(projection, "Turn 2  |  Saved", bounds):
+            return self._wait("the status of the loaded night")
+        _require_cell_text_in(offer, "@", bounds, _WHERE)
+        return self._done("folio-night-loaded", offer)
+
+
 def _desk_halves(projection) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
     """Desk's two tiles when it holds two applets: the screen above the
     taskbar split in two columns, one divider cell between them."""
@@ -4569,6 +4696,7 @@ def applet_journey(
         "agent": AgentAloneJourney,
         "soundlab": SoundLabAloneJourney,
         "observatory": ObservatoryJourney,
+        "folio": FolioAloneJourney,
         "small-terminal": SmallTerminalJourney,
         "photo": PhotoJourney,
         "damaged": DamagedPictureJourney,

@@ -1,0 +1,25 @@
+name: The Reading Room
+night: 1
+width: 24
+height: 12
+tile: · floor 0 clear
+tile: , rug 0 clear
+tile: ▒ shelf 1 opaque
+tile: = desk 1 clear
+spawn: @ archivist on ·
+spawn: f folio on =
+spawn: m nest on ·
+spawn: L lamp on ▒
+rows:
+▒▒▒▒▒▒L▒▒▒▒▒▒▒▒▒▒L▒▒▒▒▒▒
+▒m····················m▒
+▒·▒▒▒▒··=f=····=f=··▒▒·▒
+▒·▒▒▒▒·················▒
+▒······,,,,,,,,,,······▒
+▒··=f=··,,,,@,,,,··=f=·▒
+▒······,,,,,,,,,,······▒
+▒······················▒
+▒·▒▒▒▒··=f=····=f=··▒▒·▒
+▒·▒▒▒▒··············▒▒·▒
+▒m····················m▒
+▒▒▒▒▒▒L▒▒▒▒▒▒▒▒▒▒L▒▒▒▒▒▒

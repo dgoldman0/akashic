@@ -2,7 +2,9 @@
 """Test suite for Phase 3 modules (tile-physics, pathfinding, steering).
 
 Runs Forth test code through the Megapad-64 emulator and validates
-correctness by parsing structured UART output.
+correctness by parsing structured UART output.  A* runs, distance fields
+and downhill steps are also checked against the host Dijkstra in
+game_models.py.
 """
 import os, sys, tempfile, re
 
@@ -19,7 +21,12 @@ from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
 sys.path.insert(0, SCRIPT_DIR)
-from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+from forth_disk import MEMORY_LOG, kdos_diagnostics, module_disk_files  # noqa: E402
+import game_models  # noqa: E402
+
+# Seeded maps whose searches, fields and downhill steps the suite checks
+# against the host Dijkstra in game_models.py.
+ASTAR_MAPS = game_models.astar_trials(count=48)
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -86,6 +93,7 @@ VARIABLE _T-NAME-U
     ." FAILED: " _T-FAIL @ . CR
     _T-FAIL @ 0= IF ." ALL-TESTS-PASSED" CR THEN ;
 
+""" + MEMORY_LOG + r"""
 \ ── Load modules ──────────────────────────────────────────────
 
 REQUIRE game/ecs.f
@@ -114,7 +122,8 @@ CONSTANT _T-C-SPR
 CONSTANT _T-C-VEL
 CONSTANT _T-C-POS
 
-_T-C-POS _T-C-VEL _T-C-HP _T-C-TMR SYS-BIND-COMPS
+\ Steering for the shared ECS, its wander generator seeded
+_T-C-POS _T-C-VEL _T-C-AI 12345 STEER-NEW CONSTANT _T-ST
 
 \ Helper: create entity at (x, y) with pos + vel
 : _T-MAKE-ENT  ( x y -- eid )
@@ -165,7 +174,7 @@ VARIABLE _TME-X  VARIABLE _TME-Y
     10 0 ?DO  _TP-CM 9 I 1 CMAP-SET LOOP ;    \ right col
 _TP-FILL-BORDERS
 
-_TP-CM TPHYS-NEW CONSTANT _TP-PH
+_TP-CM _T-C-POS TPHYS-NEW CONSTANT _TP-PH
 
 \ ── 1.1 Constructor ──
 
@@ -257,8 +266,8 @@ VARIABLE _TP-CB-TY      0 _TP-CB-TY !
 VARIABLE _TP-CB-TV      0 _TP-CB-TV !
 VARIABLE _TP-CB-COUNT   0 _TP-CB-COUNT !
 
-: _TP-CB  ( eid tile-x tile-y tile-val -- )
-    _TP-CB-TV !  _TP-CB-TY !  _TP-CB-TX !  _TP-CB-EID !
+: _TP-CB  ( phys eid ecs tile-x tile-y tile-val -- )
+    _TP-CB-TV !  _TP-CB-TY !  _TP-CB-TX !  DROP _TP-CB-EID !  DROP
     _TP-CB-COUNT @ 1+ _TP-CB-COUNT ! ;
 
 VARIABLE _TP-CB-XT
@@ -321,6 +330,27 @@ _TP-CM 5 6 0 CMAP-SET
 _TP-PH 0 TPHYS-ONE-WAY!
 _TP-PH 0 0 TPHYS-GRAVITY!
 
+\ ── 1.10 A collision callback moves another entity ──
+\ The mover strikes the left wall; its callback pushes a second entity
+\ one tile right through the same physics.  The mover keeps its own
+\ position and the second entity moves.
+VARIABLE _TP-PUSHED
+: _TP-PUSH-CB  ( phys eid ecs tile-x tile-y tile-val -- )
+    2DROP DROP NIP _TP-PUSHED @ SWAP 1 0 TPHYS-MOVE 2DROP ;
+1 3 _T-MAKE-ENT CONSTANT _TP-E9
+4 4 _T-MAKE-ENT DUP _TP-PUSHED ! CONSTANT _TP-E10
+_TP-PH ' _TP-PUSH-CB TPHYS-ON-COLLIDE
+
+S" tphys:callback-moves-another" T-NAME
+_TP-PH _TP-E9 _T-ECS -1 1 TPHYS-MOVE
+( rx ry )
+SWAP 1 T-ASSERT 4 T-ASSERT
+S" tphys:mover-position-kept" T-NAME
+_TP-E9 _T-ENT-X 1 =  _TP-E9 _T-ENT-Y 4 = AND T-TRUE
+S" tphys:pushed-entity-moved" T-NAME
+_TP-E10 _T-ENT-X 5 =  _TP-E10 _T-ENT-Y 4 = AND T-TRUE
+_TP-PH 0 TPHYS-ON-COLLIDE
+
 \ ══════════════════════════════════════════════════════════════
 \  §2 — pathfind.f Tests
 \ ══════════════════════════════════════════════════════════════
@@ -333,128 +363,144 @@ _TP-PH 0 0 TPHYS-GRAVITY!
     10 0 ?DO  _PF-CM 0 I 1 CMAP-SET LOOP
     10 0 ?DO  _PF-CM 9 I 1 CMAP-SET LOOP ;
 _PF-FILL-BORDERS
+_PF-CM ASTAR-NEW CONSTANT _PF-S
+
+: _PF-X  ( k -- x )  _PF-S ASTAR-PATH DROP SWAP 2* CELLS + @ ;
+: _PF-Y  ( k -- y )  _PF-S ASTAR-PATH DROP SWAP 2* 1+ CELLS + @ ;
+: _PF-N  ( -- n )  _PF-S ASTAR-PATH NIP ;
 
 \ ── 2.1 Simple path in open space ──
-\ From (1,1) to (3,1) — 3 cells apart, should find path of length 3
-
-VARIABLE _PF-PATH  VARIABLE _PF-CNT
-
 S" astar:simple-path-found" T-NAME
-0 ASTAR-DIAGONAL!
-_PF-CM 1 1 3 1 ASTAR-FIND
-_PF-CNT ! _PF-PATH !
-_PF-CNT @ 0> T-TRUE
-
+_PF-S 1 1 3 1 ASTAR-RUN ASTAR-FOUND T-ASSERT
 S" astar:simple-path-count" T-NAME
-_PF-CNT @ 3 T-ASSERT
+_PF-N 3 T-ASSERT
+S" astar:simple-path-start" T-NAME
+0 _PF-X 1 =  0 _PF-Y 1 = AND T-TRUE
+S" astar:simple-path-end" T-NAME
+_PF-N 1- _PF-X 3 =  _PF-N 1- _PF-Y 1 = AND T-TRUE
+S" astar:simple-path-cost" T-NAME
+_PF-S ASTAR-PATH-COST 2 T-ASSERT
 
-S" astar:simple-path-start-x" T-NAME
-_PF-PATH @ @ 1 T-ASSERT
-
-S" astar:simple-path-start-y" T-NAME
-_PF-PATH @ CELL+ @ 1 T-ASSERT
-
-S" astar:simple-path-end-x" T-NAME
-_PF-PATH @ _PF-CNT @ 1- 2* CELLS + @ 3 T-ASSERT
-
-S" astar:simple-path-end-y" T-NAME
-_PF-PATH @ _PF-CNT @ 1- 2* 1+ CELLS + @ 1 T-ASSERT
-
-_PF-PATH @ ASTAR-FREE
-
-\ ── 2.2 Path around obstacle ──
-
-\ Place wall at (3,4)
+\ ── 2.2 Path around an obstacle ──
 _PF-CM 3 4 1 CMAP-SET
-
-S" astar:path-around-obstacle" T-NAME
-_PF-CM 2 4 4 4 ASTAR-FIND
-_PF-CNT ! _PF-PATH !
-_PF-CNT @ 0> T-TRUE
-
-S" astar:around-obs-start-x" T-NAME
-_PF-PATH @ @ 2 T-ASSERT
-
-S" astar:around-obs-end-x" T-NAME
-_PF-PATH @ _PF-CNT @ 1- 2* CELLS + @ 4 T-ASSERT
-
-S" astar:around-obs-detours" T-NAME
-_PF-CNT @ 3 > T-TRUE
-
-_PF-PATH @ ASTAR-FREE
+S" astar:around-obstacle-found" T-NAME
+_PF-S 2 4 4 4 ASTAR-RUN ASTAR-FOUND T-ASSERT
+S" astar:around-obstacle-detours" T-NAME
+_PF-N 5 T-ASSERT
 _PF-CM 3 4 0 CMAP-SET
 
-\ ── 2.3 No path — completely blocked ──
+\ ── 2.3 No path: a proven absence ──
+: _PF-RING  ( v -- )
+    >R _PF-CM 1 3 R@ CMAP-SET  _PF-CM 2 3 R@ CMAP-SET  _PF-CM 3 3 R@ CMAP-SET
+    _PF-CM 1 4 R@ CMAP-SET  _PF-CM 3 4 R@ CMAP-SET
+    _PF-CM 1 5 R@ CMAP-SET  _PF-CM 2 5 R@ CMAP-SET  _PF-CM 3 5 R> CMAP-SET ;
+1 _PF-RING
+S" astar:no-path-is-none" T-NAME
+_PF-S 2 4 7 7 ASTAR-RUN ASTAR-NONE T-ASSERT
+S" astar:no-path-empty" T-NAME
+_PF-N 0 T-ASSERT
+0 _PF-RING
 
-\ Wall off (2,4) entirely with solid ring
-_PF-CM 1 3 1 CMAP-SET
-_PF-CM 2 3 1 CMAP-SET
-_PF-CM 3 3 1 CMAP-SET
-_PF-CM 1 4 1 CMAP-SET
-_PF-CM 3 4 1 CMAP-SET
-_PF-CM 1 5 1 CMAP-SET
-_PF-CM 2 5 1 CMAP-SET
-_PF-CM 3 5 1 CMAP-SET
-
-S" astar:no-path-blocked" T-NAME
-_PF-CM 2 4 7 7 ASTAR-FIND
-_PF-CNT ! _PF-PATH !
-_PF-PATH @ 0 T-ASSERT
-
-S" astar:no-path-count-0" T-NAME
-_PF-CNT @ 0 T-ASSERT
-
-\ Clean up ring
-_PF-CM 1 3 0 CMAP-SET
-_PF-CM 2 3 0 CMAP-SET
-_PF-CM 3 3 0 CMAP-SET
-_PF-CM 1 4 0 CMAP-SET
-_PF-CM 3 4 0 CMAP-SET
-_PF-CM 1 5 0 CMAP-SET
-_PF-CM 2 5 0 CMAP-SET
-_PF-CM 3 5 0 CMAP-SET
-
-\ ── 2.4 Zero-length path (start = goal) ──
-
+\ ── 2.4 Start equals goal ──
 S" astar:start-equals-goal" T-NAME
-_PF-CM 5 5 5 5 ASTAR-FIND
-_PF-CNT ! _PF-PATH !
-_PF-CNT @ 1 T-ASSERT
+_PF-S 5 5 5 5 ASTAR-RUN ASTAR-FOUND T-ASSERT
+S" astar:start-equals-goal-one-tile" T-NAME
+_PF-N 1 =  0 _PF-X 5 = AND  0 _PF-Y 5 = AND T-TRUE
 
-S" astar:zero-path-x" T-NAME
-_PF-PATH @ @ 5 T-ASSERT
+\ ── 2.5 A spent budget differs from a proven absence ──
+_PF-S 4 ASTAR-BUDGET!
+S" astar:budget-spent" T-NAME
+_PF-S 1 1 8 8 ASTAR-RUN ASTAR-SPENT T-ASSERT
+S" astar:budget-counts-expansions" T-NAME
+_PF-S ASTAR-EXPANDED 4 T-ASSERT
+_PF-S 0 ASTAR-BUDGET!
+S" astar:no-budget-finds" T-NAME
+_PF-S 1 1 8 8 ASTAR-RUN ASTAR-FOUND T-ASSERT
 
-S" astar:zero-path-y" T-NAME
-_PF-PATH @ CELL+ @ 5 T-ASSERT
+\ ── 2.6 Off the map or onto a wall: none ──
+S" astar:goal-off-map" T-NAME
+_PF-S 1 1 12 3 ASTAR-RUN ASTAR-NONE T-ASSERT
+S" astar:goal-on-wall" T-NAME
+_PF-S 1 1 0 5 ASTAR-RUN ASTAR-NONE T-ASSERT
 
-_PF-PATH @ ASTAR-FREE
-
-\ ── 2.5 Budget limit ──
-
-S" astar:budget-limit" T-NAME
-4 ASTAR-BUDGET!
-_PF-CM 1 1 8 8 ASTAR-FIND
-_PF-CNT ! _PF-PATH !
-\ With budget=4, may not reach distant goal
-_PF-PATH @ 0 T-ASSERT
-
-512 ASTAR-BUDGET!
-
-\ ── 2.6 Diagonal mode ──
-
-S" astar:diagonal-shorter" T-NAME
--1 ASTAR-DIAGONAL!
-_PF-CM 1 1 3 3 ASTAR-FIND
-_PF-CNT ! _PF-PATH !
-_PF-CNT @ 0> T-TRUE
-
+\ ── 2.7 Diagonal steps ──
+_PF-S 1 1 ASTAR-STEPS!
 S" astar:diagonal-count" T-NAME
-\ Diagonal path from (1,1) to (3,3) = 3 steps (diagonal)
-_PF-CNT @ 3 T-ASSERT
+_PF-S 1 1 3 3 ASTAR-RUN DROP _PF-N 3 T-ASSERT
+S" astar:diagonal-cost" T-NAME
+_PF-S ASTAR-PATH-COST 2 T-ASSERT
+_PF-S 1 0 ASTAR-STEPS!
 
-_PF-PATH @ ASTAR-FREE
-0 ASTAR-DIAGONAL!
+\ ── 2.8 No step between two walls that meet at a corner ──
+3 3 CMAP-NEW CONSTANT _PF-CM3
+_PF-CM3 1 0 1 CMAP-SET  _PF-CM3 0 1 1 CMAP-SET
+_PF-CM3 ASTAR-NEW CONSTANT _PF-S3
+_PF-S3 1 1 ASTAR-STEPS!
+S" astar:corner-refused" T-NAME
+_PF-S3 0 0 1 1 ASTAR-RUN ASTAR-NONE T-ASSERT
+\ One wall: the step passes, unless corners are kept clear too
+_PF-CM3 0 1 0 CMAP-SET
+S" astar:one-side-open-passes" T-NAME
+_PF-S3 0 0 1 1 ASTAR-RUN ASTAR-FOUND T-ASSERT
+_PF-S3 -1 ASTAR-CORNERS!
+S" astar:corners-kept-clear" T-NAME
+_PF-S3 0 0 1 1 ASTAR-RUN DROP _PF-S3 ASTAR-PATH NIP 3 T-ASSERT
 
+\ ── 2.9 Terrain costs ──
+\ Mud (value 2) along row 2 costs 5 a step; the path goes round it.
+7 5 CMAP-NEW CONSTANT _PF-CM7
+: _PF-MUD  6 1 DO _PF-CM7 I 2 2 CMAP-SET LOOP ;
+_PF-MUD
+_PF-CM7 ASTAR-NEW CONSTANT _PF-S7
+S" astar:mud-impassable-by-default" T-NAME
+_PF-S7 3 1 3 3 ASTAR-RUN ASTAR-FOUND T-ASSERT
+S" astar:mud-detour-cost" T-NAME
+_PF-S7 ASTAR-PATH-COST 8 T-ASSERT
+_PF-S7 2 5 ASTAR-COST!
+S" astar:mud-crossed-when-cheaper" T-NAME
+_PF-S7 3 1 3 3 ASTAR-RUN DROP _PF-S7 ASTAR-PATH-COST 6 T-ASSERT
+
+\ ── 2.10 A distance field and its downhill steps ──
+CREATE _PF-SRC  0 , 0 , 0 , 0 ,
+5 _PF-SRC !  5 _PF-SRC 8 + !  2 _PF-SRC 16 + !  2 _PF-SRC 24 + !
+S" astar:field-found" T-NAME
+_PF-SRC 2 _PF-S ASTAR-FIELD ASTAR-FOUND T-ASSERT
+S" astar:field-source-zero" T-NAME
+_PF-S 5 5 ASTAR-DIST 0 T-ASSERT
+S" astar:field-nearest-source" T-NAME
+_PF-S 3 2 ASTAR-DIST 1 T-ASSERT
+S" astar:field-wall-unreached" T-NAME
+_PF-S 0 0 ASTAR-DIST -1 T-ASSERT
+S" astar:downhill-step" T-NAME
+_PF-S 7 5 ASTAR-DOWNHILL  ROT 6 = ROT 5 = AND AND T-TRUE
+S" astar:downhill-none-at-source" T-NAME
+_PF-S 5 5 ASTAR-DOWNHILL 0= T-TRUE
+
+\ ── 2.11 Memory stays flat over 20 rounds ──
+\ One search for each of two maps, as Appendix A's probe alternated
+40 20 CMAP-NEW CONSTANT _PF-CM40
+: _PF-WALL40  20 0 DO _PF-CM40 20 I 1 CMAP-SET LOOP  _PF-CM40 20 15 0 CMAP-SET ;
+_PF-WALL40
+64 64 CMAP-NEW CONSTANT _PF-CM64
+_PF-CM40 ASTAR-NEW CONSTANT _PF-S40
+_PF-CM64 ASTAR-NEW CONSTANT _PF-S64
+: _PF-ROUND  _PF-S40 2 2 30 3 ASTAR-RUN DROP  _PF-S64 1 1 40 40 ASTAR-RUN DROP ;
+_PF-ROUND  XMEM-HERE @ CONSTANT _PF-X1
+: _PF-ROUNDS  ( n -- )  0 DO _PF-ROUND LOOP ;
+19 _PF-ROUNDS
+S" astar:xmem-flat-over-20-rounds" T-NAME
+XMEM-HERE @ _PF-X1 T-ASSERT
+S" astar:detour-length" T-NAME
+_PF-S40 ASTAR-PATH NIP 54 T-ASSERT
+
+\ ── 2.12 Teardown ──
+-1 MLOG-HOLD  MLOG-START
+_PF-CM ASTAR-NEW  DUP 1 1 8 8 ASTAR-RUN DROP  ASTAR-FREE
+MLOG-STOP  0 MLOG-HOLD
+S" astar:free-each-block-once" T-NAME
+MLOG-BALANCED? T-TRUE
+
+""" + game_models.astar_forth(ASTAR_MAPS) + r"""
 \ ══════════════════════════════════════════════════════════════
 \  §3 — steer.f Tests
 \ ══════════════════════════════════════════════════════════════
@@ -464,28 +510,28 @@ _PF-PATH @ ASTAR-FREE
 5 5 _T-MAKE-ENT CONSTANT _ST-E0
 
 S" steer:seek-sets-dx" T-NAME
-_ST-E0 _T-ECS 8 5 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 8 5 STEER-SEEK
 _ST-E0 _T-ENT-DX 1 T-ASSERT
 
 S" steer:seek-sets-dy-zero" T-NAME
 _ST-E0 _T-ENT-DY 0 T-ASSERT
 
 S" steer:seek-diag" T-NAME
-_ST-E0 _T-ECS 8 8 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 8 8 STEER-SEEK
 _ST-E0 _T-ENT-DX 1 T-ASSERT
 
 S" steer:seek-diag-dy" T-NAME
 _ST-E0 _T-ENT-DY 1 T-ASSERT
 
 S" steer:seek-neg" T-NAME
-_ST-E0 _T-ECS 2 2 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 2 2 STEER-SEEK
 _ST-E0 _T-ENT-DX -1 T-ASSERT
 
 S" steer:seek-neg-dy" T-NAME
 _ST-E0 _T-ENT-DY -1 T-ASSERT
 
 S" steer:seek-same-pos" T-NAME
-_ST-E0 _T-ECS 5 5 STEER-SEEK
+_T-ST _ST-E0 _T-ECS 5 5 STEER-SEEK
 _ST-E0 _T-ENT-DX 0 T-ASSERT
 
 S" steer:seek-same-pos-dy" T-NAME
@@ -496,14 +542,14 @@ _ST-E0 _T-ENT-DY 0 T-ASSERT
 5 5 _T-MAKE-ENT CONSTANT _ST-E1
 
 S" steer:flee-away" T-NAME
-_ST-E1 _T-ECS 3 3 STEER-FLEE
+_T-ST _ST-E1 _T-ECS 3 3 STEER-FLEE
 _ST-E1 _T-ENT-DX 1 T-ASSERT
 
 S" steer:flee-away-dy" T-NAME
 _ST-E1 _T-ENT-DY 1 T-ASSERT
 
 S" steer:flee-neg" T-NAME
-_ST-E1 _T-ECS 8 8 STEER-FLEE
+_T-ST _ST-E1 _T-ECS 8 8 STEER-FLEE
 _ST-E1 _T-ENT-DX -1 T-ASSERT
 
 S" steer:flee-neg-dy" T-NAME
@@ -514,8 +560,8 @@ _ST-E1 _T-ENT-DY -1 T-ASSERT
 5 5 _T-MAKE-ENT CONSTANT _ST-E2
 
 S" steer:wander-sets-vel" T-NAME
-42 STEER-SEED!
-_ST-E2 _T-ECS STEER-WANDER
+_T-C-POS _T-C-VEL _T-C-AI 42 STEER-NEW CONSTANT _T-ST42
+_T-ST42 _ST-E2 _T-ECS STEER-WANDER
 \ Velocity should be in {-1, 0, 1}
 _ST-E2 _T-ENT-DX ABS 2 < T-TRUE
 
@@ -525,13 +571,31 @@ _ST-E2 _T-ENT-DY ABS 2 < T-TRUE
 S" steer:wander-changes" T-NAME
 \ Run wander twice with different seed - at least one axis likely differs
 _ST-E2 _T-ENT-DX
-999 STEER-SEED!
-_ST-E2 _T-ECS STEER-WANDER
+_T-C-POS _T-C-VEL _T-C-AI 999 STEER-NEW CONSTANT _T-ST999
+_T-ST999 _ST-E2 _T-ECS STEER-WANDER
 _ST-E2 _T-ENT-DX
 _ST-E2 _T-ENT-DY
 ROT                    ( dy-now dx-now dx-before )
 \ Just verify velocity is still in range
 DROP ABS 2 < T-TRUE
+
+\ ── 3.3b A wander replays from its seed ──
+\ Two contexts seeded alike give the same eight steps, whatever another
+\ context does in between.
+: _W-RUN  ( steer -- signature )
+    0 SWAP 8 0 DO
+        DUP _ST-E2 _T-ECS STEER-WANDER
+        _ST-E2 _T-ENT-DX 1+ 3 * _ST-E2 _T-ENT-DY 1+ +
+        ROT 9 * + SWAP
+    LOOP DROP ;
+_T-C-POS _T-C-VEL _T-C-AI 77 STEER-NEW CONSTANT _T-STA
+_T-C-POS _T-C-VEL _T-C-AI 77 STEER-NEW CONSTANT _T-STB
+_T-STA _W-RUN CONSTANT _W-A
+_T-ST999 _W-RUN DROP
+S" steer:wander-replays-from-seed" T-NAME
+_T-STB _W-RUN _W-A T-ASSERT
+S" steer:wander-seeds-differ" T-NAME
+_T-ST42 _W-RUN _W-A <> T-TRUE
 
 \ ── 3.4 STEER-FOLLOW-PATH ──
 
@@ -545,7 +609,7 @@ CREATE _SFP-TEST-PATH
 1 1 _T-MAKE-ENT CONSTANT _ST-E3
 
 S" steer:follow-path-dx" T-NAME
-_ST-E3 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
+_T-ST _ST-E3 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
 _ST-E3 _T-ENT-DX 1 T-ASSERT
 
 S" steer:follow-path-dy" T-NAME
@@ -555,7 +619,7 @@ _ST-E3 _T-ENT-DY 0 T-ASSERT
 3 1 _T-MAKE-ENT CONSTANT _ST-E4
 
 S" steer:follow-path-at-end" T-NAME
-_ST-E4 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
+_T-ST _ST-E4 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
 _ST-E4 _T-ENT-DX 0 T-ASSERT
 
 S" steer:follow-path-at-end-dy" T-NAME
@@ -565,7 +629,7 @@ _ST-E4 _T-ENT-DY 0 T-ASSERT
 7 7 _T-MAKE-ENT CONSTANT _ST-E5
 
 S" steer:follow-path-off-path" T-NAME
-_ST-E5 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
+_T-ST _ST-E5 _T-ECS _SFP-TEST-PATH 3 STEER-FOLLOW-PATH
 _ST-E5 _T-ENT-DX 0 T-ASSERT
 
 S" steer:follow-path-off-path-dy" T-NAME
@@ -584,10 +648,9 @@ CREATE _SP-TEST-WPS
 _T-ECS _ST-E6 _T-C-AI ECS-ATTACH CONSTANT _ST-E6-AI
 0 _ST-E6-AI C-AI.STATE + !
 
-_T-C-AI STEER-BIND-AI
 
 S" steer:patrol-at-wp0-advances" T-NAME
-_ST-E6 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
+_T-ST _ST-E6 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
 \ Entity is at wp[0]=(2,2), should advance to wp[1]=(4,2), seek dx=+1
 _ST-E6 _T-ENT-DX 1 T-ASSERT
 
@@ -603,7 +666,7 @@ _T-ECS _ST-E7 _T-C-AI ECS-ATTACH CONSTANT _ST-E7-AI
 1 _ST-E7-AI C-AI.STATE + !     \ target wp[1] = (4,2)
 
 S" steer:patrol-seeks-wp" T-NAME
-_ST-E7 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
+_T-ST _ST-E7 _T-ECS _SP-TEST-WPS 3 STEER-PATROL
 _ST-E7 _T-ENT-DX 1 T-ASSERT
 
 S" steer:patrol-seeks-wp-dy" T-NAME
@@ -732,6 +795,15 @@ def main():
         n_failed = int(m_failed.group(1)) if m_failed else -1
 
         print(f"  Total: {n_passed} passed, {n_failed} failed")
+
+        # Searches, fields and downhill steps against the host Dijkstra
+        problems = game_models.astar_check(text, ASTAR_MAPS)
+        print(f"  A*: {len(ASTAR_MAPS)} maps against the host Dijkstra, "
+              f"{len(problems)} differences")
+        for problem in problems[:20]:
+            print(f"  \u2717 {problem}")
+        if problems:
+            fatal = True
 
         if "ALL-TESTS-PASSED" in text and not fatal:
             print("\n[\u2713] ALL TESTS PASSED")

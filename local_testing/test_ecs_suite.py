@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Test suite for tui/game/* Phase 2 modules (ECS, Components, Systems).
+"""Test suite for the game library's ECS, components and systems
+(game/ecs.f, game/components.f, game/systems.f).
 
 Runs Forth test code through the Megapad-64 emulator and validates
 correctness by parsing structured UART output.
@@ -19,7 +20,7 @@ from system import MegapadSystem
 from diskutil import MP64FS, FTYPE_FORTH
 
 sys.path.insert(0, SCRIPT_DIR)
-from forth_disk import kdos_diagnostics, module_disk_files  # noqa: E402
+from forth_disk import MEMORY_LOG, kdos_diagnostics, module_disk_files  # noqa: E402
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -38,11 +39,6 @@ DISK_FILES = module_disk_files((
     "tui/region.f",
     "tui/widget.f",
     "tui/app-desc.f",
-    "tui/game/loop.f",
-    "tui/game/input.f",
-    "tui/game/tilemap.f",
-    "tui/game/sprite.f",
-    "tui/game/scene.f",
     "game/2d/collide.f",
     "game/ecs.f",
     "game/components.f",
@@ -98,6 +94,7 @@ VARIABLE _T-NAME-U
     ." FAILED: " _T-FAIL @ . CR
     _T-FAIL @ 0= IF ." ALL-TESTS-PASSED" CR THEN ;
 
+""" + MEMORY_LOG + r"""
 \ ── Load modules ──────────────────────────────────────────────
 
 REQUIRE game/ecs.f
@@ -273,12 +270,13 @@ _IECS ECS-SPAWN CONSTANT _IE4
 VARIABLE _ITER-SUM   0 _ITER-SUM !
 VARIABLE _ITER-CNT   0 _ITER-CNT !
 
-: _ITER-CALLBACK  ( eid addr -- )
+: _ITER-CALLBACK  ( eid addr ctx -- )
+    1000 <> IF 0 _ITER-SUM ! THEN          \ the context arrives unchanged
     @ _ITER-SUM @ + _ITER-SUM !
     DROP
     _ITER-CNT @ 1+ _ITER-CNT ! ;
 
-_IECS _IC-VAL ' _ITER-CALLBACK ECS-EACH
+_IECS _IC-VAL ' _ITER-CALLBACK 1000 ECS-EACH
 
 S" ecs:each-count" T-NAME
 _ITER-CNT @ 3 T-ASSERT
@@ -315,13 +313,14 @@ _I2ECS _I2E2 _I2C-TAG ECS-ATTACH CONSTANT _I2E2-TAG
 VARIABLE _I2-SUM   0 _I2-SUM !
 VARIABLE _I2-CNT   0 _I2-CNT !
 
-: _I2-CALLBACK  ( eid pos-addr tag-addr -- )
+: _I2-CALLBACK  ( eid pos-addr tag-addr ctx -- )
+    DROP
     @ SWAP @ +
     _I2-SUM @ + _I2-SUM !
     DROP
     _I2-CNT @ 1+ _I2-CNT ! ;
 
-_I2ECS _I2C-POS _I2C-TAG ' _I2-CALLBACK ECS-EACH2
+_I2ECS _I2C-POS _I2C-TAG ' _I2-CALLBACK 0 ECS-EACH2
 
 S" ecs:each2-count" T-NAME
 _I2-CNT @ 2 T-ASSERT
@@ -329,6 +328,53 @@ _I2-CNT @ 2 T-ASSERT
 S" ecs:each2-sum" T-NAME
 \ E0: pos.x=5 + tag=7 = 12,  E2: pos.x=13 + tag=17 = 30 → total=42
 _I2-SUM @ 42 T-ASSERT
+
+\ The callback's addresses follow the components' order: c1's, then c2's.
+VARIABLE _I2-ORDER  0 _I2-ORDER !
+: _I2-ORDER-CB  ( eid pos-addr tag-addr ctx -- )
+    DROP @ SWAP @ 10 * + _I2-ORDER +! DROP ;
+_I2ECS _I2C-POS _I2C-TAG ' _I2-ORDER-CB 0 ECS-EACH2
+S" ecs:each2-address-order" T-NAME
+\ E0: 5*10+7 = 57, E2: 13*10+17 = 147
+_I2-ORDER @ 204 T-ASSERT
+
+\ ── Iteration nests ───────────────────────────────────────────
+\ A callback iterates again over another component: three entities with
+\ VAL and, for each, the two with TAG, so six pairs.
+VARIABLE _NEST-OUTER  0 _NEST-OUTER !
+VARIABLE _NEST-PAIRS  0 _NEST-PAIRS !
+: _NEST-INNER  ( eid addr ctx -- )  DROP 2DROP 1 _NEST-PAIRS +! ;
+: _NEST-OUTER-CB  ( eid addr ctx -- )
+    1 _NEST-OUTER +!
+    >R 2DROP R> _I2C-TAG ['] _NEST-INNER 0 ECS-EACH ;
+_IECS _IC-VAL ' _NEST-OUTER-CB _I2ECS ECS-EACH
+S" ecs:nested-each-outer-visits" T-NAME
+_NEST-OUTER @ 3 T-ASSERT
+S" ecs:nested-each-pairs" T-NAME
+_NEST-PAIRS @ 6 T-ASSERT
+
+\ Iterating the same ECS inside its own iteration
+0 _NEST-OUTER !  0 _NEST-PAIRS !
+: _NEST-SAME-CB  ( eid addr ctx -- )
+    1 _NEST-OUTER +!
+    >R 2DROP R> _IC-VAL ['] _NEST-INNER 0 ECS-EACH ;
+_IECS _IC-VAL ' _NEST-SAME-CB _IECS ECS-EACH
+S" ecs:nested-each-same-ecs" T-NAME
+_NEST-OUTER @ 3 = _NEST-PAIRS @ 9 = AND T-TRUE
+
+\ ── Attaching anew starts from zero ───────────────────────────
+32 ECS-NEW CONSTANT _ZECS
+_ZECS 16 ECS-REG-COMP CONSTANT _ZC
+_ZECS ECS-SPAWN CONSTANT _ZE0
+77 _ZECS _ZE0 _ZC ECS-ATTACH !
+S" ecs:reattach-keeps-data" T-NAME
+_ZECS _ZE0 _ZC ECS-ATTACH @ 77 T-ASSERT
+_ZECS _ZE0 ECS-KILL
+_ZECS ECS-SPAWN CONSTANT _ZE1
+S" ecs:respawn-reuses-slot-for-zero-test" T-NAME
+_ZE1 _ZE0 T-ASSERT
+S" ecs:attach-after-kill-is-zeroed" T-NAME
+_ZECS _ZE1 _ZC ECS-ATTACH DUP @ SWAP 8 + @ OR 0 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Components Module Tests
@@ -425,20 +471,20 @@ VARIABLE _SYS-A-COUNT   0 _SYS-A-COUNT !
 VARIABLE _SYS-B-COUNT   0 _SYS-B-COUNT !
 VARIABLE _SYS-ORDER
 
-: _SYS-A  ( ecs dt -- )
+: _SYS-A  ( runner dt -- )
     2DROP
     _SYS-A-COUNT @ 1+ _SYS-A-COUNT !
     1 _SYS-ORDER @ 10 * + _SYS-ORDER ! ;
 
-: _SYS-B  ( ecs dt -- )
+: _SYS-B  ( runner dt -- )
     2DROP
     _SYS-B-COUNT @ 1+ _SYS-B-COUNT !
     2 _SYS-ORDER @ 10 * + _SYS-ORDER ! ;
 
 \ Add B at priority 200, then A at priority 100
 \ A should run first despite being added second
-_SRUN ' _SYS-B 200 SYSRUN-ADD
-_SRUN ' _SYS-A 100 SYSRUN-ADD
+_SRUN ' _SYS-B 200 SYSRUN-ADD CONSTANT _SYS-B-H
+_SRUN ' _SYS-A 100 SYSRUN-ADD CONSTANT _SYS-A-H
 
 S" sys:count-after-add" T-NAME
 _SRUN SYSRUN-COUNT 2 T-ASSERT
@@ -461,7 +507,7 @@ _SYS-ORDER @ 12 T-ASSERT
 
 0 _SYS-A-COUNT !
 0 _SYS-B-COUNT !
-_SRUN 0 SYSRUN-DISABLE
+_SRUN _SYS-A-H SYSRUN-DISABLE
 _SRUN 1 SYSRUN-TICK
 
 S" sys:disabled-skipped" T-NAME
@@ -470,13 +516,107 @@ _SYS-A-COUNT @ 0 T-ASSERT
 S" sys:enabled-still-ran" T-NAME
 _SYS-B-COUNT @ 1 T-ASSERT
 
-_SRUN 0 SYSRUN-ENABLE
+_SRUN _SYS-A-H SYSRUN-ENABLE
 0 _SYS-A-COUNT !
 0 _SYS-B-COUNT !
 _SRUN 1 SYSRUN-TICK
 
 S" sys:re-enabled-runs" T-NAME
 _SYS-A-COUNT @ 1 T-ASSERT
+
+\ ── A system ticks another runner ─────────────────────────────
+\ The outer runner's first system ticks an inner runner with step 5;
+\ the outer runner's next system must still receive step 3.
+_SECS SYSRUN-NEW CONSTANT _SRUN-IN
+VARIABLE _SYS-IN-DT   0 _SYS-IN-DT !
+VARIABLE _SYS-OUT-DT  0 _SYS-OUT-DT !
+: _SYS-IN  ( runner dt -- )  _SYS-IN-DT ! DROP ;
+: _SYS-NESTS  ( runner dt -- )  2DROP _SRUN-IN 5 SYSRUN-TICK ;
+: _SYS-AFTER  ( runner dt -- )  _SYS-OUT-DT ! DROP ;
+_SRUN-IN ' _SYS-IN 1 SYSRUN-ADD DROP
+_SECS SYSRUN-NEW CONSTANT _SRUN-OUT
+_SRUN-OUT ' _SYS-NESTS 1 SYSRUN-ADD DROP
+_SRUN-OUT ' _SYS-AFTER 2 SYSRUN-ADD DROP
+_SRUN-OUT 3 SYSRUN-TICK
+S" sys:nested-tick-inner-step" T-NAME
+_SYS-IN-DT @ 5 T-ASSERT
+S" sys:nested-tick-outer-step" T-NAME
+_SYS-OUT-DT @ 3 T-ASSERT
+
+\ ── Tables grow as their creator registers ───────────────────
+\ Twenty components in one ECS, the last one usable
+8 ECS-NEW CONSTANT _GECS
+: _GECS-REG20  ( -- last )  0 20 0 DO DROP _GECS 8 ECS-REG-COMP LOOP ;
+_GECS-REG20 CONSTANT _GC20
+_GECS ECS-SPAWN CONSTANT _GE0
+S" ecs:twentieth-component-id" T-NAME
+_GC20 19 T-ASSERT
+S" ecs:twentieth-component-attaches" T-NAME
+55 _GECS _GE0 _GC20 ECS-ATTACH !  _GECS _GE0 _GC20 ECS-GET @ 55 T-ASSERT
+\ A component of size 0 marks entities without data
+_GECS 0 ECS-REG-COMP CONSTANT _GMARK
+_GECS _GE0 _GMARK ECS-ATTACH DROP
+S" ecs:size-0-component-marks" T-NAME
+_GECS _GE0 _GMARK ECS-HAS? T-TRUE
+
+\ Twenty systems in one runner all run; a handle still names its
+\ system after later additions of lower priority moved it.
+VARIABLE _GSUM  0 _GSUM !
+: _GSYS  ( runner dt -- )
+    2DROP 1 _GSUM +! ;
+_GECS SYSRUN-NEW CONSTANT _GRUN
+_GRUN ' _GSYS 50 SYSRUN-ADD CONSTANT _GH-FIRST
+: _GADD19  19 0 DO _GRUN ['] _GSYS 19 I - 3 * SYSRUN-ADD DROP LOOP ;
+_GADD19
+S" sys:twenty-systems" T-NAME
+_GRUN SYSRUN-COUNT 20 T-ASSERT
+_GRUN 1 SYSRUN-TICK
+S" sys:twenty-systems-ran" T-NAME
+_GSUM @ 20 T-ASSERT
+_GRUN _GH-FIRST SYSRUN-DISABLE  0 _GSUM !  _GRUN 1 SYSRUN-TICK
+S" sys:handle-names-its-system" T-NAME
+_GSUM @ 19 T-ASSERT
+\ The runner's context reaches its systems
+_GRUN 1234 SYSRUN-CTX!
+VARIABLE _GCTX  0 _GCTX !
+: _GSYS-CTX  ( runner dt -- )  DROP SYSRUN-CTX _GCTX ! ;
+_GRUN ' _GSYS-CTX 999 SYSRUN-ADD DROP
+_GRUN 1 SYSRUN-TICK
+S" sys:context-reaches-systems" T-NAME
+_GCTX @ 1234 T-ASSERT
+
+\ ── Two ECS instances with different layouts in one pass ─────
+\ ECS A registers position then velocity; ECS B a tag, then
+\ velocity, then position.  Runner A ticks runner B from a system, and
+\ each runner's SYS-VELOCITY moves its own entity.
+16 ECS-NEW CONSTANT _AECS
+_AECS C-POS-SZ ECS-REG-COMP CONSTANT _AC-POS
+_AECS C-VEL-SZ ECS-REG-COMP CONSTANT _AC-VEL
+16 ECS-NEW CONSTANT _BECS
+_BECS C-TAG-SZ ECS-REG-COMP DROP
+_BECS C-VEL-SZ ECS-REG-COMP CONSTANT _BC-VEL
+_BECS C-POS-SZ ECS-REG-COMP CONSTANT _BC-POS
+_AECS ECS-SPAWN CONSTANT _AE
+_BECS ECS-SPAWN CONSTANT _BE
+1 _AECS _AE _AC-VEL ECS-ATTACH C-VEL.DX + !
+_AECS _AE _AC-POS ECS-ATTACH DROP
+2 _BECS _BE _BC-VEL ECS-ATTACH C-VEL.DY + !
+_BECS _BE _BC-POS ECS-ATTACH DROP
+_AECS SYSRUN-NEW CONSTANT _ARUN
+_BECS SYSRUN-NEW CONSTANT _BRUN
+_ARUN _AC-POS _AC-VEL -1 -1 SYSRUN-BIND
+_BRUN _BC-POS _BC-VEL -1 -1 SYSRUN-BIND
+_BRUN ' SYS-VELOCITY 1 SYSRUN-ADD DROP
+: _TICK-B  ( runner dt -- )  NIP _BRUN SWAP SYSRUN-TICK ;
+_ARUN ' SYS-VELOCITY 1 SYSRUN-ADD DROP
+_ARUN ' _TICK-B 2 SYSRUN-ADD DROP
+_ARUN 3 SYSRUN-TICK
+S" sys:two-layouts-a-moved" T-NAME
+_AECS _AE _AC-POS ECS-GET C-POS.X + @ 3 T-ASSERT
+S" sys:two-layouts-b-moved" T-NAME
+_BECS _BE _BC-POS ECS-GET C-POS.Y + @ 6 T-ASSERT
+S" sys:two-layouts-b-tag-untouched" T-NAME
+_BECS _BE _BC-POS ECS-GET C-POS.X + @ 0 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Built-in System Tests: SYS-VELOCITY
@@ -486,8 +626,8 @@ _SYS-A-COUNT @ 1 T-ASSERT
 _VECS C-POS-SZ ECS-REG-COMP CONSTANT _VC-POS
 _VECS C-VEL-SZ ECS-REG-COMP CONSTANT _VC-VEL
 
-_VC-POS SYS-C-POS !
-_VC-VEL SYS-C-VEL !
+_VECS SYSRUN-NEW CONSTANT _VRUN
+_VRUN _VC-POS _VC-VEL -1 -1 SYSRUN-BIND
 
 _VECS ECS-SPAWN CONSTANT _VE0
 
@@ -502,7 +642,7 @@ _VECS _VE0 _VC-VEL ECS-ATTACH CONSTANT _VE0-V
 -2 _VE0-V C-VEL.DY + !
 
 \ Run velocity system with dt=1
-_VECS 1 SYS-VELOCITY
+_VRUN 1 SYS-VELOCITY
 
 S" vel:x-after-tick" T-NAME
 _VE0-P C-POS.X + @ 13 T-ASSERT
@@ -511,7 +651,7 @@ S" vel:y-after-tick" T-NAME
 _VE0-P C-POS.Y + @ 18 T-ASSERT
 
 \ Run again with dt=5
-_VECS 5 SYS-VELOCITY
+_VRUN 5 SYS-VELOCITY
 
 S" vel:x-after-5dt" T-NAME
 _VE0-P C-POS.X + @ 28 T-ASSERT
@@ -526,7 +666,8 @@ _VE0-P C-POS.Y + @ 8 T-ASSERT
 64 ECS-NEW CONSTANT _TMECS
 _TMECS C-TMR-SZ ECS-REG-COMP CONSTANT _TMC-TMR
 
-_TMC-TMR SYS-C-TMR !
+_TMECS SYSRUN-NEW CONSTANT _TMRUN
+_TMRUN -1 -1 -1 _TMC-TMR SYSRUN-BIND
 
 _TMECS ECS-SPAWN CONSTANT _TMEID
 
@@ -538,7 +679,7 @@ _TMECS _TMEID _TMC-TMR ECS-ATTACH CONSTANT _TM-ADDR
 ' _TMR-CALLBACK _TM-ADDR C-TMR.XT + !
 
 \ Tick 1: ticks should go from 3 to 2
-_TMECS 1 SYS-TIMER
+_TMRUN 1 SYS-TIMER
 
 S" tmr:ticks-after-1" T-NAME
 _TM-ADDR C-TMR.TICKS + @ 2 T-ASSERT
@@ -547,13 +688,13 @@ S" tmr:not-fired-yet" T-NAME
 _TMR-FIRED @ 0 T-ASSERT
 
 \ Tick 2: 2 → 1
-_TMECS 1 SYS-TIMER
+_TMRUN 1 SYS-TIMER
 
 S" tmr:ticks-after-2" T-NAME
 _TM-ADDR C-TMR.TICKS + @ 1 T-ASSERT
 
 \ Tick 3: 1 → 0, callback fires
-_TMECS 1 SYS-TIMER
+_TMRUN 1 SYS-TIMER
 
 S" tmr:ticks-after-3" T-NAME
 _TM-ADDR C-TMR.TICKS + @ 0 T-ASSERT
@@ -567,7 +708,8 @@ _TMR-FIRED @ 1 T-ASSERT
 
 32 ECS-NEW CONSTANT _HECS
 _HECS C-HP-SZ ECS-REG-COMP CONSTANT _HC-HP
-_HC-HP SYS-C-HP !
+_HECS SYSRUN-NEW CONSTANT _HRUN
+_HRUN -1 -1 _HC-HP -1 SYSRUN-BIND
 
 _HECS ECS-SPAWN CONSTANT _HE0
 _HECS ECS-SPAWN CONSTANT _HE1
@@ -584,7 +726,7 @@ _HECS _HE1 _HC-HP ECS-ATTACH CONSTANT _HE1-HP
 S" cull:both-alive-before" T-NAME
 _HECS _HE0 ECS-ALIVE? _HECS _HE1 ECS-ALIVE? AND T-TRUE
 
-_HECS 0 SYS-CULL-DEAD
+_HRUN 0 SYS-CULL-DEAD
 
 S" cull:healthy-survives" T-NAME
 _HECS _HE0 ECS-ALIVE? T-TRUE
@@ -594,6 +736,45 @@ _HECS _HE1 ECS-ALIVE? T-FALSE
 
 S" cull:count-after" T-NAME
 _HECS ECS-COUNT 1 T-ASSERT
+
+\ ══════════════════════════════════════════════════════════════
+\  Teardown: KDOS's FREE returns nothing, so each FREE stands alone
+\ ══════════════════════════════════════════════════════════════
+
+\ An ECS with two components and three entities, built and freed inside
+\ one memory log, with sentinels below the argument of each teardown.
+-1 MLOG-HOLD  MLOG-START
+8 ECS-NEW CONSTANT _TD-ECS
+_TD-ECS 16 ECS-REG-COMP DROP
+_TD-ECS 8 ECS-REG-COMP DROP
+_TD-ECS ECS-SPAWN DROP  _TD-ECS ECS-SPAWN DROP  _TD-ECS ECS-SPAWN DROP
+_TD-ECS SYSRUN-NEW CONSTANT _TD-RUN
+: _TD-FREE-RUN  ( -- s1 s2 s3 gain )
+    DEPTH >R  101 202 303 _TD-RUN SYSRUN-FREE  DEPTH R> - ;
+: _TD-FREE-ECS  ( -- s1 s2 s3 gain )
+    DEPTH >R  404 505 606 _TD-ECS ECS-FREE  DEPTH R> - ;
+_TD-FREE-RUN
+_TD-FREE-ECS
+MLOG-STOP  0 MLOG-HOLD
+
+S" teardown:ecs-free-leaves-callers-cells" T-NAME
+3 T-ASSERT
+S" teardown:ecs-free-sentinels-intact" T-NAME
+606 = SWAP 505 = AND SWAP 404 = AND T-TRUE
+S" teardown:sysrun-free-leaves-callers-cells" T-NAME
+3 T-ASSERT
+S" teardown:sysrun-free-sentinels-intact" T-NAME
+303 = SWAP 202 = AND SWAP 101 = AND T-TRUE
+S" teardown:every-block-freed-once" T-NAME
+MLOG-BALANCED? T-TRUE
+S" ecs:new-leaves-only-the-ecs" T-NAME
+: _TD-NEW-GAIN  ( -- gain )  DEPTH >R  4 ECS-NEW  DEPTH R> -  SWAP ECS-FREE ;
+_TD-NEW-GAIN 1 T-ASSERT
+
+S" teardown:free-count" T-NAME
+\ ECS: descriptor, alive, generations, component table, and the data
+\ and attached bits of two components; runner: descriptor and entries
+MLOG-FREES 10 T-ASSERT
 
 \ ══════════════════════════════════════════════════════════════
 \  Summary
