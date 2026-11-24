@@ -9,6 +9,7 @@ session manifest a server runs them from:
 ```
 python3 -m toolchain.image check CONFIGURATION
 python3 -m toolchain.image build CONFIGURATION IMAGE [--fresh-user-volume] [--built-from FILE]
+python3 -m toolchain.image host
 ```
 
 Run it from Akashic's root, with `MEGAPAD_ROOT` naming MegaPad when it is not
@@ -22,6 +23,14 @@ own account alone. A user volume that is already there is kept, documents
 and all, unless `--fresh-user-volume` asks for a new one. `--built-from`
 names a JSON object, such as the components' commits, that the manifest
 records beside the configuration's own digests.
+
+`host` says whether this computer has what a build needs from it: the
+e2fsprogs tools that make the ext4 volumes, from 1.47.0 on, each linked to
+its own library. It prints the tools a build would use, with their paths and
+versions, as JSON, or what is missing or too old. A build takes the tools
+from the folder `AKASHIC_E2FSPROGS_TOOL_DIR` names, which must hold the
+tests' pinned 1.47.4, and otherwise from the first folder on the `PATH`, or
+`/usr/sbin` or `/sbin`, that holds them all.
 
 The Desktop that fantasy-engine ships, `configurations/desktop/configuration.toml`
 there, reads:

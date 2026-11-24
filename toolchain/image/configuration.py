@@ -5,9 +5,9 @@ launcher, the Agent's provider, the machine's memory and full cores, the
 user and system volumes, the viewer's size, the network, and values for
 Desk's system settings.  read() checks a file and returns its
 Configuration, image_spec() gives the build description, and build() builds
-the volumes and the session manifest a server runs them from.  The format
-is described in docs/image/configuration.md.  The harness never imports
-this module.
+the volumes and the session manifest a server runs them from.  host() checks
+what a build needs from the computer.  The format is described in
+docs/image/configuration.md.  The harness never imports this module.
 """
 
 from __future__ import annotations
@@ -407,6 +407,25 @@ def _digest(files: Mapping[str, bytes]) -> str:
     for name in sorted(files):
         identity.update(f"{name}\0{hashlib.sha256(files[name]).hexdigest()}\n".encode())
     return identity.hexdigest()
+
+
+def host() -> dict[str, object]:
+    """What a build needs from this computer, as a build finds it: the
+    e2fsprogs tools that make the ext4 volumes, each with its path and the
+    version it reports.  Tools that are missing, older than the profile's
+    minimum or not linked to their own library raise ConfigurationError
+    saying so."""
+
+    try:
+        _manifest, _environment, tools = image_build._system_volume_toolchain()
+    except RuntimeError as error:
+        raise ConfigurationError(str(error)) from None
+    return {
+        "e2fsprogs": {
+            name: {"path": found["path"], "version": found["version"]}
+            for name, found in tools.items()
+        }
+    }
 
 
 def build(

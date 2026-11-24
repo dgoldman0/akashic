@@ -3,6 +3,7 @@
     python3 -m toolchain.image check CONFIGURATION
     python3 -m toolchain.image build CONFIGURATION IMAGE
         [--fresh-user-volume] [--built-from FILE]
+    python3 -m toolchain.image host
 
 check reads a configuration and prints what it says as JSON, or says what
 is wrong and exits with 1.  build writes the boot image at IMAGE, the
@@ -11,7 +12,9 @@ settings, system and user volumes beside it, and the session manifest
 kept, documents and all, unless --fresh-user-volume asks for a new one.
 --built-from names a JSON file of what the caller built from, such as its
 components' commits, which the manifest records with the configuration's
-own digests.  Run it from Akashic's root.
+own digests.  host prints, as JSON, the e2fsprogs tools a build would make
+the ext4 volumes with, or says what this computer lacks and exits with 1.
+Run it from Akashic's root.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-from .configuration import ConfigurationError, build, read, summary
+from .configuration import ConfigurationError, build, host, read, summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,8 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FILE",
         help="a JSON object of what the caller built from, for the manifest",
     )
+    commands.add_parser("host", help="check what a build needs from this computer")
     args = parser.parse_args(argv)
     try:
+        if args.command == "host":
+            print(json.dumps(host(), indent=2, sort_keys=True))
+            return 0
         configuration = read(args.configuration)
         if args.command == "check":
             print(json.dumps(summary(configuration), indent=2, sort_keys=True))

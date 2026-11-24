@@ -261,6 +261,45 @@ def test_the_command_line_checks_a_file(tmp_path, capsys):
     assert "unknown table sound" in capsys.readouterr().err
 
 
+def _host_tools(folder: Path, version: str) -> Path:
+    """FOLDER holding stand-ins for each e2fsprogs tool the profile needs,
+    each reporting VERSION and a library of the same version."""
+
+    folder.mkdir()
+    from toolchain.image.ext4 import load_manifest
+
+    for name in load_manifest()["authorities"]["e2fsprogs"]["required_tools"]:
+        tool = folder / name
+        tool.write_text(
+            f"#!/bin/sh\necho '{name} {version} (5-Feb-2023)'\n"
+            f"echo '\tUsing EXT2FS Library version {version}'\n"
+        )
+        tool.chmod(0o755)
+    return folder
+
+
+def test_the_host_check_names_the_e2fsprogs_a_build_would_use(tmp_path, monkeypatch, capsys):
+    from toolchain.image import build as image_build
+
+    monkeypatch.delenv("AKASHIC_E2FSPROGS_TOOL_DIR", raising=False)
+    monkeypatch.setattr(image_build, "HOST_TOOL_FOLDERS", ())
+    current = _host_tools(tmp_path / "current", "1.47.0")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'nothing'}{os.pathsep}{current}")
+    assert main(["host"]) == 0
+    found = json.loads(capsys.readouterr().out)["e2fsprogs"]
+    assert found["mke2fs"]["path"] == str(current / "mke2fs")
+    assert found["mke2fs"]["version"].startswith("mke2fs 1.47.0")
+
+    old = _host_tools(tmp_path / "old", "1.46.5")
+    monkeypatch.setenv("PATH", str(old))
+    assert main(["host"]) == 1
+    assert "is not e2fsprogs 1.47.0 or later" in capsys.readouterr().err
+
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
+    assert main(["host"]) == 1
+    assert "needs e2fsprogs 1.47.0 or later" in capsys.readouterr().err
+
+
 @pytest.mark.skipif(not PINNED, reason="needs the pinned e2fsprogs in AKASHIC_E2FSPROGS_TOOL_DIR")
 def test_a_configuration_builds_its_volumes_and_manifest(tmp_path):
     documents = tmp_path / "documents"
