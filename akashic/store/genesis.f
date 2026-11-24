@@ -104,13 +104,13 @@ VARIABLE _GEN-I
     CON-STARK? IF 1 ELSE 0 THEN CBOR-UINT
     \ 4. epoch_len
     _GEN-S-EPOCH _GEN-TSTR
-    CON-POS-EPOCH-LEN CBOR-UINT
+    CON-POS-EPOCH-LEN @ CBOR-UINT
     \ 5. min_stake
     _GEN-S-MSTK _GEN-TSTR
-    CON-POS-MIN-STAKE CBOR-UINT
-    \ 6. lock_period
+    CON-POS-MIN-STAKE @ CBOR-UINT
+    \ 6. lock_period — the state's, which GEN-LOAD sets and unstaking uses
     _GEN-S-LOCK _GEN-TSTR
-    CON-POS-LOCK-PERIOD CBOR-UINT
+    _ST-LOCK-PERIOD @ CBOR-UINT
     \ 7. authorities — array of 32-byte pubkeys
     _GEN-S-AUTH _GEN-TSTR
     CON-POA-COUNT CBOR-ARRAY

@@ -481,6 +481,34 @@ def test_genesis_load_changes_nothing_when_refused():
           "[GWHOLE -1 42 3 -1 10 500 7 2 2 ]")
 
 
+def test_genesis_round_trip():
+    """GEN-CREATE writes the values GEN-LOAD reads back: the chain ID, the
+    mode, STARK, the epoch length, the minimum stake, the state's lock
+    period, the authorities and the accounts with their balances."""
+    print("\n=== Genesis round trip ===")
+    lines = (create_hex_buf("_GK1", "a1" * 32) + create_hex_buf("_GK2", "a2" * 32)
+             + create_hex_buf("_GA1", "01" * 32) + create_hex_buf("_GA2", "02" * 32) + [
+        "ST-INIT",
+        "7 GEN-CHAIN-ID!  CON-POSA CON-MODE!  -1 CON-STARK!",
+        "12 CON-POS-EPOCH-LEN !  345 CON-POS-MIN-STAKE !  9 _ST-LOCK-PERIOD !",
+        "_GK1 CON-POA-ADD  _GK2 CON-POA-ADD",
+        "_GA1 1000 ST-CREATE DROP  _GA2 2000 ST-CREATE DROP",
+        "CREATE _GCOPY 4096 ALLOT",
+        "GEN-CREATE GEN-RESULT DUP CONSTANT _GLEN _GCOPY SWAP CMOVE",
+        # Another configuration, then the genesis loaded over it.
+        "ST-INIT  0 _CON-POA-COUNT !",
+        "1 GEN-CHAIN-ID!  CON-POW CON-MODE!  0 CON-STARK!",
+        "32 CON-POS-EPOCH-LEN !  100 CON-POS-MIN-STAKE !  64 _ST-LOCK-PERIOD !",
+        ": _GSET.  ( -- )  GEN-CHAIN-ID@ . CON-MODE@ . CON-STARK? . CON-POS-EPOCH-LEN @ . "
+        "CON-POS-MIN-STAKE @ . _ST-LOCK-PERIOD @ . CON-POA-COUNT . ST-COUNT . ;",
+        '_GCOPY _GLEN GEN-LOAD ." [GTRIP " . _GSET. ." ]" CR',
+        '." [GTRIP-DATA " _GA1 ST-BALANCE@ . _GA2 ST-BALANCE@ . '
+        '_CON-POA-KEYS C@ . _CON-POA-KEYS 32 + C@ . ." ]" CR',
+    ])
+    check("the settings and counts come back", lines, "[GTRIP -1 7 3 -1 12 345 9 2 2 ]")
+    check("the balances and authorities come back", lines, "[GTRIP-DATA 1000 2000 161 162 ]")
+
+
 def test_pow_testing_flag():
     """_CON-POW-TESTING-ONLY constant exists and is -1 (true)."""
     print("\n=== PoW testing-only flag ===")
