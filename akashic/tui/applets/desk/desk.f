@@ -90,6 +90,7 @@ REQUIRE ../../../interop/sandbox-capability.f
 REQUIRE ../../../interop/resource-owners.f
 REQUIRE sandbox-surface.f
 REQUIRE schedule-surface.f
+REQUIRE keyring-surface.f
 
 \ =====================================================================
 \  §1 — Host Slot Compatibility Views
@@ -388,6 +389,20 @@ _DESK-CURRENT-STATE MAND-SIZE CMP-FIELD: _DESK-AGENT-MANDATE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROMPT
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROMPT-RGN
 _DESK-CURRENT-STATE _DESK-AGENT-PROMPT-CAP CMP-FIELD: _DESK-AGENT-PROMPT-BUF
+\ The machine's passphrase keyring, in Desk's own home, or 0 when Desk has
+\ none, and the status its opening gave; what the keyring's screen chose,
+\ for Desk to carry out once the screen has closed; the derivation Desk
+\ started, or 0, and the tenths of it last told; what Desk's prompt asks
+\ for; and the first entry of a new passphrase, until the second entry
+\ confirms it.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-KEYRING
+_DESK-CURRENT-STATE CMP-CELL: _DESK-KEYRING-STATUS
+_DESK-CURRENT-STATE CMP-CELL: _DESK-KEYRING-CHOSEN
+_DESK-CURRENT-STATE CMP-CELL: _DESK-KEYRING-OP
+_DESK-CURRENT-STATE CMP-CELL: _DESK-KEYRING-TOLD
+_DESK-CURRENT-STATE CMP-CELL: _DESK-PROMPT-MODE
+_DESK-CURRENT-STATE CMP-CELL: _DESK-KEYRING-FIRST-U
+_DESK-CURRENT-STATE _DESK-AGENT-PROMPT-CAP CMP-FIELD: _DESK-KEYRING-FIRST
 
 \ Completed-shell banks.  The text arena owns labels/titles/action IDs;
 \ observers never borrow slots.  A bank starts small and is replaced by one
@@ -834,6 +849,7 @@ VARIABLE _DLB-H
     DUP DESK-LAUNCHER-DESC = IF DROP _DESK-LAUNCHER-BOX TRUE EXIT THEN
     DUP SBXS-OVERLAY? IF SBXS-BOX TRUE EXIT THEN
     DUP SCHS-OVERLAY? IF SCHS-BOX TRUE EXIT THEN
+    DUP KRS-OVERLAY? IF KRS-BOX TRUE EXIT THEN
     DROP FALSE ;
 
 VARIABLE _DPO-SA
@@ -1540,7 +1556,146 @@ VARIABLE _DSBI-STATUS
     THEN
     DROP _DESK-AGENT-RUNTIME @ ARUNTIME-CONVERSATION-STORE! DROP ;
 
+\ --- The keyring's prompts ---
+\
+\  Desk's prompt also asks for the keyring's passphrase, masked: it
+\  publishes only mask characters, and Desk wipes it as soon as the
+\  keyring has taken the passphrase.  A setup or a change asks twice and
+\  goes ahead only when both entries match.  The derivation that follows
+\  runs in Desk's ticks (_DESK-KEYRING-TICK).
+
+0 CONSTANT _DESK-PM-ASK
+1 CONSTANT _DESK-PM-UNLOCK
+\ A setup's or change's first entry; the mode after it asks for the second.
+2 CONSTANT _DESK-PM-SETUP
+3 CONSTANT _DESK-PM-SETUP-AGAIN
+4 CONSTANT _DESK-PM-CHANGE
+5 CONSTANT _DESK-PM-CHANGE-AGAIN
+
+\ The fewest characters a new passphrase takes.
+8 CONSTANT _DESK-KEYRING-MIN-CHARS
+
+: _DESK-KEYRING$  ( -- a u ) S" /keyring.bin" ;
+
+: _DESK-KEYRING-PROMPT?  ( -- flag )  _DESK-PROMPT-MODE @ _DESK-PM-ASK <> ;
+
+: _DESK-KEYRING-FIRST-WIPE  ( -- )
+    _DESK-KEYRING-FIRST _DESK-AGENT-PROMPT-CAP 0 FILL
+    0 _DESK-KEYRING-FIRST-U ! ;
+
+\ Returns PROMPT to asking the Agent, unmasked, with no passphrase left
+\ in it or in Desk.
+: _DESK-KEYRING-PROMPT-END  ( prompt -- )
+    DUP PRM-WIPE  0 SWAP PRM-MASK!
+    _DESK-PM-ASK _DESK-PROMPT-MODE !
+    _DESK-KEYRING-FIRST-WIPE ;
+
+: _DESK-KEYRING-LABEL$  ( mode -- a u )
+    CASE
+        _DESK-PM-UNLOCK OF S" Keyring passphrase:" ENDOF
+        _DESK-PM-SETUP OF S" New keyring passphrase:" ENDOF
+        _DESK-PM-CHANGE OF S" New keyring passphrase:" ENDOF
+        >R S" Type it again:" R>
+    ENDCASE ;
+
+\ Opens Desk's prompt, empty and masked, for MODE.
+: _DESK-KEYRING-ASK  ( mode -- )
+    _DESK-AGENT-PROMPT @ ?DUP 0= IF DROP EXIT THEN >R
+    DUP _DESK-PROMPT-MODE !
+    R@ PRM-WIPE  42 R@ PRM-MASK!
+    _DESK-KEYRING-LABEL$ 0 0 R> PRM-SHOW
+    ASHELL-DIRTY! ;
+
+\ The characters in A U, as UTF-8 counts them.
+: _DESK-UTF8-CHARS  ( a u -- n )
+    0 -ROT OVER + SWAP ?DO
+        I C@ 192 AND 128 <> IF 1+ THEN
+    LOOP ;
+
+\ A derivation the keyring answered STATUS to starting, for OP: Desk's
+\ ticks run it from here.
+: _DESK-KEYRING-STARTED  ( status op -- )
+    SWAP KEYRING-S-PENDING = IF
+        _DESK-KEYRING-OP !  -1 _DESK-KEYRING-TOLD !
+    ELSE
+        DROP S" The keyring could not start" 2000 ASHELL-TOAST-WARNING
+    THEN ;
+
+: _DESK-KEYRING-UNLOCK-SUBMIT  ( prompt -- )
+    DUP PRM-GET-TEXT _DESK-KEYRING @ KEYRING-UNLOCK
+    SWAP _DESK-KEYRING-PROMPT-END
+    KRS-UNLOCK _DESK-KEYRING-STARTED ;
+
+\ The first entry of a new passphrase is kept, and asked for again; one
+\ too short is asked for afresh.
+: _DESK-KEYRING-NEW-SUBMIT  ( prompt -- )
+    PRM-GET-TEXT
+    2DUP _DESK-UTF8-CHARS _DESK-KEYRING-MIN-CHARS < IF
+        2DROP S" A passphrase takes at least 8 characters" 2000
+        ASHELL-TOAST-WARNING
+        _DESK-PROMPT-MODE @ _DESK-KEYRING-ASK EXIT
+    THEN
+    DUP _DESK-KEYRING-FIRST-U !  _DESK-KEYRING-FIRST SWAP MOVE
+    _DESK-PROMPT-MODE @ 1+ _DESK-KEYRING-ASK ;
+
+\ The second entry, the same as the first, starts the setup or the
+\ change; a different one asks for both again.
+: _DESK-KEYRING-AGAIN-SUBMIT  ( prompt -- )
+    DUP PRM-GET-TEXT _DESK-KEYRING-FIRST _DESK-KEYRING-FIRST-U @ COMPARE IF
+        _DESK-PROMPT-MODE @ 1- >R  _DESK-KEYRING-PROMPT-END
+        S" The two passphrases differ" 2000 ASHELL-TOAST-WARNING
+        R> _DESK-KEYRING-ASK EXIT
+    THEN
+    DUP PRM-GET-TEXT KEYRING-ITERATIONS-DEFAULT _DESK-KEYRING @
+    _DESK-PROMPT-MODE @ _DESK-PM-SETUP-AGAIN = IF
+        KEYRING-SETUP KRS-SETUP
+    ELSE
+        KEYRING-CHANGE KRS-CHANGE
+    THEN
+    ROT _DESK-KEYRING-PROMPT-END
+    _DESK-KEYRING-STARTED ;
+
+\ Escape takes no passphrase: a setup or change starts again from its
+\ first entry next time, and the keyring is no longer wanted, so that
+\ Desk does not ask again until something asks for its key.
+: _DESK-KEYRING-PROMPT-CANCEL  ( prompt -- )
+    _DESK-KEYRING-PROMPT-END
+    _DESK-KEYRING @ ?DUP IF KEYRING-WANT-CLEAR THEN
+    ASHELL-DIRTY! ;
+
+: _DESK-KEYRING-PROMPT-SUBMIT  ( prompt -- )
+    _DESK-KEYRING @ 0= IF _DESK-KEYRING-PROMPT-END EXIT THEN
+    _DESK-PROMPT-MODE @ CASE
+        _DESK-PM-UNLOCK OF _DESK-KEYRING-UNLOCK-SUBMIT ENDOF
+        _DESK-PM-SETUP OF _DESK-KEYRING-NEW-SUBMIT ENDOF
+        _DESK-PM-CHANGE OF _DESK-KEYRING-NEW-SUBMIT ENDOF
+        >R _DESK-KEYRING-AGAIN-SUBMIT R>
+    ENDCASE
+    ASHELL-DIRTY! ;
+
+\ Opens the keyring in Desk's own home.  A Desk with no home, or no
+\ memory for the keyring, has none; the status says why.
+: _DESK-KEYRING-INIT  ( -- )
+    0 _DESK-KEYRING !  _DESK-PM-ASK _DESK-PROMPT-MODE !
+    KEYRING-S-IO _DESK-KEYRING-STATUS !
+    _DESK-OWN-PLACES _DESK-HOME-IN ?DUP 0= IF EXIT THEN
+    KEYRING-SIZE ALLOCATE IF
+        2DROP KEYRING-S-CAPACITY _DESK-KEYRING-STATUS ! EXIT
+    THEN                                               ( place keyring )
+    >R _DESK-KEYRING$ ROT R@ KEYRING-INIT
+    DUP _DESK-KEYRING-STATUS ! IF R> FREE EXIT THEN
+    R> _DESK-KEYRING ! ;
+
+\ Wipes any passphrase Desk's prompt holds and the keyring with its key.
+: _DESK-KEYRING-FINI  ( -- )
+    _DESK-KEYRING-PROMPT? IF
+        _DESK-AGENT-PROMPT @ ?DUP IF _DESK-KEYRING-PROMPT-END THEN
+    THEN
+    _DESK-KEYRING @ ?DUP IF DUP KEYRING-FINI FREE THEN
+    0 _DESK-KEYRING !  0 _DESK-KEYRING-OP !  0 _DESK-KEYRING-CHOSEN ! ;
+
 : _DESK-AGENT-PROMPT-SUBMIT  ( prompt -- )
+    _DESK-KEYRING-PROMPT? IF _DESK-KEYRING-PROMPT-SUBMIT EXIT THEN
     PRM-GET-TEXT _DESK-AGENT-RUNTIME @ ARUNTIME-SEND
     DUP 0= IF
         DROP S" Agent request started" 1000 ASHELL-TOAST
@@ -1550,6 +1705,7 @@ VARIABLE _DSBI-STATUS
     ASHELL-DIRTY! ;
 
 : _DESK-AGENT-PROMPT-CANCEL  ( prompt -- )
+    _DESK-KEYRING-PROMPT? IF _DESK-KEYRING-PROMPT-CANCEL EXIT THEN
     DROP ASHELL-DIRTY! ;
 
 VARIABLE _DSFA-SLOT
@@ -1568,6 +1724,9 @@ VARIABLE _DSFA-SLOT
     DROP ;
 
 : _DESK-SHOW-AGENT-PROMPT  ( -- )
+    _DESK-KEYRING-PROMPT? IF
+        _DESK-AGENT-PROMPT @ ?DUP IF _DESK-KEYRING-PROMPT-END THEN
+    THEN
     DESK-RECOVERY? IF
         S" Practice recovery: Agent is disabled" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
@@ -1904,6 +2063,7 @@ VARIABLE _DMC-CANDIDATE
     _DESK-BUS @ _DINI-CONTEXT @ CTX.QUEUE !
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
     _DESK-STORE-PLACES-INIT
+    _DESK-KEYRING-INIT
     _DESK-DAYBOOK-INIT
     _DESK-REMINDERS-INIT
     DESK-RECOVERY? 0= IF _DESK-AGENT-INIT THEN
@@ -1989,6 +2149,7 @@ VARIABLE _DIFI-XIO-STATUS
             DROP
         THEN
     THEN
+    _DESK-KEYRING-FINI
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-FREE THEN
     _DESK-AGENT-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _DESK-BUS @ ?DUP IF
@@ -2829,9 +2990,17 @@ _DESK-LAUNCHER-DESC-SETUP
 \ Carries out what the user chose on the open screen, through its own
 \ surface, and closes the screen when the surface says so.  A schedule's
 \ screen is given the wall clock, for a permission granted.
+\ What the keyring's screen chose, kept for Desk's tick to carry out once
+\ the screen has closed.
+: _DESK-KEYRING-SCREEN-SERVICE  ( instance -- )
+    DUP KRS-SERVICE 0= IF DROP EXIT THEN
+    KRS-CHOSEN _DESK-KEYRING-CHOSEN !
+    _DESK-SCREEN-CLOSE ;
+
 : _DESK-SCREEN-SERVICE  ( -- )
     _DESK-SCREEN-SLOT ?DUP 0= IF EXIT THEN
     DUP _SL-INST @ ?DUP 0= IF DROP EXIT THEN
+    OVER _SL-DESC @ KRS-OVERLAY? IF NIP _DESK-KEYRING-SCREEN-SERVICE EXIT THEN
     SWAP _SL-DESC @ SBXS-OVERLAY? IF
         SBXS-SERVICE
     ELSE
@@ -2916,6 +3085,151 @@ _DESK-LAUNCHER-DESC-SETUP
     SCHS-SHUTDOWN-BIND
     ASHELL-DIRTY! ;
 
+\ --- The keyring ---
+\
+\  Desk keeps the machine's passphrase keyring (security/passphrase-
+\  keyring.f) in its own home, the file /keyring.bin, with its screen
+\  (keyring-surface.f) and its prompts.  Alt+K opens the screen, which
+\  offers what the keyring's state allows.  When something asks the
+\  locked keyring for its key, Desk asks for the passphrase once the user
+\  has no other screen or prompt open.  A derivation runs in Desk's ticks,
+\  a share at a time, and a notice tells how far it has come.
+
+\ The iterations one tick derives: about 66 ms of MegaPad's time at 100
+\ MHz, so Desk goes on answering keys while a key is derived.
+1000 CONSTANT _DESK-KEYRING-BUDGET
+
+\ Opens the keyring's screen; without a keyring, a notice says why.
+: _DESK-SHOW-KEYRING  ( -- )
+    _DESK-KEYRING @ 0= IF
+        _DESK-KEYRING-STATUS @ KEYRING-S-CORRUPT = IF
+            S" The keyring file is damaged" 2400 ASHELL-TOAST-ERROR
+        ELSE
+            S" The keyring is unavailable" 1800 ASHELL-TOAST-WARNING
+        THEN EXIT
+    THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    KRS-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
+    _DESK-KEYRING @ ['] _DESK-LAUNCHER-STYLE R> KRS-BIND
+    ASHELL-DIRTY! ;
+
+: _DESK-KEYRING-CARRY-OUT  ( action -- )
+    CASE
+        KRS-SETUP OF _DESK-PM-SETUP _DESK-KEYRING-ASK ENDOF
+        KRS-UNLOCK OF _DESK-PM-UNLOCK _DESK-KEYRING-ASK ENDOF
+        KRS-CHANGE OF _DESK-PM-CHANGE _DESK-KEYRING-ASK ENDOF
+        KRS-LOCK OF
+            _DESK-KEYRING @ KEYRING-LOCK
+            S" Keyring locked" 1400 ASHELL-TOAST
+        ENDOF
+        KRS-CANCEL OF
+            _DESK-KEYRING-OP @ IF
+                _DESK-KEYRING @ KEYRING-CANCEL  0 _DESK-KEYRING-OP !
+                S" Stopped; the keyring is as it was" 1600 ASHELL-TOAST
+            THEN
+        ENDOF
+    ENDCASE ;
+
+\ The notice of how far a derivation has come: what it does, then its
+\ share done, built here; the shell keeps its own copy.
+: _DESK-KEYRING-UNLOCKING$  ( -- a u ) S" Unlocking the keyring: " ;
+: _DESK-KEYRING-SETTING-UP$  ( -- a u ) S" Setting up the keyring: " ;
+: _DESK-KEYRING-CHANGING$  ( -- a u ) S" Changing the passphrase: " ;
+_DESK-KEYRING-UNLOCKING$ NIP _DESK-KEYRING-SETTING-UP$ NIP MAX
+_DESK-KEYRING-CHANGING$ NIP MAX 4 +
+    CONSTANT _DESK-KEYRING-NOTE-MAX
+CREATE _DESK-KEYRING-NOTE _DESK-KEYRING-NOTE-MAX ALLOT
+VARIABLE _DESK-KEYRING-NOTE-U
+
+: _DESK-KEYRING-NOTE+  ( a u -- )
+    _DESK-KEYRING-NOTE-MAX _DESK-KEYRING-NOTE-U @ - MIN 0 MAX
+    DUP >R _DESK-KEYRING-NOTE _DESK-KEYRING-NOTE-U @ + SWAP MOVE
+    R> _DESK-KEYRING-NOTE-U +! ;
+
+: _DESK-KEYRING-DOING$  ( -- a u )
+    _DESK-KEYRING-OP @ CASE
+        KRS-UNLOCK OF _DESK-KEYRING-UNLOCKING$ ENDOF
+        KRS-SETUP OF _DESK-KEYRING-SETTING-UP$ ENDOF
+        >R _DESK-KEYRING-CHANGING$ R>
+    ENDCASE ;
+
+\ Tells how far the derivation has come, at its start and each tenth.
+: _DESK-KEYRING-PROGRESS  ( -- )
+    _DESK-KEYRING @ KEYRING-PROGRESS ?DUP 0= IF DROP EXIT THEN
+    >R 10 * R> /
+    DUP _DESK-KEYRING-TOLD @ > 0= IF DROP EXIT THEN
+    DUP _DESK-KEYRING-TOLD !
+    0 _DESK-KEYRING-NOTE-U !
+    _DESK-KEYRING-DOING$ _DESK-KEYRING-NOTE+
+    10 * NUM>STR _DESK-KEYRING-NOTE+  S" %" _DESK-KEYRING-NOTE+
+    _DESK-KEYRING-NOTE _DESK-KEYRING-NOTE-U @ 4000 ASHELL-TOAST ;
+
+\ What a derivation's end says.  A wrong passphrase is asked for again.
+: _DESK-KEYRING-ENDED  ( status -- )
+    _DESK-KEYRING-OP @  0 _DESK-KEYRING-OP !  SWAP
+    CASE
+        KEYRING-S-OK OF
+            CASE
+                KRS-UNLOCK OF S" Keyring unlocked" ENDOF
+                KRS-SETUP OF S" Keyring set up and unlocked" ENDOF
+                >R S" Passphrase changed" R>
+            ENDCASE
+            1600 ASHELL-TOAST
+        ENDOF
+        KEYRING-S-WRONG OF
+            DROP S" Wrong passphrase" 1800 ASHELL-TOAST-WARNING
+            _DESK-PM-UNLOCK _DESK-KEYRING-ASK
+        ENDOF
+        KEYRING-S-CORRUPT OF
+            DROP S" The keyring file is damaged" 2400 ASHELL-TOAST-ERROR
+        ENDOF
+        KEYRING-S-IO OF
+            DROP S" The keyring file could not be read or written" 2400
+            ASHELL-TOAST-ERROR
+        ENDOF
+        >R DROP S" The keyring failed" 2400 ASHELL-TOAST-ERROR R>
+    ENDCASE ;
+
+\ Ends a keyring prompt hidden without an answer, wiping what was typed;
+\ carries out what the keyring's screen chose once the screen has closed;
+\ runs the keyring's derivation a share each tick; and asks for the
+\ passphrase when something asked the locked keyring for its key, or for
+\ a new one when something asked before any was set up, while the user
+\ has no other screen or prompt open.
+: _DESK-KEYRING-TICK  ( -- )
+    _DESK-KEYRING @ 0= IF EXIT THEN
+    _DESK-KEYRING-PROMPT? IF
+        _DESK-AGENT-PROMPT @ ?DUP IF
+            DUP PRM-ACTIVE? IF DROP ELSE _DESK-KEYRING-PROMPT-END THEN
+        THEN
+    THEN
+    _DESK-KEYRING-CHOSEN @ ?DUP IF
+        _DESK-SCREEN-ID @ IF
+            DROP
+        ELSE
+            0 _DESK-KEYRING-CHOSEN !  _DESK-KEYRING-CARRY-OUT ASHELL-DIRTY! EXIT
+        THEN
+    THEN
+    _DESK-KEYRING-OP @ IF
+        _DESK-KEYRING-BUDGET _DESK-KEYRING @ KEYRING-STEP
+        DUP KEYRING-S-PENDING = IF DROP _DESK-KEYRING-PROGRESS EXIT THEN
+        _DESK-KEYRING-ENDED ASHELL-DIRTY! EXIT
+    THEN
+    _DESK-KEYRING @ KEYRING-WANTED? 0= IF EXIT THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-ACTIVE? IF EXIT THEN THEN
+    _DESK-KEYRING @ KEYRING-STATE@ CASE
+        KEYRING-LOCKED OF _DESK-PM-UNLOCK _DESK-KEYRING-ASK ENDOF
+        KEYRING-ABSENT OF
+            S" Saving a secret needs a keyring: choose its passphrase" 2600
+            ASHELL-TOAST
+            _DESK-PM-SETUP _DESK-KEYRING-ASK
+        ENDOF
+    ENDCASE ;
+
 \ Services the open screen, or opens one a component or Daybook asks
 \ for: the sandbox's access prompt first, then a schedule's approval.
 : _DESK-SCREENS-TICK  ( -- )
@@ -2966,6 +3280,8 @@ _DESK-LAUNCHER-DESC-SETUP
         DROP _DESK-SHOW-SBOX-MODULES -1 EXIT THEN
     DUP 112 _DESK-ALT? IF
         DROP _DESK-SHOW-SCHEDULE-PERMISSIONS -1 EXIT THEN
+    DUP 107 _DESK-ALT? IF
+        DROP _DESK-SHOW-KEYRING -1 EXIT THEN
     \ Alt+Q shuts Desk down, which asks first while a scheduled run is in
     \ flight or waiting.
     DUP 113 _DESK-ALT? IF DROP ASHELL-QUIT -1 EXIT THEN
@@ -3049,6 +3365,7 @@ VARIABLE _DDT-M
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
     _DESK-SBOX-READY? IF _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP THEN
+    _DESK-KEYRING-TICK
     _DESK-SCREENS-TICK
     _DESK-REMINDERS-TICK
     _DESK-HOST AHOST-TICK ;

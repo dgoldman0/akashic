@@ -52,8 +52,9 @@ draw progress between steps. The start runs the first iteration, as PBKDF2's
 
 A resolver call while the keyring is locked answers `SEALED-RECORD-S-KEY`,
 which the vault reports as `CVAULT-S-LOCKED`, and marks the keyring wanted.
-Its owner sees `KEYRING-WANTED?` and asks for the passphrase; the vault's
-caller retries once the keyring is unlocked.
+Its owner, Desk, sees `KEYRING-WANTED?` and asks for the passphrase
+([desk.md](../tui/applets/desk/desk.md#the-keyring)); the vault's caller
+retries once the keyring is unlocked.
 
 ## Words
 

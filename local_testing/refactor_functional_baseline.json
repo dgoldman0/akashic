@@ -574,8 +574,8 @@
         {
           "path": "akashic/tui/applets/desk/desk.f",
           "word": "_DESK-SHORTCUT?",
-          "sha256": "b20206cd42742f6059e127f5bedca208c6fd5479e067cdd7cf6133d5f8494e6c",
-          "bindings": ["Ctrl+Space -> Agent composer", "Alt+1..9 -> focus slot", "Alt+Tab -> cycle focus", "Alt+M -> minimize focused slot", "Alt+R -> restore", "Alt+F -> toggle full frame", "Alt+L -> toggle vertical/horizontal layout", "Alt+W -> close focused slot", "Alt+H -> applet launcher", "Alt+A -> Agent composer", "Alt+S -> sandbox module inspector", "Alt+P -> scheduled run permissions", "Alt+Q -> shut Desk down, asking first while a scheduled run is in flight or waiting"]
+          "sha256": "1df20b708b649dbcd166d08b92e412238ab8ac8ba1a2fb6202b98d74d06b4d11",
+          "bindings": ["Ctrl+Space -> Agent composer", "Alt+1..9 -> focus slot", "Alt+Tab -> cycle focus", "Alt+M -> minimize focused slot", "Alt+R -> restore", "Alt+F -> toggle full frame", "Alt+L -> toggle vertical/horizontal layout", "Alt+W -> close focused slot", "Alt+H -> applet launcher", "Alt+A -> Agent composer", "Alt+S -> sandbox module inspector", "Alt+P -> scheduled run permissions", "Alt+K -> keyring screen", "Alt+Q -> shut Desk down, asking first while a scheduled run is in flight or waiting"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.theme"], "ids": []},

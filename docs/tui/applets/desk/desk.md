@@ -562,6 +562,42 @@ dispatch returns.
   Agent records as cancelled because Desk shut down. Desk itself offers no
   command that closes it; the question guards any close that comes.
 
+## The keyring
+
+Desk keeps the machine's passphrase keyring
+([passphrase-keyring.md](../../../security/passphrase-keyring.md)) in its
+own home, the file `/keyring.bin`, and opens it as it starts. The keyring
+holds the root key that sealed secrets are sealed under, behind a
+passphrase the user gives once per boot. A Desk with no home, as in
+recovery without its volume, has no keyring, and Alt+K says so; a keyring
+file that reads as damaged is named as such.
+
+- **Keyring.** Alt+K opens a screen (`keyring-surface.f`) in Desk's one
+  screen slot. Its status line says what state the keyring is in, and its
+  rows offer what that state allows: Set up a passphrase when there is
+  none; Unlock when it is locked; Lock now, then Change the passphrase,
+  when it is unlocked; and Cancel while a key is being derived, when the
+  status line counts the share done. Enter chooses and Esc closes; the
+  screen itself asks for nothing and changes nothing, and Desk carries out
+  the choice once it has closed.
+
+Desk asks for passphrases in its own prompt, masked: the prompt shows and
+publishes mask characters only, and Desk wipes what was typed as soon as
+the keyring has taken it. A setup or change asks for the new passphrase
+twice, takes one of at least 8 characters, and goes ahead only when both
+entries match, at 100,000 PBKDF2 iterations. The derivation runs in Desk's
+ticks, 1,000 iterations a tick, about 66 ms of MegaPad's time at 100 MHz,
+so Desk goes on answering keys; a notice tells how far it has come at its
+start and each tenth, and another how it ended. A wrong passphrase is
+asked for again.
+
+When something asks the locked keyring for its key, the vault it asks
+through answers `CVAULT-S-LOCKED` and the keyring is marked wanted. Desk
+then opens the unlock prompt once the user has no other screen or prompt
+open, or the setup prompt when no keyring was ever set up; the asker
+retries once the keyring is unlocked. Esc on the prompt stops Desk asking
+until something asks again.
+
 ## Lending services
 
 Every lookup through the interoperability endpoint names the instance
@@ -671,12 +707,13 @@ All shortcuts require **Alt** modifier:
 | Alt+H | Open the selectable catalog launcher |
 | Alt+S | Open the sandbox module inspector |
 | Alt+P | Open the scheduled run permissions |
+| Alt+K | Open the keyring: set up, unlock, lock or change its passphrase |
 | Alt+Q | Shut Desk down, asking first while a scheduled run is in flight or waiting |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
 the selected row, or an OPEN item event focuses or launches; Esc closes it.
-The modal consumes input without blocking Desk ticks. The sandbox and
-schedule screens behave the same way.
+The modal consumes input without blocking Desk ticks. The sandbox,
+schedule and keyring screens behave the same way.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.
