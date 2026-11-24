@@ -503,7 +503,9 @@ module whose absence changes no outcome gives the player nothing. A design
 section, here or in `docs/game/folio-watch.md` if it grows, records the core
 loop, each module's role, these numbers and the changes they caused. The
 skeleton of stage 4 follows these rules, and stage 5's rules, creatures and
-maps follow them in full.
+maps follow them in full. The first part of
+[folio-watch.md](folio-watch.md), proposed and not yet accepted, sets out
+how the game would look.
 
 Size: 1,200 to 1,600 lines of Forth and UIDL and three maps, 9.5 to 15 hours
 after the library stages, 1.5 to 3 of them for the scripted players and the
