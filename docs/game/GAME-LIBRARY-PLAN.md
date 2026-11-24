@@ -790,9 +790,10 @@ refresh check at the quiet moment after the turn 1.05 million. The board's
 rebuild costs 7.08 million cycles and 1.18 million steps, 6.0 cycles a step,
 so the move comes to about 37 million cycles, 0.37 s at 100 MHz, over the
 turn budget of 15 million (decision 3). Each validation of the grid proves
-that no two items share a cell by sorting the items' cells, and those sorts
-took 1.25 million of the move's steps across `TGRID-BIND`'s validation and
-the rich capture's.
+its items' keys unique by sorting them, and those sorts took 1.25 million of
+the move's steps across `TGRID-BIND`'s validation and the rich capture's.
+That no two items share a cell the validation already proves in one pass,
+since the items come in row-major order (`_USCOL-VT-ORDER-STEP?`).
 
 The fog figures come from today's scan. On the open 64×64 map, where nothing
 blocks sight, it visits the tiles a correct scan visits; on 40×20, whose wall
