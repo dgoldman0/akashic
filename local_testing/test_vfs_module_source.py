@@ -27,7 +27,7 @@ from simulator.runtime import MegaForthRuntime
 from simulator.storage import HostedStorageService
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
+MANIFEST = ext4_fixture_generator.DEFAULT_MANIFEST
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
 BASE_IMAGE = "primary-1k-i256"
 ROOTS = (

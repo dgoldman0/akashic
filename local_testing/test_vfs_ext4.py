@@ -67,7 +67,7 @@ _EXT4_SOURCE_JIT_BEGIN = (
 _EXT4_SOURCE_JIT_END = (
     ("JIT-OFF",) if _EXT4_SOURCE_JIT_ENABLED else ()
 )
-MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
+MANIFEST = ext4_fixture_generator.DEFAULT_MANIFEST
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
 
 with MANIFEST.open("r", encoding="utf-8") as source:

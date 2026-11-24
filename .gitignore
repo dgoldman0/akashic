@@ -104,7 +104,6 @@ local_testing/*
 !local_testing/cold-source-loader.f
 !local_testing/test_cold_source_loader.py
 # Refactor architecture inventory and ratchet
-!local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
 !local_testing/refactor_architecture.json
 !local_testing/test_refactor_inventory.py

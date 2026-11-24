@@ -85,14 +85,26 @@ def test_shared_dependency_grammar_matches_kdos_ascii_space_rules() -> None:
     assert len(module_key("x")) == MODULE_KEY_BYTES
 
 
-def test_packaging_harness_uses_the_shared_dependency_core() -> None:
+def test_image_tool_uses_the_shared_dependency_core() -> None:
+    """The image tool, which builds every harness profile, takes module
+    closures from the shared core, and the harness keeps no copy."""
+    tool = (
+        LOCAL_TESTING.parent / "toolchain" / "image" / "build.py"
+    ).read_text(encoding="utf-8")
     harness = (LOCAL_TESTING / "akashic_tui.py").read_text(encoding="utf-8")
-    assert "from toolchain.image.closure import (" in harness
-    assert "_external_module_sources" not in harness
-    assert "return _shared_dependency_closure(" in harness
-    assert "return _shared_dependency_order(" in harness
-    assert "return _shared_normalize_module(module, requiring)" in harness
-    assert "key = module_key(module_id)" in harness
+    assert "from .closure import (" in tool
+    assert "return _shared_dependency_closure(" in tool
+    assert "return _shared_dependency_order(" in tool
+    assert "return _shared_normalize_module(module, requiring)" in tool
+    assert "key = module_key(module_id)" in tool
+    assert "_external_module_sources" not in tool + harness
+    for definition in (
+        "def dependency_closure(",
+        "def dependency_order(",
+        "def _normalize_module(",
+    ):
+        assert definition in tool
+        assert definition not in harness
 
 
 def test_lexical_inventory_finds_all_top_level_definitions_only() -> None:

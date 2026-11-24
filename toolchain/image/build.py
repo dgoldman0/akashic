@@ -1349,7 +1349,7 @@ def _user_image_for(image_path: Path) -> Path | None:
 
 
 # The system volume's ext4 geometry.  The pinned profile fixes the rest
-# (local_testing/fixtures/ext4-profile/manifest.json): 256-byte inodes, a
+# (toolchain/image/ext4-profile/manifest.json): 256-byte inodes, a
 # 4 MiB journal, the feature set the driver is qualified against, and one
 # inode for every 16,384 bytes of a full block group, which the driver's
 # admission requires of each group whatever the volume's size.
