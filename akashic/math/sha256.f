@@ -7,7 +7,10 @@
 \  The BIOS owns the per-core streaming context.  This library exposes no
 \  caller-spanning streaming aliases: each public hash validates all caller
 \  geometry, acquires CRYPTO-ACC and the SHA-256 operation guard in that
-\  order, then completes one INIT/UPDATE*/FINAL transaction.
+\  order, then completes one INIT/UPDATE*/FINAL transaction.  A caller that
+\  hashes many times in a row, such as PBKDF2, takes both boundaries once
+\  with SHA256-WITH-TRANSACTION and runs complete held hashes inside it; no
+\  BIOS transaction stays open between them.
 \
 \  Public API:
 \    SHA256-LEN          ( -- 32 )
@@ -17,6 +20,13 @@
 \    SHA256-HASH         ( src len dst -- status )
 \    SHA256-HASH-2       ( a1 u1 a2 u2 dst -- status )
 \    SHA256-HASH-3       ( a1 u1 a2 u2 a3 u3 dst -- status )
+\    SHA256-WITH-TRANSACTION ( i*x xt -- j*x )
+\    SHA256-TRANSACTION-MINE? ( -- flag )
+\    SHA256-HELD-HASH    ( src len dst -- status )
+\    SHA256-KEYED-SIZE   ( -- u )
+\    SHA256-HELD-KEY     ( block keyed -- status )
+\    SHA256-HELD-RESUME  ( keyed msg msg-u dst -- status )
+\    SHA256-HELD-RESUME-2 ( keyed a1 u1 a2 u2 dst -- status )
 \    SHA256->HEX         ( src dst -- n )
 \    SHA256-.            ( addr -- )
 \    SHA256-COMPARE      ( a b -- flag )
@@ -94,6 +104,11 @@ CREATE _SHA256-HEX
 \ exist before public geometry words are compiled.
 GUARD-BLOCKING _sha256-guard
 
+\ While a held transaction runs, this cell holds its core's number plus
+\ one; otherwise zero.  It belongs to the reserved footprint too.
+CREATE _s256-held 8 ALLOT
+0 _s256-held !
+
 \ =====================================================================
 \  Public geometry
 \ =====================================================================
@@ -137,6 +152,9 @@ GUARD-BLOCKING _sha256-guard
 
 : _S256-LOCAL-RESERVED-OVERLAP?  ( address length -- flag )
     2DUP CRYPTO-ACC-RESERVED-OVERLAP? IF
+        2DROP -1 EXIT
+    THEN
+    2DUP _s256-held 8 MSPAN-OVERLAP? IF
         2DROP -1 EXIT
     THEN
     _sha256-guard GUARD-BLOCKING-SIZE MSPAN-OVERLAP? ;
@@ -300,31 +318,33 @@ GUARD-BLOCKING _sha256-guard
     SHA256-UPDATE
     R> SWAP ;
 
-\ Complete an admitted prefix while the algorithm guard is held.
-\ Successful FINAL has already erased the BIOS SHA context and must not be
-\ followed by CLEAR.  FINAL failure and FINAL THROW both receive CLEAR.
-: _S256-FINISH  ( dst bios-status -- status )
+\ Complete an admitted prefix while the algorithm guard is held.  Successful
+\ FINAL has already erased the BIOS SHA context and must not be followed by
+\ CLEAR; a failed prefix or FINAL status receives CLEAR here.  A THROW from
+\ FINAL passes through, and the boundary that catches it clears: the
+\ one-shot finish below, or a held transaction's run.
+: _S256-COMPLETE  ( dst bios-status -- status )
     _S256-BIOS>STATUS
     DUP IF
         NIP
         _S256-CLEAR-AFTER-FAILURE
-        _sha256-guard GUARD-RELEASE
         EXIT
     THEN
     DROP
-
-    ['] SHA256-FINAL CATCH
-    ?DUP IF
-        >R DROP
-        _S256-CLEAR-STATUS DROP
-        _sha256-guard GUARD-RELEASE
-        R> THROW
-    THEN
+    SHA256-FINAL
     _S256-BIOS>STATUS
     DUP IF
         _S256-CLEAR-AFTER-FAILURE
+    THEN ;
+
+\ The one-shot units finish here and release the guard on every path.
+: _S256-FINISH  ( dst bios-status -- status )
+    ['] _S256-COMPLETE CATCH
+    ?DUP IF
+        >R 2DROP
+        _S256-CLEAR-STATUS DROP
         _sha256-guard GUARD-RELEASE
-        EXIT
+        R> THROW
     THEN
     _sha256-guard GUARD-RELEASE ;
 
@@ -387,3 +407,82 @@ GUARD-BLOCKING _sha256-guard
     THEN
     DROP
     ['] _S256-UNIT-3 CRYPTO-ACC-WITH-TRANSACTION ;
+
+\ =====================================================================
+\  Held transactions for runs of complete hashes
+\ =====================================================================
+\  SHA256-WITH-TRANSACTION takes both ownership boundaries in the canonical
+\  order and runs xt inside them.  Inside, SHA256-HELD-HASH runs the same
+\  complete INIT/UPDATE/FINAL unit as SHA256-HASH without taking either
+\  boundary again.  Its caller has already admitted every span with
+\  SHA256-CALLER-SPAN-STATUS and SHA256-HASH's overlap rule, and keeps
+\  them stable while it holds the transaction: a run of hashes over the same
+\  spans needs that proof once, not once a hash.
+\
+\  The run marks its core in _s256-held, so a held hash checks one cell
+\  where a guard query would take the metadata lock twice; outside a run
+\  the word answers SHA256-S-STATE without touching the hardware.  A held
+\  hash catches nothing: an exception from the engine propagates, and the
+\  run clears the BIOS context before the guards are released.
+
+: _S256-HELD?  ( -- flag )
+    _s256-held @ COREID 1+ = ;
+
+: _S256-HELD-RUN  ( i*x xt -- j*x )
+    _s256-held @ >R
+    COREID 1+ _s256-held !
+    CATCH
+    R> _s256-held !
+    ?DUP IF
+        _S256-CLEAR-STATUS DROP
+        THROW
+    THEN ;
+
+: _S256-WITH-LOCAL  ( i*x xt -- j*x )
+    ['] _S256-HELD-RUN _sha256-guard WITH-GUARD ;
+
+: SHA256-WITH-TRANSACTION  ( i*x xt -- j*x )
+    ['] _S256-WITH-LOCAL CRYPTO-ACC-WITH-TRANSACTION ;
+
+: SHA256-TRANSACTION-MINE?  ( -- flag )
+    CRYPTO-ACC-TRANSACTION-MINE?
+    _sha256-guard GUARD-MINE? AND ;
+
+: SHA256-HELD-HASH  ( src len dst -- status )
+    _S256-HELD? 0= IF
+        _S256-DROP3 SHA256-S-STATE EXIT
+    THEN
+    _S256-PREFIX-1 _S256-COMPLETE ;
+
+\ =====================================================================
+\  Keyed states: held hashes that share their first block
+\ =====================================================================
+\  HMAC hashes every message after one of two 64-byte key blocks.  A keyed
+\  state stands for such a block: SHA256-HELD-KEY makes one from the
+\  block, and SHA256-HELD-RESUME and SHA256-HELD-RESUME-2 hash a message
+\  of one or two parts as if it followed the block.  Here a keyed state is
+\  the block itself, and each hash absorbs it again.  Once the SHA-2 engine
+\  saves and loads its chaining state (MegaPad docs/crypto-engines-plan.md
+\  section 2), a keyed state becomes the chaining state after the block
+\  and a resume loads it, so each hash compresses only its message: these
+\  words and SHA256-KEYED-SIZE change, and their callers do not.  They run
+\  in a held transaction over spans their caller has admitted, and a
+\  message that directly follows its keyed state hashes as one span.
+
+64 CONSTANT SHA256-KEYED-SIZE
+
+: SHA256-HELD-KEY  ( block keyed -- status )
+    _S256-HELD? 0= IF 2DROP SHA256-S-STATE EXIT THEN
+    64 MOVE SHA256-S-OK ;
+
+: SHA256-HELD-RESUME  ( keyed msg msg-u dst -- status )
+    _S256-HELD? 0= IF _S256-DROP4 SHA256-S-STATE EXIT THEN
+    >R
+    2 PICK 64 + 2 PICK = IF
+        NIP 64 + R> _S256-PREFIX-1 _S256-COMPLETE EXIT
+    THEN
+    >R >R 64 R> R> R> _S256-PREFIX-2 _S256-COMPLETE ;
+
+: SHA256-HELD-RESUME-2  ( keyed a1 u1 a2 u2 dst -- status )
+    _S256-HELD? 0= IF _S256-DROP6 SHA256-S-STATE EXIT THEN
+    >R >R >R >R >R 64 R> R> R> R> R> _S256-PREFIX-3 _S256-COMPLETE ;

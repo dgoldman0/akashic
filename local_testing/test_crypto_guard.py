@@ -111,9 +111,43 @@ def _assert_checked_source(path: Path, prefix: str, short: str) -> None:
     assert "XOR OR" in compare
 
     finish = _word_body(source, f"_{short}-FINISH")
-    assert f"['] {prefix}-FINAL CATCH" in finish
-    assert f"_{short}-CLEAR-AFTER-FAILURE" in finish
-    assert "R> THROW" in finish
+    if f": _{short}-COMPLETE" in source:
+        # SHA-256 completes a prefix in one place, which the one-shot units
+        # and the held hash share.  Each catches FINAL's exceptions at its
+        # own boundary: the one-shot finish clears, releases and rethrows;
+        # a held transaction's run clears and rethrows.
+        complete = _word_body(source, f"_{short}-COMPLETE")
+        assert f"{prefix}-FINAL" in complete
+        assert f"_{short}-CLEAR-AFTER-FAILURE" in complete
+        assert "CATCH" not in complete
+        assert "GUARD-RELEASE" not in complete
+        assert f"['] _{short}-COMPLETE CATCH" in finish
+        assert f"_{short}-CLEAR-STATUS" in finish
+        assert finish.count("GUARD-RELEASE") == 2
+        assert "R> THROW" in finish
+        held_hash = _word_body(source, f"{prefix}-HELD-HASH")
+        assert held_hash.index(f"_{short}-HELD?") < held_hash.index(
+            f"_{short}-PREFIX-1"
+        )
+        assert f"_{short}-COMPLETE" in held_hash
+        assert "CATCH" not in held_hash
+        assert "GUARD-ACQUIRE" not in held_hash
+        run = _word_body(source, f"_{short}-HELD-RUN")
+        assert run.index("CATCH") < run.index(f"_{short}-CLEAR-STATUS")
+        assert "THROW" in run
+        assert f"_s{short[1:].lower()}-held" in run
+        local = _word_body(source, f"_{short}-WITH-LOCAL")
+        assert f"_{short}-HELD-RUN" in local and "WITH-GUARD" in local
+        scope = _word_body(source, f"{prefix}-WITH-TRANSACTION")
+        assert "CRYPTO-ACC-WITH-TRANSACTION" in scope
+        assert f"_s{short[1:].lower()}-held" in local_reserved
+        mine = _word_body(source, f"{prefix}-TRANSACTION-MINE?")
+        assert "CRYPTO-ACC-TRANSACTION-MINE?" in mine
+        assert "GUARD-MINE?" in mine
+    else:
+        assert f"['] {prefix}-FINAL CATCH" in finish
+        assert f"_{short}-CLEAR-AFTER-FAILURE" in finish
+        assert "R> THROW" in finish
 
     clear = _word_body(source, f"_{short}-CLEAR-STATUS")
     assert f"['] {prefix}-CLEAR CATCH" in clear

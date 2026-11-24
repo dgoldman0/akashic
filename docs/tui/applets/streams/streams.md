@@ -100,15 +100,13 @@ unpublished draft remain alongside that path.
 Ordinary `STREAMS-ENTRY` remains offline even when Desk exposes external I/O:
 it installs no concrete configured-source provider factory, and source
 recovery or Observe calls never start network work. `streams-online.f` is the
-explicit composition edge; a live configured-source deployment must inject a
-factory constructed with its reviewed full-source and canonical-host
-authorization policy. The default factory denies every source. Trusted boot
-may separately import a reviewed exact-host MPTA artifact before freezing
-machine trust; source creation, applet launch, and refresh cannot add or widen
-trust. The repository ships neither a catch-all feed trust set nor an ambient
-WebPKI fallback. Credentials, scheduling, notification providers, outputs, and
-publication are not implemented by the current applet. Their correct forward
-ownership and sequencing are recorded in
+explicit composition edge. Its default configured factory admits every
+enabled syndication source, because each feed's host proves itself with a
+certificate chain to the machine's global root set; a deployment may inject a
+factory with a narrower reviewed policy instead. Source creation, applet
+launch, and refresh cannot add or widen trust. Credentials, scheduling,
+notification providers, outputs, and publication are not implemented by the
+current applet. Their correct forward ownership and sequencing are recorded in
 [information-integration.md](information-integration.md).
 
 The former L13 scalable configured-source authority, four-index topology,
@@ -217,14 +215,17 @@ requires its implemented one-page, sixteen-observation, four-version policy;
 other valid registry policies remain configuration-only until their retention
 semantics are implemented.
 
-HTTPS source configuration is not TLS provisioning. A live composition must
-associate the complete reviewed source snapshot with its canonical host and
-port independently of TLS trust; authorization is rechecked both during pure
-configuration and at the physical bind. One supported trust route is an
-exact-host MPTA artifact imported by trusted boot before Desk freezes machine
-trust. The importer does not itself bind an artifact to a source RID or
-revision. Imported run artifacts reject global and include-subdomains scopes,
-and ordinary Streams never receives their CA bytes or the trust builder.
+HTTPS source configuration is not TLS provisioning. The machine trusts the
+global TLS root set (`docs/net/web-roots.md`), so a feed's host proves itself
+with its own certificate chain, and the default configured factory's policy,
+`STREAMS-SYNDICATION-OPEN?`, admits every enabled syndication source. HRES
+still admits only absolute HTTPS targets and same-origin redirects, and the
+KDOS TLS transport's address policy only public IPv4 destinations. A
+composition may instead pass a narrower reviewed policy, which associates
+the complete source snapshot with its canonical host and port, to
+`STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED`; authorization is rechecked
+both during pure configuration and at the physical bind, and ordinary
+Streams never receives the policy or the trust builder.
 
 The owner API provides bounded count/read/create/replace/enable/remove methods.
 Creation ignores caller-supplied identity and generates a nonzero 32-byte RID;

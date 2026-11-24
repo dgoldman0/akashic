@@ -17,6 +17,12 @@ arguments takes its defaults.  A script that builds one image names its path
 ``IMAGE``; one that builds several names their folder ``IMAGE_DIR``.  A
 script that imports the harness only inside ``main()`` has its captures
 moved all the same, since the harness module is shared.
+
+Contracts that are only profiles of the harness, run from its command line
+as ``akashic_tui.py smoke PROFILE``, run under pytest through
+``run_profile_smoke``, which builds the profile's image in pytest's
+temporary folder and runs its smoke with the profile's own step budget and
+timeout, as the command line does.
 """
 
 from __future__ import annotations
@@ -41,3 +47,15 @@ def run_as_test(script: ModuleType, tmp_path: Path,
         monkeypatch.setattr(script, "IMAGE_DIR", tmp_path)
     monkeypatch.setattr(sys, "argv", [script.__file__, *args])
     assert script.main() == 0
+
+
+def run_profile_smoke(profile: str, tmp_path: Path,
+                      monkeypatch: pytest.MonkeyPatch, *,
+                      cols: int = 100, rows: int = 32) -> None:
+    import akashic_tui as harness
+
+    monkeypatch.setattr(harness, "OUTPUT_ROOT", tmp_path)
+    image = harness.build_image(profile, tmp_path / f"{profile}.img")
+    max_steps, timeout = harness._smoke_limits(profile, None, None)
+    assert harness.smoke(profile, image, cols=cols, rows=rows,
+                         max_steps=max_steps, timeout=timeout)

@@ -1,13 +1,30 @@
 # Machine TLS trust registry
 
-`akashic/net/tls-trust-registry.f` composes the reviewed TLS anchors needed by
-the installed machine image. Trusted boot modules register contributors; the
-machine owner then builds one bounded MPTA bundle and loads it into KDOS before
-external I/O becomes available.
+`akashic/net/tls-trust-registry.f` composes the TLS anchors the installed
+machine trusts. Trusted boot modules register contributors; the machine owner
+then builds one MPTA version 2 bundle, sized to what they contribute, and
+loads it into KDOS before external I/O becomes available.
 
 The registry is a provisioning boundary, not a network capability or a trust
 discovery service. Registration does not authorize an applet to make requests,
 and applets are not given the builder or a way to replace the frozen bundle.
+
+## What a bundle holds
+
+Two kinds of anchor reach KDOS (MegaPad's `docs/tls-hardening.md`, Trust
+Bundles):
+
+- **Global anchors** may end the certificate path of any host that no scoped
+  anchor binds. They come from one place only: the pinned root set, the roots
+  NSS trusts for TLS server authentication, with Mozilla's distrust-after
+  dates and NSS's imposed name constraints (see [web-roots.md](web-roots.md)).
+- **Scoped anchors** are private roots. A scoped anchor names an exact host,
+  or with `TTAF-SUBDOMAINS` a domain and every name below it, and binds those
+  hosts: their paths may end only at scoped anchors that name them, so no
+  public certificate can stand in for the private root.
+
+Public services such as Bluesky or an AI provider need no anchor of their own:
+their chains verify against the global set.
 
 ## Lifecycle
 
@@ -21,9 +38,11 @@ The machine-global registry is core-0 owned and has a one-way lifecycle:
 - `FAILED`: composition failed and the KDOS trust store was reset. There is no
   retry or thaw within that boot.
 
-Desk calls `MTRUST-FREEZE` before it initializes the machine external-I/O
-service, publishes interoperability endpoints, or autostarts applets. A valid
-empty bundle is allowed for an image with no live-network contributors.
+Desk registers the root set's contributor with its origin place, when it has
+one, then calls `MTRUST-FREEZE` before it initializes the machine external-I/O
+service, publishes interoperability endpoints, or autostarts applets. An image
+built without the root set's file composes a bundle with no global anchors, so
+its public TLS fails closed with `TLS-CERT-NO-TRUST`.
 
 ## Contributors
 
@@ -44,83 +63,31 @@ Repeating the same identifier, emitter, and context while the registry is open
 is idempotent. Reusing an identifier for a different emitter or context is a
 conflict. Registration after freezing is rejected, so installing a new
 live-network package requires a new boot composition rather than widening trust
-during applet launch.
+during applet launch. The contributor table grows as contributors register.
 
-`MTRUST-ANCHOR+` accepts a DER CA certificate, a nonempty validated DNS scope,
-and either exact-host flags (`0`) or `TTAF-SUBDOMAINS`. It rejects malformed
-bounds, unsupported flags, exact duplicate records, stale builders, and totals
-beyond KDOS's eight-anchor and 32768-byte limits. KDOS remains the final X.509
-and CA validator at the single load boundary. An emitter error, throw, or stack
-imbalance fails the entire composition; partial trust is never retained.
-After every emitter, the registry revalidates the exact builder descriptor and
-its complete bounded record sequence before invoking another contributor or
-hashing output. A callback cannot turn corrupt count, position, capacity, or
-buffer metadata into an unbounded duplicate scan or final hash.
+`MTRUST-ANCHOR+ ( cert-a cert-u scope-a scope-u flags builder -- status )`
+adds a scoped anchor: a DER CA certificate of 128 to 8192 bytes, a nonempty
+validated DNS scope, and either exact-host flags (`0`) or `TTAF-SUBDOMAINS`.
+It rejects malformed bounds, unsupported flags, a missing scope, exact
+duplicate records, and stale builders, and answers `MTRUST-S-CAPACITY` when
+the builder cannot grow.
 
-## Reviewed run artifacts
+`MTRUST-WEB-ROOTS+ ( bundle-a bundle-u builder -- status )` adds the global
+root set, once per composition. The bundle must be exactly `WEB-ROOTS-BYTES`
+long, hash to `WEB-ROOTS-SHA256` and hold `WEB-ROOTS-COUNT` records without
+scopes, the constants `net/web-roots/web-roots-pin.f` pins; anything else is
+`MTRUST-S-INVALID`. No other path adds a global anchor.
 
-`MTRUST-MPTA+ ( bundle-a bundle-u builder -- status )` lets a trusted boot
-emitter contribute a separately reviewed MPTA v1 artifact without compiling
-its CA bytes into an applet. The operation is intentionally narrower than
-`TLS-TRUST-LOAD`:
-
-- it is accepted only on core 0 during `BUILDING` with the exact active builder;
-- the input and active output allocation must not overlap;
-- the artifact must contain one through eight complete records and no trailing
-  bytes;
-- every record must use a nonempty valid DNS scope and flags `0`, so global and
-  include-subdomains anchors are rejected;
-- duplicates within the artifact or against earlier contributors are rejected;
-  and
-- all count and byte capacity is proven before the first output byte changes.
-
-An unexpected append-pass failure rolls the builder back to its original count
-and position and clears any bytes appended by that call. KDOS still performs
-the authoritative certificate, CA, key-usage, and supported-key validation when
-the completed machine bundle is loaded. Import success alone does not prove a
-server certificate path, authorize network I/O, or make response content
-trustworthy.
-
-The artifact header's generation must equal the first 64 bits of SHA3-256 over
-the exact artifact with generation bytes 8 through 15 treated as zero. This is
-a deterministic content/corruption tag, not a signature, authenticated boot
-claim, provenance proof, freshness proof, or rollback counter. The provisioning
-path remains responsible for authenticating and reviewing the artifact and for
-associating its scopes with the intended installed services.
-
-A run composition can retain the reviewed bytes in its own bounded buffer and
-pass a two-cell descriptor as contributor context:
-
-```forth
-CREATE FEED-TRUST-DESCRIPTOR 16 ALLOT
-
-: FEED-TRUST-EMIT  ( builder descriptor -- status )
-    DUP @ SWAP 8 + @ ROT MTRUST-MPTA+ ;
-
-reviewed-bundle-a FEED-TRUST-DESCRIPTOR !
-reviewed-bundle-u FEED-TRUST-DESCRIPTOR 8 + !
-S" org.example.reviewed-feed-trust" ['] FEED-TRUST-EMIT
-    FEED-TRUST-DESCRIPTOR MTRUST-REGISTER
-MTRUST-S-OK <> ABORT" feed trust registration failed"
-```
-
-The composition owns the descriptor through registration and keeps its artifact
-bytes immutable and quiescent through the synchronous `MTRUST-FREEZE` call.
-The importer is core-0-only, uses global scratch, and is not reentrant. Ordinary
-Streams source creation and refresh never receive the builder, import artifacts,
-add anchors, or thaw the accepted snapshot.
-
-This API supplies the reviewed preboot/run-contribution alternative; it does
-not bind an artifact scope to a Streams source identity or revision. A later
-configured-source composition must separately prove that the canonical source
-host has the intended reviewed provisioning before opening it, and TLS still
-proves the presented path. The shipped composition has no ambient broad WebPKI
-fallback, although other explicitly reviewed `MTRUST-ANCHOR+` contributors may
-deliberately use `TTAF-SUBDOMAINS` for their own services.
+KDOS remains the final X.509 and CA validator at the single load boundary. An
+emitter error, throw, or stack imbalance fails the entire composition; partial
+trust is never retained. After every emitter, the registry revalidates the
+exact builder descriptor and its complete record sequence before invoking
+another contributor or hashing output, so a callback cannot turn corrupt
+count, position, capacity, or buffer metadata into an unbounded scan or hash.
 
 ## Bundle identity
 
-The registry serializes MPTA version 1 with a zero generation field, computes
+The registry serializes MPTA version 2 with a zero generation field, computes
 SHA3-256 over those exact bytes using the standard guarded hardware wrapper,
 and stores the first 64 digest bits as the bundle generation. It then invokes
 `TLS-TRUST-LOAD` once. The generation is a deterministic content tag for
@@ -132,12 +99,7 @@ snapshot. `MTRUST-LAST-STATUS@` and `MTRUST-LAST-DETAIL@` retain freeze failure
 diagnostics. Direct KDOS trust loading remains a platform primitive, not an
 applet or provider lifecycle operation.
 
-Run the deterministic contracts with:
-
-```sh
-python local_testing/akashic_tui.py smoke --profile tls-trust-registry
-python local_testing/akashic_tui.py smoke --profile tls-trust-mpta
-python local_testing/akashic_tui.py smoke --profile tls-trust-registry-error
-python local_testing/akashic_tui.py smoke --profile tls-trust-registry-throw
-python local_testing/akashic_tui.py smoke --profile tls-trust-registry-builder
-```
+`local_testing/test_tls_trust_contracts.py` checks registration, scoped
+anchors, the root set's refusals, the freeze and every way an emitter can fail
+the composition; `local_testing/test_web_roots.py` loads the root set through a
+place and verifies captured public chains against it.

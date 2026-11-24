@@ -8,11 +8,15 @@
 \  after both SHA-256 passes complete, and clears the entire workspace before
 \  returning from every admitted computation.
 \
-\  Rejected calls do not modify either the destination or workspace.
-\  Returned success and lower-layer crypto failure statuses prove that the
-\  workspace was cleared.  A publication or cleanup THROW is propagated
-\  rather than normalized; depending on its phase, destination publication
-\  and/or workspace containment may then be ambiguous.
+\  Rejected calls do not modify either the destination or workspace.  That
+\  includes CRYPTO for a span the SHA layer refuses before admission, such
+\  as one that runs past the end of memory.  Success, and CRYPTO from an
+\  admitted computation, prove that the workspace was cleared.  A
+\  publication or cleanup THROW is propagated rather than normalized;
+\  depending on its phase, destination publication and/or workspace
+\  containment may then be ambiguous.  MOVE and FILL report an unmapped
+\  address as a bus fault, which no CATCH receives, so on this machine such
+\  a THROW comes only from a checked memory word.
 \  Key and message spans may overlap each other, but neither may overlap the
 \  destination or workspace.
 \
@@ -278,9 +282,11 @@ REQUIRE ../utils/memory-span.f
 \ Publication faults are intrinsically ambiguous: MOVE may have changed any
 \ prefix of the caller's digest.  Attempt the secret wipe, then rethrow the
 \ publication exception.  If that wipe itself throws, its exception escapes
-\ instead; no returned status claims that either output is contained.
-: _H256-PUBLISH-CLEAR  ( workspace -- status | throws )
-    ['] _H256-PUBLISH CATCH
+\ instead; no returned status claims that either output is contained.  The
+\ publication word arrives as an xt, as the computation's does, so the
+\ contract can raise a THROW inside it.
+: _H256-PUBLISH-WITH  ( workspace xt -- status | throws )
+    CATCH
     ?DUP IF
         >R
         HMAC-SHA256-WORKSPACE-SIZE 0 FILL
@@ -288,6 +294,9 @@ REQUIRE ../utils/memory-span.f
     THEN
     HMAC-SHA256-WORKSPACE-SIZE 0 FILL
     HMAC-SHA256-S-OK ;
+
+: _H256-PUBLISH-CLEAR  ( workspace -- status | throws )
+    ['] _H256-PUBLISH _H256-PUBLISH-WITH ;
 
 : HMAC-SHA256
   ( key key-u message message-u digest workspace -- status )
