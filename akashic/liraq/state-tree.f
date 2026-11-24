@@ -967,8 +967,9 @@ VARIABLE _ST-SNAP-LEN
 
 4 CONSTANT ST-F-COMPUTED    \ node has a computed expression
 
+\ The evaluator of a computed value, ( expr-a expr-l -- type v1 v2 ), which
+\ lel.f installs; 0 until it does.
 VARIABLE _ST-COMPUTE-XT
-' NOOP _ST-COMPUTE-XT !
 
 : ST-COMPUTED?  ( node -- flag )
     SN.FLAGS @ ST-F-COMPUTED AND 0<> ;

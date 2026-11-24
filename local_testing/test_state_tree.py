@@ -1060,15 +1060,18 @@ def test_computed_stubs():
 def test_subscriptions():
     """ST-SUBSCRIBE / ST-UNSUBSCRIBE / _ST-NOTIFY."""
 
+    # The callbacks take and leave nothing; these two are never called.
     check("subscribe-returns-id", [
         'T-INIT',
-        "S\" test\" ' NOOP ST-SUBSCRIBE . CR",
+        ': NO-CB ;',
+        "S\" test\" ' NO-CB ST-SUBSCRIBE . CR",
     ], '0')
 
     check("subscribe-second-id", [
         'T-INIT',
-        "S\" a\" ' NOOP ST-SUBSCRIBE DROP",
-        "S\" b\" ' NOOP ST-SUBSCRIBE . CR",
+        ': NO-CB ;',
+        "S\" a\" ' NO-CB ST-SUBSCRIBE DROP",
+        "S\" b\" ' NO-CB ST-SUBSCRIBE . CR",
     ], '1')
 
     check("notify-fires-callback", [
