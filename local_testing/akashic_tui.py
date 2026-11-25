@@ -15162,9 +15162,11 @@ DESKTOP_APT1_APPLETS = (
 )
 # Development checks beyond one applet: Desk with Pad on a terminal with
 # little room for retained text, Desk with File Explorer showing a real
-# photograph, and Desk with the Agent and Probe sharing the sandbox (below).
+# photograph, Desk with the Agent and Probe sharing the sandbox, and Desk
+# with Pad through Desk's own keyring screen and prompt (below).
 DESKTOP_APT1_CHECKS = (
     *DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damaged", "sandbox",
+    "keyring",
 )
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
@@ -15281,6 +15283,9 @@ PROFILES["desktop-apt1-agent"] = replace(
     ),
 )
 assert _DAYBOOK_AGENT_SOURCE_BOOT in PROFILES["desktop-apt1-agent"].autoexec
+
+# Desk with Pad, for the journey through Desk's keyring screen and prompt.
+PROFILES["desktop-apt1-keyring"] = replace(PROFILES["desktop-apt1-pad"])
 
 # A terminal with little room for retained text.  Pad's empty editor fits
 # it.  Its Open prompt, which leaves the whole screen to residual glyphs, and

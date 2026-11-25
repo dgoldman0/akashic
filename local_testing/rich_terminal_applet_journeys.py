@@ -384,6 +384,11 @@ class _AppletJourney(FrameBoundJourney):
 
         return False
 
+    def _desk_prompt_held(self, projection) -> bool:
+        """Whether Desk's own prompt holds the taskbar row in this frame."""
+
+        return _desk_prompt_claim(projection) is not None
+
     def _admit(self, offer, generation, projection, sender) -> bool:
         """Whether the journey may act on this frame: one newer than its last
         input's frame, in the session's lineage, once any pointer gesture the
@@ -414,7 +419,7 @@ class _AppletJourney(FrameBoundJourney):
                 self._send("send_key", "alt+1", 0, offer, generation, sender)
                 return False
         elif not _taskbar_has_focus(projection, self.focus_marker) and not (
-            self._desk_prompt_expected() and _desk_prompt_claim(projection) is not None
+            self._desk_prompt_expected() and self._desk_prompt_held(projection)
         ):
             raise PhysicalDesktopAcceptanceError(
                 f"the applet lost focus: {self._taskbar_line(projection).strip()!r}"
@@ -4674,6 +4679,125 @@ class SandboxJourney(_AppletJourney):
             raise PhysicalDesktopAcceptanceError(f"Probe's line became {reply!r}")
         return self._done(self._name("sandbox-journey-done"), offer)
 
+KEYRING_TITLE = "Keyring"
+KEYRING_ABSENT = "No passphrase is set. Set one up to keep secrets on this machine."
+KEYRING_UNLOCKED = "Unlocked. Applets can open the secrets they saved."
+KEYRING_SETUP_ROW = "Set up a passphrase"
+KEYRING_LOCK_ROW = "Lock now"
+KEYRING_NEW_LABEL = "New keyring passphrase:"
+# A new passphrase is asked for twice under one label; the second time the
+# empty field says to type it again.
+KEYRING_AGAIN_HINT = "type it again to confirm"
+KEYRING_PASSPHRASE = "correct horse battery"
+KEYRING_SET_UP = "Keyring set up and unlocked"
+KEYRING_LOCKED = "Keyring locked"
+
+
+class KeyringJourney(_AppletJourney):
+    """Desk with Pad: the machine's keyring set up and locked through Desk's
+    own screen and prompt.
+
+    Alt+K opens Desk's keyring screen, a dialog whose status line says no
+    passphrase is set and whose one row offers to set one up.  Enter on it
+    closes the screen and Desk's prompt asks for the new passphrase across
+    the taskbar row: a TEXT field that is MASKED, whose value is one mask
+    character for each character typed, while CELL never shows what was
+    typed.  It asks again under the same label, the empty field saying to
+    type it again, and the derivation then runs in Desk's ticks until a
+    notice says the keyring is set up and unlocked.  Alt+K again shows the
+    keyring unlocked, with Lock now first, and Enter locks it, which a
+    notice says.
+    """
+
+    focus_marker = PAD_ALONE_FOCUS_MARKER
+    (READY, SCREEN, FIRST, FIRST_TYPED, AGAIN, AGAIN_TYPED, DERIVING,
+     SCREEN_AGAIN, LOCKING) = range(9)
+
+    @property
+    def final_stage(self) -> int:
+        return self.LOCKING
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        # The last frame shows the notice that the keyring is locked.
+        return (KEYRING_LOCKED,)
+
+    def _desk_prompt_expected(self) -> bool:
+        # A frame drawn before Desk takes the last Enter still shows its
+        # prompt, so the derivation's first frames may hold the row too.
+        return self.stage in (self.FIRST, self.FIRST_TYPED, self.AGAIN, self.AGAIN_TYPED,
+                              self.DERIVING)
+
+    def _desk_prompt_held(self, projection) -> bool:
+        return self._prompt(projection, KEYRING_NEW_LABEL) is not None
+
+    @staticmethod
+    def _prompt(projection, label: str):
+        """Desk's prompt labelled LABEL across the taskbar row, masked."""
+
+        row = (0, projection.rows - 1, projection.cols, projection.rows)
+        prompt = _prompt_claim(projection, label, row)
+        if prompt is not None and not prompt.content.masked:
+            raise PhysicalDesktopAcceptanceError(f"Desk's prompt {label!r} is not masked")
+        return prompt
+
+    def _screen(self, projection, status: str, row: str) -> bool:
+        """Whether Desk's keyring screen shows STATUS with ROW first."""
+
+        screen = _overlay(projection, KEYRING_TITLE)
+        if screen is None:
+            return False
+        text = _overlay_text(projection, screen)
+        return status in text and row in text
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        if offer.cell.find(KEYRING_PASSPHRASE):
+            raise PhysicalDesktopAcceptanceError("CELL shows the passphrase typed")
+        if self.stage == self.READY:
+            return self._step("keyring-ready", "send_key", "alt+k", self.SCREEN,
+                              offer, generation, sender)
+        if self.stage == self.SCREEN:
+            if not self._screen(projection, KEYRING_ABSENT, KEYRING_SETUP_ROW):
+                return self._wait("Desk's keyring screen offering a setup")
+            return self._step("keyring-screen-offers-setup", "send_key", "enter",
+                              self.FIRST, offer, generation, sender)
+        if self.stage in (self.FIRST, self.AGAIN):
+            which = "first" if self.stage == self.FIRST else "again"
+            hint = "" if self.stage == self.FIRST else KEYRING_AGAIN_HINT
+            prompt = self._prompt(projection, KEYRING_NEW_LABEL)
+            if prompt is None or prompt.content.text or prompt.content.placeholder != hint:
+                return self._wait(f"Desk's empty prompt {KEYRING_NEW_LABEL!r} "
+                                  f"showing {hint!r}")
+            return self._step(f"keyring-{which}-prompt", "send_text",
+                              KEYRING_PASSPHRASE, self.stage + 1, offer, generation, sender)
+        if self.stage in (self.FIRST_TYPED, self.AGAIN_TYPED):
+            which = "first" if self.stage == self.FIRST_TYPED else "again"
+            prompt = self._prompt(projection, KEYRING_NEW_LABEL)
+            if prompt is None or prompt.content.text != "*" * len(KEYRING_PASSPHRASE):
+                return self._wait("the passphrase masked in Desk's prompt")
+            return self._step(f"keyring-{which}-typed-masked", "send_key", "enter",
+                              self.stage + 1, offer, generation, sender)
+        if self.stage == self.DERIVING:
+            notice = _notice_claim(projection, KEYRING_SET_UP)
+            if notice is None:
+                return self._wait(f"the notice {KEYRING_SET_UP!r}")
+            _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+            return self._step("keyring-set-up", "send_key", "alt+k", self.SCREEN_AGAIN,
+                              offer, generation, sender)
+        if self.stage == self.SCREEN_AGAIN:
+            if not self._screen(projection, KEYRING_UNLOCKED, KEYRING_LOCK_ROW):
+                return self._wait("Desk's keyring screen offering a lock")
+            return self._step("keyring-screen-offers-lock", "send_key", "enter",
+                              self.LOCKING, offer, generation, sender)
+        notice = _notice_claim(projection, KEYRING_LOCKED)
+        if notice is None:
+            return self._wait(f"the notice {KEYRING_LOCKED!r}")
+        _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+        return self._done("keyring-locked", offer)
+
+
 def applet_journey(
     name: str,
     ready_markers: tuple[str, ...],
@@ -4701,6 +4825,7 @@ def applet_journey(
         "photo": PhotoJourney,
         "damaged": DamagedPictureJourney,
         "sandbox": SandboxJourney,
+        "keyring": KeyringJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")
