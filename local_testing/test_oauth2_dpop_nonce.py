@@ -14,7 +14,7 @@ ROOT = LOCAL_TESTING.parent
 sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
-from forth_dependencies import dependency_closure  # noqa: E402
+from toolchain.image.closure import dependency_closure  # noqa: E402
 
 
 PROFILE = "oauth2-dpop-nonce-contracts"

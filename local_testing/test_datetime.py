@@ -23,7 +23,7 @@ EXT_MEM_SIZE = 64 << 20
 NUM_CORES = 1
 
 sys.path.insert(0, str(LOCAL_TESTING))
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 
 
 MODULES = dependency_order(ROOT / "akashic", ("utils/datetime.f",))

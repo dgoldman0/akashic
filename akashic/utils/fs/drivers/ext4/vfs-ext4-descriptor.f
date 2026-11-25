@@ -170,3 +170,11 @@ VARIABLE _EXT4-GDV-NEXT
 
 : _EXT4-LOAD-DESC  ( group ctx -- ior )
     DUP _EXT4-GDT-BASE SWAP _EXT4-LOAD-DESC-AT ;
+
+\ The first block after a sparse group's backup superblock, its descriptor
+\ blocks and their reserved successors.
+: _EXT4-BACKUP-END  ( group ctx -- block )
+    >R R@ _EXT4-C.BPG + @ * R@ _EXT4-C.FIRST + @ + 1+
+    R@ _EXT4-C.GROUPS + @ _EXT4-DESC-SIZE *
+    R@ _EXT4-C.BSIZE + @ 1- + R@ _EXT4-C.BSIZE + @ / +
+    R> _EXT4-C.SB + _EXT4-SB.RESERVED-GDT + W@ + ;

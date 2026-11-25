@@ -24,23 +24,28 @@ import uuid
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path, PurePosixPath
-
-from forth_dependencies import (
-    PROVIDED_RE,
-    REQUIRE_RE,
-    dependency_closure as _shared_dependency_closure,
-    dependency_order as _shared_dependency_order,
-    module_key,
-    normalize_module as _shared_normalize_module,
-)
 
 
 AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_ROOT = AKASHIC_ROOT / "akashic"
-DEFAULT_MEGAPAD_ROOT = AKASHIC_ROOT.parent / "megapad"
+# The image tool, toolchain/image, sits in the Akashic root, which a run of
+# this file as a script does not put on the path.
+if str(AKASHIC_ROOT) not in sys.path:
+    sys.path.append(str(AKASHIC_ROOT))
+
+from toolchain.image.closure import REQUIRE_RE  # noqa: E402
+from toolchain.image.megapad import MEGAPAD_ROOT, SOURCE_ROOT  # noqa: E402
 OUTPUT_ROOT = AKASHIC_ROOT / "local_testing" / "out"
+# The Desktop's sample files, which local_testing/generate_desktop_samples.py
+# writes.  Every image takes its samples from here (_sample_files).
+DESKTOP_SAMPLES = AKASHIC_ROOT / "assets" / "samples" / "desktop"
+
+
+def _desktop_sample(name: str) -> bytes:
+    return (DESKTOP_SAMPLES / name).read_bytes()
+
+
 STREAMS_TIMELINE_FIXTURE = (
     AKASHIC_ROOT / "local_testing" / "fixtures" / "atproto" / "timeline.json"
 ).read_bytes()
@@ -148,95 +153,6 @@ DESK_GATE0_DRAFT_LEGACY_FIXTURE = (
     DESK_GATE0_FIXTURE_ROOT / "draft-v1-legacy-r7.bin"
 ).read_bytes()
 
-
-def _reviewed_atproto_yr2_der() -> bytes:
-    """Return the reviewed YR2 DER already carried by the public ATProto gate."""
-    import base64
-    import hashlib
-
-    source = (SOURCE_ROOT / "atproto" / "public-trust.f").read_text(
-        encoding="utf-8"
-    )
-    start = source.index(": _APTR-DECODE-YR2")
-    end = source.index(
-        "_APTR-YR2 _APTR-YR2-SIZE _APTR-DECODE ;", start
-    )
-    fragments = re.findall(
-        r'S" ([A-Za-z0-9+/=]+)" _APTR-B64,', source[start:end]
-    )
-    certificate = base64.b64decode("".join(fragments), validate=True)
-    expected_digest = (
-        "238b85a0099c65b970477d5724f1a1d475ce5058cffe4efa8733899bdb863c47"
-    )
-    if (
-        len(certificate) != 1246
-        or hashlib.sha256(certificate).hexdigest() != expected_digest
-    ):
-        raise RuntimeError("reviewed ATProto YR2 certificate changed unexpectedly")
-    return certificate
-
-
-def _streams_live_exact_host_trust_artifact() -> bytes:
-    """Return the reviewed exact-host YR2 MPTA used by the live refresh gate."""
-    import hashlib
-    import struct
-
-    scope = b"foo-dogsquared.github.io"
-    intermediates = (_reviewed_atproto_yr2_der(),)
-    artifact = bytearray(b"MPTA" + struct.pack(">HHQ", 1, len(intermediates), 0))
-    for certificate in intermediates:
-        artifact.extend(struct.pack(">HHI", 0, len(scope), len(certificate)))
-        artifact.extend(scope)
-        artifact.extend(certificate)
-    artifact[8:16] = hashlib.sha3_256(artifact).digest()[:8]
-    return bytes(artifact)
-
-
-def _streams_live_exact_host_trust_leaf() -> bytes:
-    """Render the reviewed artifact as a local Forth data-only test leaf."""
-    artifact = _streams_live_exact_host_trust_artifact()
-    lines = [
-        "\\ Generated deterministic data for the opt-in live Streams gate.",
-        "PROVIDED streams-live-trust",
-        "CREATE _lrc-artifact",
-    ]
-    for offset in range(0, len(artifact), 16):
-        lines.append(
-            " ".join(f"0x{byte:02X} C," for byte in artifact[offset : offset + 16])
-        )
-    lines.append(f"{len(artifact)} CONSTANT _lrc-artifact-u")
-    return ("\n".join(lines) + "\n").encode("ascii")
-COLON_STACK_EFFECT_RE = re.compile(
-    r"^(?P<head> *: +[^ ]+) +(?P<effect>\([^()\r\n]*--[^()\r\n]*\))"
-)
-FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
-# Keep deployment chunks modest even though KDOS now batches large module
-# transfers.  This bounds source prescan/evaluation work and leaves room for
-# profile growth without changing the generated chunk topology on every edit.
-LINK_CHUNK_BYTES = 120 * 1024
-COLD_SOURCE_MAGIC = b"AKSRC001"
-COLD_SOURCE_VERSION = 1
-COLD_SOURCE_CODEC_LZSS = 0
-COLD_SOURCE_CODEC_STORED = 1
-COLD_SOURCE_CODECS = frozenset(
-    (COLD_SOURCE_CODEC_LZSS, COLD_SOURCE_CODEC_STORED)
-)
-COLD_SOURCE_CODEC_NAMES = {
-    COLD_SOURCE_CODEC_LZSS: "lzss",
-    COLD_SOURCE_CODEC_STORED: "stored",
-}
-COLD_SOURCE_HEADER_BYTES = 40
-COLD_SOURCE_RAW_MAX_BYTES = LINK_CHUNK_BYTES
-COLD_SOURCE_LOADER_PATH = "coldsrc.f"
-COLD_SOURCE_CHUNK_TEMPLATE = "source-{index:02d}.src"
-COLD_SOURCE_HEADER = struct.Struct("<8sHHIQQII")
-MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
-FORTH_LINE_COALESCE_BARRIERS = frozenset(
-    ("(", 'S"', 'C"', '."', 'ABORT"', ".(", "[IF]", "[ELSE]", "[THEN]")
-)
-FORTH_SPLIT_STACK_EFFECT_RE = re.compile(
-    r"^\( [^()\r\n]*--[^()\r\n]*\) *$"
-)
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
@@ -253,47 +169,6 @@ def write_raw_capture(name: str, text: str) -> Path:
     return path
 
 
-def _megapad_root() -> Path:
-    configured = os.environ.get("MEGAPAD_ROOT")
-    root = Path(configured).expanduser() if configured else DEFAULT_MEGAPAD_ROOT
-    root = root.resolve()
-    required = (
-        "bios.asm",
-        "kdos.f",
-        "networking.f",
-        "diskutil.py",
-        "emulator/session.py",
-        "shared/session.py",
-    )
-    missing = [name for name in required if not (root / name).is_file()]
-    if missing:
-        detail = ", ".join(missing)
-        raise RuntimeError(
-            f"MegaPad checkout not found at {root} (missing: {detail}). "
-            "Set MEGAPAD_ROOT to the emulator repository."
-        )
-    return root
-
-
-MEGAPAD_ROOT = _megapad_root()
-DEFAULT_EXT_MEM_MIB = 128
-DEFAULT_RAM_KIB = 1024
-DEFAULT_VRAM_MIB = 4
-MACHINE_BACKENDS = ("emulator", "simulator", "hybrid")
-# Both semantic backends boot the same prepared image as one semantic session;
-# hybrid also runs declared machine routines on a native core.
-SEMANTIC_BACKENDS = ("simulator", "hybrid")
-# The rich Desktop machine has 384 MiB of external memory.  Desk's rich
-# storage (the engine's banks, the screen and shell producers' storage and
-# the shell model's snapshot) is not sized up front: it starts small and
-# grows from the system heap in the general-XMEM partition as the screen and
-# its content need.  After networking, the rich-terminal module and the
-# cold Desk closure load, the general partition has about 178 MiB free;
-# Desk then needs about 15 MiB for a 280 by 84 screen with Pad open.  The
-# machine's memory is the only limit on that growth.  Networking takes a
-# quarter of the general partition for its tables, so changing the machine
-# size also changes them.
-DESKTOP_APT1_EXT_MEM_MIB = 384
 # These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
@@ -313,8 +188,6 @@ DESKTOP_ACCEPTANCE_COLS = 280
 DESKTOP_ACCEPTANCE_ROWS = 84
 GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS = 4096
 GUEST_PHASE_PROFILE_MAX_EVENTS = 65_536
-sys.path.insert(0, str(MEGAPAD_ROOT))
-
 from diskutil import (  # noqa: E402
     FLAG_SYSTEM,
     FTYPE_DATA,
@@ -329,7 +202,6 @@ from rich_terminal import DriverStatus, TerminalState  # noqa: E402
 from rich_terminal import text_rules  # noqa: E402
 import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
-import qoi_codec  # noqa: E402
 import sample_documents  # noqa: E402
 import sample_pdf  # noqa: E402
 import styled_text  # noqa: E402
@@ -344,418 +216,210 @@ from shared.session import (  # noqa: E402
     TerminalSnapshot,
 )
 from shared.session_options import link_pace  # noqa: E402
+from toolchain.image.forth import (  # noqa: E402, F401  (tests read some through the harness)
+    COLON_STACK_EFFECT_RE,
+    FORTH_LINE_COALESCE_BARRIERS,
+    MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+    _coalesce_audited_forth_lines,
+    _forth_byte_buffer,
+    _forth_line_tokens,
+    _minify_forth,
+)
+from toolchain.image.rich import (  # noqa: E402, F401  (tests read some through the harness)
+    DESKTOP_APT1_COLLECTION_CONTROLS,
+    DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES,
+    DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
+    DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES,
+    DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES,
+    DESKTOP_APT1_CONTENT_ITEMS,
+    DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES,
+    DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES,
+    DESKTOP_APT1_CONTROL_VARIABLE_BYTES,
+    DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS,
+    DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES,
+    DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES,
+    DESKTOP_APT1_EXT_MEM_MIB,
+    DESKTOP_APT1_FIELD_CHOICES,
+    DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_HEADER_BYTES,
+    DESKTOP_APT1_FIELD_NATIVE_BYTES,
+    DESKTOP_APT1_FRAME_HEADER_BYTES,
+    DESKTOP_APT1_GUEST_TX_BYTES,
+    DESKTOP_APT1_HIDDEN_START_BYTES,
+    DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES,
+    DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES,
+    DESKTOP_APT1_INSTRUMENT_REGIONS,
+    DESKTOP_APT1_INSTRUMENT_WIRE_BYTES,
+    DESKTOP_APT1_MAX_CELLS,
+    DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES,
+    DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_COLS,
+    DESKTOP_APT1_MAX_CONTROLS,
+    DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
+    DESKTOP_APT1_MAX_FIELDS,
+    DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
+    DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
+    DESKTOP_APT1_MAX_INSTRUMENTS,
+    DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_OBJECTS,
+    DESKTOP_APT1_MAX_OPERATIONS,
+    DESKTOP_APT1_MAX_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_REGIONS,
+    DESKTOP_APT1_MAX_ROWS,
+    DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+    DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
+    DESKTOP_APT1_MAX_SERIES,
+    DESKTOP_APT1_MAX_STATUS_FIELDS,
+    DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES,
+    DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES,
+    DESKTOP_APT1_REGION_FRAME_BYTES,
+    DESKTOP_APT1_REGION_WIRE_BYTES,
+    DESKTOP_APT1_RICH_TERMINAL,
+    DESKTOP_APT1_RICH_TERMINAL_BASE,
+    DESKTOP_APT1_SERIES_HEADER_BYTES,
+    DESKTOP_APT1_SERIES_MAX_CHUNKS,
+    DESKTOP_APT1_SERIES_OPERATIONS,
+    DESKTOP_APT1_SERIES_WIRE_BYTES,
+    DESKTOP_APT1_SHELL_WIRE_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES,
+    DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES,
+    DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
+    DESKTOP_APT1_TOTAL_UTF8_BYTES,
+    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS,
+    DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES,
+    DESKTOP_APT1_UIDL_BINDINGS,
+    DESKTOP_APT1_UIDL_RECORDS,
+    DESKTOP_APT1_UIDL_TEXT_BYTES,
+    DESKTOP_APT1_XMEM_RESERVE_BYTES,
+    desktop_apt1_collection_control_capacity,
+)
+from toolchain.image.desk import (  # noqa: E402, F401  (tests read some through the harness)
+    DESK_APPLETS,
+    DESK_SYSTEM_SETTINGS,
+    DeskApplet,
+    RecordsSeed,
+    _DESK_AGENT_PROVIDER,
+    _DESK_AGENT_SOURCE_BOOT,
+    _DESK_PRACTICE_PROVISION,
+    _DESK_RECORDS_SEED,
+    _DESK_SANDBOX_POLICY,
+    desk_applet,
+    desktop_autoexec,
+    desktop_composes,
+    desktop_ready_markers,
+    desktop_resources,
+    desktop_roots,
+    desktop_stable_markers,
+)
+from toolchain.image.build import (  # noqa: E402, F401  (tests read some through the harness)
+    APP_SHELL_MODULE,
+    COLD_SOURCE_CHUNK_TEMPLATE,
+    COLD_SOURCE_CODEC_LZSS,
+    COLD_SOURCE_CODEC_STORED,
+    COLD_SOURCE_HEADER,
+    COLD_SOURCE_HEADER_BYTES,
+    COLD_SOURCE_LOADER_PATH,
+    COLD_SOURCE_MAGIC,
+    COLD_SOURCE_RAW_MAX_BYTES,
+    COLD_SOURCE_VERSION,
+    DEFAULT_EXT_MEM_MIB,
+    DEFAULT_RAM_KIB,
+    DEFAULT_VRAM_MIB,
+    ImageSpec,
+    LINK_CHUNK_BYTES,
+    MACHINE_BACKENDS,
+    MEGAPAD_NETWORKING_BOOT_LINE,
+    MEGAPAD_NETWORKING_CONSUMERS,
+    MEGAPAD_RICH_TERMINAL_BOOT_LINE,
+    MEGAPAD_RICH_TERMINAL_CONSUMERS,
+    MEGAPAD_RICH_TERMINAL_MODULE,
+    MODULE_TOKENS_BOOT_LINE,
+    MP64FS_VFS_PLATFORM_BOOT_LINE,
+    MP64FS_VFS_PLATFORM_MODULE,
+    PLACES_BOOT_ENTRY,
+    PLACES_BOOT_LABEL,
+    PLACES_BOOT_LINES,
+    PLACES_BOOT_PLACE,
+    SEMANTIC_BACKENDS,
+    SYSTEM_VOLUME_ARENA_BYTES,
+    SYSTEM_VOLUME_BLOCK_BYTES,
+    SYSTEM_VOLUME_BOOT_ENTRY,
+    SYSTEM_VOLUME_MODULE,
+    USER_VOLUME_ARENA_BYTES,
+    USER_VOLUME_DEFAULT_MIB,
+    USER_VOLUME_DOCUMENTS,
+    USER_VOLUME_FOLDERS,
+    USER_VOLUME_ORIGIN,
+    USER_VOLUME_RECORDS,
+    _boot_in_simulator,
+    _build_user_image,
+    _cold_source_lzss_decode,
+    _cold_source_lzss_encode,
+    _container_linked_chunks,
+    _directories,
+    _linked_autoexec,
+    _linked_chunks,
+    _machine_backend,
+    _pack_cold_source,
+    _requires_megapad_networking,
+    _requires_megapad_rich_terminal,
+    _settings_image_for,
+    _simulator_session_autoexec,
+    _system_image_for,
+    _system_volume_toolchain,
+    _token_form,
+    _unpack_cold_source,
+    _user_image_for,
+    _user_volume_boot_lines,
+    _validate_image_paths,
+    _validate_module_ids,
+    _with_megapad_networking,
+    _with_megapad_rich_terminal,
+    _with_mp64fs_vfs_platform,
+    _with_rich_desktop_boot_progress,
+    _with_userland_xmem_reserve,
+    build,
+    dependency_closure,
+    dependency_order,
+    settings_image_path,
+    system_image_path,
+    system_volume_geometry,
+    user_image_path,
+)
 
 
-@dataclass(frozen=True)
-class RichTerminalProfile:
-    """Product bounds for one explicitly rich-terminal-enabled profile."""
+@dataclass(frozen=True, kw_only=True)
+class Profile(ImageSpec):
+    """A test profile: an image (ImageSpec) and what its checks look for."""
 
-    guest_rx_bytes: int
-    guest_tx_bytes: int
-    guest_collection_native_bytes: int
-    guest_data_graphics_native_bytes: int
-    guest_status_field_native_bytes: int
-    guest_field_native_bytes: int
-    host_policy: RichTerminalSessionPolicy
-    retained_policy: RetainedPolicy | None = None
-    # Desk also publishes its panes and taskbar through the shell producer,
-    # whose storage grows from Desk's memory as each candidate needs.
-    shell: bool = False
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.host_policy, RichTerminalSessionPolicy):
-            raise TypeError("host_policy must be a RichTerminalSessionPolicy")
-        if self.retained_policy is not None and not isinstance(
-            self.retained_policy, RetainedPolicy
-        ):
-            raise TypeError("retained_policy must be a RetainedPolicy or None")
-        for name in (
-            "guest_rx_bytes",
-            "guest_tx_bytes",
-            "guest_collection_native_bytes",
-            "guest_data_graphics_native_bytes",
-            "guest_status_field_native_bytes",
-            "guest_field_native_bytes",
-        ):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"{name} must be an integer")
-        if not isinstance(self.shell, bool):
-            raise TypeError("shell must be a bool")
-        if not 0 < self.guest_collection_native_bytes <= 0xFFFFFFFF:
-            raise ValueError(
-                "guest_collection_native_bytes must be a positive u32"
-            )
-        if self.guest_collection_native_bytes & 7:
-            raise ValueError(
-                "guest_collection_native_bytes must be eight-byte aligned"
-            )
-        if not 0 < self.guest_data_graphics_native_bytes <= 0xFFFFFFFF:
-            raise ValueError(
-                "guest_data_graphics_native_bytes must be a positive u32"
-            )
-        # One nonempty canonical graph needs its 112-byte UDG header and the
-        # smallest current 128-byte STATUS record.  These are wire/model ABI
-        # sizes, not a product graph-count limit.
-        if self.guest_data_graphics_native_bytes < 112 + 128:
-            raise ValueError(
-                "guest_data_graphics_native_bytes cannot admit one "
-                "instrument graph"
-            )
-        if self.guest_data_graphics_native_bytes & 7:
-            raise ValueError(
-                "guest_data_graphics_native_bytes must be eight-byte aligned"
-            )
-        if not 72 <= self.guest_status_field_native_bytes <= 0xFFFFFFFF:
-            raise ValueError(
-                "guest_status_field_native_bytes must admit one field in a u32 bank"
-            )
-        if self.guest_status_field_native_bytes & 7:
-            raise ValueError(
-                "guest_status_field_native_bytes must be eight-byte aligned"
-            )
-        if not 192 <= self.guest_field_native_bytes <= 0xFFFFFFFF:
-            raise ValueError("guest_field_native_bytes must admit one FIELD in a u32 bank")
-        if self.guest_field_native_bytes & 7:
-            raise ValueError("guest_field_native_bytes must be eight-byte aligned")
-        if self.guest_rx_bytes < 4_168:
-            raise ValueError("guest_rx_bytes must admit the control reserve")
-        # Screen width sets no bound: PT splits CELL spans, and the engine
-        # refuses a terminal glyph-run limit the transport cannot carry.
-        required_payload = max(
-            80 + self.guest_collection_native_bytes,
-            104 + self.guest_data_graphics_native_bytes,
-            96 + self.guest_status_field_native_bytes,
-            80 + self.guest_field_native_bytes,
-        )
-        if self.shell:
-            required_payload = max(required_payload, DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
-        maximum_payload = required_payload
-        if self.retained_policy is not None:
-            if (
-                self.retained_policy.client_to_terminal_max_payload
-                < required_payload
-            ):
-                raise ValueError(
-                    "retained client payload cannot admit a selected native object"
-                )
-            maximum_payload = max(
-                maximum_payload,
-                self.retained_policy.client_to_terminal_max_payload,
-            )
-        if self.guest_tx_bytes < max(73, 40 + maximum_payload):
-            raise ValueError("guest_tx_bytes cannot admit a maximum frame")
-
-    def configuration(self, cols: int, rows: int):
-        return self.host_policy.configuration(
-            cols,
-            rows,
-            retained_policy=self.retained_policy,
-        )
-
-
-@dataclass(frozen=True)
-class Profile:
-    roots: tuple[str, ...]
-    resources: tuple[str, ...]
-    autoexec: str
+    # Text the screen shows once the profile's boot is ready, and while it
+    # keeps running.
     ready_markers: tuple[str, ...]
     stable_markers: tuple[str, ...]
-    linked: bool = False
-    # A profile that stages its Akashic modules as initial files, not
-    # roots, declares here whether they consume KDOS networking; the image
-    # then carries MegaPad's networking.f, required after ENTER-USERLAND.
-    megapad_networking: bool = False
-    requires_tap: bool = False
+    # The profile reaches real servers, so it runs only with a network card
+    # (--nic).
+    requires_network: bool = False
     failure_markers: tuple[str, ...] = ()
-    # Files the profile ships for its own code: on the boot volume, or on
-    # the system volume when that volume is the origin of a build with the
-    # user volume, at their paths.
-    initial_files: tuple[tuple[str, bytes], ...] = ()
-    # Samples of the profile's own, files a person works with, such as a
-    # picture a check previews.  They go where the build puts the image's
-    # samples (_sample_files): the boot volume's root, or with the user
-    # volume its documents.
-    sample_files: tuple[tuple[str, bytes], ...] = ()
-    # Raw Forth sources deployed as checked AKSRC001 data containers.  Each
-    # tuple names the on-image container, not the host source.  This keeps
-    # qualification leaves on the same checked cold-compile path as linked
-    # production modules instead of routing them through KDOS's unchecked
-    # line walker.
-    cold_source_initial_files: tuple[tuple[str, bytes], ...] = ()
-    include_large_sample: bool = True
-    # Focused development images hold their module closure plus samples.
-    # 4 MiB leaves room for the generated Unicode text tables that every
-    # TUI closure now carries; it is a development default, not a limit.
-    total_sectors: int = 8192
-    link_chunk_bytes: int = LINK_CHUNK_BYTES
     smoke_max_steps: int | None = None
     smoke_timeout: float | None = None
     # The largest share of the system clock the guest may run while its ready
     # screen sits idle with no input.  None reports the load without checking
     # it.  A shell that sleeps between ticks runs a few percent.
     idle_load_ceiling: float | None = None
-    # A cold-source codec opts linked source into the checked container path.
-    # The guest validates and compiles each source chunk through the checked
-    # evaluator; this is not a compiled dictionary cache.  Stored containers
-    # avoid guest decompression while retaining the same integrity and
-    # failure-atomic evaluation contract.
-    cold_source_codec: int | None = None
-    # Physical-line joining is safe only for a source closure audited for
-    # line-sensitive custom parsing words.  It is never a default transform.
-    audited_link_line_bytes: int | None = None
-    audited_initial_forth_line_bytes: int | None = None
-    rich_terminal: RichTerminalProfile | None = None
-    rich_boot_progress: bool = False
     # The emulator's clock otherwise starts at 1970-01-01.  A profile whose
     # applet shows "today" from sample files dated SAMPLE_DATE starts it at
     # noon UTC on that date instead.
     sample_date_clock: bool = False
-    minimum_free_bytes: int = 0
-    default_ext_mem_mib: int = DEFAULT_EXT_MEM_MIB
-    # The machine a session boots by default: full cores, and micro-core
-    # clusters beside them.  The simulator runs one to four full cores and
-    # no cluster, the hybrid backend one full core, and only the emulator
-    # accepts clusters.
-    full_cores: int = 1
-    clusters: int = 0
-    # A profile opts into semantic execution by naming the ordinary Forth
-    # entry boundary that the simulator may defer until after autoexec has
-    # returned to its outer dispatch.  Emulator images invoke this word in
-    # place as usual; no alternate application composition is permitted.
-    session_entry: str | None = None
-    # Zero preserves KDOS's default dictionary/general-XMEM partition.
-    general_xmem_reserve_bytes: int = 0
-    # The system settings, Akashic paths that go on the settings disk: the
-    # second storage unit, whose medium the machine reads and never writes.
-    # A profile with none gets no settings disk.
-    settings_files: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
-        if (
-            isinstance(self.default_ext_mem_mib, bool)
-            or not isinstance(self.default_ext_mem_mib, int)
-            or self.default_ext_mem_mib <= 0
-        ):
-            raise ValueError("default_ext_mem_mib must be a positive integer")
-        if (
-            isinstance(self.full_cores, bool)
-            or not isinstance(self.full_cores, int)
-            or self.full_cores <= 0
-        ):
-            raise ValueError("full_cores must be a positive integer")
-        if (
-            isinstance(self.clusters, bool)
-            or not isinstance(self.clusters, int)
-            or self.clusters < 0
-        ):
-            raise ValueError("clusters must be a non-negative integer")
-        if (
-            isinstance(self.general_xmem_reserve_bytes, bool)
-            or not isinstance(self.general_xmem_reserve_bytes, int)
-        ):
-            raise TypeError("general_xmem_reserve_bytes must be an integer")
-        if (
-            not 0 <= self.general_xmem_reserve_bytes <= 0xFFFFFFFF
-            or self.general_xmem_reserve_bytes & 15
-            or self.general_xmem_reserve_bytes >= self.default_ext_mem_mib << 20
-        ):
-            raise ValueError("general_xmem_reserve_bytes must be aligned and leave dictionary memory")
-        if (
-            self.cold_source_codec is not None
-            and (
-                isinstance(self.cold_source_codec, bool)
-                or self.cold_source_codec not in COLD_SOURCE_CODECS
-            )
-        ):
-            raise ValueError(
-                "cold_source_codec must be None, "
-                "COLD_SOURCE_CODEC_LZSS, or COLD_SOURCE_CODEC_STORED"
-            )
-        if self.session_entry is not None and (
-            not isinstance(self.session_entry, str)
-            or not self.session_entry
-            or any(character.isspace() for character in self.session_entry)
-        ):
-            raise ValueError("session_entry must be one nonempty Forth token")
-
-
-# Akashic modules that bind directly to the networking surface exported by
-# MegaPad's loadable networking.f module.  Checking the resolved profile
-# closure keeps parser-only and abstract-I/O net modules lightweight while
-# making each native KDOS transport pull in the one canonical system module.
-MEGAPAD_NETWORKING_CONSUMERS = frozenset(
-    {
-        "tui/applets/agent/providers/codex/trust.f",
-        "atproto/public-author-feed.f",
-        "net/http.f",
-        "net/tls-trust-registry.f",
-        "net/transports/kdos-tls.f",
-        "net/transports/kdos-tls-inbound.f",
-        "net/transports/kdos-tls-port.f",
-        "net/ws.f",
-        "web/response.f",
-        "web/server.f",
-    }
-)
-MEGAPAD_NETWORKING_BOOT_LINE = "REQUIRE networking.f"
-MEGAPAD_RICH_TERMINAL_MODULE = "rich-terminal.f"
-MEGAPAD_RICH_TERMINAL_BOOT_LINE = (
-    f"REQUIRE {MEGAPAD_RICH_TERMINAL_MODULE}"
-)
-# Like the native networking consumers above, these Akashic modules compile
-# against an already-loaded MegaPad system ABI.  They must never REQUIRE or
-# copy the MegaPad source into the Akashic dependency graph.
-MEGAPAD_RICH_TERMINAL_CONSUMERS = frozenset(
-    {
-        "tui/app-shell-apt1.f",
-        "tui/desk-apt1.f",
-        "tui/rich-terminal/apt1-engine.f",
-        "tui/rich-terminal/screen-adapter-apt1.f",
-        "tui/screen-backend-apt1.f",
-    }
-)
-APP_SHELL_MODULE = "tui/app-shell.f"
-MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
-MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
-# The places this build declares (docs/utils/fs/places.md).  The platform
-# module reports the boot volume; composition declares one writable place
-# over its root and a default set in which that place is both the home,
-# where records are written, and the origin, where shipped files are read.
-# The origin is required, so a boot without it stops here with a message.
-# Applets ask the set for its home, its origin and its list, so the names
-# below appear nowhere else.
-PLACES_BOOT_ENTRY = "_boot-places-declare"
-# The name composition gives the build's one place.  A check that reads a
-# file's locator on the screen builds it from this.
-PLACES_BOOT_PLACE = "files"
-# What a person reads for it, as the first row of an explorer's tree.
-PLACES_BOOT_LABEL = "Files"
-PLACES_BOOT_LINES = (
-    "VARIABLE _boot-place  VARIABLE _boot-places",
-    f": {PLACES_BOOT_ENTRY}  ( -- )",
-    '    S" boot" PLACES-VOLUME ABORT" PLACES FAIL volume"',
-    f'    >R S" {PLACES_BOOT_PLACE}" S" /" PLACE-WRITABLE R> PLACES-DECLARE',
-    '        ABORT" PLACES FAIL place"  _boot-place !',
-    f'    S" {PLACES_BOOT_LABEL}" _boot-place @ PLACE-LABEL! ABORT" PLACES FAIL label"',
-    "    -1 _boot-place @ PLACE-REQUIRED!",
-    "    PLACES-CHECK ?DUP IF",
-    '        NIP ." PLACES FAIL origin ior=" . CR TX-FLUSH ABORT',
-    "    THEN DROP",
-    '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
-    "    PLACE-WRITABLE _boot-place @ _boot-places @ PLSET-GRANT",
-    '        ABORT" PLACES FAIL grant"',
-    "    DUP _boot-places @ PLSET-HOME!  DUP _boot-places @ PLSET-ORIGIN!",
-    "    _boot-places @ PLSET-DOCUMENTS!",
-    "    _boot-places @ PLACES-DEFAULT! ;",
-    PLACES_BOOT_ENTRY,
-)
 # Forth for a check that keeps its records on a RAM volume of its own: a
 # writable place over the volume's root, in a set of its own or as the
 # default set its applet instances take (local_testing/test-root-place.f).
 TEST_ROOT_PLACE_F = AKASHIC_ROOT / "local_testing" / "test-root-place.f"
 TEST_ROOT_PLACE = "\n" + TEST_ROOT_PLACE_F.read_text(encoding="utf-8")
-# With --system-volume a profile's modules are plain files on the system
-# volume, the ext4 volume on the machine's third storage unit.  The boot
-# volume then carries only the closure of the module that mounts it,
-# deployed as the profile deploys its source, and autoexec.f mounts the
-# volume and makes it the source of LOAD and REQUIRE before the profile's
-# own REQUIREs run (docs/utils/fs/system-volume.md).  The arena is the
-# mount's storage, its records; the cache of entries and names takes its
-# pages from the heap.
-SYSTEM_VOLUME_MODULE = "utils/fs/system-volume.f"
-SYSTEM_VOLUME_ARENA_BYTES = 524288
-SYSTEM_VOLUME_BOOT_ENTRY = "_BOOT-SYSTEM-VOLUME"
-SYSTEM_VOLUME_BOOT_LINES = (
-    f": {SYSTEM_VOLUME_BOOT_ENTRY}  ( -- )",
-    f"    {SYSTEM_VOLUME_ARENA_BYTES} A-XMEM ARENA-NEW ?DUP IF",
-    '        NIP ." SYSTEM VOLUME FAIL arena ior=" . CR TX-FLUSH ABORT',
-    "    THEN",
-    "    SYSVOL-MOUNT ?DUP IF",
-    '        ." SYSTEM VOLUME FAIL mount ior=" . CR TX-FLUSH ABORT',
-    "    THEN",
-    "    SYSVOL-SOURCE MODULE-SOURCE! ;",
-    SYSTEM_VOLUME_BOOT_ENTRY,
-)
-# With --user-volume the build adds the user volume, the ext4 volume on the
-# machine's fourth storage unit, unit 3, and declares the shipping form's
-# places (docs/utils/fs/places.md): a read-only place over the root of the
-# volume that holds the profile's shipped files, which is the origin, and
-# two writable places on the user volume, documents and records, in folders
-# of their own, records being the home.  That volume is the system volume
-# when the build has one and the boot volume otherwise.  utils/fs/
-# user-volume.f mounts the user volume and reports it to the registry; a
-# boot without its image, or with one the driver refuses, goes on, and Desk
-# starts in recovery because its home is missing.  The layout below is the
-# only place it is written: the boot lines declare it and the user image is
-# built with its folders.
-USER_VOLUME_MODULE = "utils/fs/user-volume.f"
-USER_VOLUME_ARENA_BYTES = 524288
-USER_VOLUME_DEFAULT_MIB = 64
-USER_VOLUME_BLOCK_BYTES = 1024
-USER_VOLUME_LABEL = "AKASHIC-USER"
-# (name, folder, label) of the places the shipping form declares.
-USER_VOLUME_ORIGIN = ("system", "/", "System")
-USER_VOLUME_DOCUMENTS = ("documents", "/documents", "Documents")
-USER_VOLUME_RECORDS = ("records", "/records", "Records")
-USER_VOLUME_FOLDERS = (USER_VOLUME_DOCUMENTS[1], USER_VOLUME_RECORDS[1])
-
-
-def _user_volume_boot_lines(system_volume: bool) -> tuple[str, ...]:
-    """The lines that load and mount the user volume and declare the
-    shipping form's places over it, in PLACES_BOOT_LINES' place.  The boot
-    says how the mount went and goes on whatever it answered: only a missing
-    origin stops it."""
-
-    origin_name, origin_folder, origin_label = USER_VOLUME_ORIGIN
-    documents_name, documents_folder, documents_label = USER_VOLUME_DOCUMENTS
-    records_name, records_folder, records_label = USER_VOLUME_RECORDS
-    if system_volume:
-        # The system volume's module mounted it before this; composition
-        # reports it to the registry, where the origin is declared over it.
-        origin_volume = [
-            '    S" system" PLACES-VOLUME ABORT" PLACES FAIL volume"',
-            "    SYSVOL-VFS OVER PVOL-ATTACH ABORT\" PLACES FAIL system volume\"",
-        ]
-    else:
-        origin_volume = ['    S" boot" PLACES-VOLUME ABORT" PLACES FAIL volume"']
-    return (
-        f"REQUIRE {USER_VOLUME_MODULE}",
-        ": _boot-user-volume  ( -- )",
-        f"    {USER_VOLUME_ARENA_BYTES} USERVOL-MOUNT ?DUP IF",
-        '        ." USER VOLUME UNAVAILABLE ior=" . CR TX-FLUSH',
-        "    ELSE",
-        '        ." USER VOLUME ATTACHED" CR',
-        "    THEN ;",
-        "_boot-user-volume",
-        "VARIABLE _boot-origin  VARIABLE _boot-documents",
-        "VARIABLE _boot-records  VARIABLE _boot-places",
-        f": {PLACES_BOOT_ENTRY}  ( -- )",
-        *origin_volume,
-        f'    >R S" {origin_name}" S" {origin_folder}" PLACE-READ-ONLY R> PLACES-DECLARE',
-        '        ABORT" PLACES FAIL place"  _boot-origin !',
-        f'    S" {origin_label}" _boot-origin @ PLACE-LABEL! ABORT" PLACES FAIL label"',
-        "    -1 _boot-origin @ PLACE-REQUIRED!",
-        "    PLACES-CHECK ?DUP IF",
-        '        NIP ." PLACES FAIL origin ior=" . CR TX-FLUSH ABORT',
-        "    THEN DROP",
-        '    S" user" PLACES-VOLUME ABORT" PLACES FAIL volume"',
-        f'    >R S" {documents_name}" S" {documents_folder}" PLACE-WRITABLE R@ PLACES-DECLARE',
-        '        ABORT" PLACES FAIL place"  _boot-documents !',
-        f'    S" {records_name}" S" {records_folder}" PLACE-WRITABLE R> PLACES-DECLARE',
-        '        ABORT" PLACES FAIL place"  _boot-records !',
-        f'    S" {documents_label}" _boot-documents @ PLACE-LABEL! ABORT" PLACES FAIL label"',
-        f'    S" {records_label}" _boot-records @ PLACE-LABEL! ABORT" PLACES FAIL label"',
-        '    PLSET-NEW ABORT" PLACES FAIL set"  _boot-places !',
-        "    PLACE-WRITABLE _boot-documents @ _boot-places @ PLSET-GRANT",
-        '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-DOCUMENTS!',
-        "    PLACE-WRITABLE _boot-records @ _boot-places @ PLSET-GRANT",
-        '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-HOME!',
-        "    PLACE-READ-ONLY _boot-origin @ _boot-places @ PLSET-GRANT",
-        '        ABORT" PLACES FAIL grant"  _boot-places @ PLSET-ORIGIN!',
-        "    _boot-places @ PLACES-DEFAULT! ;",
-        PLACES_BOOT_ENTRY,
-    )
 
 
 def _practice_crc32(data: bytes) -> int:
@@ -790,295 +454,6 @@ def _practice_head_snapshot(generation: int) -> bytes:
     checksum_data = bytes(snapshot[:40] + snapshot[48:])
     struct.pack_into("<Q", snapshot, 40, _practice_crc32(checksum_data))
     return bytes(snapshot)
-
-
-def _forth_byte_buffer(name: str, value: str) -> str:
-    """Forth that holds VALUE's UTF-8 bytes in a buffer NAME, with their
-    count in the constant NAME-u."""
-
-    encoded = value.encode("utf-8")
-    lines = [f"CREATE {name}"]
-    for start in range(0, len(encoded), 24):
-        chunk = encoded[start : start + 24]
-        lines.append("  " + " ".join(f"{byte} C," for byte in chunk))
-    lines.append(f"{len(encoded)} CONSTANT {name}-u")
-    return "\n".join(lines)
-
-
-@dataclass(frozen=True)
-class RecordsSeed:
-    """Records a Desk applet starts with, written at boot before Desk starts,
-    in the home where Desk keeps that applet's records (_DESK_RECORDS_SEED).
-    FORTH defines WORD, ( home -- ), which writes them in HOME through the
-    applet's own stores."""
-
-    forth: str
-    word: str
-
-
-# The Desktop profile composes Desk with these applets.  The same table gives
-# Desk with a single applet, for checking one applet's work on the optional
-# rich terminal before the full Desktop journey runs as regression.
-@dataclass(frozen=True)
-class DeskApplet:
-    """One applet the Desktop profile composes, and how Desk starts it."""
-
-    name: str  # the boot descriptor is _boot-<name>-desc
-    module: str
-    resources: tuple[str, ...]
-    entry: str  # the applet's descriptor word
-    ready: tuple[str, ...] = ()  # visible once it has started
-    stable: tuple[str, ...] = ()  # visible while it runs
-    tile: bool = True  # starts in a tile; otherwise a discoverable built-in
-    note: str = ""  # comment above a built-in's registration
-    setup: str = ""  # Forth run once its descriptor is filled, before Desk takes it
-    seeds: tuple[RecordsSeed, ...] = ()  # records it starts with, in its home
-
-
-DESK_APPLETS = (
-    DeskApplet(
-        "pad",
-        "tui/applets/pad/pad.f",
-        ("tui/applets/pad/pad.uidl", "tui/applets/pad/pad.toml"),
-        "PAD-ENTRY",
-        ready=("Selection", "Untitled"),
-        stable=("Selection", "UTF-8"),
-    ),
-    DeskApplet(
-        "fexp",
-        "tui/applets/fexplorer/fexplorer.f",
-        ("tui/applets/fexplorer/fexplorer.uidl", "tui/applets/fexplorer/fexplorer.toml"),
-        "FEXP-ENTRY",
-        ready=("Details", "Tools"),
-        stable=("Details", "Tools"),
-    ),
-    DeskApplet(
-        "daybook",
-        "tui/applets/daybook/daybook.f",
-        ("tui/applets/daybook/daybook.uidl",),
-        "DAYBOOK-ENTRY",
-        ready=("Entry",),
-        stable=("Entry",),
-    ),
-    DeskApplet(
-        "grid",
-        "tui/applets/grid/grid.f",
-        ("tui/applets/grid/grid.uidl",),
-        "GRID-ENTRY",
-        ready=("Data", "Grid"),
-        stable=("Data", "Grid"),
-    ),
-    DeskApplet(
-        "agent",
-        "tui/applets/agent/agent.f",
-        ("tui/applets/agent/agent.uidl",),
-        "AGENT-ENTRY",
-        ready=("Agent",),
-        stable=("Agent",),
-    ),
-    DeskApplet(
-        "streams",
-        "tui/applets/streams/streams.f",
-        ("tui/applets/streams/streams.uidl",),
-        "STREAMS-ENTRY",
-        tile=False,
-        note=(
-            "\\ Streams is a discoverable built-in but does not consume a startup tile or\n"
-            "\\ start external I/O. Desk and the active Practice still gate explicit work."
-        ),
-    ),
-)
-# Applets Desk runs that the Desktop profile does not compose.  Desk with
-# one of them checks its work on the optional rich terminal.  Sound Lab,
-# Observatory and Worlds stay out of the first release.
-ADJACENT_DESK_APPLETS = (
-    DeskApplet(
-        "soundlab",
-        "tui/applets/soundlab/soundlab.f",
-        ("tui/applets/soundlab/soundlab.uidl",),
-        "SOUNDLAB-ENTRY",
-        tile=False,
-        note="\\ Sound Lab is a discoverable built-in but does not consume a startup tile.",
-    ),
-    DeskApplet(
-        "observatory",
-        "tui/applets/observatory/observatory.f",
-        ("tui/applets/observatory/observatory.uidl",),
-        "OBSERVATORY-ENTRY",
-        ready=("OBSERVATORY / SERIES PROFILE",),
-        stable=("OBSERVATORY / SERIES PROFILE",),
-    ),
-    DeskApplet(
-        "worlds",
-        "tui/applets/worlds/worlds.f",
-        ("tui/applets/worlds/worlds.uidl",),
-        "WORLDS-ENTRY",
-        ready=("WORLDS / RESERVOIR FACILITY",),
-        stable=("WORLDS / RESERVOIR FACILITY",),
-    ),
-    # Folio Watch, the game library's first game, ships its room as a text
-    # map in its origin; no configuration composes it yet.
-    DeskApplet(
-        "folio",
-        "tui/applets/folio/folio.f",
-        ("tui/applets/folio/folio.uidl", "tui/applets/folio/reading-room.map"),
-        "FOLIO-ENTRY",
-        ready=("Night", "Help"),
-        stable=("Night",),
-    ),
-)
-_DESK_AGENT_PROVIDER = "tui/applets/agent/providers/devtools/scripted.f"
-
-_DESK_PRACTICE_PROVISION = r"""\ Development-image installation step: provision only genuinely blank media.
-\ Existing but invalid slots are deliberately left for Desk recovery.
-CREATE _boot-practice-head PHEAD-SIZE ALLOT
-CREATE _boot-practice-out PHEAD-SIZE ALLOT
-CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
-: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
-: _boot-practice-slot?  ( path-a path-u -- flag )
-    VFS-FF-READ PLACES-DEFAULT PLSET-HOME PLACE-OPEN
-    IF DROP 0 ELSE VFS-CLOSE -1 THEN ;
-: _boot-practice-present?  ( -- flag )
-    S" /practice-head-a.bin" _boot-practice-slot?
-    S" /practice-head-b.bin" _boot-practice-slot? OR ;
-: _boot-practice-provision  ( -- )
-    _boot-practice-present? IF EXIT THEN
-    PLACES-DEFAULT PLSET-HOME _boot-practice-store PHEADVFS-INIT
-        PHEADVFS-S-OK <> ABORT" Practice store init failed"
-    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
-        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
-    _boot-practice-head PHEAD-INIT
-    1 _boot-practice-head PHEAD.ID _boot-practice-id!
-    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
-    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
-        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
-_boot-practice-provision
-"""
-# A build whose home can be missing, as one with the user volume, provisions
-# only a home that is there: a missing one is not blank media, and Desk
-# starts in recovery and says why (docs/utils/fs/places.md).
-_DESK_PRACTICE_PROVISION_HEAD = (
-    ": _boot-practice-provision  ( -- )\n"
-    "    _boot-practice-present? IF EXIT THEN\n"
-)
-_DESK_PRACTICE_PROVISION_HOME_GUARD = (
-    ": _boot-practice-provision  ( -- )\n"
-    "    PLACES-DEFAULT PLSET-HOME PLACE-STATUS IF EXIT THEN\n"
-    "    _boot-practice-present? IF EXIT THEN\n"
-)
-
-
-def _with_practice_home_guard(autoexec: str) -> str:
-    """AUTOEXEC with Desk's Practice provisioning left out while the home
-    is unavailable.  An autoexec without that provisioning is unchanged."""
-
-    return autoexec.replace(
-        _DESK_PRACTICE_PROVISION_HEAD, _DESK_PRACTICE_PROVISION_HOME_GUARD
-    )
-
-
-# Records an applet starts with (RecordsSeed), seeded at boot where Desk will
-# keep them.  Desk activates the Practice over the default set when it starts,
-# and its stores keep each component's records in the home the activation
-# gives that component's stores (PACT-STORE-PLACES): a folder named by the
-# component's id under the records place in the shipping form, and the one
-# place of the linked form, which is the documents place too.  Desk binds the
-# Agent's conversation store, which loads the conversation at once, before
-# any applet or boot code runs again, so a seed writes before Desk starts.
-# The boot then activates the Practice it has just provisioned over the same
-# default set, asks the activation for the set of the stores of the component
-# an applet's descriptor names, runs the seed in that set's home, and frees
-# the set and the activation.  A seed names no place and no folder: the
-# activation decides both, as it does for Desk.
-_DESK_RECORDS_SEED = r"""\ Records an applet starts with, seeded where Desk keeps them.
-CREATE _boot-records-pact-raw PACT-SIZE 7 + ALLOT
-: _boot-records-pact  ( -- pact ) _boot-records-pact-raw 7 + -8 AND ;
-VARIABLE _boot-records-set
-\ Runs XT ( home -- ) in the home of the stores that keep the records of
-\ the component APP-DESC names, the home the activation gives Desk for them.
-: _boot-records-in  ( xt app-desc -- )
-    _boot-records-pact PACT-INIT
-    PLACES-DEFAULT _boot-records-pact PACT-ACTIVATE
-        PACT-S-OK <> ABORT" records: Practice activation failed"
-    APP.COMP-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
-        _boot-records-pact PACT-STORE-PLACES
-    DUP 0= ABORT" records: no places for the applet's records"
-    DUP _boot-records-set !
-    PLSET-HOME DUP 0= ABORT" records: no home for the applet's records"
-    SWAP EXECUTE
-    _boot-records-set @ PLSET-FREE  0 _boot-records-set !
-    _boot-records-pact PACT-DEACTIVATE ;
-"""
-
-
-def _records_seed_lines(applet: DeskApplet) -> str:
-    """Forth that seeds APPLET's records (DeskApplet.seeds), each seed's word
-    run in the home of its records, once the applet's descriptor is filled."""
-
-    descriptor = f"_boot-{applet.name}-desc"
-    return "".join(
-        f"{seed.forth}' {seed.word} {descriptor} _boot-records-in\n"
-        for seed in applet.seeds
-    )
-
-
-_DESK_SANDBOX_POLICY = r"""\ The product Desktop offers the shared sandbox under this policy.  A run
-\ gets ten seconds and twenty milliseconds of each fifty-millisecond tick.
-CREATE _boot-sandbox-policy-raw SBOX-LIMITS-SIZE 7 + ALLOT
-: _boot-sandbox-policy  ( -- limits ) _boot-sandbox-policy-raw 7 + -8 AND ;
-: _boot-sandbox-limit  ( value field -- )
-    _boot-sandbox-policy SBOX-LIMIT-CAP
-    SBOX-LIMITS-S-OK <> ABORT" sandbox policy refused a limit" ;
-: _boot-sandbox  ( -- )
-    _boot-sandbox-policy SBOX-LIMITS-BEGIN
-        SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not begin"
-    1000000 SBOX-LIMIT-INSTRUCTION-BUDGET _boot-sandbox-limit
-      16384 SBOX-LIMIT-VALUE-OP-BUDGET _boot-sandbox-limit
-    1048576 SBOX-LIMIT-COPY-BUDGET _boot-sandbox-limit
-      10000 SBOX-LIMIT-WALL-MS _boot-sandbox-limit
-         16 SBOX-LIMIT-DEPTH _boot-sandbox-limit
-      65536 SBOX-LIMIT-BLOB-BYTES _boot-sandbox-limit
-       1024 SBOX-LIMIT-LIST-COUNT _boot-sandbox-limit
-       1024 SBOX-LIMIT-MAP-COUNT _boot-sandbox-limit
-       4096 SBOX-LIMIT-INPUT-NODES _boot-sandbox-limit
-      65536 SBOX-LIMIT-INPUT-BYTES _boot-sandbox-limit
-      16384 SBOX-LIMIT-OUTPUT-ARENA-NODES _boot-sandbox-limit
-     262144 SBOX-LIMIT-OUTPUT-ARENA-BYTES _boot-sandbox-limit
-       4096 SBOX-LIMIT-OUTPUT-RESULT-NODES _boot-sandbox-limit
-      65536 SBOX-LIMIT-OUTPUT-RESULT-BYTES _boot-sandbox-limit
-       1024 SBOX-LIMIT-DATA-STACK _boot-sandbox-limit
-        256 SBOX-LIMIT-CALL-FRAMES _boot-sandbox-limit
-        256 SBOX-LIMIT-LOOP-FRAMES _boot-sandbox-limit
-    1048576 SBOX-LIMIT-MEMORY-BYTES _boot-sandbox-limit
-    _boot-sandbox-policy SBOX-LIMITS-SEAL
-        SBOX-LIMITS-S-OK <> ABORT" sandbox policy could not seal"
-    _boot-sandbox-policy 4 1024 20 SBOX-JOB-OTHER-CORES DESK-SANDBOX-CONFIGURE
-        SBOX-JOB-S-OK <> ABORT" Desk refused the sandbox policy" ;
-_boot-sandbox
-"""
-
-_DESK_ANSI_RUN = """." [akashic] starting desktop" CR
-: _boot-run-desktop  ( -- ) DESK-RUN ;
-' _boot-run-desktop CATCH ?DUP IF
-    ." [akashic] desktop exception " . CR
-THEN
-." [akashic] desktop exited" CR
-"""
-
-_DESK_APT1_RUN = """." [akashic boot] entering Desk" CR TX-FLUSH
-: _boot-rich-quarantine  ( -- ) BEGIN IDLE AGAIN ;
-: _boot-run-desktop  ( -- ) APT1-DESK-RUN ;
-: _boot-report-desktop-apt1-error  ( ior -- )
-    PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN
-    ." [akashic] desktop exception " . CR ;
-: _boot-desktop-session-entry  ( -- )
-    ['] _boot-run-desktop CATCH ?DUP IF
-        _boot-report-desktop-apt1-error
-    THEN
-    PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
-    ." [akashic] desktop exited" CR ;
-_boot-desktop-session-entry
-"""
 
 
 def streams_fixture_init(path: str) -> str:
@@ -1120,115 +495,6 @@ VARIABLE _boot-streams-status
         ABORT" Streams synthetic fixture load failed" ;
 ' _boot-streams-init _boot-streams-desc APP.INIT-XT !
 """.replace("{path}", path)
-
-
-def desktop_roots(applets, *, rich: bool = False) -> tuple[str, ...]:
-    desk = "tui/desk-apt1.f" if rich else "tui/applets/desk/desk.f"
-    agent = any(applet.name == "agent" for applet in applets)
-    return (
-        desk,
-        *(applet.module for applet in applets),
-        *((_DESK_AGENT_PROVIDER,) if agent else ()),
-    )
-
-
-# Desk's system settings, which the settings disk holds.  Desk with a rich
-# terminal reads them as it starts (tui/desk-system-settings.f).
-DESK_SYSTEM_SETTINGS = "tui/applets/desk/system.toml"
-# The settings disk's sectors: the RTL settings slot's default window.
-SETTINGS_DISK_SECTORS = 2048
-
-
-def desktop_resources(applets) -> tuple[str, ...]:
-    return (
-        "tui/applets/desk/desk.toml",
-        *(resource for applet in applets for resource in applet.resources),
-    )
-
-
-# How the Desktop hands Desk the Agent's scripted provider, which focused
-# profiles replace with their own.
-_DESK_AGENT_SOURCE_BOOT = (
-    ": _boot-agent-source  ( -- )\n"
-    '    SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"\n'
-    "    DESK-AGENT-SOURCE! ;"
-)
-
-
-def desktop_autoexec(applets, *, rich: bool = False) -> str:
-    """Desk's autoexec: load Desk and APPLETS, provision a blank Practice,
-    seed the records an applet starts with in its home, start each tile
-    applet, register each built-in, then run Desk, either in the ANSI
-    terminal or as the optional rich terminal's session."""
-
-    agent = any(applet.name == "agent" for applet in applets)
-    parts = [
-        "\\ autoexec.f - Akashic desktop profile\nENTER-USERLAND\n",
-        (
-            '." [akashic boot] configuring Desk" CR TX-FLUSH\n'
-            if rich
-            else '." [akashic] loading desktop" CR\n'
-        ),
-    ]
-    parts.extend(f"REQUIRE {root}\n" for root in desktop_roots(applets, rich=rich))
-    if agent:
-        parts.append(_DESK_AGENT_SOURCE_BOOT + "\n_boot-agent-source\n")
-    parts.append("\n" + _DESK_PRACTICE_PROVISION)
-    if rich:
-        parts.append('." [akashic boot] Practice ready" CR TX-FLUSH\n')
-    if any(applet.seeds for applet in applets):
-        parts.append("\n" + _DESK_RECORDS_SEED)
-    blocks = []
-    for applet in applets:
-        descriptor = f"_boot-{applet.name}-desc"
-        if applet.tile:
-            blocks.append(
-                f"CREATE {descriptor} APP-DESC ALLOT\n"
-                f"{descriptor} {applet.entry}\n"
-                f"{applet.setup}"
-                f"{_records_seed_lines(applet)}"
-                f"{descriptor} DESK-QUEUE-LAUNCH\n"
-            )
-        else:
-            blocks.append(
-                f"{applet.note}\n"
-                f"CREATE {descriptor} APP-DESC ALLOT\n"
-                f"{descriptor} {applet.entry}\n"
-                f"{applet.setup}"
-                f"{_records_seed_lines(applet)}"
-                f"{descriptor}\n"
-                "ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR\n"
-                "DESK-QUEUE-BUILTIN\n"
-            )
-    parts.append("\n" + "\n".join(blocks))
-    if rich:
-        parts.append('." [akashic boot] app descriptors ready" CR TX-FLUSH\n')
-    parts.append("\n" + _DESK_SANDBOX_POLICY)
-    parts.append("\n" + (_DESK_APT1_RUN if rich else _DESK_ANSI_RUN))
-    return "".join(parts)
-
-
-def desktop_ready_markers(applets) -> tuple[str, ...]:
-    return tuple(marker for applet in applets for marker in applet.ready)
-
-
-def desktop_stable_markers(applets) -> tuple[str, ...]:
-    return tuple(marker for applet in applets for marker in applet.stable)
-
-
-def desktop_composes(name: str) -> bool:
-    """Whether the Desktop profile composes the Desk applet NAME."""
-
-    return any(applet.name == name for applet in DESK_APPLETS)
-
-
-def desk_applet(name: str) -> DeskApplet:
-    """The Desk applet NAME, from the Desktop's or the adjacent ones."""
-
-    for applet in (*DESK_APPLETS, *ADJACENT_DESK_APPLETS):
-        if applet.name == name:
-            return applet
-    raise ValueError(f"no Desk applet {name!r}")
 
 
 # Worlds' valve field: its label, then its value right-aligned in a slot as
@@ -3465,607 +2731,8 @@ _dx-run
         failure_markers=("DESK EXTERNAL IO FAIL",),
         linked=True,
         include_large_sample=False,
-        total_sectors=8192,
-    ),
-    "tls-trust-registry": Profile(
-        roots=("tui/applets/agent/providers/codex/trust.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - composed machine TLS trust contracts
-ENTER-USERLAND
-." [akashic] loading machine TLS trust contracts" CR
-REQUIRE tui/applets/agent/providers/codex/trust.f
-
-VARIABLE _tr-fails
-VARIABLE _tr-checks
-VARIABLE _tr-depth
-VARIABLE _tr-builder
-VARIABLE _tr-generation
-: _tr-assert  ( flag -- )
-    1 _tr-checks +!
-    0= IF 1 _tr-fails +! ." ASSERT " _tr-checks @ . CR THEN ;
-: _tr-stack  ( -- )
-    DEPTH DUP _tr-depth @ <> IF
-        ." STACK " _tr-depth @ . ."  -> " DUP . CR .S CR
-    THEN
-    _tr-depth @ = _tr-assert ;
-
-: _tr-extra-emit  ( builder context -- status )
-    DROP _tr-builder !
-    _CDTR-CERT 127 S" short.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" bad..example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" badflags.example" 2 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" auth.openai.com" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-CONFLICT = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" testing.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-OK = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" testing.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-CONFLICT = _tr-assert
-    MTRUST-S-OK ;
-
-: _tr-other-emit  ( builder context -- status )
-    2DROP MTRUST-S-OK ;
-
-: _tr-leak-emit  ( builder context -- leaked status )
-    2DROP 123 MTRUST-S-OK ;
-
-CREATE _tr-leak-contributor _MTC-SIZE ALLOT
-
-: _tr-run  ( -- )
-    0 _tr-fails ! 0 _tr-checks ! DEPTH _tr-depth !
-    TLS-TRUST-RESET
-    ['] _tr-leak-emit _tr-leak-contributor _MTC.EMIT-XT !
-    0 _tr-leak-contributor _MTC.CONTEXT !
-    _tr-leak-contributor _MTR-CALL-EMITTER
-        MTRUST-S-CONTRIBUTOR = _tr-assert
-    MTRUST-LAST-DETAIL@ MTRUST-D-EMITTER-STACK = _tr-assert
-    _tr-stack
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _tr-assert
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.trust" ['] _tr-extra-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.trust" ['] _tr-extra-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.empty-trust" ['] _tr-other-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tr-assert
-    S" org.akashic.testing.trust" ['] _tr-other-emit 0
-        MTRUST-REGISTER MTRUST-S-CONFLICT = _tr-assert
-    TLS-TRUST-COUNT @ 0= _tr-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tr-assert
-    MTRUST-FROZEN? _tr-assert
-    MTRUST-COUNT@ 3 = _tr-assert
-    TLS-TRUST-COUNT @ 3 = _tr-assert
-    TLS-TRUST-VERSION @ 1 = _tr-assert
-    MTRUST-GENERATION@ DUP _tr-generation ! 0<> _tr-assert
-    _MTRUST-DIGEST _MTR-BE64@ _tr-generation @ = _tr-assert
-    TLS-TRUST-GENERATION @ _tr-generation @ = _tr-assert
-    S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
-    S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
-    S" testing.example" 2 TLS-TRUST@ _TLS-SCOPE-MATCH? _tr-assert
-    S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _tr-assert
-    S" auth.openai.com.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _tr-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tr-assert
-    CODEX-TRUST-REGISTER MTRUST-S-FROZEN = _tr-assert
-    _CDTR-CERT _CDTR-CERT-SIZE S" after-freeze.example" 0 _tr-builder @
-        MTRUST-ANCHOR+ MTRUST-S-INVALID = _tr-assert
-    _tr-generation @ 1+ TLS-TRUST-GENERATION !
-    MTRUST-FREEZE MTRUST-S-DIVERGED = _tr-assert
-    TLS-TRUST-GENERATION @ _tr-generation @ 1+ = _tr-assert
-    _tr-generation @ TLS-TRUST-GENERATION !
-    _tr-stack
-    _tr-fails @ 0= IF
-        ." TLS TRUST REGISTRY PASS " _tr-checks @ .
-    ELSE
-        ." TLS TRUST REGISTRY FAIL " _tr-fails @ . ."  / " _tr-checks @ .
-    THEN CR ;
-
-_tr-run
-""",
-        ready_markers=("TLS TRUST REGISTRY PASS",),
-        stable_markers=("TLS TRUST REGISTRY PASS",),
-        failure_markers=("TLS TRUST REGISTRY FAIL",),
-        include_large_sample=False,
-    ),
-    "tls-trust-mpta": Profile(
-        roots=("tui/applets/agent/providers/codex/trust.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - exact-host MPTA import contracts
-ENTER-USERLAND
-." [akashic] loading exact-host MPTA import contracts" CR
-REQUIRE tui/applets/agent/providers/codex/trust.f
-
-VARIABLE _tm-fails
-VARIABLE _tm-checks
-VARIABLE _tm-depth
-VARIABLE _tm-builder
-VARIABLE _tm-scope-a
-VARIABLE _tm-scope-u
-VARIABLE _tm-flags
-VARIABLE _tm-art-u
-VARIABLE _tm-record-u
-VARIABLE _tm-old-pos
-VARIABLE _tm-old-count
-VARIABLE _tm-generation
-
-CREATE _tm-art 4096 ALLOT
-CREATE _tm-digest 32 ALLOT
-CREATE _tm-old-output-digest 32 ALLOT
-CREATE _tm-output-digest 32 ALLOT
-CREATE _tm-empty-output-digest 32 ALLOT
-CREATE _tm-long-scope 254 ALLOT
-
-: _tm-assert  ( flag -- )
-    1 _tm-checks +!
-    0= IF 1 _tm-fails +! ." TM ASSERT " _tm-checks @ . CR THEN ;
-: _tm-stack  ( -- ) DEPTH _tm-depth @ = _tm-assert ;
-
-: _tm-be16!  ( value address -- )
-    >R DUP 8 RSHIFT 255 AND R@ C! 255 AND R> 1+ C! ;
-: _tm-be32!  ( value address -- )
-    >R
-    DUP 24 RSHIFT 255 AND R@ C!
-    DUP 16 RSHIFT 255 AND R@ 1+ C!
-    DUP 8 RSHIFT 255 AND R@ 2 + C!
-    255 AND R> 3 + C! ;
-
-: _tm-seal  ( -- )
-    _tm-art 8 + 8 0 FILL
-    _tm-art _tm-art-u @ _tm-digest SHA3-256-HASH
-    _tm-digest _tm-art 8 + 8 CMOVE ;
-
-: _tm-build-one  ( scope-a scope-u flags -- )
-    _tm-flags ! _tm-scope-u ! _tm-scope-a !
-    _tm-art 4096 0 FILL
-    _MTRUST-MPTA-MAGIC _tm-art 4 CMOVE
-    1 _tm-art 4 + _tm-be16!
-    1 _tm-art 6 + _tm-be16!
-    _tm-flags @ _tm-art 16 + _tm-be16!
-    _tm-scope-u @ _tm-art 18 + _tm-be16!
-    _CDTR-CERT-SIZE _tm-art 20 + _tm-be32!
-    _tm-scope-u @ IF
-        _tm-scope-a @ _tm-art 24 + _tm-scope-u @ CMOVE
-    THEN
-    _CDTR-CERT _tm-art 24 + _tm-scope-u @ + _CDTR-CERT-SIZE CMOVE
-    24 _tm-scope-u @ + _CDTR-CERT-SIZE + _tm-art-u !
-    _tm-seal ;
-
-: _tm-build-duplicate  ( -- )
-    S" duplicate.example" 0 _tm-build-one
-    _tm-art-u @ 16 - _tm-record-u !
-    _tm-art 16 + _tm-art _tm-art-u @ + _tm-record-u @ CMOVE
-    2 _tm-art 6 + _tm-be16!
-    _tm-record-u @ _tm-art-u +!
-    _tm-seal ;
-
-: _tm-build-two  ( -- )
-    S" first.example" 0 _tm-build-one
-    _tm-art-u @ 16 - _tm-record-u !
-    _tm-art 16 + _tm-art _tm-art-u @ + _tm-record-u @ CMOVE
-    S" other.example" _tm-art _tm-art-u @ + 8 + SWAP CMOVE
-    2 _tm-art 6 + _tm-be16!
-    _tm-record-u @ _tm-art-u +!
-    _tm-seal ;
-
-: _tm-snapshot  ( -- )
-    _tm-builder @ _MTB.POSITION @ _tm-old-pos !
-    _tm-builder @ _MTB.COUNT @ _tm-old-count !
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-old-output-digest SHA3-256-HASH ;
-
-: _tm-unchanged?  ( -- flag )
-    _tm-builder @ _MTB.POSITION @ _tm-old-pos @ =
-    _tm-builder @ _MTB.COUNT @ _tm-old-count @ = AND
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-output-digest SHA3-256-HASH
-    _tm-old-output-digest 32 _tm-output-digest 32 COMPARE 0= AND ;
-
-: _tm-expect  ( expected-status -- )
-    >R _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        R> = _tm-assert
-    _tm-unchanged? _tm-assert ;
-
-: _tm-cap-anchor  ( scope-a scope-u -- )
-    _CDTR-CERT _CDTR-CERT-SIZE 2SWAP 0 _tm-builder @ MTRUST-ANCHOR+
-        MTRUST-S-OK = _tm-assert ;
-
-: _tm-import-emit  ( builder context -- status )
-    DROP _tm-builder !
-    _CDTR-DECODE TLS-CERT-OK = _tm-assert
-
-    \ The public span predicates make exact adjacency safe and reject either
-    \ direction of one-byte overlap without dereferencing wrapping spans.
-    1000 16 1016 8 _MTRUST-RANGES-OVERLAP? 0= _tm-assert
-    1000 17 1016 8 _MTRUST-RANGES-OVERLAP? _tm-assert
-    1016 8 1000 17 _MTRUST-RANGES-OVERLAP? _tm-assert
-    -8 16 _MTRUST-SPAN-VALID? 0= _tm-assert
-
-    \ The active output allocation can never serve as its own import input,
-    \ and a null/stale builder is rejected before dereference.
-    _tm-snapshot
-    _tm-builder @ _MTB.BUFFER @ 16 _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-    _tm-snapshot
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @ + 1-
-        16 _tm-builder @ MTRUST-MPTA+ MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-    S" feeds.example" 0 _tm-build-one
-    _tm-snapshot
-    _tm-art _tm-art-u @ 0 MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-
-    \ Emitter-visible metadata is sealed before any duplicate scan or append.
-    \ Each malformed form remains byte-identical and is then restored so the
-    \ next independent case starts from the canonical empty builder.
-    S" feeds.example" 0 _tm-build-one
-    -1 _tm-builder @ _MTB.COUNT !
-    MTRUST-S-INVALID _tm-expect
-    0 _tm-builder @ _MTB.COUNT !
-    15 _tm-builder @ _MTB.POSITION !
-    MTRUST-S-INVALID _tm-expect
-    16 _tm-builder @ _MTB.POSITION !
-    _tm-snapshot
-    TLS-TRUST-BUNDLE-MAX 1+ _tm-builder @ _MTB.CAPACITY !
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    TLS-TRUST-BUNDLE-MAX _tm-builder @ _MTB.CAPACITY !
-    _tm-unchanged? _tm-assert
-    1 _tm-builder @ _MTB.COUNT !
-    MTRUST-S-INVALID _tm-expect
-    0 _tm-builder @ _MTB.COUNT !
-
-    \ All artifacts are internally self-identifying and exact.  Recompute
-    \ the digest after each structural mutation so these checks reach their
-    \ intended parser branch rather than merely failing the generation.
-    S" feeds.example" 0 _tm-build-one
-    88 _tm-art C! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    2 _tm-art 4 + _tm-be16! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    TLS-TRUST-MAX 1+ _tm-art 6 + _tm-be16! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    0 _tm-art 6 + _tm-be16! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    0 0 0 _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    S" bad..example" 0 _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" TTAF-SUBDOMAINS _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    _tm-long-scope 254 97 FILL
-    _tm-long-scope 254 0 _tm-build-one
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    127 _tm-art 20 + _tm-be32! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    8193 _tm-art 20 + _tm-be32! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    _tm-art-u @ 1- _tm-art-u ! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    99 _tm-art _tm-art-u @ + C! 1 _tm-art-u +! _tm-seal
-    MTRUST-S-INVALID _tm-expect
-
-    S" feeds.example" 0 _tm-build-one
-    _tm-art 8 + DUP C@ 1 XOR SWAP C!
-    MTRUST-S-INVALID _tm-expect
-
-    _tm-build-duplicate
-    MTRUST-S-CONFLICT _tm-expect
-
-    _tm-build-duplicate
-    S" Duplicate.Example" _tm-art 16 + _tm-record-u @ + 8 + SWAP CMOVE
-    _tm-seal
-    MTRUST-S-CONFLICT _tm-expect
-
-    \ White-box the append boundary after a successful full preflight.  A
-    \ second-record structural failure rolls back the already-appended first
-    \ record, and a same-shape post-hash mutation is caught by the second
-    \ generation check after copying.
-    _tm-build-two
-    _tm-art _MTBI-A ! _tm-art-u @ _MTBI-U !
-    _tm-builder @ _MTBI-BUILDER !
-    _MTBI-PREFLIGHT MTRUST-S-OK = _tm-assert
-    1 _tm-art 16 + _tm-record-u @ + _tm-be16!
-    _tm-snapshot
-    _MTBI-APPEND MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-
-    _tm-build-two
-    _tm-art _MTBI-A ! _tm-art-u @ _MTBI-U !
-    _tm-builder @ _MTBI-BUILDER !
-    _MTBI-PREFLIGHT MTRUST-S-OK = _tm-assert
-    _tm-art _tm-art-u @ + 1- DUP C@ 1 XOR SWAP C!
-    _tm-snapshot
-    _MTBI-APPEND MTRUST-S-INVALID = _tm-assert
-    _tm-unchanged? _tm-assert
-
-    \ Capacity refusal is also preflight-only.  Build eight structurally
-    \ valid distinct anchors, prove the import changes none of them, then
-    \ restore the canonical empty builder for the accepted artifact below.
-    S" capacity.example" 0 _tm-build-one
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-empty-output-digest SHA3-256-HASH
-    S" cap0.example" _tm-cap-anchor
-    S" cap1.example" _tm-cap-anchor
-    S" cap2.example" _tm-cap-anchor
-    S" cap3.example" _tm-cap-anchor
-    S" cap4.example" _tm-cap-anchor
-    S" cap5.example" _tm-cap-anchor
-    S" cap6.example" _tm-cap-anchor
-    S" cap7.example" _tm-cap-anchor
-    _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-CAPACITY = _tm-assert
-    _tm-unchanged? _tm-assert
-    _tm-builder @ _MTB.BUFFER @ 16 +
-        _tm-builder @ _MTB.POSITION @ 16 - 0 FILL
-    16 _tm-builder @ _MTB.POSITION !
-    0 _tm-builder @ _MTB.COUNT !
-    _tm-builder @ _MTB-STRUCTURE? _tm-assert
-    _tm-builder @ _MTB.BUFFER @ _tm-builder @ _MTB.CAPACITY @
-        _tm-output-digest SHA3-256-HASH
-    _tm-empty-output-digest 32 _tm-output-digest 32 COMPARE 0=
-        _tm-assert
-
-    \ One valid two-host artifact qualifies the complete multi-record scan
-    \ and append path.  Reimport and mixed-case scope aliases are semantic
-    \ duplicate conflicts and change no output byte.
-    _tm-build-two
-    _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-OK = _tm-assert
-    _tm-builder @ _MTB.COUNT @ _tm-old-count @ 2 + = _tm-assert
-    _tm-builder @ _MTB.POSITION @ _tm-old-pos @
-        _tm-art-u @ 16 - + = _tm-assert
-    _tm-snapshot
-    _tm-art _tm-art-u @ _tm-builder @ MTRUST-MPTA+
-        MTRUST-S-CONFLICT = _tm-assert
-    _tm-unchanged? _tm-assert
-    S" FIRST.EXAMPLE" 0 _tm-build-one
-    MTRUST-S-CONFLICT _tm-expect
-    MTRUST-S-OK ;
-
-: _tm-run  ( -- )
-    0 _tm-fails ! 0 _tm-checks ! DEPTH _tm-depth !
-    TLS-TRUST-RESET
-    _CDTR-DECODE TLS-CERT-OK = _tm-assert
-    _tm-build-two
-    _tm-art 8 + _MTR-BE64@ DUP _tm-generation ! 0<> _tm-assert
-    _tm-art _tm-art-u @ _MTRUST-BUILDER MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    S" org.akashic.testing.exact-mpta" ['] _tm-import-emit 0
-        MTRUST-REGISTER MTRUST-S-OK = _tm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tm-assert
-    MTRUST-FROZEN? _tm-assert
-    MTRUST-COUNT@ 2 = _tm-assert
-    TLS-TRUST-COUNT @ 2 = _tm-assert
-    MTRUST-GENERATION@ _tm-generation @ = _tm-assert
-    S" first.example" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _tm-assert
-    S" other.example" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _tm-assert
-    S" sub.first.example" 0 TLS-TRUST@ _TLS-SCOPE-MATCH?
-        0= _tm-assert
-    S" first.example.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH?
-        0= _tm-assert
-    0 TLS-TRUST@ TTA-FLAGS + @ 0= _tm-assert
-    1 TLS-TRUST@ TTA-FLAGS + @ 0= _tm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _tm-assert
-    _tm-art _tm-art-u @ _MTRUST-BUILDER MTRUST-MPTA+
-        MTRUST-S-INVALID = _tm-assert
-    _tm-stack
-    _tm-fails @ 0= IF
-        ." TLS TRUST MPTA PASS " _tm-checks @ .
-    ELSE
-        ." TLS TRUST MPTA FAIL " _tm-fails @ . ."  / " _tm-checks @ .
-    THEN CR ;
-
-_tm-run
-""",
-        ready_markers=("TLS TRUST MPTA PASS",),
-        stable_markers=("TLS TRUST MPTA PASS",),
-        failure_markers=("TLS TRUST MPTA FAIL", "TM ASSERT"),
-        include_large_sample=False,
-    ),
-    "tls-trust-registry-error": Profile(
-        roots=("net/tls-trust-registry.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - nonthrowing trust contributor failure
-ENTER-USERLAND
-." [akashic] loading trust contributor error contract" CR
-REQUIRE net/tls-trust-registry.f
-
-VARIABLE _te-fails
-VARIABLE _te-checks
-VARIABLE _te-depth
-: _te-assert  ( flag -- )
-    1 _te-checks +!
-    0= IF 1 _te-fails +! ." ASSERT " _te-checks @ . CR THEN ;
-: _te-error  ( builder context -- status ) 2DROP -771 ;
-: _te-run  ( -- )
-    0 _te-fails ! 0 _te-checks ! DEPTH _te-depth !
-    1 TLS-TRUST-COUNT ! 1 TLS-TRUST-VERSION ! 99 TLS-TRUST-GENERATION !
-    S" org.akashic.testing.error" ['] _te-error 0
-        MTRUST-REGISTER MTRUST-S-OK = _te-assert
-    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _te-assert
-    MTRUST-LAST-DETAIL@ -771 = _te-assert
-    MTRUST-STATE@ MTRUST-STATE-FAILED = _te-assert
-    TLS-TRUST-COUNT @ 0= _te-assert
-    TLS-TRUST-VERSION @ 0= _te-assert
-    TLS-TRUST-GENERATION @ 0= _te-assert
-    S" org.akashic.testing.late" ['] _te-error 0
-        MTRUST-REGISTER MTRUST-S-STATE = _te-assert
-    MTRUST-FREEZE MTRUST-S-STATE = _te-assert
-    DEPTH _te-depth @ = _te-assert
-    _te-fails @ 0= IF
-        ." TLS TRUST ERROR PASS " _te-checks @ .
-    ELSE
-        ." TLS TRUST ERROR FAIL " _te-fails @ . ."  / " _te-checks @ .
-    THEN CR ;
-
-_te-run
-""",
-        ready_markers=("TLS TRUST ERROR PASS",),
-        stable_markers=("TLS TRUST ERROR PASS",),
-        failure_markers=("TLS TRUST ERROR FAIL",),
-        include_large_sample=False,
-    ),
-    "tls-trust-registry-throw": Profile(
-        roots=("net/tls-trust-registry.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - throwing trust contributor failure
-ENTER-USERLAND
-." [akashic] loading trust contributor throw contract" CR
-REQUIRE net/tls-trust-registry.f
-
-VARIABLE _tt-fails
-VARIABLE _tt-checks
-VARIABLE _tt-depth
-: _tt-assert  ( flag -- )
-    1 _tt-checks +!
-    0= IF 1 _tt-fails +! ." ASSERT " _tt-checks @ . CR THEN ;
-: _tt-throw  ( builder context -- status ) 2DROP -772 THROW 0 ;
-: _tt-run  ( -- )
-    0 _tt-fails ! 0 _tt-checks ! DEPTH _tt-depth !
-    S" org.akashic.testing.throw" ['] _tt-throw 0
-        MTRUST-REGISTER MTRUST-S-OK = _tt-assert
-    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _tt-assert
-    MTRUST-LAST-DETAIL@ -772 = _tt-assert
-    MTRUST-STATE@ MTRUST-STATE-FAILED = _tt-assert
-    TLS-TRUST-COUNT @ 0= _tt-assert
-    DEPTH _tt-depth @ = _tt-assert
-    _tt-fails @ 0= IF
-        ." TLS TRUST THROW PASS " _tt-checks @ .
-    ELSE
-        ." TLS TRUST THROW FAIL " _tt-fails @ . ."  / " _tt-checks @ .
-    THEN CR ;
-
-_tt-run
-""",
-        ready_markers=("TLS TRUST THROW PASS",),
-        stable_markers=("TLS TRUST THROW PASS",),
-        failure_markers=("TLS TRUST THROW FAIL",),
-        include_large_sample=False,
-    ),
-    "tls-trust-registry-builder": Profile(
-        roots=("net/tls-trust-registry.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - corrupt trust-builder contributor contract
-ENTER-USERLAND
-." [akashic] loading trust builder corruption contract" CR
-REQUIRE net/tls-trust-registry.f
-
-VARIABLE _tb-fails
-VARIABLE _tb-checks
-VARIABLE _tb-depth
-: _tb-assert  ( flag -- )
-    1 _tb-checks +!
-    0= IF 1 _tb-fails +! ." ASSERT " _tb-checks @ . CR THEN ;
-: _tb-corrupt  ( builder context -- status )
-    DROP DUP 15 SWAP _MTB.POSITION !
-    -1 SWAP _MTB.BUFFER ! MTRUST-S-OK ;
-: _tb-run  ( -- )
-    0 _tb-fails ! 0 _tb-checks ! DEPTH _tb-depth !
-    S" org.akashic.testing.builder-corruption" ['] _tb-corrupt 0
-        MTRUST-REGISTER MTRUST-S-OK = _tb-assert
-    MTRUST-FREEZE MTRUST-S-CONTRIBUTOR = _tb-assert
-    MTRUST-LAST-DETAIL@ MTRUST-D-EMITTER-BUILDER = _tb-assert
-    MTRUST-STATE@ MTRUST-STATE-FAILED = _tb-assert
-    TLS-TRUST-COUNT @ 0= _tb-assert
-    TLS-TRUST-VERSION @ 0= _tb-assert
-    TLS-TRUST-GENERATION @ 0= _tb-assert
-    DEPTH _tb-depth @ = _tb-assert
-    _tb-fails @ 0= IF
-        ." TLS TRUST BUILDER PASS " _tb-checks @ .
-    ELSE
-        ." TLS TRUST BUILDER FAIL " _tb-fails @ . ."  / " _tb-checks @ .
-    THEN CR ;
-
-_tb-run
-""",
-        ready_markers=("TLS TRUST BUILDER PASS",),
-        stable_markers=("TLS TRUST BUILDER PASS",),
-        failure_markers=("TLS TRUST BUILDER FAIL",),
-        include_large_sample=False,
-    ),
-    "atproto-public-trust": Profile(
-        roots=("atproto/public-trust.f",),
-        resources=(),
-        autoexec=r"""\ autoexec.f - scoped public Bluesky trust contract
-ENTER-USERLAND
-." [akashic] loading public Bluesky trust contract" CR
-REQUIRE atproto/public-trust.f
-
-VARIABLE _apt-fails
-VARIABLE _apt-checks
-VARIABLE _apt-depth
-: _apt-assert  ( flag -- )
-    1 _apt-checks +!
-    0= IF 1 _apt-fails +! ." ASSERT " _apt-checks @ . CR THEN ;
-: _apt-stack  ( -- ) DEPTH _apt-depth @ = _apt-assert ;
-
-: _apt-run  ( -- )
-    0 _apt-fails ! 0 _apt-checks ! DEPTH _apt-depth !
-    TLS-TRUST-RESET
-    _APTR-DECODE-YR1 MTRUST-S-OK = _apt-assert
-    _APTR-DECODE-YR2 MTRUST-S-OK = _apt-assert
-    _APTR-YR1 C@ 48 = _apt-assert
-    _APTR-YR2 C@ 48 = _apt-assert
-    _APTR-YR1 _APTR-YR1-SIZE _APTR-YR2 _APTR-YR2-SIZE COMPARE 0<> _apt-assert
-    ATPUBLIC-TRUST-REGISTER MTRUST-S-OK = _apt-assert
-    ATPUBLIC-TRUST-REGISTER MTRUST-S-OK = _apt-assert
-    TLS-TRUST-COUNT @ 0= _apt-assert
-    MTRUST-FREEZE MTRUST-S-OK = _apt-assert
-    MTRUST-FROZEN? _apt-assert
-    MTRUST-COUNT@ 2 = _apt-assert
-    TLS-TRUST-COUNT @ 2 = _apt-assert
-    TLS-TRUST-VERSION @ 1 = _apt-assert
-    TLS-TRUST-GENERATION @ 0<> _apt-assert
-    S" public.api.bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _apt-assert
-    S" PUBLIC.API.BSKY.APP" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _apt-assert
-    S" bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    S" api.bsky.app" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    S" evil.public.api.bsky.app" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    S" public.api.bsky.app.evil" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _apt-assert
-    0 TLS-TRUST@ TTA-FLAGS + @ 0= _apt-assert
-    1 TLS-TRUST@ TTA-FLAGS + @ 0= _apt-assert
-    0 TLS-TRUST@ TTA-DESC + XC.PUB-ALGO + @ X509-ALG-RSA2048 = _apt-assert
-    1 TLS-TRUST@ TTA-DESC + XC.PUB-ALGO + @ X509-ALG-RSA2048 = _apt-assert
-    0 TLS-TRUST@ TTA-DESC + XC.FLAGS + @ XCF-CA AND 0<> _apt-assert
-    1 TLS-TRUST@ TTA-DESC + XC.FLAGS + @ XCF-CA AND 0<> _apt-assert
-    ATPUBLIC-TRUST-REGISTER MTRUST-S-FROZEN = _apt-assert
-    _apt-stack
-    _apt-fails @ 0= IF
-        ." ATPROTO PUBLIC TRUST PASS " _apt-checks @ .
-    ELSE
-        ." ATPROTO PUBLIC TRUST FAIL " _apt-fails @ . ."  / " _apt-checks @ .
-    THEN CR ;
-
-_apt-run
-""",
-        ready_markers=("ATPROTO PUBLIC TRUST PASS",),
-        stable_markers=("ATPROTO PUBLIC TRUST PASS",),
-        failure_markers=("ATPROTO PUBLIC TRUST FAIL",),
-        include_large_sample=False,
+        # Room beside the files Desk's closure ships, the root set among them.
+        total_sectors=16384,
     ),
     "http-buffered": Profile(
         roots=("net/http-buffered.f",),
@@ -8065,185 +6732,6 @@ _cc-run
 """,
         ready_markers=("CODEX CATALOG PASS",),
         stable_markers=("CODEX CATALOG PASS",),
-    ),
-    "codex-source": Profile(
-        roots=(
-            "tui/applets/agent/providers/codex/source.f",
-            "tui/applets/agent/providers/codex/trust.f",
-            "tui/applets/agent/runtime.f",
-        ),
-        resources=(),
-        autoexec=r"""\ autoexec.f - owned Codex provider source
-ENTER-USERLAND
-." [akashic] loading Codex provider source" CR
-REQUIRE tui/applets/agent/providers/codex/source.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
-REQUIRE tui/applets/agent/runtime.f
-
-VARIABLE _cm-fails
-VARIABLE _cm-checks
-VARIABLE _cm-depth
-VARIABLE _cm-source
-VARIABLE _cm-provider
-VARIABLE _cm-runtime
-VARIABLE _cm-trust-generation
-VARIABLE _cm-cancels
-VARIABLE _cm-closes
-VARIABLE _cm-failure-source
-VARIABLE _cm-auth-cancels
-VARIABLE _cm-model-cancels
-CREATE _cm-wire 4096 ALLOT
-CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
-CREATE _cm-session 256 ALLOT
-: _cm-assert  ( flag -- )
-    1 _cm-checks +!
-    0= IF 1 _cm-fails +! ." ASSERT " _cm-checks @ . CR THEN ;
-: _cm-stack  ( -- )
-    DEPTH DUP _cm-depth @ <> IF
-        ." STACK " _cm-depth @ . ." -> " DUP . CR .S CR
-    THEN
-    _cm-depth @ = _cm-assert ;
-
-: _cm-cancel  ( context -- ) DROP 1 _cm-cancels +! ;
-: _cm-close  ( context -- ) DROP 1 _cm-closes +! -792 THROW ;
-: _cm-auth-cancel-fail  ( context -- )
-    DROP 1 _cm-auth-cancels +! -795 THROW ;
-: _cm-auth-cancel-ok  ( context -- ) DROP 1 _cm-auth-cancels +! ;
-: _cm-model-cancel  ( context -- ) DROP 1 _cm-model-cancels +! ;
-: _cm-free-failure-source  ( -- ) _cm-failure-source @ CODEX-SOURCE-FREE ;
-
-: _cm-test-cancel-exhaustion  ( -- )
-    0 _cm-auth-cancels ! 0 _cm-model-cancels !
-    CODEX-SOURCE-NEW
-    DUP APSOURCE-S-OK = _cm-assert DROP _cm-failure-source !
-    ['] _cm-auth-cancel-fail
-    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT
-    KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-model-cancel
-    _cm-failure-source @ CODEX-SOURCE-MODEL-TRANSPORT
-    KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-free-failure-source CATCH
-    KDOSTLS-E-CLEANUP NEGATE = _cm-assert
-    _cm-auth-cancels @ 1 = _cm-assert
-    _cm-model-cancels @ 1 = _cm-assert
-    _cm-failure-source @ DUP APSOURCE.ID-A @ SWAP APSOURCE.ID-U @
-    S" org.akashic.agent.source.codex" STR-STR= _cm-assert
-
-    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS.PORT NIO-INIT
-    ['] _cm-auth-cancel-ok
-    _cm-failure-source @ CODEX-SOURCE-AUTH-TRANSPORT
-    KDOSTLS.PORT NIO.CANCEL-XT !
-    _cm-failure-source @ CODEX-SOURCE-FREE
-    _cm-auth-cancels @ 2 = _cm-assert
-    _cm-model-cancels @ 1 = _cm-assert ;
-
-: _cm-run  ( -- )
-    0 _cm-fails ! 0 _cm-checks ! 0 _cm-cancels ! 0 _cm-closes !
-    DEPTH _cm-depth !
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
-    CODEX-TRUST-REGISTER MTRUST-S-OK = _cm-assert
-    TLS-TRUST-COUNT @ 0= _cm-assert
-    CODEX-SOURCE-NEW
-    DUP APSOURCE-S-OK = _cm-assert DROP _cm-source !
-    ['] _cm-cancel _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT
-        KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-close _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT
-        KDOSTLS.PORT NIO.CLOSE-XT !
-    ['] _cm-cancel _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT
-        KDOSTLS.PORT NIO.CANCEL-XT !
-    ['] _cm-close _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT
-        KDOSTLS.PORT NIO.CLOSE-XT !
-    TLS-TRUST-COUNT @ 0= _cm-assert
-    TLS-TRUST-GENERATION @ 0= _cm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _cm-assert
-    MTRUST-FROZEN? _cm-assert
-    MTRUST-GENERATION@ DUP 0<> _cm-assert
-    DUP _cm-trust-generation ! TLS-TRUST-GENERATION @ = _cm-assert
-    MTRUST-FREEZE MTRUST-S-OK = _cm-assert
-    CODEX-TRUST-REGISTER MTRUST-S-FROZEN = _cm-assert
-    _cm-source @ CODEX-SOURCE-CONFIG OAIC-HOST
-    CODEX-BACKEND-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-SOURCE-AUTH-TRANSPORT KDOSTLS-HOST
-    CODEX-AUTH-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-SOURCE-MODEL-TRANSPORT KDOSTLS-HOST
-    CODEX-BACKEND-HOST STR-STR= _cm-assert
-    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH AAUTH.METHODS @
-    AAUTH-M-DEVICE AND 0<> _cm-assert
-
-    _cm-source @ APSOURCE-PROVIDER-NEW
-    DUP OAIR-S-OK = _cm-assert DROP _cm-provider !
-    _cm-provider @ DUP APROV.ID-A @ SWAP APROV.ID-U @
-    CODEX-PROVIDER-ID STR-STR= _cm-assert
-    _cm-provider @ APROV-AUTH
-    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH = _cm-assert
-    TLS-TRUST-COUNT @ 2 = _cm-assert
-    TLS-TRUST-VERSION @ 1 = _cm-assert
-    TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
-    S" auth.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
-    S" chatgpt.com" 1 TLS-TRUST@ _TLS-SCOPE-MATCH? _cm-assert
-    S" api.openai.com" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
-    S" auth.openai.com.evil" 0 TLS-TRUST@ _TLS-SCOPE-MATCH? 0= _cm-assert
-    _cm-provider @ APROV-RUN-SETTINGS
-    _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
-    _cm-source @ CODEX-SOURCE-CATALOG CDMC.CONFIG @
-    _cm-provider @ OPENAI-PROVIDER-CONFIG = _cm-assert
-    \ A turn that names its model is configured from the catalog.
-    _cm-provider @ APROV.CONTEXT @ DUP OAIR-C.DESIGNATE-XT @
-    ['] CDMC-DESIGNATE = _cm-assert
-    OAIR-C.DESIGNATE-CONTEXT @ _cm-source @ CODEX-SOURCE-CATALOG = _cm-assert
-    _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
-    _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
-    _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
-    AAUTH.STATE @ AAUTH-STATE-SIGNED-OUT = _cm-assert
-    _cm-runtime @ ARUNTIME-RUN-SETTINGS
-    _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
-    S" hello" _cm-runtime @ ARUNTIME-SEND 4 = _cm-assert
-
-    S" account-fixture"
-    _cm-source @ CODEX-SOURCE-AUTH CDA.AUTH AAUTH.ACCOUNT-ID CV-STRING!
-    0= _cm-assert
-    _cm-provider @ OPENAI-PROVIDER-CONFIG OAIC.FLAGS DUP @
-    OAIC-F-RESPONSES-LITE OR SWAP !
-    _cm-wire 4096 _cm-request HREQ-INIT HREQ-S-OK = _cm-assert
-    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
-    HREQ-S-OK = _cm-assert
-    _cm-session 256 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
-    _cm-provider @ OPENAI-PROVIDER-CONFIG _cm-session OAIR-S.CONFIG !
-    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
-    OAIR-S-OK = _cm-assert
-    _cm-wire _cm-request HREQ.LENGTH @
-    S" x-openai-internal-codex-responses-lite: true"
-    STR-STR-CONTAINS _cm-assert
-    \ The headers follow the session's own configuration, which a turn
-    \ naming its model has, not the provider's.
-    _cm-request HREQ-CLEAR
-    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
-    HREQ-S-OK = _cm-assert
-    _cm-source @ CODEX-SOURCE-CONFIG _cm-session OAIR-S.CONFIG !
-    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
-    OAIR-S-OK = _cm-assert
-    _cm-wire _cm-request HREQ.LENGTH @
-    S" x-openai-internal-codex-responses-lite: true"
-    STR-STR-CONTAINS 0= _cm-assert
-    _cm-runtime @ ARUNTIME-FREE
-    _cm-provider @ APROV-FREE
-    _cm-source @ APSOURCE-FREE
-    _cm-cancels @ 2 = _cm-assert
-    _cm-closes @ 0= _cm-assert
-    TLS-TRUST-COUNT @ 2 = _cm-assert
-    TLS-TRUST-GENERATION @ _cm-trust-generation @ = _cm-assert
-    _cm-test-cancel-exhaustion
-    _cm-stack
-    _cm-fails @ 0= IF
-        ." CODEX SOURCE PASS " _cm-checks @ .
-    ELSE
-        ." CODEX SOURCE FAIL " _cm-fails @ . ." / " _cm-checks @ .
-    THEN CR ;
-
-_cm-run
-""",
-        ready_markers=("CODEX SOURCE PASS",),
-        stable_markers=("CODEX SOURCE PASS",),
     ),
     "net-stream": Profile(
         roots=("net/sse.f", "net/http-stream.f", "net/http.f"),
@@ -14425,429 +12913,16 @@ WORLDS-RUN
 }
 
 
-# The geometry the simulated terminal itself accepts, and the per-terminal
-# budgets derived from it below.  Desk sizes nothing from them: a larger
-# screen grows Desk's storage, and the terminal grants or refuses its space.
-DESKTOP_APT1_MAX_COLS = 400
-DESKTOP_APT1_MAX_ROWS = 200
-DESKTOP_APT1_MAX_CELLS = DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
-DESKTOP_APT1_UIDL_BINDINGS = 32
-DESKTOP_APT1_UIDL_RECORDS = 256
-DESKTOP_APT1_UIDL_TEXT_BYTES = 12_288
-DESKTOP_APT1_UIDL_AGGREGATE_RECORDS = (
-    DESKTOP_APT1_UIDL_BINDINGS * DESKTOP_APT1_UIDL_RECORDS
-)
-DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES = (
-    DESKTOP_APT1_UIDL_BINDINGS * DESKTOP_APT1_UIDL_TEXT_BYTES
-)
-# This is the exact default selected by desk-apt1.f from the aggregate UIDL
-# text bank.  Keep it explicit in the product profile so the host policy and
-# caller-owned guest banks cannot silently diverge.
-DESKTOP_APT1_COLLECTION_NATIVE_BYTES = (
-    DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
-)
-# Separate caller-selected static-field bytes. One canonical field needs at
-# least its 72-byte native header; no application-specific field count is used.
-DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES = 72
-DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES = DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
-DESKTOP_APT1_MAX_STATUS_FIELDS = (
-    DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES // DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES
-)
-DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES = 96
-DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES = 136
-# A canonical FIELD needs a 224-byte root; each CHOICE consumes at least its
-# 24-byte native record. These independent conservative bounds account for
-# roots and content items without hard-coding Sound Lab's four parameters.
-DESKTOP_APT1_FIELD_HEADER_BYTES = 224
-DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES = 24
-DESKTOP_APT1_FIELD_NATIVE_BYTES = DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
-DESKTOP_APT1_MAX_FIELDS = DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_HEADER_BYTES
-DESKTOP_APT1_FIELD_CHOICES = (
-    DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES
-)
-# Match desk-apt1.f's renderer-neutral DATA_GRAPHICS bank: every possible
-# UIDL record may be one minimum 112-byte UDG root.  Object, region, operation,
-# UTF-8, transport, and transaction capacities below all derive from this
-# selected byte bank rather than from any applet's current graph count.
-DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES = 112
-DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES = 128
-DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES = (
-    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
-    * DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
-)
-# Complete snapshot storage bounds include one DEFINE per native history and
-# at most one sample chunk per i64 value. Declared history reservations are
-# independent finite limits; sparse/empty histories still consume their full
-# authored capacity.
-DESKTOP_APT1_SERIES_HEADER_BYTES = 72
-DESKTOP_APT1_MAX_SERIES = (
-    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_SERIES_HEADER_BYTES
-)
-DESKTOP_APT1_SERIES_MAX_CHUNKS = DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // 8
-DESKTOP_APT1_SERIES_OPERATIONS = (
-    DESKTOP_APT1_MAX_SERIES + DESKTOP_APT1_SERIES_MAX_CHUNKS
-)
-DESKTOP_APT1_SERIES_WIRE_BYTES = (
-    80 * DESKTOP_APT1_SERIES_OPERATIONS + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-)
-DESKTOP_APT1_MAX_HISTORY_PER_SERIES = 32_768
-# A POLYLINE keeps each point as two native cells, sixteen bytes, in the same
-# DATA_GRAPHICS bank, so that bank bounds both the points of one line and the
-# points of every line.  An owner asks for only the points its lines need.
-DESKTOP_APT1_POLYLINE_POINT_BYTES = 16
-DESKTOP_APT1_MAX_PATH_POINTS = (
-    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_POLYLINE_POINT_BYTES
-)
-DESKTOP_APT1_TOTAL_SAMPLE_SLOTS = 65_536
-DESKTOP_APT1_MAX_SAMPLES_PER_APPEND = 4_096
-# Two thirds of the machine is general XMEM, where Desk's rich storage grows;
-# the dictionary keeps about 126 MiB and the cold closure uses about 2 MiB.
-DESKTOP_APT1_XMEM_RESERVE_BYTES = 256 << 20
-if DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES < (
-    DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES
-    + DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
-):
-    raise ValueError(
-        "desktop-apt1 DATA_GRAPHICS bank cannot admit one instrument graph"
-    )
-DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS = min(
-    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-    // DESKTOP_APT1_DATA_GRAPHICS_HEADER_BYTES,
-    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS,
-)
-DESKTOP_APT1_MAX_INSTRUMENTS = (
-    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-    // DESKTOP_APT1_DATA_GRAPHICS_STATUS_RECORD_BYTES
-)
-DESKTOP_APT1_INSTRUMENT_REGIONS = min(
-    DESKTOP_APT1_DATA_GRAPHICS_DESCRIPTORS,
-    DESKTOP_APT1_MAX_INSTRUMENTS,
-)
-DESKTOP_APT1_MAX_REGIONS = 1 + DESKTOP_APT1_INSTRUMENT_REGIONS
-# Match the producer's worst-case canonical graph density: one 80-byte TABSET
-# root, then every remaining semantic control may be a minimum 48-byte TAB.
-# This is a storage negotiation bound derived from the caller-selected native
-# bank, not a product tab-count limit.
-DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES = 80
-DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES = 48
-DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES = 64
-DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES = 120
-DESKTOP_APT1_FRAME_HEADER_BYTES = 40
-DESKTOP_APT1_REGION_FRAME_BYTES = 104
-DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES = 152
-DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES = 104
-DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES = (
-    DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES
-    - DESKTOP_APT1_FRAME_HEADER_BYTES
-)
-
-
-def desktop_apt1_collection_control_capacity(native_bytes: int) -> int:
-    """Return the canonical TABSET/TAB control density for a native bank."""
-
-    if isinstance(native_bytes, bool) or not isinstance(native_bytes, int):
-        raise TypeError("native collection capacity must be an integer")
-    if not 0 < native_bytes <= 0xFFFFFFFF:
-        return 0
-    if native_bytes < DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES:
-        return 0
-    controls = 1 + (
-        native_bytes - DESKTOP_APT1_COLLECTION_TABSET_FIXED_BYTES
-    ) // DESKTOP_APT1_COLLECTION_TAB_MIN_BYTES
-    if not 0 < controls <= 0xFFFFFFFF:
-        return 0
-    return controls
-
-
-DESKTOP_APT1_COLLECTION_CONTROLS = (
-    desktop_apt1_collection_control_capacity(
-        DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-    )
-)
-if DESKTOP_APT1_COLLECTION_CONTROLS == 0:
-    raise ValueError(
-        "desktop-apt1 native collection bank cannot admit a canonical root"
-    )
-DESKTOP_APT1_CONTENT_ITEMS = (
-    DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-    // DESKTOP_APT1_COLLECTION_ITEM_HEADER_BYTES
-    + DESKTOP_APT1_FIELD_CHOICES
-)
-DESKTOP_APT1_MAX_CONTROLS = (
-    DESKTOP_APT1_UIDL_AGGREGATE_RECORDS
-    + DESKTOP_APT1_COLLECTION_CONTROLS
-    + DESKTOP_APT1_MAX_FIELDS
-)
-DESKTOP_APT1_MAX_OBJECTS = (
-    DESKTOP_APT1_MAX_CELLS
-    + DESKTOP_APT1_MAX_CONTROLS
-    + DESKTOP_APT1_CONTENT_ITEMS
-    + DESKTOP_APT1_MAX_INSTRUMENTS
-    + DESKTOP_APT1_MAX_STATUS_FIELDS
-)
-DESKTOP_APT1_MAX_OPERATIONS = (
-    DESKTOP_APT1_MAX_CELLS
-    + DESKTOP_APT1_MAX_CONTROLS
-    + DESKTOP_APT1_MAX_INSTRUMENTS
-    + DESKTOP_APT1_MAX_REGIONS
-    + DESKTOP_APT1_MAX_STATUS_FIELDS
-    + DESKTOP_APT1_SERIES_OPERATIONS
-)
-DESKTOP_APT1_MAX_GLYPH_RUN_BYTES = 4 * DESKTOP_APT1_MAX_COLS
-# RETAINED-1 applies max_glyph_run_bytes to each formatted READOUT as well as
-# each residual glyph run.  Multiplying that negotiated per-object bound by
-# the caller-derived instrument ceiling admits every advertised instrument
-# without encoding a separate applet or readout-text cap.
-DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES = (
-    DESKTOP_APT1_MAX_GLYPH_RUN_BYTES * DESKTOP_APT1_MAX_INSTRUMENTS
-)
-DESKTOP_APT1_TOTAL_UTF8_BYTES = (
-    4 * DESKTOP_APT1_MAX_CELLS
-    + DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
-    + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-    + DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES
-    + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
-    + DESKTOP_APT1_FIELD_NATIVE_BYTES
-)
-DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
-DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES = (
-    DESKTOP_APT1_CONTROL_PAYLOAD_FIXED_BYTES
-    + max(
-        DESKTOP_APT1_UIDL_TEXT_BYTES,
-        DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
-        DESKTOP_APT1_FIELD_NATIVE_BYTES,
-    )
-)
-DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES = (
-    DESKTOP_APT1_READOUT_PAYLOAD_FIXED_BYTES
-    + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-)
-DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES = (
-    DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES
-    + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
-)
-DESKTOP_APT1_MAX_PAYLOAD_BYTES = max(
-    DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
-    DESKTOP_APT1_MAX_COLLECTION_PAYLOAD_BYTES,
-    DESKTOP_APT1_MAX_INSTRUMENT_PAYLOAD_BYTES,
-    DESKTOP_APT1_MAX_STATUS_FIELD_PAYLOAD_BYTES,
-)
-# A collection CONTROL is atomic.  STX1 needs 72 fixed bytes, 36 bytes per
-# item, and raw UTF-8; its native source needs 168 fixed bytes, 72 bytes per
-# item, and padded UTF-8.  The caller's native bank is therefore also an honest
-# upper bound for the wire content, without inventing a second item cap.
-DESKTOP_APT1_MAX_COLLECTION_CONTENT_BYTES = (
-    DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-)
-DESKTOP_APT1_GUEST_TX_BYTES = (
-    DESKTOP_APT1_FRAME_HEADER_BYTES + DESKTOP_APT1_MAX_PAYLOAD_BYTES
-)
-DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
-    DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
-    + DESKTOP_APT1_COLLECTION_NATIVE_BYTES
-    + DESKTOP_APT1_FIELD_NATIVE_BYTES
-)
-# METER has the largest fixed INSTRUMENT frame (152 bytes); adding the entire
-# DATA_GRAPHICS bank separately covers every READOUT unit span and every
-# POLYLINE's points, eight wire bytes for each sixteen native ones.  This is a
-# conservative combined-family wire bound selected from caller-owned bytes,
-# not a hidden per-unit or per-applet limit.
-DESKTOP_APT1_INSTRUMENT_WIRE_BYTES = (
-    DESKTOP_APT1_INSTRUMENT_FRAME_FIXED_BYTES
-    * DESKTOP_APT1_MAX_INSTRUMENTS
-    + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-)
-DESKTOP_APT1_REGION_WIRE_BYTES = (
-    DESKTOP_APT1_REGION_FRAME_BYTES * DESKTOP_APT1_MAX_REGIONS
-)
-DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES = (
-    DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_STATUS_FIELDS
-    + DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES
-)
-DESKTOP_APT1_HIDDEN_START_BYTES = (
-    160
-    + DESKTOP_APT1_REGION_WIRE_BYTES
-    + 124 * DESKTOP_APT1_MAX_CELLS
-    + DESKTOP_APT1_CONTROL_FRAME_FIXED_BYTES * DESKTOP_APT1_MAX_CONTROLS
-    + DESKTOP_APT1_CONTROL_VARIABLE_BYTES
-    + DESKTOP_APT1_INSTRUMENT_WIRE_BYTES
-    + DESKTOP_APT1_STATUS_FIELD_WIRE_BYTES
-    + DESKTOP_APT1_SERIES_WIRE_BYTES
-)
-DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
-    DESKTOP_APT1_HIDDEN_START_BYTES
-    + 56
-    + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
-)
-
-# The terminal's budget for the optional shell: what this profile's terminal
-# grants a Desk with 64 panes, 64 tasks and 12 pins and their text.  Desk's
-# own model is not bounded by it: a larger shell asks the terminal for more
-# space, which the terminal may refuse.  These quotas are added to every
-# existing app-family allowance; they do not enlarge collection, FIELD,
-# STATUS_FIELD or DATA_GRAPHICS source banks.
-DESKTOP_APT1_SHELL_MODEL_BYTES = 49_152
-DESKTOP_APT1_SHELL_MAX_ENTRIES = 140
-DESKTOP_APT1_SHELL_TEXT_BYTES = (
-    DESKTOP_APT1_SHELL_MODEL_BYTES - 128 - 168 * DESKTOP_APT1_SHELL_MAX_ENTRIES
-)
-# Each entry may be a pane, with a content region and, while its
-# application shows a prompt, a modal region over that content.
-DESKTOP_APT1_SHELL_REGIONS = 2 * DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
-DESKTOP_APT1_SHELL_CONTROLS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 2
-DESKTOP_APT1_SHELL_PANES = DESKTOP_APT1_SHELL_MAX_ENTRIES
-DESKTOP_APT1_SHELL_OBJECTS = DESKTOP_APT1_SHELL_CONTROLS + DESKTOP_APT1_SHELL_PANES
-DESKTOP_APT1_SHELL_OPERATIONS = DESKTOP_APT1_SHELL_REGIONS + DESKTOP_APT1_SHELL_OBJECTS
-DESKTOP_APT1_SHELL_WIRE_BYTES = (
-    104 * DESKTOP_APT1_SHELL_REGIONS + 120 * DESKTOP_APT1_SHELL_CONTROLS
-    + 144 * DESKTOP_APT1_SHELL_PANES + DESKTOP_APT1_SHELL_TEXT_BYTES
-)
-DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES = 104 + DESKTOP_APT1_SHELL_TEXT_BYTES
-
-
-# Pictures.  The rich Desktop terminal holds raw RGBA8 pictures up to 4096
-# pixels a side, an image size practically every renderer takes, and as many
-# bytes as one picture that large; a producer asks its owner for only what
-# its pictures need.  Sixteen pictures leave room for several applets that
-# show one each.  A chunk is as long as one frame's payload lets it be.
-DESKTOP_APT1_MAX_IMAGE_SIDE = 4_096
-DESKTOP_APT1_MAX_RESOURCES = 16
-DESKTOP_APT1_TOTAL_RESOURCE_BYTES = DESKTOP_APT1_MAX_IMAGE_SIDE ** 2 * 4
-DESKTOP_APT1_MAX_RESOURCE_CHUNK_BYTES = DESKTOP_APT1_MAX_PAYLOAD_BYTES - 32
-
-
-# The rich Desktop terminal without the shell's panes and taskbar.
-DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
-    guest_rx_bytes=8_192,
-    guest_tx_bytes=DESKTOP_APT1_GUEST_TX_BYTES,
-    guest_collection_native_bytes=DESKTOP_APT1_COLLECTION_NATIVE_BYTES,
-    guest_data_graphics_native_bytes=(
-        DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
-    ),
-    guest_status_field_native_bytes=DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES,
-    guest_field_native_bytes=DESKTOP_APT1_FIELD_NATIVE_BYTES,
-    host_policy=RichTerminalSessionPolicy(
-        max_cols=DESKTOP_APT1_MAX_COLS,
-        max_rows=DESKTOP_APT1_MAX_ROWS,
-        egress_high_publications=2,
-        egress_high_batches=32,
-        egress_low_batches=4,
-        ingress_bytes=128 * 1024,
-        ingress_events=256,
-        ingress_control_bytes=4_096,
-        ingress_control_events=32,
-        geometry_events=8,
-        pending_outbound_bytes=128 * 1024,
-        pending_outbound_events=256,
-        ansi_history_bytes=256 * 1024,
-        service_batches=4,
-    ),
-    retained_policy=RetainedPolicy(
-        features=(
-            RetainedFeature.CORE
-            | RetainedFeature.INSTRUMENT
-            | RetainedFeature.CONTROLS
-            | RetainedFeature.CONTROL_COLLECTIONS
-            | RetainedFeature.CONTROL_ITEMS
-            | RetainedFeature.CONTROL_DOCUMENTS
-            | RetainedFeature.GRID_CELLS
-            | RetainedFeature.STATUS_FIELDS
-            | RetainedFeature.FIELDS
-            | RetainedFeature.DIALOGS
-            | RetainedFeature.SERIES
-            | RetainedFeature.VECTOR
-            | RetainedFeature.RGBA_IMAGE
-        ),
-        max_owner_records=1,
-        max_live_owners=1,
-        max_regions=DESKTOP_APT1_MAX_REGIONS,
-        max_resources=DESKTOP_APT1_MAX_RESOURCES,
-        max_objects=DESKTOP_APT1_MAX_OBJECTS,
-        max_series=DESKTOP_APT1_MAX_SERIES,
-        max_operations_per_transaction=DESKTOP_APT1_MAX_OPERATIONS,
-        max_resource_chunk_bytes=DESKTOP_APT1_MAX_RESOURCE_CHUNK_BYTES,
-        max_retained_transaction_bytes=(
-            DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
-        ),
-        total_resource_bytes=DESKTOP_APT1_TOTAL_RESOURCE_BYTES,
-        # Raw pixels, and QOI, PNG and JPEG files the terminal decodes.
-        image_formats=IMAGE_FORMATS,
-        max_image_width=DESKTOP_APT1_MAX_IMAGE_SIDE,
-        max_image_height=DESKTOP_APT1_MAX_IMAGE_SIDE,
-        max_path_points=DESKTOP_APT1_MAX_PATH_POINTS,
-        max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
-        max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
-        max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
-        minimum_presentation_interval_us=0,
-        total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
-        total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
-        total_path_points=DESKTOP_APT1_MAX_PATH_POINTS,
-        client_to_terminal_max_payload=DESKTOP_APT1_MAX_PAYLOAD_BYTES,
-        terminal_to_client_max_payload=64,
-        base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
-    ),
-)
-
-
-def desktop_apt1_shell_profile(
-    base: RichTerminalProfile = DESKTOP_APT1_RICH_TERMINAL_BASE,
-) -> RichTerminalProfile:
-    """Add the shell's terminal quotas to a rich terminal profile.
-
-    Its storage is not sized here: it grows from Desk's memory.  A profile
-    already carrying the shell is rejected so repeated configuration cannot
-    silently accumulate quotas.
-    """
-    if not isinstance(base, RichTerminalProfile):
-        raise TypeError("base must be a RichTerminalProfile")
-    retained = base.retained_policy
-    shell_features = RetainedFeature.PANES | RetainedFeature.TASKBARS
-    if retained is None:
-        raise ValueError("shell selection requires an existing retained policy")
-    if base.shell or retained.features & shell_features:
-        raise ValueError("shell selection requires a base without the shell")
-    payload = max(retained.client_to_terminal_max_payload,
-                  DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES)
-    selected = replace(
-        retained,
-        features=retained.features | shell_features,
-        max_regions=retained.max_regions + DESKTOP_APT1_SHELL_REGIONS,
-        max_objects=retained.max_objects + DESKTOP_APT1_SHELL_OBJECTS,
-        max_operations_per_transaction=(retained.max_operations_per_transaction
-                                        + DESKTOP_APT1_SHELL_OPERATIONS),
-        total_utf8_bytes=retained.total_utf8_bytes + DESKTOP_APT1_SHELL_TEXT_BYTES,
-        max_retained_transaction_bytes=(retained.max_retained_transaction_bytes
-                                        + DESKTOP_APT1_SHELL_WIRE_BYTES),
-        base_max_transaction_bytes=(retained.base_max_transaction_bytes
-                                    + DESKTOP_APT1_SHELL_WIRE_BYTES),
-        client_to_terminal_max_payload=payload,
-    )
-    return replace(
-        base, retained_policy=selected, shell=True,
-        guest_tx_bytes=max(base.guest_tx_bytes, DESKTOP_APT1_FRAME_HEADER_BYTES + payload),
-    )
-
-
-# The image's sample day: today, as the build's clock reads it in UTC.  The
-# sample daybook.md holds four records of it, and a profile whose applet
-# shows "today" from them starts its clock on that day
-# (Profile.sample_date_clock).
-_SAMPLE_DAY = datetime.now(timezone.utc).date()
-SAMPLE_DATE = _SAMPLE_DAY.isoformat()
+# The sample daybook.md holds four records of one day, SAMPLE_DATE, and a
+# profile whose applet shows "today" from them starts its clock at noon UTC
+# on that day (Profile.sample_date_clock), so its images are the same on
+# every day.
+DAYBOOK_SAMPLE = _desktop_sample("daybook.md")
+SAMPLE_DATE = re.search(rb"\d{4}-\d{2}-\d{2}", DAYBOOK_SAMPLE).group().decode()
 # Noon UTC on SAMPLE_DATE, in milliseconds since the Unix epoch.
 SAMPLE_CLOCK_MS = int(
-    datetime(
-        _SAMPLE_DAY.year, _SAMPLE_DAY.month, _SAMPLE_DAY.day, 12, tzinfo=timezone.utc
-    ).timestamp()
-    * 1000
+    datetime.fromisoformat(f"{SAMPLE_DATE}T12:00:00+00:00").timestamp() * 1000
 )
-DAYBOOK_SAMPLE = (
-    "# Daybook\n\n"
-    f"- {SAMPLE_DATE} 09:30 | Project review\n"
-    f"- [ ] {SAMPLE_DATE} | Plan the next release\n"
-    f"- [x] {SAMPLE_DATE} | Morning walk\n"
-    f"> {SAMPLE_DATE} | Keep the system small and legible\n"
-).encode()
 
 
 # Desk with Daybook, for Daybook's reminders in the CELL terminal.  The boot
@@ -15133,13 +13208,6 @@ def agent_operands(data: bytes) -> dict[str, object]:
         fields[name] = data[at + 8:at + 8 + length].decode("utf-8")
         at += 8 + ((length + 7) & ~7)
     return fields
-
-
-# Desk publishes its panes and taskbar as rich objects through the shell
-# producer. A changed draw with the acknowledged layout goes out as a retained
-# DELTA; layout changes publish a complete hidden replacement. The scratch and
-# bank sizes are those the shell was qualified with at 280 by 84 cells.
-DESKTOP_APT1_RICH_TERMINAL = desktop_apt1_shell_profile()
 
 
 PROFILES["desktop-apt1"] = replace(
@@ -19649,14 +17717,16 @@ _slc-run
 PROFILES["streams-live-public"] = Profile(
     roots=(
         "tui/applets/streams/bluesky-public.f",
-        "atproto/public-trust.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - credential-free public Streams qualification
 ENTER-USERLAND
 ." [akashic] loading public Streams qualification" CR
 REQUIRE tui/applets/streams/bluesky-public.f
-REQUIRE atproto/public-trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 
 VARIABLE _slp-inst
 VARIABLE _slp-state
@@ -19739,15 +17809,28 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
         -1 THROW
     THEN ;
 
+: _slp-trust-fail  ( reason-a reason-u -- )
+    ." STREAMS LIVE PUBLIC TRUST FAIL " TYPE CR -1 THROW ;
+
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _slp-roots  ( -- )
+    S" boot" PLACES-VOLUME IF S" volume" _slp-trust-fail THEN
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE
+        IF S" place" _slp-trust-fail THEN
+    PLSET-NEW IF S" set" _slp-trust-fail THEN >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT IF S" grant" _slp-trust-fail THEN
+    WEB-ROOTS-REGISTER DUP MTRUST-S-OK <> IF
+        ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
+    THEN DROP ;
+
 : _slp-exercise  ( -- )
     10 64 0 2 IP-SET
     10 64 0 1 GW-IP IP!
     255 255 255 0 NET-MASK IP!
     8 8 8 8 DNS-SERVER-IP IP!
 
-    ATPUBLIC-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-        ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
-    THEN DROP
+    _slp-roots
     MTRUST-FREEZE DUP MTRUST-S-OK <> IF
         ." STREAMS LIVE PUBLIC TRUST FAIL status=" . CR -1 THROW
     THEN DROP
@@ -19932,7 +18015,7 @@ _slp-run
         "STREAMS LIVE PUBLIC FAIL",
     ),
     linked=True,
-    requires_tap=True,
+    requires_network=True,
 )
 
 PROFILES["streams-persistence-contracts"] = Profile(
@@ -23698,10 +21781,11 @@ _STREAMS_VERTICAL_FEED_URL = (
     "hugo-theme-more-contentful/feed.rss"
 )
 _STREAMS_VERTICAL_ACTOR = "did:plc:z72i7hdynmk6r22z27h6tvur"
+# The vertical's narrow syndication policy.  It registers no trust and does not
+# freeze the registry: Desk registers the machine's global root set from its
+# origin while the registry is open and freezes it itself, and the public
+# hosts verify against that set.
 _STREAMS_VERTICAL_COMPOSITION = r"""
-REQUIRE atproto/public-trust.f
-REQUIRE local_testing/streams-live-trust.f
-
 VARIABLE _dsv-source
 VARIABLE _dsv-target
 
@@ -23727,28 +21811,12 @@ VARIABLE _dsv-target
 : _dsv-syndication-factory  ( -- provider status )
     ['] _dsv-syndication-authorized? 0
         STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED ;
-
-: _dsv-syndication-trust  ( builder context -- status )
-    DROP _lrc-artifact _lrc-artifact-u ROT MTRUST-MPTA+ ;
-
-ATPUBLIC-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-    ." STREAMS VERTICAL AT TRUST FAIL status=" . CR TX-FLUSH ABORT
-THEN DROP
-S" org.akashic.trust.streams-vertical-syndication"
-    ['] _dsv-syndication-trust 0 MTRUST-REGISTER
-    DUP MTRUST-S-OK <> IF
-        ." STREAMS VERTICAL RSS TRUST FAIL status=" . CR TX-FLUSH ABORT
-    THEN DROP
-MTRUST-FREEZE DUP MTRUST-S-OK <> IF
-    ." STREAMS VERTICAL TRUST FREEZE FAIL status=" . CR TX-FLUSH ABORT
-THEN DROP
 """
 
 PROFILES["desktop-streams-vertical"] = Profile(
     roots=(
         "tui/applets/desk/desk.f",
         "tui/applets/streams/streams-online.f",
-        "atproto/public-trust.f",
     ),
     resources=PROFILES["desktop-streams"].resources,
     autoexec=(
@@ -23778,27 +21846,13 @@ PROFILES["desktop-streams-vertical"] = Profile(
     ready_markers=PROFILES["desktop-streams"].ready_markers,
     stable_markers=("[Agent: offline]",),
     linked=True,
-    requires_tap=True,
-    failure_markers=(
-        "STREAMS VERTICAL AT TRUST FAIL",
-        "STREAMS VERTICAL RSS TRUST FAIL",
-        "STREAMS VERTICAL TRUST FREEZE FAIL",
-    ),
-    initial_files=(
-        (
-            "local_testing/streams-live-trust.f",
-            _streams_live_exact_host_trust_leaf(),
-        ),
-    ),
+    requires_network=True,
     include_large_sample=False,
     total_sectors=PROFILES["desktop-streams"].total_sectors,
 )
 
 PROFILES["streams-multiprotocol-composition"] = Profile(
-    roots=(
-        "tui/applets/streams/streams-online.f",
-        "atproto/public-trust.f",
-    ),
+    roots=("tui/applets/streams/streams-online.f",),
     resources=(),
     autoexec=(
         r"""\ autoexec.f - deterministic Streams multiprotocol composition
@@ -23868,15 +21922,6 @@ _dsvc-run
     failure_markers=(
         "STREAMS MULTIPROTOCOL ASSERT",
         "STREAMS MULTIPROTOCOL COMPOSITION FAIL",
-        "STREAMS VERTICAL AT TRUST FAIL",
-        "STREAMS VERTICAL RSS TRUST FAIL",
-        "STREAMS VERTICAL TRUST FREEZE FAIL",
-    ),
-    initial_files=(
-        (
-            "local_testing/streams-live-trust.f",
-            _streams_live_exact_host_trust_leaf(),
-        ),
     ),
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
@@ -23987,14 +22032,15 @@ PROFILES["desktop-codex-live"] = Profile(
     cold_source_codec=PROFILES["desktop-codex"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop-codex"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop-codex"].smoke_timeout,
-    requires_tap=True,
+    requires_network=True,
     total_sectors=PROFILES["desktop-codex"].total_sectors,
 )
 PROFILES["codex-live-tls"] = Profile(
     roots=(
         "tui/applets/agent/providers/codex/auth.f",
         "tui/applets/agent/providers/codex/config.f",
-        "tui/applets/agent/providers/codex/trust.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
         "net/transports/kdos-tls.f",
     ),
     resources=(),
@@ -24003,7 +22049,8 @@ ENTER-USERLAND
 ." [akashic] loading Codex live TLS gate" CR
 REQUIRE tui/applets/agent/providers/codex/auth.f
 REQUIRE tui/applets/agent/providers/codex/config.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 REQUIRE net/transports/kdos-tls.f
 
 CREATE _clt-auth KDOSTLS-SIZE ALLOT
@@ -24025,14 +22072,24 @@ VARIABLE _clt-adapter
     THEN DROP
     _clt-adapter @ KDOSTLS.PORT NIO-CLOSE ;
 
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _clt-roots  ( -- )
+    S" boot" PLACES-VOLUME ABORT" CODEX TLS TRUST FAIL volume"
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE
+    ABORT" CODEX TLS TRUST FAIL place"
+    PLSET-NEW ABORT" CODEX TLS TRUST FAIL set" >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT ABORT" CODEX TLS TRUST FAIL grant"
+    WEB-ROOTS-REGISTER DUP MTRUST-S-OK <> IF
+        ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP ;
+
 10 64 0 2 IP-SET
 10 64 0 1 GW-IP IP!
 255 255 255 0 NET-MASK IP!
 8 8 8 8 DNS-SERVER-IP IP!
 
-CODEX-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-    ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
-THEN DROP
+_clt-roots
 MTRUST-FREEZE DUP MTRUST-S-OK <> IF
     ." CODEX TLS TRUST FAIL status=" . CR TX-FLUSH ABORT
 THEN DROP
@@ -24049,7 +22106,7 @@ CODEX-BACKEND-HOST _clt-backend _clt-connect
         "CODEX TLS BACKEND OK",
         "CODEX TLS LIVE PASS",
     ),
-    requires_tap=True,
+    requires_network=True,
     failure_markers=(
         "CODEX TLS CONFIG FAIL",
         "CODEX TLS TRUST FAIL",
@@ -24059,7 +22116,8 @@ CODEX-BACKEND-HOST _clt-backend _clt-connect
 PROFILES["codex-live-auth"] = Profile(
     roots=(
         "tui/applets/agent/providers/codex/auth.f",
-        "tui/applets/agent/providers/codex/trust.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
         "net/transports/kdos-tls.f",
     ),
     resources=(),
@@ -24067,7 +22125,8 @@ PROFILES["codex-live-auth"] = Profile(
 ENTER-USERLAND
 ." [akashic] loading Codex live authentication probe" CR
 REQUIRE tui/applets/agent/providers/codex/auth.f
-REQUIRE tui/applets/agent/providers/codex/trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 REQUIRE net/transports/kdos-tls.f
 
 CREATE _cla-tls KDOSTLS-SIZE ALLOT
@@ -24101,15 +22160,25 @@ VARIABLE _cla-code-shown
     _cla-auth CDA.AUTH AAUTH.USER-CODE DUP CV-DATA@ SWAP CV-LEN@ TYPE CR
     ." Waiting for browser authorization..." CR TX-FLUSH ;
 
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _cla-roots  ( -- )
+    S" boot" PLACES-VOLUME ABORT" CODEX AUTH TRUST FAIL volume"
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE
+    ABORT" CODEX AUTH TRUST FAIL place"
+    PLSET-NEW ABORT" CODEX AUTH TRUST FAIL set" >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT ABORT" CODEX AUTH TRUST FAIL grant"
+    WEB-ROOTS-REGISTER DUP MTRUST-S-OK <> IF
+        ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP ;
+
 : _cla-run  ( -- )
     0 _cla-polls ! 0 _cla-code-shown !
     10 64 0 2 IP-SET
     10 64 0 1 GW-IP IP!
     255 255 255 0 NET-MASK IP!
     8 8 8 8 DNS-SERVER-IP IP!
-    CODEX-TRUST-REGISTER DUP MTRUST-S-OK <> IF
-        ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
-    THEN DROP
+    _cla-roots
     MTRUST-FREEZE DUP MTRUST-S-OK <> IF
         ." CODEX AUTH TRUST FAIL status=" . CR TX-FLUSH ABORT
     THEN DROP
@@ -24152,7 +22221,7 @@ _cla-run
 """,
     ready_markers=("CODEX AUTH CODE READY",),
     stable_markers=("CODEX AUTH CODE READY",),
-    requires_tap=True,
+    requires_network=True,
     failure_markers=(
         "CODEX AUTH TRUST FAIL",
         "CODEX AUTH CONFIG FAIL",
@@ -27405,117 +25474,25 @@ _ssoc-run
     include_large_sample=False,
 )
 
-LARGE_SAMPLE = b"".join(
-    f"Large fixture line {line:03d}: Pad crosses MP64FS sector boundaries.\n".encode()
-    for line in range(1, 49)
-)
-
-GRID_SAMPLE = (
-    "Item,Qty,Price,Total\n"
-    '"Paper, A4",3,12,=B2*C2\n'
-    "Ink,2,25,=B3*C3\n"
-    "Subtotal,,,=SUM(D2:D3)\n"
-).encode()
-
-def _sample_picture() -> bytes:
-    """An evening sky over two hills with a low sun, 160 by 100 pixels, as
-    QOI.  Integer arithmetic keeps its bytes the same on every host.  The
-    corners are rounded with transparent and half-transparent pixels, so a
-    viewer's background and blending show."""
-
-    width, height = 160, 100
-    rows = []
-    for y in range(height):
-        row = []
-        for x in range(width):
-            r = 30 + 200 * y // 70
-            g = 40 + 110 * y // 70
-            b = 120 - 50 * y // 70
-            dx, dy = x - 112, y - 60
-            if dx * dx + dy * dy < 16 * 16:
-                r, g, b = 255, 214, 96
-            hill = 66 + (abs(x % 64 - 32) * 3) // 8 - x // 20
-            if y >= hill:
-                r, g, b = 26, 70 + (y - hill) * 2, 44
-            r, g, b = (min(255, max(0, value)) for value in (r, g, b))
-            cx, cy = min(x, width - 1 - x), min(y, height - 1 - y)
-            alpha = 255
-            if cx < 8 and cy < 8:
-                distance = (8 - cx) ** 2 + (8 - cy) ** 2
-                alpha = 0 if distance > 80 else 128 if distance > 48 else 255
-            row.append((r, g, b, alpha))
-        rows.append(row)
-    return qoi_codec.encode(rows)
-
-
+# File Explorer's sample picture and Markdown guide.
 SAMPLE_PICTURE_NAME = "sunset.qoi"
-SAMPLE_PICTURE = _sample_picture()
-
-# A Markdown document with every kind of block, links to its own headings
-# and to other files, and the sample picture as a figure, long enough to
-# scroll in File Explorer's preview.
+SAMPLE_PICTURE = _desktop_sample(SAMPLE_PICTURE_NAME)
 SAMPLE_DOCUMENT_NAME = "guide.md"
-SAMPLE_DOCUMENT = """# A guide to Akashic
+SAMPLE_DOCUMENT = _desktop_sample(SAMPLE_DOCUMENT_NAME)
 
-Akashic is a library of Forth modules for **MegaPad**. This guide is a
-*Markdown* document, which File Explorer shows as a document: headings,
-lists, quotes, code and pictures, with the text wrapped to the preview.
-
-- [Notes](notes.md), another document
-- [Pictures](#pictures), just below
-- [The end](#the-end)
-
-## Pictures
-
-![An evening sky over two hills](sunset.qoi)
-
-The picture above is sunset.qoi, from the same folder.
-
-## Lists
-
-1. Select a file in File Explorer.
-2. Its preview shows it the way its kind is shown.
-3. A link to a file selects that file and previews it.
-
-- A bullet
-  - inside another
-    - and one more
-
-## Quotes
-
-> A quote with **strong** words and `code` in it.
->
-> - and a list inside the quote
-
-## Code
-
-```
-: SQUARE  ( n -- n*n )  DUP * ;
-9 SQUARE .
-```
-
----
-
-## Reading
-
-- The wheel scrolls a document three rows a turn.
-- A link to a heading, such as [Lists](#lists), scrolls to it.
-- A link to a file selects that file and shows it here.
-
-## The end
-
-Back to [the top](#a-guide-to-akashic), or see the [example](example.f) in
-Forth.
-""".encode()
-
+# The text samples every image carries.
 SAMPLE_FILES = {
-    "welcome.txt": b"Welcome to Akashic.\nThis file is editable in Pad.\n",
-    "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
-    "large.txt": LARGE_SAMPLE,
-    "daybook.md": DAYBOOK_SAMPLE,
-    styled_text.NOTES_NAME: styled_text.NOTES_MD,
-    "grid.csv": GRID_SAMPLE,
+    name: _desktop_sample(name)
+    for name in (
+        "welcome.txt",
+        "example.f",
+        "large.txt",
+        "daybook.md",
+        styled_text.NOTES_NAME,
+        "grid.csv",
+    )
 }
+LARGE_SAMPLE = SAMPLE_FILES["large.txt"]
 
 DESK_MODULE = "tui/applets/desk/desk.f"
 PAD_MODULE = "tui/applets/pad/pad.f"
@@ -27528,14 +25505,15 @@ def _sample_files(
     own: tuple[tuple[str, bytes], ...] = (),
     documents: bool = False,
 ) -> dict[str, bytes]:
-    """The sample files an image carries: the text samples, which every
-    image has, and OWN, the samples its profile adds (Profile.sample_files).
-    One with File Explorer, the viewer that shows them, has the sample
-    picture, document and PDFs as well (sample_pdf.py).
+    """The sample files an image carries, from DESKTOP_SAMPLES: the text
+    samples, which every image has, and OWN, the samples its profile adds
+    (Profile.sample_files).  One with File Explorer, the viewer that shows
+    them, has the sample picture, document and PDFs as well (named by
+    sample_pdf.py).
 
     A Desktop, Desk with Pad to write in and File Explorer to list what is
-    written, also has the notes and lists a person keeps
-    (sample_documents.py) when DOCUMENTS says its build has room for them:
+    written, also has the notes and lists a person keeps (named by
+    sample_documents.py) when DOCUMENTS says its build has room for them:
     a build with the system volume, whose boot volume then holds few
     chunks, or one with the user volume, whose documents place holds every
     sample.  Nothing else makes the folder File Explorer opens on a list
@@ -27551,11 +25529,13 @@ def _sample_files(
             {
                 SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
                 SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
-                **sample_pdf.SAMPLES,
+                **{name: _desktop_sample(name) for name in sample_pdf.SAMPLES},
             }
         )
         if documents and DESK_MODULE in modules and PAD_MODULE in modules:
-            samples.update(sample_documents.SAMPLES)
+            samples.update(
+                {name: _desktop_sample(name) for name in sample_documents.SAMPLES}
+            )
     for name, content in own:
         if name in samples:
             raise RuntimeError(
@@ -27588,1579 +25568,6 @@ def _marked_cells(
         for column in range(left, min(right, screen.cols))
         if screen.cells[row][column].attrs & 32 and screen.cells[row][column].char
     ]
-
-
-def _normalize_module(module: str, requiring: str | None = None) -> str:
-    return _shared_normalize_module(module, requiring)
-
-
-def dependency_closure(roots: tuple[str, ...]) -> tuple[str, ...]:
-    """Return the deterministic transitive REQUIRE closure for *roots*."""
-    return _shared_dependency_closure(SOURCE_ROOT, roots)
-
-
-def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
-    """Return dependencies before their requiring modules."""
-    return _shared_dependency_order(SOURCE_ROOT, roots)
-
-
-def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
-    """Return whether an Akashic module closure consumes KDOS networking."""
-    return not MEGAPAD_NETWORKING_CONSUMERS.isdisjoint(modules)
-
-
-def _requires_megapad_rich_terminal(
-    modules: tuple[str, ...],
-) -> bool:
-    """Return whether an Akashic closure consumes the boot-loaded PT ABI."""
-    return not MEGAPAD_RICH_TERMINAL_CONSUMERS.isdisjoint(modules)
-
-
-def _forth_line_tokens(line: str) -> tuple[str, ...]:
-    """Return executable words using MegaPad's ASCII-space token rules.
-
-    The linked-source packer uses this stream to keep a colon definition in
-    one MP64FS chunk.  Parser-word payloads are data, not executable tokens:
-    in particular, a semicolon inside ``S\" ; detail`` must not look like the
-    end of the surrounding definition.
-    """
-    tokens: list[str] = []
-    quoted_next = False
-    index = 0
-    while index < len(line):
-        while index < len(line) and line[index] == " ":
-            index += 1
-        if index >= len(line):
-            break
-        start = index
-        while index < len(line) and line[index] != " ":
-            index += 1
-        token = line[start:index]
-        upper = token.upper()
-        if token.startswith("\\"):
-            break
-        if quoted_next:
-            quoted_next = False
-            continue
-        tokens.append(token)
-        if upper in {
-            "'",
-            "[']",
-            "CHAR",
-            "[CHAR]",
-            "POSTPONE",
-            "[COMPILE]",
-            "[DEFINED]",
-            "[UNDEFINED]",
-        }:
-            quoted_next = True
-            continue
-        if upper in {'S"', 'C"', '."', 'ABORT"'}:
-            close = line.find('"', index)
-            index = len(line) if close < 0 else close + 1
-            continue
-        if token == "(" or upper == ".(":
-            close = line.find(")", index)
-            index = len(line) if close < 0 else close + 1
-            continue
-    return tuple(tokens)
-
-
-def _forth_line_contains_module_load(
-    tokens: tuple[str, ...], command: str, module: str
-) -> bool:
-    """Find one module load using the guest's token and filename rules."""
-    return any(
-        tokens[index].upper() == command
-        and tokens[index + 1].lower() == module.lower()
-        for index in range(len(tokens) - 1)
-    )
-
-
-def _forth_line_contains_networking_load(
-    tokens: tuple[str, ...], command: str
-) -> bool:
-    return _forth_line_contains_module_load(tokens, command, "networking.f")
-
-
-def _without_places_boot_lines(lines: list[str]) -> list[str]:
-    """LINES without the places declaration, wherever it stands."""
-    block = list(PLACES_BOOT_LINES)
-    for index in range(len(lines) - len(block) + 1):
-        if lines[index:index + len(block)] == block:
-            return lines[:index] + lines[index + len(block):]
-    return lines
-
-
-def _with_mp64fs_vfs_platform(
-    autoexec: str, places_lines: tuple[str, ...] = PLACES_BOOT_LINES
-) -> str:
-    """Compose the eager MP64FS VFS, and declare the build's places over
-    it with PLACES_LINES, before any applet module is loaded."""
-    lines = _without_places_boot_lines(autoexec.splitlines())
-    token_lines = [_forth_line_tokens(line) for line in lines]
-    userland_lines = [
-        index
-        for index, tokens in enumerate(token_lines)
-        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
-    ]
-    if len(userland_lines) != 1:
-        raise RuntimeError(
-            "App-shell profiles must enter userland exactly once before "
-            "loading the MP64FS VFS platform"
-        )
-    platform_lines = [
-        index
-        for index, tokens in enumerate(token_lines)
-        if len(tokens) == 2
-        and tokens[0].upper() == "REQUIRE"
-        and tokens[1] == MP64FS_VFS_PLATFORM_MODULE
-    ]
-    if len(platform_lines) > 1:
-        raise RuntimeError(
-            "App-shell profiles must load the MP64FS VFS platform exactly once"
-        )
-    if platform_lines:
-        old_index = platform_lines[0]
-        lines.pop(old_index)
-        token_lines.pop(old_index)
-
-    userland_index = next(
-        index
-        for index, tokens in enumerate(token_lines)
-        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
-    )
-    insert_index = userland_index + 1
-    if (
-        insert_index < len(token_lines)
-        and len(token_lines[insert_index]) == 2
-        and token_lines[insert_index][0].upper() == "REQUIRE"
-        and token_lines[insert_index][1].lower() == "networking.f"
-    ):
-        insert_index += 1
-    lines[insert_index:insert_index] = [
-        MP64FS_VFS_PLATFORM_BOOT_LINE, *places_lines
-    ]
-    suffix = "\n" if autoexec.endswith("\n") else ""
-    return "\n".join(lines) + suffix
-
-
-def _with_megapad_networking(autoexec: str) -> str:
-    """Require canonical networking.f immediately after entering userland."""
-    lines = autoexec.splitlines()
-    token_lines = [_forth_line_tokens(line) for line in lines]
-    if any(
-        _forth_line_contains_networking_load(tokens, "FSLOAD")
-        for tokens in token_lines
-    ):
-        raise RuntimeError(
-            "FSLOAD networking.f is unsafe during KDOS autoboot; use the "
-            "KDOS module loader"
-        )
-    userland_lines = [
-        index
-        for index, tokens in enumerate(token_lines)
-        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
-    ]
-    if len(userland_lines) != 1:
-        raise RuntimeError(
-            "Networking profiles must enter userland exactly once before "
-            "loading networking.f"
-    )
-    expected_index = userland_lines[0] + 1
-    networking_lines = [
-        index
-        for index, tokens in enumerate(token_lines)
-        if _forth_line_contains_networking_load(tokens, "REQUIRE")
-    ]
-    if networking_lines:
-        if (
-            networking_lines != [expected_index]
-            or len(token_lines[expected_index]) != 2
-            or token_lines[expected_index][0].upper() != "REQUIRE"
-            or token_lines[expected_index][1] != "networking.f"
-        ):
-            raise RuntimeError(
-                "Networking profiles must load networking.f exactly once, "
-                "immediately after entering userland"
-            )
-        return autoexec
-    lines.insert(expected_index, MEGAPAD_NETWORKING_BOOT_LINE)
-    suffix = "\n" if autoexec.endswith("\n") else ""
-    return "\n".join(lines) + suffix
-
-
-def _with_userland_xmem_reserve(autoexec: str, reserve_bytes: int) -> str:
-    """Select KDOS's existing partition before the first userland entry."""
-    if isinstance(reserve_bytes, bool) or not isinstance(reserve_bytes, int):
-        raise TypeError("general XMEM reserve must be an integer")
-    if not 0 <= reserve_bytes <= 0xFFFFFFFF or reserve_bytes & 15:
-        raise ValueError("general XMEM reserve must be an aligned u32")
-    if reserve_bytes == 0:
-        return autoexec
-    lines = autoexec.splitlines()
-    tokens = [_forth_line_tokens(line) for line in lines]
-    entries = [i for i, words in enumerate(tokens)
-               if len(words) == 1 and words[0].upper() == "ENTER-USERLAND"]
-    if len(entries) != 1:
-        raise RuntimeError("XMEM partition requires exactly one ENTER-USERLAND")
-    entry = entries[0]
-    declaration = f"{reserve_bytes} U-XMEM-RESERVE !"
-    existing = [i for i, words in enumerate(tokens)
-                if any(word.upper() == "U-XMEM-RESERVE" for word in words)]
-    if existing:
-        if existing != [entry - 1] or lines[entry - 1] != declaration:
-            raise RuntimeError("XMEM reserve must appear exactly once immediately before ENTER-USERLAND")
-        return autoexec
-    lines.insert(entry, declaration)
-    return "\n".join(lines) + ("\n" if autoexec.endswith("\n") else "")
-
-
-def _with_megapad_rich_terminal(
-    autoexec: str,
-    rich_terminal: RichTerminalProfile,
-) -> str:
-    """Load and configure the external APT module before Akashic sources."""
-    if not isinstance(rich_terminal, RichTerminalProfile):
-        raise TypeError("rich_terminal must be a RichTerminalProfile")
-    lines = autoexec.splitlines()
-    token_lines = [_forth_line_tokens(line) for line in lines]
-    if any(
-        _forth_line_contains_module_load(
-            tokens, "FSLOAD", MEGAPAD_RICH_TERMINAL_MODULE
-        )
-        for tokens in token_lines
-    ):
-        raise RuntimeError(
-            "FSLOAD rich-terminal.f is unsafe during KDOS autoboot; "
-            "use the KDOS module loader"
-        )
-    userland_lines = [
-        index
-        for index, tokens in enumerate(token_lines)
-        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
-    ]
-    if len(userland_lines) != 1:
-        raise RuntimeError(
-            "Rich-terminal profiles must enter userland exactly once before "
-            "loading rich-terminal.f"
-        )
-    expected_index = userland_lines[0] + 1
-    if (
-        expected_index < len(token_lines)
-        and len(token_lines[expected_index]) == 2
-        and token_lines[expected_index][0].upper() == "REQUIRE"
-        and token_lines[expected_index][1] == "networking.f"
-    ):
-        expected_index += 1
-    canonical_block = [
-        MEGAPAD_RICH_TERMINAL_BOOT_LINE,
-        (
-            f"{rich_terminal.guest_rx_bytes} CONSTANT "
-            "APT1-DESK-RX-CAPACITY"
-        ),
-        (
-            f"{rich_terminal.guest_tx_bytes} CONSTANT "
-            "APT1-DESK-TX-CAPACITY"
-        ),
-        (
-            f"{rich_terminal.guest_collection_native_bytes} CONSTANT "
-            "APT1-DESK-COLLECTION-NATIVE-CAPACITY"
-        ),
-        (
-            f"{rich_terminal.guest_data_graphics_native_bytes} CONSTANT "
-            "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY"
-        ),
-        (
-            f"{rich_terminal.guest_status_field_native_bytes} CONSTANT "
-            "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY"
-        ),
-        (
-            f"{rich_terminal.guest_field_native_bytes} CONSTANT "
-            "APT1-DESK-FIELDS-NATIVE-CAPACITY"
-        ),
-    ]
-    if rich_terminal.shell:
-        canonical_block.append("-1 CONSTANT APT1-DESK-SHELL-ENABLED")
-    rich_terminal_lines = [
-        index
-        for index, tokens in enumerate(token_lines)
-        if _forth_line_contains_module_load(
-            tokens, "REQUIRE", MEGAPAD_RICH_TERMINAL_MODULE
-        )
-    ]
-    shell_bound_lines = [
-        index for index, tokens in enumerate(token_lines)
-        if any(token.upper() == "APT1-DESK-SHELL-ENABLED" for token in tokens)
-    ]
-    expected_shell_bound_lines = (
-        [expected_index + len(canonical_block) - 1]
-        if rich_terminal_lines and rich_terminal.shell else []
-    )
-    if shell_bound_lines != expected_shell_bound_lines:
-        raise RuntimeError(
-            "Rich-terminal shell selection must match the selected profile exactly once"
-        )
-    if rich_terminal_lines:
-        if (
-            rich_terminal_lines != [expected_index]
-            or lines[expected_index : expected_index + len(canonical_block)]
-            != canonical_block
-        ):
-            raise RuntimeError(
-                "Rich-terminal profiles must load and configure "
-                "rich-terminal.f exactly once after networking"
-            )
-        return autoexec
-    lines[expected_index:expected_index] = canonical_block
-    suffix = "\n" if autoexec.endswith("\n") else ""
-    return "\n".join(lines) + suffix
-
-
-def _rich_desktop_boot_line(message: str) -> str:
-    """Return one promptly visible pre-ownership Desk boot marker."""
-    return f'." [akashic boot] {message}" CR TX-FLUSH'
-
-
-def _with_rich_desktop_boot_progress(
-    autoexec: str,
-    rich_terminal: RichTerminalProfile,
-    chunk_names: tuple[str, ...],
-    *,
-    volume_modules: tuple[str, ...] = (),
-) -> str:
-    """Instrument the generated rich Desk cold-load path before PT-START.
-
-    VOLUME_MODULES are the modules a system-volume image loads from that
-    volume.  Its chunks hold the volume's driver, and the framework is ready
-    once the last REQUIRE of one of those modules has run.
-    """
-    if not chunk_names:
-        raise RuntimeError("Rich Desktop boot progress requires source chunks")
-    chunk_label = "volume driver" if volume_modules else "framework"
-    if f"[akashic boot] {chunk_label} source " in autoexec:
-        raise RuntimeError("Rich Desktop boot progress is already installed")
-
-    lines = autoexec.splitlines()
-    userland_line = "ENTER-USERLAND"
-    rich_bounds_last_line = (
-        f"{rich_terminal.guest_field_native_bytes} CONSTANT "
-        "APT1-DESK-FIELDS-NATIVE-CAPACITY"
-    )
-    if rich_terminal.shell:
-        rich_bounds_last_line = "-1 CONSTANT APT1-DESK-SHELL-ENABLED"
-    loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
-    chunk_lines = tuple(
-        f"_BOOT-COLD-SOURCE {name}" for name in chunk_names
-    )
-    required_lines = (
-        userland_line,
-        MEGAPAD_NETWORKING_BOOT_LINE,
-        MEGAPAD_RICH_TERMINAL_BOOT_LINE,
-        rich_bounds_last_line,
-        loader_line,
-        *chunk_lines,
-    )
-    for required in required_lines:
-        if lines.count(required) != 1:
-            raise RuntimeError(
-                "Rich Desktop boot progress expected exactly one line: "
-                f"{required}"
-            )
-
-    positions = tuple(lines.index(line) for line in required_lines)
-    if positions != tuple(sorted(positions)):
-        raise RuntimeError(
-            "Rich Desktop boot progress requires canonical boot ordering"
-        )
-    volume_module_set = set(volume_modules)
-    volume_requires = [
-        index
-        for index, line in enumerate(lines)
-        if (match := REQUIRE_RE.match(line))
-        and match.group(1) in volume_module_set
-    ]
-    if volume_modules and (
-        lines.count(SYSTEM_VOLUME_BOOT_ENTRY) != 1
-        or not volume_requires
-        or not positions[-1]
-        < lines.index(SYSTEM_VOLUME_BOOT_ENTRY)
-        < volume_requires[0]
-    ):
-        raise RuntimeError(
-            "Rich Desktop boot progress expected the system volume mounted "
-            "once, after its driver and before the modules it holds"
-        )
-
-    width = max(2, len(str(len(chunk_names))))
-    output: list[str] = []
-    chunk_number_by_line = {
-        line: number
-        for number, line in enumerate(chunk_lines, start=1)
-    }
-    for index, line in enumerate(lines):
-        if line == userland_line:
-            output.append(
-                _rich_desktop_boot_line(
-                    "loading networking and rich-terminal modules"
-                )
-            )
-        if line in chunk_number_by_line:
-            number = chunk_number_by_line[line]
-            output.append(
-                _rich_desktop_boot_line(
-                    f"{chunk_label} source "
-                    f"{number:0{width}d}/{len(chunk_names):0{width}d}"
-                )
-            )
-        output.append(line)
-        if line == rich_bounds_last_line:
-            output.append(
-                _rich_desktop_boot_line("system modules ready")
-            )
-        elif line == loader_line:
-            output.append(
-                _rich_desktop_boot_line("checked source loader ready")
-            )
-        elif line == chunk_lines[-1]:
-            output.append(
-                _rich_desktop_boot_line(f"{chunk_label} ready")
-            )
-        elif volume_modules and line == SYSTEM_VOLUME_BOOT_ENTRY:
-            output.append(
-                _rich_desktop_boot_line("system volume mounted")
-            )
-        elif volume_requires and index == volume_requires[-1]:
-            output.append(
-                _rich_desktop_boot_line("framework ready")
-            )
-
-    suffix = "\n" if autoexec.endswith("\n") else ""
-    return "\n".join(output) + suffix
-
-
-def _has_forth_conditional_token(text: str) -> bool:
-    """Return whether MegaPad's raw conditional scanner observes a token."""
-    return any(
-        token.upper() in FORTH_CONDITIONAL_TOKENS
-        for token in text.split(" ")
-    )
-
-
-def _compact_forth(
-    text: str,
-    *,
-    remove_requires: bool = False,
-    remove_stack_effects: bool = False,
-) -> str:
-    """Compact only syntax whose MegaPad interpretation is unambiguous.
-
-    MegaPad separates source tokens on ASCII spaces. Its normal evaluator
-    treats every token beginning with ``\\`` as an end-of-line comment, but
-    conditional skip mode scans raw tokens without honoring comments or
-    strings. Consequently full-line comments containing conditional-control
-    tokens must remain in the linked source.
-
-    Linked Akashic modules additionally drop a conventional flat stack-effect
-    comment immediately after ``: name``. No inline comment is otherwise
-    rewritten, so defining words and other source parsers need no host-side
-    whitelist.
-    """
-    lines: list[str] = []
-    for line in text.split("\n"):
-        stripped = line.lstrip(" ")
-        if not stripped:
-            continue
-        if stripped.startswith("\\"):
-            if not _has_forth_conditional_token(stripped):
-                continue
-        if remove_requires and REQUIRE_RE.match(line):
-            continue
-        if remove_stack_effects:
-            match = COLON_STACK_EFFECT_RE.match(line)
-            if match and not _has_forth_conditional_token(
-                match.group("effect")
-            ):
-                suffix = line[match.end() :].lstrip(" ")
-                line = match.group("head")
-                if suffix:
-                    line += " " + suffix
-        lines.append(line.lstrip(" "))
-    return "".join(line + "\n" for line in lines)
-
-
-def _minify_forth(text: str, *, remove_requires: bool = False) -> str:
-    """Compact linked Akashic source without guessing parser-word input."""
-    return _compact_forth(
-        text,
-        remove_requires=remove_requires,
-        remove_stack_effects=True,
-    )
-
-
-def _strip_forth_noncode_lines(text: str) -> str:
-    """Apply only blank-line, full-comment, and indentation compaction."""
-    return _compact_forth(text)
-
-
-def _coalesce_audited_forth_lines(
-    source: bytes,
-    maximum_bytes: int,
-) -> bytes:
-    """Join physical lines in a specifically audited Forth source closure.
-
-    MegaPad evaluates each physical loader line through a 256-byte TIB, so
-    generated lines may contain at most 255 source bytes.  A flat stack-effect
-    comment immediately following a bare colon header is also redundant and
-    removed.  Backslash comments consume the remainder of their input line,
-    and delimiter parsers can do so when their closing delimiter is absent.
-    Conditional tokens retain physical boundaries for the raw skip scanner,
-    while PROVIDED must remain the first token on a line for KDOS's module
-    pre-scan.  Those lines are therefore emitted unchanged and in isolation.
-
-    This barrier set covers the built-in parsers used by the opted-in closure;
-    it cannot infer arbitrary custom immediate words that observe an input-line
-    boundary.  Callers must leave this transform disabled unless their complete
-    source closure has been audited for that property.
-    """
-    if not 0 < maximum_bytes <= MEGAPAD_EVALUATE_SOURCE_MAX_BYTES:
-        raise ValueError(
-            "Linked Forth line limit must be between 1 and "
-            f"{MEGAPAD_EVALUATE_SOURCE_MAX_BYTES} bytes"
-        )
-
-    output: list[bytes] = []
-    current = bytearray()
-    previous_tokens: tuple[str, ...] = ()
-
-    def flush() -> None:
-        if current:
-            output.append(bytes(current))
-            current.clear()
-
-    for line in source.split(b"\n"):
-        if not line:
-            continue
-        if len(line) > maximum_bytes:
-            raise RuntimeError(
-                f"Linked Forth source line exceeds {maximum_bytes} bytes"
-            )
-        text = line.decode("utf-8")
-        tokens = tuple(token for token in text.split(" ") if token)
-        if (
-            len(previous_tokens) == 2
-            and previous_tokens[0] == ":"
-            and FORTH_SPLIT_STACK_EFFECT_RE.fullmatch(text)
-            and not _has_forth_conditional_token(text)
-        ):
-            previous_tokens = tokens
-            continue
-        barrier = (
-            any(token.startswith("\\") for token in tokens)
-            or bool(tokens and tokens[0].upper() == "PROVIDED")
-            or any(
-                token.upper() in FORTH_LINE_COALESCE_BARRIERS
-                for token in tokens
-            )
-        )
-        if barrier:
-            flush()
-            output.append(line)
-            previous_tokens = tokens
-            continue
-
-        separator = b" " if current else b""
-        if len(current) + len(separator) + len(line) > maximum_bytes:
-            flush()
-            separator = b""
-        current.extend(separator)
-        current.extend(line)
-        previous_tokens = tokens
-
-    flush()
-    return b"".join(line + b"\n" for line in output)
-
-
-def _linked_chunks(
-    modules: tuple[str, ...],
-    maximum_bytes: int = LINK_CHUNK_BYTES,
-    audited_maximum_line_bytes: int | None = None,
-) -> dict[str, bytes]:
-    """Pack ordered source units into loader-safe native Forth chunks.
-
-    Oversized modules may cross chunk boundaries only while the interpreter
-    is back at top level: never inside a colon definition or a conditional
-    compilation region.  KDOS retains dictionary state between loads, so
-    top-level data declarations remain contiguous without exposing a partial
-    definition to the next chunk's ``REQUIRE`` line.
-
-    Opt-in physical-line coalescing is applied only after those chunk
-    boundaries are fixed.  The caller must have audited the complete closure
-    for custom words that observe physical input-line boundaries.
-    """
-    chunks: list[bytearray] = []
-    current = bytearray()
-    for module in modules:
-        source = _minify_forth(
-            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
-            remove_requires=True,
-        ).encode("utf-8")
-        units: list[bytearray] = []
-        unit = bytearray()
-        definition_depth = 0
-        conditional_depth = 0
-        for line in source.splitlines(keepends=True):
-            unit.extend(line)
-            text = line.decode("utf-8").rstrip("\r\n")
-            tokens = _forth_line_tokens(text)
-            if tokens and (tokens[0] == ":" or tokens[0].upper() == ":NONAME"):
-                definition_depth = 1
-            if definition_depth and any(
-                token == ";"
-                and (index == 0 or tokens[index - 1].upper() not in {"CHAR", "[CHAR]"})
-                for index, token in enumerate(tokens)
-            ):
-                definition_depth = 0
-            for token in tokens:
-                upper = token.upper()
-                if upper == "[IF]":
-                    conditional_depth += 1
-                elif upper == "[THEN]" and conditional_depth:
-                    conditional_depth -= 1
-            if definition_depth == 0 and conditional_depth == 0:
-                units.append(unit)
-                unit = bytearray()
-        if unit:
-            raise RuntimeError(f"Linked module ends inside source unit: {module}")
-        for source_unit in units:
-            if len(source_unit) > maximum_bytes:
-                raise RuntimeError(
-                    f"Linked source unit exceeds {maximum_bytes} bytes: "
-                    f"{module}"
-                )
-            if current and len(current) + len(source_unit) > maximum_bytes:
-                chunks.append(current)
-                current = bytearray()
-            current.extend(source_unit)
-    if current:
-        chunks.append(current)
-    linked_chunks: dict[str, bytes] = {}
-    for index, content in enumerate(chunks):
-        source = bytes(content)
-        if audited_maximum_line_bytes is not None:
-            source = _coalesce_audited_forth_lines(
-                source,
-                audited_maximum_line_bytes,
-            )
-        linked_chunks[f".akashic/link-{index:02d}.f"] = source
-    return linked_chunks
-
-
-def _cold_source_lzss_encode(source: bytes) -> bytes:
-    """Encode one bounded source chunk with deterministic LZSS tokens.
-
-    Control groups describe at most eight tokens, least-significant bit
-    first.  A set bit is one literal.  A clear bit is a two-byte little-endian
-    ``((distance - 1) << 4) | (length - 3)`` match with a 4 KiB window and a
-    3..18 byte length.  Greedy longest-match selection prefers the nearest
-    equal-length match and does not impose a candidate-count heuristic.
-    """
-    if not source:
-        raise ValueError("Cold source chunks must not be empty")
-
-    encoded = bytearray()
-    cursor = 0
-    while cursor < len(source):
-        control_offset = len(encoded)
-        encoded.append(0)
-        control = 0
-        for bit in range(8):
-            if cursor == len(source):
-                break
-
-            best_length = 0
-            best_distance = 0
-            maximum_length = min(18, len(source) - cursor)
-            if maximum_length >= 3:
-                window_start = max(0, cursor - 4096)
-                for distance in range(1, min(2, cursor) + 1):
-                    length = 0
-                    while (
-                        length < maximum_length
-                        and source[cursor + length - distance]
-                        == source[cursor + length]
-                    ):
-                        length += 1
-                    if length >= 3 and length > best_length:
-                        best_length = length
-                        best_distance = distance
-                        if length == maximum_length:
-                            break
-
-                needle = source[cursor : cursor + 3]
-                candidate = (
-                    -1
-                    if best_length == maximum_length
-                    else source.rfind(needle, window_start, cursor)
-                )
-                while candidate >= window_start:
-                    distance = cursor - candidate
-                    length = 3
-                    while (
-                        length < maximum_length
-                        and source[cursor + length - distance]
-                        == source[cursor + length]
-                    ):
-                        length += 1
-                    if length >= 3 and length > best_length:
-                        best_length = length
-                        best_distance = distance
-                        if length == maximum_length:
-                            break
-                    candidate = source.rfind(
-                        needle, window_start, candidate
-                    )
-
-            if best_length >= 3:
-                code = ((best_distance - 1) << 4) | (best_length - 3)
-                encoded.extend(struct.pack("<H", code))
-                cursor += best_length
-            else:
-                control |= 1 << bit
-                encoded.append(source[cursor])
-                cursor += 1
-        encoded[control_offset] = control
-    return bytes(encoded)
-
-
-def _cold_source_lzss_decode(payload: bytes, raw_bytes: int) -> bytes:
-    """Host-side exact decoder used to validate every generated payload."""
-    if raw_bytes <= 0:
-        raise ValueError("Cold source raw size must be positive")
-
-    decoded = bytearray()
-    cursor = 0
-    while len(decoded) < raw_bytes:
-        if cursor >= len(payload):
-            raise ValueError("Truncated cold source control group")
-        control = payload[cursor]
-        cursor += 1
-        for _ in range(8):
-            if len(decoded) == raw_bytes:
-                if control:
-                    raise ValueError("Non-canonical cold source control bits")
-                if cursor != len(payload):
-                    raise ValueError("Trailing cold source payload")
-                return bytes(decoded)
-
-            if control & 1:
-                if cursor >= len(payload):
-                    raise ValueError("Truncated cold source literal")
-                decoded.append(payload[cursor])
-                cursor += 1
-            else:
-                if cursor + 2 > len(payload):
-                    raise ValueError("Truncated cold source match")
-                code = payload[cursor] | (payload[cursor + 1] << 8)
-                cursor += 2
-                distance = (code >> 4) + 1
-                length = (code & 0x0F) + 3
-                if distance > 4096 or distance > len(decoded):
-                    raise ValueError("Invalid cold source match distance")
-                if length > raw_bytes - len(decoded):
-                    raise ValueError("Cold source match overruns output")
-                for _ in range(length):
-                    decoded.append(decoded[-distance])
-            control >>= 1
-
-    if cursor != len(payload):
-        raise ValueError("Trailing cold source payload")
-    return bytes(decoded)
-
-
-def _pack_cold_source(
-    source: bytes,
-    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
-    *,
-    codec: int = COLD_SOURCE_CODEC_LZSS,
-) -> bytes:
-    """Wrap one linked source chunk in the checked AKSRC001 container."""
-    if not 0 < len(source) <= maximum_raw_bytes:
-        raise ValueError(
-            "Cold source raw size must be between 1 and "
-            f"{maximum_raw_bytes} bytes"
-        )
-    if isinstance(codec, bool):
-        raise ValueError(f"Unsupported cold source codec: {codec}")
-    if codec == COLD_SOURCE_CODEC_LZSS:
-        payload = _cold_source_lzss_encode(source)
-    elif codec == COLD_SOURCE_CODEC_STORED:
-        payload = source
-    else:
-        raise ValueError(f"Unsupported cold source codec: {codec}")
-    header = COLD_SOURCE_HEADER.pack(
-        COLD_SOURCE_MAGIC,
-        COLD_SOURCE_VERSION,
-        codec,
-        COLD_SOURCE_HEADER_BYTES,
-        len(source),
-        len(payload),
-        zlib.crc32(source) & 0xFFFFFFFF,
-        0,
-    )
-    packed = header + payload
-    if _unpack_cold_source(packed, maximum_raw_bytes) != source:
-        raise RuntimeError("Cold source packer failed its exact round trip")
-    return packed
-
-
-def _unpack_cold_source(
-    packed: bytes,
-    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
-) -> bytes:
-    """Validate and expand one AKSRC001 container on the host."""
-    if len(packed) < COLD_SOURCE_HEADER_BYTES:
-        raise ValueError("Truncated cold source header")
-    (
-        magic,
-        version,
-        codec,
-        header_bytes,
-        raw_bytes,
-        payload_bytes,
-        raw_crc32,
-        reserved,
-    ) = COLD_SOURCE_HEADER.unpack_from(packed)
-    if magic != COLD_SOURCE_MAGIC:
-        raise ValueError("Invalid cold source magic")
-    if version != COLD_SOURCE_VERSION:
-        raise ValueError("Unsupported cold source version")
-    if codec not in COLD_SOURCE_CODECS or reserved != 0:
-        raise ValueError("Unsupported cold source codec or reserved flags")
-    if header_bytes != COLD_SOURCE_HEADER_BYTES:
-        raise ValueError("Invalid cold source header size")
-    if not 0 < raw_bytes <= maximum_raw_bytes:
-        raise ValueError("Invalid cold source raw size")
-    if payload_bytes <= 0 or payload_bytes != len(packed) - header_bytes:
-        raise ValueError("Invalid cold source payload size")
-    payload = packed[header_bytes:]
-    if codec == COLD_SOURCE_CODEC_LZSS:
-        maximum_payload_bytes = raw_bytes + (raw_bytes + 7) // 8
-        if payload_bytes > maximum_payload_bytes:
-            raise ValueError("Invalid compressed cold source payload size")
-        source = _cold_source_lzss_decode(payload, raw_bytes)
-    else:
-        if payload_bytes != raw_bytes:
-            raise ValueError("Stored cold source payload size mismatch")
-        source = payload
-    if zlib.crc32(source) & 0xFFFFFFFF != raw_crc32:
-        raise ValueError("Cold source CRC mismatch")
-    return source
-
-
-def _container_linked_chunks(
-    linked_chunks: dict[str, bytes],
-    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
-    *,
-    codec: int,
-) -> dict[str, bytes]:
-    """Replace linked source files with checked root-level containers."""
-    return {
-        COLD_SOURCE_CHUNK_TEMPLATE.format(index=index): _pack_cold_source(
-            source, maximum_raw_bytes, codec=codec
-        )
-        for index, source in enumerate(linked_chunks.values())
-    }
-
-
-def _linked_autoexec(
-    autoexec: str,
-    chunk_names: tuple[str, ...],
-    modules: tuple[str, ...],
-    *,
-    cold_source_codec: int | None = None,
-    system_volume: bool = False,
-    module_tokens: bool = False,
-) -> str:
-    """Replace linked source REQUIREs while retaining injected test leaves.
-
-    With SYSTEM_VOLUME the chunks hold only what mounts the system volume,
-    and MODULES are files on it.  Their REQUIREs then stay, after the chunks
-    and the lines that mount the volume and select it as the module source.
-    A profile that is not linked has no chunks: the mounting module is a
-    file on the boot volume, and its REQUIRE takes their place.
-    """
-    load_lines = [f"REQUIRE {name}" for name in chunk_names]
-    if cold_source_codec is not None:
-        load_lines = [
-            f"REQUIRE {COLD_SOURCE_LOADER_PATH}",
-            "VARIABLE _BOOT-COLD-SOURCE-STATUS",
-            # A chunk that cannot be loaded ends the boot, named, and
-            # nothing is loaded in its place.
-            ': _BOOT-COLD-SOURCE  ( "filename" -- )',
-            "    COLD-SOURCE-LOAD DUP _BOOT-COLD-SOURCE-STATUS ! ?DUP IF",
-            '        ." COLD SOURCE LOAD FAIL status=" .',
-            '        ." eval=" CSL-LAST-EVAL@ .',
-            '        ." line=" EVAL-LINE @ .',
-            '        ." column=" EVAL-COLUMN @ .',
-            '        ." throw=" CSL-LAST-THROW@ .',
-            '        ." token=" EVAL-TOKEN TYPE',
-            '        ."  file=" CSL-LAST-NAME TYPE CR TX-FLUSH ABORT',
-            "    THEN ;",
-        ] + [
-            (
-                f"_BOOT-COLD-SOURCE {name}"
-            )
-            for name in chunk_names
-        ]
-    if system_volume:
-        if not chunk_names:
-            load_lines = [f"REQUIRE {SYSTEM_VOLUME_MODULE}"]
-        load_lines.extend(SYSTEM_VOLUME_BOOT_LINES)
-        if module_tokens:
-            # The volume's modules have their token forms beside them.
-            load_lines.append(MODULE_TOKENS_BOOT_LINE)
-    lines: list[str] = []
-    inserted = False
-    linked_modules = set(modules)
-    for line in autoexec.splitlines():
-        match = REQUIRE_RE.match(line)
-        if match and match.group(1) in linked_modules:
-            if not inserted:
-                lines.extend(load_lines)
-                inserted = True
-            if not system_volume:
-                continue
-        lines.append(line)
-    if not inserted:
-        if cold_source_codec is not None or system_volume:
-            raise RuntimeError(
-                "Profile autoexec has no linked REQUIRE insertion point"
-                if system_volume
-                else "Cold source profile autoexec has no linked REQUIRE "
-                "insertion point"
-            )
-        lines[0:0] = load_lines
-    if system_volume and not chunk_names:
-        # A profile that is not linked keeps its autoexec as it wrote it.
-        return "\n".join(lines) + "\n"
-    linked_autoexec = _minify_forth("\n".join(lines) + "\n")
-    if cold_source_codec is not None:
-        enter = linked_autoexec.find("ENTER-USERLAND")
-        loader = linked_autoexec.find(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
-        if enter < 0 or loader < enter:
-            raise RuntimeError(
-                "Cold source loader must run after ENTER-USERLAND"
-            )
-    return linked_autoexec
-
-
-def _directories(paths: set[str]) -> list[str]:
-    directories: set[str] = set()
-    for path in paths:
-        parts = PurePosixPath(path).parts[:-1]
-        for depth in range(1, len(parts) + 1):
-            directories.add("/".join(parts[:depth]))
-    return sorted(directories, key=lambda value: (value.count("/"), value))
-
-
-def _validate_image_paths(
-    paths: set[str],
-    directories: list[str],
-    *,
-    include_networking: bool = False,
-    external_system_files: frozenset[str] = frozenset(),
-    sample_names: frozenset[str] = frozenset(SAMPLE_FILES),
-):
-    system_files = set(external_system_files)
-    if include_networking:
-        system_files.add("networking.f")
-    system_aliases = paths & system_files
-    if system_aliases:
-        raise RuntimeError(
-            "Profile files collide with separately injected system modules: "
-            + ", ".join(sorted(system_aliases))
-        )
-    all_paths = paths | system_files
-    file_directory_aliases = all_paths & set(directories)
-    if file_directory_aliases:
-        raise RuntimeError(
-            "Image paths collide as both files and directories: "
-            + ", ".join(sorted(file_directory_aliases))
-        )
-    # Include kdos/autoexec and two temporary fragmentation fixtures.  The
-    # separately injected system modules participate as ordinary file entries.
-    entries = (
-        len(all_paths)
-        + len(directories)
-        + len(sample_names)
-        + 4
-    )
-    if entries > MAX_FILES:
-        raise RuntimeError(
-            f"Profile needs {entries} MP64FS entries; filesystem limit is "
-            f"{MAX_FILES}."
-        )
-    for path in all_paths | set(directories) | set(sample_names):
-        name = PurePosixPath(path).name
-        if len(name.encode("utf-8")) > MAX_NAME_LEN:
-            raise RuntimeError(
-                f"MP64FS name is too long ({len(name)} > {MAX_NAME_LEN}): {path}"
-            )
-
-
-def _validate_module_ids(
-    modules: tuple[str, ...],
-    initial_files: tuple[tuple[str, bytes], ...] = (),
-):
-    """Reject PROVIDED names that alias in KDOS's bounded module table.
-
-    Injected Forth leaves participate in the same runtime module table as the
-    linked Akashic closure, so validating only ``SOURCE_ROOT`` modules would
-    miss collisions that make a later REQUIRE silently skip its fixture.
-    """
-    keys: dict[bytes, tuple[str, str]] = {}
-    sources = [
-        (
-            module,
-            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
-        )
-        for module in modules
-    ]
-    sources.extend(
-        (path, content.decode("utf-8"))
-        for path, content in initial_files
-        if path.lower().endswith((".f", ".f.src"))
-    )
-    for source_path, text in sources:
-        for match in PROVIDED_RE.finditer(text):
-            module_id = match.group(1)
-            key = module_key(module_id)
-            previous = keys.get(key)
-            identity = (source_path, module_id)
-            if previous and previous != identity:
-                other_path, other_id = previous
-                raise RuntimeError(
-                    "KDOS PROVIDED key collision: "
-                    f"{other_id!r} ({other_path}) and "
-                    f"{module_id!r} ({source_path})"
-                )
-            keys[key] = identity
-
-
-def _machine_backend(backend: str) -> str:
-    """Validate one explicit execution backend name."""
-
-    if not isinstance(backend, str):
-        raise TypeError("backend must be a string")
-    if backend not in MACHINE_BACKENDS:
-        raise ValueError(
-            "backend must be one of " + ", ".join(MACHINE_BACKENDS)
-        )
-    return backend
-
-
-def _profile_backend(profile_name: str, backend: str) -> tuple[Profile, str]:
-    """Resolve a profile/backend pair without inventing a second profile."""
-
-    selected = _machine_backend(backend)
-    profile = PROFILES[profile_name]
-    if selected in SEMANTIC_BACKENDS and profile.session_entry is None:
-        raise RuntimeError(
-            f"profile {profile_name!r} has no semantic session entry"
-        )
-    return profile, selected
-
-
-def _simulator_session_autoexec(autoexec: str, session_entry: str) -> str:
-    """Defer only the final ordinary session invocation to the simulator.
-
-    The simulator defines ``_SIMULATOR-SESSION-ENTRY`` before evaluating this
-    file.  Everything before the last line remains byte-identical, so source
-    loading, app construction, descriptors, and boot diagnostics stay shared
-    with the emulator image.
-    """
-
-    if not isinstance(autoexec, str):
-        raise TypeError("autoexec must be a string")
-    if (
-        not isinstance(session_entry, str)
-        or not session_entry
-        or any(character.isspace() for character in session_entry)
-    ):
-        raise ValueError("session_entry must be one nonempty Forth token")
-    lines = autoexec.splitlines(keepends=True)
-    invocations = [
-        index
-        for index, line in enumerate(lines)
-        if line.strip() == session_entry
-    ]
-    nonempty = [index for index, line in enumerate(lines) if line.strip()]
-    if not nonempty or invocations != nonempty[-1:]:
-        raise RuntimeError(
-            "semantic session entry must be the one final autoexec invocation"
-        )
-    index = invocations[0]
-    ending = "\n" if lines[index].endswith("\n") else ""
-    lines[index] = (
-        f"' {session_entry} IS _SIMULATOR-SESSION-ENTRY{ending}"
-    )
-    return "".join(lines)
-
-
-def settings_image_path(image_path: Path) -> Path:
-    """The settings disk's image built beside the system disk's IMAGE_PATH."""
-
-    return image_path.with_name(f"{image_path.stem}-settings{image_path.suffix}")
-
-
-def _settings_image_for(profile: Profile, image_path: Path) -> Path | None:
-    """The settings image a launch of PROFILE's IMAGE_PATH attaches, or None
-    for a profile with no system settings."""
-
-    return settings_image_path(image_path) if profile.settings_files else None
-
-
-def _build_settings_image(profile: Profile, target: Path, *, safe_mode: bool) -> Path:
-    """Write PROFILE's settings disk beside TARGET: its system settings
-    files on an MP64FS volume.  SAFE_MODE writes Desk's settings asking for
-    safe mode."""
-
-    fs = MP64FS(total_sectors=SETTINGS_DISK_SECTORS)
-    fs.format()
-    for relative in profile.settings_files:
-        text = (AKASHIC_ROOT / "akashic" / relative).read_text(encoding="utf-8")
-        if safe_mode and relative == DESK_SYSTEM_SETTINGS:
-            if text.count("safe-mode = false\n") != 1:
-                raise RuntimeError(f"{relative} must hold one safe-mode = false line")
-            text = text.replace("safe-mode = false\n", "safe-mode = true\n")
-        fs.inject_file(Path(relative).name, text.encode("utf-8"), ftype=FTYPE_TEXT)
-    settings = settings_image_path(target)
-    fs.save(settings)
-    return settings
-
-
-def system_image_path(image_path: Path) -> Path:
-    """The system volume's image built beside the boot disk's IMAGE_PATH."""
-
-    return image_path.with_name(f"{image_path.stem}-system{image_path.suffix}")
-
-
-def _system_image_for(image_path: Path) -> Path | None:
-    """The system volume a launch of IMAGE_PATH attaches as the third
-    storage unit, or None.  A --system-volume build writes it beside the boot
-    image and a build without the option removes it, so its presence is what
-    the last build of IMAGE_PATH chose."""
-
-    system = system_image_path(image_path)
-    return system if system.is_file() else None
-
-
-def user_image_path(image_path: Path) -> Path:
-    """The user volume's image built beside the boot disk's IMAGE_PATH."""
-
-    return image_path.with_name(f"{image_path.stem}-user{image_path.suffix}")
-
-
-def _user_image_for(image_path: Path) -> Path | None:
-    """The user volume a launch of IMAGE_PATH attaches as the fourth storage
-    unit, or None.  A --user-volume build writes it beside the boot image and
-    a build without the option removes it, so its presence is what the last
-    build of IMAGE_PATH chose."""
-
-    user = user_image_path(image_path)
-    return user if user.is_file() else None
-
-
-# The system volume's ext4 geometry.  The pinned profile fixes the rest
-# (local_testing/fixtures/ext4-profile/manifest.json): 256-byte inodes, a
-# 4 MiB journal, the feature set the driver is qualified against, and one
-# inode for every 16,384 bytes of a full block group, which the driver's
-# admission requires of each group whatever the volume's size.
-SYSTEM_VOLUME_BLOCK_BYTES = 4096
-SYSTEM_VOLUME_LABEL = "AKASHIC-SYSTEM"
-_SYSTEM_VOLUME_INODE_RATIO_BYTES = 16384
-_SYSTEM_VOLUME_INODE_BYTES = 256
-_SYSTEM_VOLUME_JOURNAL_BYTES = 4 << 20
-
-
-def system_volume_geometry(
-    file_sizes: tuple[int, ...], directories: int, block_bytes: int
-) -> tuple[int, int, int]:
-    """The bytes, block groups and inodes of a system volume that holds
-    files of FILE_SIZES in DIRECTORIES directories, from its content alone.
-
-    Each file takes its bytes rounded up to whole blocks and each directory
-    one block.  The journal takes 4 MiB.  An eighth of that sum is added for
-    the filesystem's own structures apart from its inode tables: the bitmaps,
-    the group descriptors with their reserve, and the orphan file.  A block
-    group spans eight times the block size in blocks, and each group carries
-    an inode table for one inode per 16,384 bytes of a full group.  The
-    volume has as many groups as its content and their inode tables fill and
-    as give every file and directory an inode, with sixteen over for the
-    reserved ones, and never fewer than two: the driver takes the backup
-    superblock of the second group as its witness when it checks the
-    journal.  Its size is rounded up to a whole MiB.
-    """
-
-    mib = 1 << 20
-    group_bytes = 8 * block_bytes * block_bytes
-    group_inodes = group_bytes // _SYSTEM_VOLUME_INODE_RATIO_BYTES
-    table_bytes = group_inodes * _SYSTEM_VOLUME_INODE_BYTES
-    data = sum(-(-size // block_bytes) for size in file_sizes) + directories
-    content = data * block_bytes + _SYSTEM_VOLUME_JOURNAL_BYTES
-    needed = content + content // 8
-    groups = max(
-        2,
-        -(-needed // (group_bytes - table_bytes)),
-        -(-(len(file_sizes) + directories + 16) // group_inodes),
-    )
-    # A volume reaches far enough into its last group for that group to
-    # hold its own inode table.
-    volume = max(
-        needed + groups * table_bytes,
-        (groups - 1) * group_bytes + table_bytes + mib,
-    )
-    return -(-volume // mib) * mib, groups, groups * group_inodes
-
-
-def _system_volume_toolchain() -> tuple[dict, dict[str, str], dict]:
-    """The ext4 fixtures' profile, its pinned environment and the verified
-    pinned e2fsprogs that AKASHIC_E2FSPROGS_TOOL_DIR names: what a system
-    volume is built with.  A build asks for them before it writes anything."""
-
-    import generate_ext4_profile_fixtures as ext4_profile
-
-    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
-    if not tool_dir_value:
-        raise RuntimeError(
-            "--system-volume and --user-volume build ext4 images with the "
-            "pinned e2fsprogs; set AKASHIC_E2FSPROGS_TOOL_DIR to the folder "
-            "that holds them"
-        )
-    manifest_path = ext4_profile.DEFAULT_MANIFEST
-    manifest = ext4_profile.load_manifest(manifest_path)
-    tool_dir = Path(tool_dir_value).resolve()
-    env = ext4_profile.pinned_environment(manifest, tool_dir, manifest_path)
-    try:
-        tools = ext4_profile.verify_toolchain(manifest, tool_dir, env)
-    except ext4_profile.ProfileError as error:
-        raise RuntimeError(str(error)) from error
-    return manifest, env, tools
-
-
-def _write_ext4_image(
-    target: Path,
-    spec: dict,
-    inodes: int,
-    volume_bytes: int,
-    toolchain: tuple[dict, dict[str, str], dict],
-    *,
-    directories: list[str],
-    source_paths: tuple[str, ...],
-    staged: dict[str, bytes],
-    what: str,
-) -> None:
-    """Write an ext4 image of VOLUME_BYTES to TARGET from SPEC, the
-    geometry and identity of one of the ext4 profile's images, with INODES
-    inodes: DIRECTORIES made, each of SOURCE_PATHS written at its path from
-    the source root, each of STAGED written from its bytes, every file with
-    the same permission bits.  The host's e2fsck then checks it and the
-    driver's admission facts are checked against its superblock.  WHAT names
-    the volume in an error.
-
-    TOOLCHAIN (:func:`_system_volume_toolchain`) makes it, with the
-    arguments, feature set and fixed time of the ext4 fixtures' profile.
-    """
-
-    import generate_ext4_profile_fixtures as ext4_profile
-
-    manifest, env, tools = toolchain
-    context = dict(spec)
-    context.update(
-        tool_dir=Path(tools["mke2fs"]["path"]).parent,
-        image=target,
-        feature_names=",".join(ext4_profile.profile_feature_names(manifest, spec)),
-    )
-
-    def run(
-        argv: list[str], step: str, cwd: Path | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
-            argv, env=env, cwd=cwd, text=True, capture_output=True, check=False
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"{step} failed for {what} {target}:\n"
-                + result.stdout
-                + result.stderr
-            )
-        return result
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as image:
-        image.truncate(volume_bytes)
-    # The profile's arguments end with the image and its block count.  The
-    # inode count goes before them: mke2fs would otherwise scale a group's
-    # inodes down with a volume smaller than one group.
-    mkfs_argv = ext4_profile.render_argv(manifest["generator"]["mkfs_argv"], context)
-    run([*mkfs_argv[:-2], "-N", str(inodes), *mkfs_argv[-2:]], "mke2fs")
-    # debugfs splits a command on spaces, so it runs in the source root and
-    # takes each source file by its path from there.  It gives a written
-    # file its host file's permission bits, which follow the checkout; every
-    # file is set to the same ones.
-    commands = [f"mkdir /{directory}" for directory in directories]
-    for path in (*source_paths, *staged):
-        if any(character.isspace() for character in path):
-            raise RuntimeError(f"path holds white space: {path!r}")
-    for path in source_paths:
-        commands.append(f"write {path} /{path}")
-        commands.append(f"sif /{path} mode 0100644")
-    with tempfile.TemporaryDirectory(prefix="akashic-ext4-volume-") as scratch:
-        for number, (path, content) in enumerate(staged.items()):
-            if any(character.isspace() for character in scratch):
-                raise RuntimeError(f"scratch path holds white space: {scratch!r}")
-            staged_file = Path(scratch) / f"{number}.ft"
-            staged_file.write_bytes(content)
-            commands.append(f"write {staged_file} /{path}")
-            commands.append(f"sif /{path} mode 0100644")
-        script = Path(scratch) / "populate.debugfs"
-        script.write_text("\n".join(commands) + "\n", encoding="utf-8")
-        populated = run(
-            [tools["debugfs"]["path"], "-w", "-f", str(script), str(target)],
-            "debugfs",
-            SOURCE_ROOT,
-        )
-    # debugfs reports a command that failed on stderr and still exits zero.
-    complaints = [
-        line
-        for line in populated.stderr.splitlines()
-        if line.strip() and not line.startswith("debugfs ")
-    ]
-    if complaints:
-        raise RuntimeError(
-            f"debugfs could not populate {what} {target}:\n"
-            + "\n".join(complaints[:20])
-        )
-    run([tools["e2fsck"]["path"], "-f", "-n", str(target)], "e2fsck")
-    # The facts the driver's admission checks, as the fixtures are checked.
-    try:
-        ext4_profile.validate_observed_superblock(
-            manifest, spec, ext4_profile.read_superblock(target)
-        )
-    except ext4_profile.ProfileError as error:
-        raise RuntimeError(str(error)) from error
-
-
-def _build_system_image(
-    modules: tuple[str, ...],
-    target: Path,
-    toolchain: tuple[dict, dict[str, str], dict],
-    *,
-    block_bytes: int = SYSTEM_VOLUME_BLOCK_BYTES,
-    token_files: dict[str, bytes] | None = None,
-    boot_id: int = 0,
-    keep_source: bool = False,
-    loaded_before: frozenset[str] = frozenset(),
-    extra_sources: tuple[str, ...] = (),
-    extra_files: dict[str, bytes] | None = None,
-) -> dict[str, object]:
-    """Write the system volume to TARGET: an ext4 image that holds each of
-    MODULES as a plain file at its module path, the repository's text
-    unchanged.  EXTRA_SOURCES are other files of the source root it holds
-    at their paths, such as a profile's resources when the volume is its
-    origin, and EXTRA_FILES files it holds by path with their bytes, such
-    as the profile's initial files then.
-
-    With TOKEN_FILES the volume holds each module's token form instead, at
-    the module's path with a t added, built for the system whose BOOT-ID is
-    BOOT_ID, and no source.  A module of LOADED_BEFORE,
-    which the boot loads before it mounts the volume, has no token form of
-    its own; a file that only names its module stands at its path, so that
-    a REQUIRE of that path finds the module loaded.  Any other module
-    without a token form is absent.  KEEP_SOURCE writes every module's
-    source as well, beside its token form: the volume of a system that
-    edits its own modules, on which KDOS checks each token file against its
-    source and loads the source of a module that was edited.
-
-    TOOLCHAIN (:func:`_system_volume_toolchain`) makes it, with the
-    arguments, feature set and fixed time of the ext4 fixtures' profile.  The
-    volume's identity follows from its content, so the same modules give the
-    same image.  Returns facts about the volume for the build's report.
-    """
-
-    import generate_ext4_profile_fixtures as ext4_profile
-
-    manifest, env, tools = toolchain
-    if block_bytes not in manifest["platform_bounds"]["filesystem_block_bytes"]:
-        raise ValueError(f"the ext4 profile has no {block_bytes}-byte blocks")
-
-    from shared.token_form import pack_module_name_file
-
-    texts = {module: (SOURCE_ROOT / module).read_bytes() for module in modules}
-    # Each module's token form, or the file that names a module loaded
-    # before the volume is mounted.  Both stand at the module's path with a
-    # t added.
-    token_forms: dict[str, bytes] = {}
-    name_files: dict[str, bytes] = {}
-    absent: list[str] = []
-    if token_files:
-        for module, text in texts.items():
-            form = _token_form(text, token_files, boot_id, source_beside=keep_source)
-            if form is not None:
-                token_forms[module] = form
-            elif keep_source:
-                continue
-            elif module in loaded_before and (
-                provided := PROVIDED_RE.search(text.decode("utf-8", "replace"))
-            ):
-                name_files[module] = pack_module_name_file(
-                    provided.group(1).encode("utf-8")
-                )
-            else:
-                absent.append(module)
-    source_modules = modules if not token_files or keep_source else ()
-    extra_files = dict(extra_files or {})
-    held = {
-        **{module: texts[module] for module in source_modules},
-        **{path: (SOURCE_ROOT / path).read_bytes() for path in extra_sources},
-        **extra_files,
-        **{
-            module + TOKEN_FORM_SUFFIX: form
-            for module, form in (token_forms | name_files).items()
-        },
-    }
-    taken = set(extra_files) & {*source_modules, *extra_sources}
-    if taken:
-        raise RuntimeError(
-            "Initial files take paths of the system volume's modules or "
-            "resources: " + ", ".join(sorted(taken))
-        )
-    sizes = tuple(map(len, held.values()))
-    directories = _directories(set(held))
-    identity = hashlib.sha256(f"{block_bytes}\n".encode())
-    for path, content in held.items():
-        identity.update(
-            f"{path}\0{hashlib.sha256(content).hexdigest()}\n".encode()
-        )
-    digest = identity.digest()
-    volume_bytes, groups, inodes = system_volume_geometry(
-        sizes, len(directories), block_bytes
-    )
-    spec = {
-        "id": "system volume",
-        "profile": "primary",
-        "block_size": block_bytes,
-        "inode_size": manifest["profiles"]["primary"]["inode_size"],
-        "blocks_per_group": 8 * block_bytes,
-        "block_count": volume_bytes // block_bytes,
-        "expected_groups": groups,
-        "expected_inodes": inodes,
-        "uuid": str(uuid.UUID(bytes=digest[:16], version=4)),
-        "hash_seed": str(uuid.UUID(bytes=digest[16:], version=4)),
-        "label": SYSTEM_VOLUME_LABEL,
-    }
-    _write_ext4_image(
-        target,
-        spec,
-        inodes,
-        volume_bytes,
-        toolchain,
-        directories=directories,
-        source_paths=(*source_modules, *extra_sources),
-        staged={
-            **extra_files,
-            **{
-                module + TOKEN_FORM_SUFFIX: form
-                for module, form in (token_forms | name_files).items()
-            },
-        },
-        what="the system volume",
-    )
-    return {
-        "path": target,
-        "bytes": volume_bytes,
-        "block_bytes": block_bytes,
-        "files": len(held),
-        "file_bytes": sum(sizes),
-        "source_files": len(source_modules),
-        "source_bytes": sum(len(texts[module]) for module in source_modules),
-        "token_files": len(token_forms),
-        "token_bytes": sum(map(len, token_forms.values())),
-        "name_files": len(name_files),
-        "absent": tuple(absent),
-        "directories": len(directories),
-        "uuid": spec["uuid"],
-    }
-
-
-def _build_user_image(
-    target: Path,
-    volume_bytes: int,
-    toolchain: tuple[dict, dict[str, str], dict],
-    *,
-    documents: dict[str, bytes],
-) -> dict[str, object]:
-    """Write the user volume to TARGET: a fresh ext4 image of VOLUME_BYTES in
-    the format the staged writer takes, 1 KiB blocks and 256-byte inodes with
-    the ext4 profile's features, holding the folders the shipping form's
-    places name and, in the documents folder, DOCUMENTS by name.
-
-    Every block group carries one inode for each 16 KiB of a full group, as
-    the driver's admission requires, and the volume has at least two groups,
-    16 MiB: the driver takes the backup superblock of the second group as
-    its witness when it checks the journal.  The volume's identity follows
-    from its size and content.  Returns facts for the build's report.
-    """
-
-    block_bytes = USER_VOLUME_BLOCK_BYTES
-    group_bytes = 8 * block_bytes * block_bytes
-    if volume_bytes % (1 << 20) or volume_bytes < 2 * group_bytes:
-        raise ValueError(
-            f"a user volume is a whole number of MiB of at least "
-            f"{2 * group_bytes >> 20} MiB, not {volume_bytes} bytes"
-        )
-    manifest, _env, _tools = toolchain
-    block_count = volume_bytes // block_bytes
-    groups = -(-block_count // (8 * block_bytes))
-    inodes = groups * (group_bytes // _SYSTEM_VOLUME_INODE_RATIO_BYTES)
-    folder = USER_VOLUME_DOCUMENTS[1].strip("/")
-    staged = {f"{folder}/{name}": content for name, content in sorted(documents.items())}
-    identity = hashlib.sha256(f"user\n{volume_bytes}\n".encode())
-    for path, content in staged.items():
-        identity.update(f"{path}\0{hashlib.sha256(content).hexdigest()}\n".encode())
-    digest = identity.digest()
-    spec = {
-        "id": "user volume",
-        "profile": "primary",
-        "block_size": block_bytes,
-        "inode_size": manifest["profiles"]["primary"]["inode_size"],
-        "blocks_per_group": 8 * block_bytes,
-        "block_count": block_count,
-        "expected_groups": groups,
-        "expected_inodes": inodes,
-        "uuid": str(uuid.UUID(bytes=digest[:16], version=4)),
-        "hash_seed": str(uuid.UUID(bytes=digest[16:], version=4)),
-        "label": USER_VOLUME_LABEL,
-    }
-    _write_ext4_image(
-        target,
-        spec,
-        inodes,
-        volume_bytes,
-        toolchain,
-        directories=[folder.strip("/") for folder in USER_VOLUME_FOLDERS],
-        source_paths=(),
-        staged=staged,
-        what="the user volume",
-    )
-    return {
-        "path": target,
-        "bytes": volume_bytes,
-        "groups": groups,
-        "documents": len(staged),
-        "uuid": spec["uuid"],
-    }
 
 
 def default_image_path(profile: str, *, backend: str = "emulator") -> Path:
@@ -29283,126 +25690,28 @@ def _with_safe_mode(autoexec: str, modules: tuple[str, ...]) -> str:
     return _after_last_require(autoexec, "CHK-WHY-BOOT CHK-SAFE-ON", "--safe-mode")
 
 
-# A module's token form stands on a volume at the module's path with a t
-# added: utils/string.f, utils/string.ft.  KDOS reads it in the module's
-# place once MODULE-TOKENS is set.
-TOKEN_FORM_SUFFIX = "t"
-MODULE_TOKENS_BOOT_LINE = "-1 MODULE-TOKENS !"
-# The boot script stays source: it is the file a person edits to change
-# what the machine loads.
-TOKEN_FORM_SOURCE_ONLY = frozenset({"autoexec.f"})
+def _profile_backend(profile_name: str, backend: str) -> tuple[Profile, str]:
+    """Resolve a profile/backend pair without inventing a second profile."""
 
-
-def _token_form(
-    content: bytes,
-    token_files: dict[str, bytes] | None,
-    boot_id: int,
-    *,
-    source_beside: bool = False,
-) -> bytes | None:
-    """The token form recorded for a source file with CONTENT, if any,
-    built for the system whose BOOT-ID is BOOT_ID.  SOURCE_BESIDE says that
-    the source ships beside it."""
-
-    if not token_files:
-        return None
-    form = token_files.get(hashlib.sha256(content).hexdigest())
-    if form is None:
-        return None
-    from shared.token_form import with_boot_id
-
-    return with_boot_id(form, boot_id, source_beside=source_beside)
-
-
-def _boot_in_simulator(image_path: Path, profile: Profile, *, recorder=None):
-    """Boot IMAGE_PATH in MegaPad's simulator, on the profile's full cores,
-    until its boot script has run, and return the runtime.  RECORDER, a token
-    recorder, is attached before KDOS loads.  A profile without a session
-    entry, such as a contract profile, does its work in the boot script and
-    binds no live entry.  A boot that fails raises, with the end of what the
-    guest printed."""
-
-    from shared.storage import STORAGE_UNIT_TABLE
-    from simulator.image_bootstrap import prepare_image_bootstrap
-    from simulator.platform import Topology, create_address_space
-    from simulator.runtime import MegaForthRuntime
-    from simulator.server import _CANONICAL_HBW_MIB
-    from simulator.storage import HostedStorageService
-
-    paths = (
-        image_path,
-        _settings_image_for(profile, image_path),
-        _system_image_for(image_path),
-        _user_image_for(image_path),
-    )
-    services = {
-        unit.host_name: None
-        if unit_path is None
-        else HostedStorageService(
-            image_path=unit_path, write_protected=unit.write_protected
-        )
-        for unit, unit_path in zip(STORAGE_UNIT_TABLE, paths, strict=True)
-    }
-    # The profile's machine: the simulator refuses a shape it cannot run.
-    memory = create_address_space(
-        topology=Topology(
-            full_cores=profile.full_cores, clusters=profile.clusters,
-        ),
-        bank0_size=DEFAULT_RAM_KIB << 10,
-        external_size=profile.default_ext_mem_mib << 20,
-        vram_size=DEFAULT_VRAM_MIB << 20,
-        hbw_size=_CANONICAL_HBW_MIB << 20,
-        initial_epoch_ms=time.time_ns() // 1_000_000,
-    )
-    memory.mmio.rtc.bind_monotonic_clock(time.monotonic_ns)
-    runtime = MegaForthRuntime(
-        memory=memory, **services, execution_backend="native"
-    )
-    if recorder is not None:
-        recorder.attach(runtime)
-    try:
-        prepare_image_bootstrap(
-            memory=memory,
-            **services,
-            terminal_cols=DESKTOP_ACCEPTANCE_COLS,
-            terminal_rows=DESKTOP_ACCEPTANCE_ROWS,
-            runtime=runtime,
-            session=profile.session_entry is not None,
-        )
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except BaseException as error:
-        # A guest fault leaves the runtime as an exception of its own kind.
+    selected = _machine_backend(backend)
+    profile = PROFILES[profile_name]
+    if selected in SEMANTIC_BACKENDS and profile.session_entry is None:
         raise RuntimeError(
-            f"The boot of {image_path.name} in the simulator failed: "
-            f"{type(error).__name__}: {str(error)[:600]}\n"
-            + bytes(runtime.uart_output[-1200:]).decode("utf-8", "replace")
-        ) from error
-    return runtime
+            f"profile {profile_name!r} has no semantic session entry"
+        )
+    return profile, selected
 
 
-def _record_token_files(image_path: Path, profile: Profile) -> dict[str, bytes]:
-    """Boot IMAGE_PATH from source in MegaPad's simulator with its token
-    recorder attached, and return each loaded source file's token form by
-    the SHA-256 of its text.
+def _profile_samples(
+    profile: ImageSpec, modules: tuple[str, ...], documents: bool
+) -> tuple[dict[str, bytes], frozenset[str]]:
+    """A profile's samples (_sample_files), with the sample picture as the
+    one that is data rather than text."""
 
-    The record is made by the interpreter that loads the source, so the
-    builder keeps no reader of Forth for it.  A file whose load cannot be
-    replayed has no entry and stays source.
-    """
-
-    from shared.token_form import TokenFormError
-    from simulator.token_recorder import TokenRecorder
-
-    recorder = TokenRecorder()
-    _boot_in_simulator(image_path, profile, recorder=recorder)
-    token_files: dict[str, bytes] = {}
-    for unit in recorder.units:
-        try:
-            token_files[unit.digest] = unit.token_file()
-        except TokenFormError:
-            continue
-    return token_files
+    return (
+        _sample_files(modules, own=profile.sample_files, documents=documents),
+        frozenset({SAMPLE_PICTURE_NAME}),
+    )
 
 
 def build_image(
@@ -29421,625 +25730,46 @@ def build_image(
     user_volume: bool = False,
     user_volume_mib: int = USER_VOLUME_DEFAULT_MIB,
 ) -> Path:
-    """Build PROFILE_NAME's boot image and the images of its other disks.
+    """Build PROFILE_NAME's images with the image tool (toolchain.image
+    .build.build), at OUTPUT or the profile's default path.
 
-    With SYSTEM_VOLUME the profile's Akashic modules are plain files on an
-    ext4 system volume written beside the boot image
-    (:func:`system_image_path`), and the boot image holds the closure of
-    utils/fs/system-volume.f in their place, deployed as the profile deploys
-    its source.  autoexec.f then mounts the volume and keeps the profile's
-    REQUIREs, which KDOS resolves as paths on it.
-
-    With TOKEN_MODULES the image is first built from source for the
-    simulator and booted there once with MegaPad's token recorder attached.
-    Every source file that boot loaded then goes into the image in its token
-    form, in the source file's place: a linked chunk and a system module of
-    the boot volume, and a module of the system volume, which then holds no
-    source.  Each token file states the system this image boots, by the
-    BOOT-ID that its BIOS gives once it has loaded the image's KDOS, and
-    KDOS uses the file on that system only.  KEEP_MODULE_SOURCE writes the
-    system volume's source as well, beside the token files: the volume of a
-    system that edits its own modules, where KDOS loads the source of a
-    token file whose source has changed.
-
-    With USER_VOLUME the build writes the user volume beside the boot image
-    (:func:`user_image_path`), a fresh ext4 image of USER_VOLUME_MIB MiB with
-    the folders of the shipping form's places, and autoexec.f mounts it and
-    declares those places in place of the one place over the boot volume:
-    the origin, read-only over the root of the volume that holds the
-    profile's shipped files, and documents and records on the user volume,
-    records being the home.  With a system volume as well, the profile's
-    resources and initial files move onto the system volume, the origin's
-    volume.  Every sample, the large one included, moves into the user
-    volume's documents, and the boot volume keeps none.
-
-    These options default to off here.  The command line builds the
-    shipping form for the profiles of SHIPPING_FORM_PROFILES unless it is
-    given --linked (:func:`build_form`).
+    CODEX_AUTH_CHECKPOINT seeds a private local Codex Desk image, and
+    SHADOW_CHECK, EVERY_FRAME_CHECKS and SAFE_MODE turn those checks on at
+    boot.  The other options are build()'s.  These options default to off
+    here.  The command line builds the shipping form for the profiles of
+    SHIPPING_FORM_PROFILES unless it is given --linked (:func:`build_form`).
     """
-    if keep_module_source and not (token_modules and system_volume):
-        raise ValueError(
-            "keeping module source beside token files needs a system volume "
-            "of token modules"
-        )
-    token_files: dict[str, bytes] | None = None
-    if token_modules:
-        with tempfile.TemporaryDirectory(prefix="akashic-token-record-") as scratch:
-            with contextlib.redirect_stdout(sys.stderr):
-                recorded = build_image(
-                    profile_name,
-                    Path(scratch) / "source.img",
-                    codex_auth_checkpoint,
-                    backend="simulator",
-                    shadow_check=shadow_check,
-                    every_frame_checks=every_frame_checks,
-                    safe_mode=safe_mode,
-                    settings_safe_mode=settings_safe_mode,
-                    system_volume=system_volume,
-                    user_volume=user_volume,
-                    user_volume_mib=user_volume_mib,
-                )
-            token_files = _record_token_files(recorded, PROFILES[profile_name])
-        if not token_files:
-            raise RuntimeError("The recording boot loaded no source file")
-    # KDOS as the image holds it.  The BIOS loads it first, so it is part of
-    # the identity of the system the image boots, which every token file's
-    # header states.
-    kdos_boot_file = _strip_forth_noncode_lines(
-        (MEGAPAD_ROOT / "kdos.f").read_text(encoding="utf-8")
-    ).encode("utf-8")
-    boot_id = 0
-    if token_files:
-        from shared.boot_identity import boot_identity
-
-        boot_id = boot_identity(kdos_boot_file)
-    token_bytes = [0, 0, 0]  # files, source bytes, token bytes
-
-    def tokens_for(name: str, content: bytes) -> bytes:
-        """CONTENT, or its token form when the build has one."""
-
-        form = (
-            None
-            if name in TOKEN_FORM_SOURCE_ONLY
-            else _token_form(content, token_files, boot_id)
-        )
-        if form is None:
-            return content
-        token_bytes[0] += 1
-        token_bytes[1] += len(content)
-        token_bytes[2] += len(form)
-        return form
 
     profile, backend = _profile_backend(profile_name, backend)
-    system_volume_toolchain = (
-        _system_volume_toolchain() if system_volume or user_volume else None
-    )
-    if settings_safe_mode and DESK_SYSTEM_SETTINGS not in profile.settings_files:
-        raise RuntimeError(
-            "--settings-safe-mode needs a profile whose settings disk holds "
-            f"{DESK_SYSTEM_SETTINGS}"
-        )
-    autoexec = profile.autoexec
     if codex_auth_checkpoint is not None:
-        autoexec = _with_codex_auth_checkpoint(autoexec, codex_auth_checkpoint)
-    profile_modules = (
-        dependency_order(profile.roots)
-        if profile.linked
-        else dependency_closure(profile.roots)
-    )
-    uses_app_shell = APP_SHELL_MODULE in profile_modules
-    composition_roots = profile.roots
-    if user_volume and not uses_app_shell:
-        raise RuntimeError("--user-volume needs a profile that composes the app shell")
-    if uses_app_shell:
-        platform_roots = (MP64FS_VFS_PLATFORM_MODULE,)
-        if user_volume:
-            platform_roots += (USER_VOLUME_MODULE,)
-        composition_roots = platform_roots + tuple(
-            root
-            for root in profile.roots
-            if _normalize_module(root) not in platform_roots
-        )
-        autoexec = _with_mp64fs_vfs_platform(
-            autoexec,
-            _user_volume_boot_lines(system_volume)
-            if user_volume
-            else PLACES_BOOT_LINES,
-        )
-        if user_volume:
-            autoexec = _with_practice_home_guard(autoexec)
-    modules = (
-        dependency_order(composition_roots)
-        if profile.linked
-        else dependency_closure(composition_roots)
-    )
-    akashic_modules = modules
-    # What the boot volume deploys: the profile's modules, or what mounts
-    # the system volume that holds them.
-    deployed_modules = akashic_modules
-    if system_volume:
-        deployed_modules = (
-            dependency_order((SYSTEM_VOLUME_MODULE,))
-            if profile.linked
-            else dependency_closure((SYSTEM_VOLUME_MODULE,))
-        )
-    if shadow_check:
-        autoexec = _with_frame_shadow(autoexec, modules)
-    if every_frame_checks:
-        autoexec = _with_every_frame_checks(autoexec, modules)
-    if safe_mode:
-        autoexec = _with_safe_mode(autoexec, modules)
-    samples = _sample_files(
-        modules,
-        own=profile.sample_files,
-        documents=system_volume or user_volume,
-    )
-    # With the user volume the samples are documents there, and the boot
-    # volume holds none of them: not the large sample either, whose growth
-    # check is one of the boot volume's own (Profile.include_large_sample).
-    user_documents = samples if user_volume else {}
-    if user_volume:
-        samples = {}
-    large_sample = profile.include_large_sample and not user_volume
-    requires_networking = (
-        profile.megapad_networking or _requires_megapad_networking(modules)
-    )
-    requires_rich_terminal = _requires_megapad_rich_terminal(modules)
-    if requires_rich_terminal != (profile.rich_terminal is not None):
-        raise RuntimeError(
-            "Rich-terminal module closure and profile-owned host bounds must "
-            "be enabled together"
-        )
-    resources = set(profile.resources)
-    # With both volumes the origin is the system volume, which then holds
-    # the profile's resources and initial files in the boot volume's place.
-    origin_resources: tuple[str, ...] = ()
-    origin_files: dict[str, bytes] = {}
-    initial_files = profile.initial_files
-    if user_volume and system_volume:
-        origin_resources = tuple(sorted(resources))
-        resources = set()
-        origin_files = dict(initial_files)
-        initial_files = ()
-    linked_chunks = (
-        _linked_chunks(
-            deployed_modules,
-            profile.link_chunk_bytes,
-            profile.audited_link_line_bytes,
-        )
-        if profile.linked
-        else {}
-    )
-    deployed_chunks = linked_chunks
-    generated_files: dict[str, bytes] = (
-        {
-            name: tokens_for(name, source)
-            for name, source in linked_chunks.items()
-        }
-        if profile.cold_source_codec is None
-        else {}
-    )
-    generated_validation_files: tuple[tuple[str, bytes], ...] = ()
-    cold_source_initial_files: dict[str, bytes] = {}
-    cold_source_raw_bytes = 0
-    cold_source_container_bytes = 0
-    if profile.cold_source_codec is not None:
-        if not profile.linked:
-            raise RuntimeError(
-                "Checked cold source requires a linked profile"
-            )
-        if profile.link_chunk_bytes > COLD_SOURCE_RAW_MAX_BYTES:
-            raise RuntimeError(
-                "Cold source chunk limit exceeds the audited guest decoder "
-                f"bound of {COLD_SOURCE_RAW_MAX_BYTES} bytes"
-            )
-        deployed_chunks = {
-            COLD_SOURCE_CHUNK_TEMPLATE.format(index=index): (
-                _pack_cold_source(
-                    source, COLD_SOURCE_RAW_MAX_BYTES,
-                    codec=profile.cold_source_codec,
-                )
-                if (form := tokens_for(name, source)) is source
-                # A token form is binary already; it is stored as it is.
-                else _pack_cold_source(
-                    form, COLD_SOURCE_RAW_MAX_BYTES,
-                    codec=COLD_SOURCE_CODEC_STORED,
-                )
-            )
-            for index, (name, source) in enumerate(linked_chunks.items())
-        }
-        cold_source_raw_bytes = sum(map(len, linked_chunks.values()))
-        cold_source_container_bytes = sum(map(len, deployed_chunks.values()))
-        loader_source = (
-            AKASHIC_ROOT / "local_testing" / "cold-source-loader.f"
-        )
-        if not loader_source.is_file():
-            raise FileNotFoundError(
-                f"Missing cold source loader: {loader_source}"
-            )
-        generated_files = dict(deployed_chunks)
-        loader_content = loader_source.read_bytes()
-        generated_files[COLD_SOURCE_LOADER_PATH] = tokens_for(
-            COLD_SOURCE_LOADER_PATH, loader_content
-        )
-        generated_validation_files = (
-            (COLD_SOURCE_LOADER_PATH, loader_content),
-        )
-    if profile.cold_source_initial_files:
-        if profile.cold_source_codec is None:
-            raise RuntimeError(
-                "Checked cold-source leaves require a cold source codec"
-            )
-        for path, source in profile.cold_source_initial_files:
-            if not path.endswith(".f.src"):
-                raise RuntimeError(
-                    "Checked cold-source leaf names must end in .f.src: "
-                    f"{path}"
-                )
-            if path in cold_source_initial_files:
-                raise RuntimeError(
-                    f"Duplicate checked cold-source leaf path: {path}"
-                )
-            cold_source_initial_files[path] = _pack_cold_source(
-                source,
-                COLD_SOURCE_RAW_MAX_BYTES,
-                codec=profile.cold_source_codec,
-            )
-        cold_source_raw_bytes += sum(
-            len(source) for _, source in profile.cold_source_initial_files
-        )
-        cold_source_container_bytes += sum(
-            map(len, cold_source_initial_files.values())
-        )
-    if profile.linked or system_volume:
-        autoexec = _linked_autoexec(
-            autoexec,
-            tuple(deployed_chunks),
-            akashic_modules,
-            cold_source_codec=profile.cold_source_codec,
-            system_volume=system_volume,
-            module_tokens=bool(token_files) and system_volume,
-        )
-    autoexec = _with_userland_xmem_reserve(
-        autoexec, profile.general_xmem_reserve_bytes,
-    )
-    if requires_networking:
-        autoexec = _with_megapad_networking(autoexec)
-    if requires_rich_terminal:
-        autoexec = _with_megapad_rich_terminal(
-            autoexec, profile.rich_terminal
-        )
-        if profile.rich_boot_progress:
-            autoexec = _with_rich_desktop_boot_progress(
-                autoexec,
-                profile.rich_terminal,
-                tuple(deployed_chunks),
-                volume_modules=akashic_modules if system_volume else (),
-            )
-    elif profile.rich_boot_progress:
-        raise RuntimeError(
-            "Rich boot progress requires a rich-terminal profile"
-        )
-    if backend in SEMANTIC_BACKENDS:
-        assert profile.session_entry is not None
-        autoexec = _simulator_session_autoexec(
-            autoexec, profile.session_entry
-        )
-    paths = (
-        set(generated_files) | resources
-        if profile.linked
-        else set(deployed_modules) | resources
-    )
-    regular_initial_paths = {path for path, _ in initial_files}
-    cold_initial_paths = set(cold_source_initial_files)
-    initial_aliases = regular_initial_paths & cold_initial_paths
-    if initial_aliases:
-        raise RuntimeError(
-            "Regular and checked cold-source leaves collide: "
-            + ", ".join(sorted(initial_aliases))
-        )
-    initial_paths = regular_initial_paths | cold_initial_paths
-    overlap = set(generated_files) & (resources | initial_paths)
-    if overlap:
-        raise RuntimeError(
-            "Generated image paths collide with profile files: "
-            + ", ".join(sorted(overlap))
-        )
-    if profile.cold_source_codec is not None:
-        reserved_root_paths = set(samples) | {
-            "autoexec.f",
-            "kdos.f",
-        }
-        if requires_networking:
-            reserved_root_paths.add("networking.f")
-        if requires_rich_terminal:
-            reserved_root_paths.add(MEGAPAD_RICH_TERMINAL_MODULE)
-        root_generated = {
-            path
-            for path in set(generated_files) | cold_initial_paths
-            if PurePosixPath(path).parent == PurePosixPath(".")
-        }
-        reserved_overlap = root_generated & reserved_root_paths
-        if reserved_overlap:
-            raise RuntimeError(
-                "Cold source paths collide with image boot/sample files: "
-                + ", ".join(sorted(reserved_overlap))
-            )
-    image_paths = paths | initial_paths
-    directories = _directories(image_paths)
-    _validate_module_ids(
-        tuple(dict.fromkeys((*deployed_modules, *modules))),
-        profile.initial_files
-        + profile.cold_source_initial_files
-        + generated_validation_files,
-    )
-    _validate_image_paths(
-        image_paths,
-        directories,
-        include_networking=requires_networking,
-        external_system_files=(
-            frozenset({MEGAPAD_RICH_TERMINAL_MODULE})
-            if requires_rich_terminal
-            else frozenset()
-        ),
-        sample_names=frozenset(samples),
-    )
-
-    target = (
-        output or default_image_path(profile_name, backend=backend)
-    ).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    fs = MP64FS(total_sectors=profile.total_sectors)
-    fs.format()
-    fs.inject_file(
-        "kdos.f",
-        kdos_boot_file,
-        ftype=FTYPE_FORTH,
-        flags=FLAG_SYSTEM,
-    )
-    if requires_networking:
-        fs.inject_file(
-            "networking.f",
-            tokens_for(
-                "networking.f",
-                pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
-            ),
-            ftype=FTYPE_FORTH,
-        )
-    if requires_rich_terminal:
-        fs.inject_file(
-            MEGAPAD_RICH_TERMINAL_MODULE,
-            tokens_for(
-                MEGAPAD_RICH_TERMINAL_MODULE,
-                pack_forth_source(
-                    (
-                        MEGAPAD_ROOT / MEGAPAD_RICH_TERMINAL_MODULE
-                    ).read_bytes()
-                ),
-            ),
-            ftype=FTYPE_FORTH,
+        profile = replace(
+            profile,
+            autoexec=_with_codex_auth_checkpoint(profile.autoexec, codex_auth_checkpoint),
         )
 
-    for directory in directories:
-        fs.mkdir(directory)
+    def adjust(autoexec: str, modules: tuple[str, ...]) -> str:
+        if shadow_check:
+            autoexec = _with_frame_shadow(autoexec, modules)
+        if every_frame_checks:
+            autoexec = _with_every_frame_checks(autoexec, modules)
+        if safe_mode:
+            autoexec = _with_safe_mode(autoexec, modules)
+        return autoexec
 
-    for path in sorted(paths):
-        source = SOURCE_ROOT / path
-        if path in generated_files:
-            content = generated_files[path]
-        else:
-            if not source.is_file():
-                raise FileNotFoundError(f"Missing Akashic resource: {path}")
-            content = source.read_bytes()
-            if path.endswith(".f"):
-                content = tokens_for(path, content)
-        disk_path = PurePosixPath(path)
-        is_cold_source_chunk = (
-            profile.cold_source_codec is not None
-            and path in deployed_chunks
-        )
-        if is_cold_source_chunk:
-            file_type = FTYPE_DATA
-        else:
-            file_type = (
-                FTYPE_FORTH if disk_path.suffix == ".f" else FTYPE_TEXT
-            )
-        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
-        entry = fs.inject_file(
-            disk_path.name,
-            content,
-            ftype=file_type,
-            path=parent,
-        )
-        if is_cold_source_chunk and entry.ext1_count:
-            raise RuntimeError(
-                "Cold source payload must occupy one MP64FS extent for "
-                f"checked guest FREAD: {path}"
-            )
-
-    for path, content in initial_files:
-        disk_path = PurePosixPath(path)
-        if (
-            profile.audited_initial_forth_line_bytes is not None
-            and disk_path.suffix.lower() == ".f"
-        ):
-            content = _coalesce_audited_forth_lines(
-                content,
-                profile.audited_initial_forth_line_bytes,
-            )
-        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
-        fs.inject_file(disk_path.name, content, path=parent)
-
-    for path, content in cold_source_initial_files.items():
-        disk_path = PurePosixPath(path)
-        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
-        entry = fs.inject_file(
-            disk_path.name,
-            content,
-            ftype=FTYPE_DATA,
-            path=parent,
-        )
-        if entry.ext1_count:
-            raise RuntimeError(
-                "Checked cold-source leaf must occupy one MP64FS extent: "
-                f"{path}"
-            )
-
-    if large_sample:
-        fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
-
-        # Leave two isolated one-sector holes in the generated test image.
-        # Guest-created smoke.txt uses the first; the large Save As copy uses
-        # the second and must grow through MP64FS's secondary extent.
-        fs.inject_file(".growth-hole-1", bytes(512), flags=FLAG_SYSTEM)
-
-    fs.inject_file(
-        "autoexec.f",
-        autoexec.encode("utf-8"),
-        ftype=FTYPE_FORTH,
-    )
-    if large_sample:
-        fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
-
-    # The pictures, the sample one and a profile's own, are data; the other
-    # samples are text.
-    pictures = {SAMPLE_PICTURE_NAME} | {name for name, _ in profile.sample_files}
-    for name in sorted(samples.keys() - {"large.txt"}):
-        fs.inject_file(
-            name,
-            samples[name],
-            ftype=FTYPE_DATA if name in pictures else FTYPE_TEXT,
-        )
-
-    if large_sample:
-        fs.delete_file(".growth-hole-1")
-        fs.delete_file(".growth-hole-2")
-    fs.save(target)
-    if codex_auth_checkpoint is not None:
-        target.chmod(0o600)
-    settings = (
-        _build_settings_image(profile, target, safe_mode=settings_safe_mode)
-        if profile.settings_files
-        else None
-    )
-    system = (
-        _build_system_image(
-            akashic_modules,
-            system_image_path(target),
-            system_volume_toolchain,
-            token_files=token_files,
-            boot_id=boot_id,
-            keep_source=keep_module_source,
-            loaded_before=frozenset(deployed_modules),
-            extra_sources=origin_resources,
-            extra_files=origin_files,
-        )
-        if system_volume
-        else None
-    )
-    if system is None:
-        system_image_path(target).unlink(missing_ok=True)
-    user = (
-        _build_user_image(
-            user_image_path(target),
-            user_volume_mib << 20,
-            system_volume_toolchain,
-            documents=user_documents,
-        )
-        if user_volume
-        else None
-    )
-    if user is None:
-        user_image_path(target).unlink(missing_ok=True)
-
-    info = fs.info()
-    if info["free_sectors"] * 512 < profile.minimum_free_bytes:
-        raise RuntimeError(
-            f"Profile {profile_name!r} must retain at least "
-            f"{profile.minimum_free_bytes:,} bytes of mutable MP64FS space; "
-            f"only {info['free_sectors'] * 512:,} bytes remain"
-        )
-    cold_source_summary = (
-        "checked cold-source "
-        f"{COLD_SOURCE_CODEC_NAMES[profile.cold_source_codec]}, "
-        if profile.cold_source_codec is not None
-        else ""
-    )
-    print(
-        f"Built {profile_name} image: {target}\n"
-        f"  {len(modules)} modules"
-        f"{' on the system volume, ' + str(len(deployed_modules)) + ' to mount it' if system_volume else ''}"
-        f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
-        f"{cold_source_summary}"
-        f"{'MegaPad networking, ' if requires_networking else ''}"
-        f"{'MegaPad rich terminal, ' if requires_rich_terminal else ''}"
-        f"{len(resources)} resources, "
-        f"{len(directories)} directories\n"
-        + (
-            "  cold source: "
-            f"{cold_source_raw_bytes:,} raw bytes -> "
-            f"{cold_source_container_bytes:,} container bytes "
-            f"({cold_source_container_bytes / cold_source_raw_bytes:.1%}, "
-            f"{cold_source_container_bytes - cold_source_raw_bytes:+,} "
-            "bytes versus raw)\n"
-            if profile.cold_source_codec is not None
-            else ""
-        )
-        +
-        f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes, "
-        f"{info['free_sectors']} free sectors"
-        + (
-            f"\n  settings disk: {settings}"
-            f"{' (asks for safe mode)' if settings_safe_mode else ''}"
-            if settings is not None
-            else ""
-        )
-        + (
-            f"\n  system volume: {system['path']}, ext4, "
-            f"{system['bytes']:,} bytes in {system['block_bytes']}-byte "
-            f"blocks, {system['files']} files of {system['file_bytes']:,} "
-            f"bytes in {system['directories']} directories"
-            + (
-                f": {system['token_files']} token forms of "
-                f"{system['token_bytes']:,} bytes, "
-                + (
-                    f"{system['source_files']} source files of "
-                    f"{system['source_bytes']:,} bytes beside them"
-                    if system["source_files"]
-                    else "no source"
-                )
-                + (
-                    f", {system['name_files']} files that name a module "
-                    "loaded before the volume is mounted"
-                    if system["name_files"]
-                    else ""
-                )
-                + (
-                    f", {len(system['absent'])} modules without a token "
-                    "form left out: " + " ".join(system["absent"])
-                    if system["absent"]
-                    else ""
-                )
-                if token_files
-                else ""
-            )
-            if system is not None
-            else ""
-        )
-        + (
-            f"\n  user volume: {user['path']}, ext4, {user['bytes']:,} bytes "
-            f"in {USER_VOLUME_BLOCK_BYTES}-byte blocks, {user['groups']} groups, "
-            f"{user['documents']} documents"
-            if user is not None
-            else ""
-        )
-        + (
-            f"\n  token forms on the boot volume: {token_bytes[0]} files, "
-            f"{token_bytes[1]:,} source bytes -> {token_bytes[2]:,} bytes"
-            if token_files
-            else ""
-        )
+    target = build(
+        profile,
+        output or default_image_path(profile_name, backend=backend),
+        name=profile_name,
+        backend=backend,
+        samples_for=_profile_samples,
+        adjust_autoexec=adjust,
+        settings_safe_mode=settings_safe_mode,
+        system_volume=system_volume,
+        token_modules=token_modules,
+        keep_module_source=keep_module_source,
+        user_volume=user_volume,
+        user_volume_mib=user_volume_mib,
+        fresh_user_volume=True,
     )
     return target
 
@@ -30645,11 +26375,16 @@ def smoke(
     max_steps: int,
     timeout: float,
     ext_mem_mib: int | None = None,
-    nic_tap: str | None = None,
+    nic: str | None = None,
+    local_access: bool = False,
     backend: str = "emulator",
     full_cores: int | None = None,
     clusters: int | None = None,
 ) -> bool:
+    """Boot PROFILE_NAME's image in the emulator in this process and watch its
+    screen for the profile's markers.  NIC and LOCAL_ACCESS attach a network
+    card as MegaPad's servers' --nic and --local-access do."""
+
     try:
         profile, backend = _profile_backend(profile_name, backend)
         full_cores, clusters = _profile_machine_shape(
@@ -30676,23 +26411,26 @@ def smoke(
             "use the accept command"
         )
         return False
-    if profile.requires_tap and not nic_tap:
+    if profile.requires_network and not nic:
         print(
             f"Smoke {profile_name}: FAIL\n"
-            "  this opt-in live profile requires --nic-tap[=IFNAME]"
+            "  this opt-in live profile requires --nic SPEC"
         )
         return False
     nic_backend = None
-    if nic_tap:
-        from nic_backends import TAPBackend, tap_available
+    if nic is not None:
+        from nic_backends import backend_from_spec
+        from shared.session_options import report_network
 
-        if not tap_available(nic_tap):
-            print(
-                f"Smoke {profile_name}: FAIL\n"
-                f"  TAP device {nic_tap!r} does not exist or is not accessible"
-            )
+        try:
+            nic_backend = backend_from_spec(nic, local_access=local_access)
+        except ValueError as exc:
+            print(f"Smoke {profile_name}: FAIL\n  {exc}")
             return False
-        nic_backend = TAPBackend(tap_name=nic_tap)
+        report_network(nic_backend)
+    elif local_access:
+        print(f"Smoke {profile_name}: FAIL\n  --local-access needs --nic slirp")
+        return False
     started = time.perf_counter()
     total_steps = 0
     stop_reason = "budget"
@@ -30711,9 +26449,11 @@ def smoke(
         num_cores=full_cores,
         num_clusters=clusters,
         nic_backend=nic_backend,
-        realtime_clock=bool(nic_tap),
+        realtime_clock=nic_backend is not None,
         rtc_epoch_ms=(
-            SAMPLE_CLOCK_MS if profile.sample_date_clock and not nic_tap else None
+            SAMPLE_CLOCK_MS
+            if profile.sample_date_clock and nic_backend is None
+            else None
         ),
         rich_terminal=(
             profile.rich_terminal.configuration(cols, rows)
@@ -36521,6 +32261,20 @@ def _storage_unit_arguments(profile: Profile, image_path: Path) -> tuple[str, ..
     )
 
 
+def _passed_server_options(
+    nic: str | None, local_access: bool, debug_access: bool
+) -> list[str]:
+    """MegaPad's network and debugging options as given: the server reads
+    the network SPEC and refuses one its backend cannot attach."""
+
+    options = [] if nic is None else ["--nic", nic]
+    if local_access:
+        options.append("--local-access")
+    if debug_access:
+        options.append("--debug-access")
+    return options
+
+
 def _session_server_command(
     profile_name: str,
     image_path: Path,
@@ -36529,7 +32283,9 @@ def _session_server_command(
     cols: int,
     rows: int,
     ext_mem_mib: int | None = None,
-    nic_tap: str | None = None,
+    nic: str | None = None,
+    local_access: bool = False,
+    debug_access: bool = False,
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
@@ -36554,18 +32310,10 @@ def _session_server_command(
         or semantic_step_budget <= 0
     ):
         raise ValueError("semantic_step_budget must be a positive integer")
+    if profile.requires_network and not nic:
+        raise SystemExit(f"profile {profile_name!r} requires --nic SPEC")
+    passed = _passed_server_options(nic, local_access, debug_access)
     if backend in SEMANTIC_BACKENDS:
-        if profile.requires_tap:
-            raise SystemExit(
-                f"profile {profile_name!r} requires a configured live network "
-                f"port, which this {backend} launch does not attach"
-            )
-        if nic_tap:
-            raise SystemExit(
-                f"the {backend} launcher does not configure a live local "
-                "network port; live networking is deferred and will require "
-                "the port setup before qualification"
-            )
         if audio:
             raise SystemExit(
                 f"the semantic {backend} server does not expose an audio sink"
@@ -36598,14 +32346,11 @@ def _session_server_command(
             command.extend(
                 ("--semantic-step-budget", str(semantic_step_budget))
             )
+        command.extend(passed)
         return command
     if semantic_step_budget is not None:
         raise ValueError(
             "semantic_step_budget is available only with the semantic backends"
-        )
-    if profile.requires_tap and not nic_tap:
-        raise SystemExit(
-            f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
         )
     command = [
         *_megapad_launcher("emulator"),
@@ -36631,8 +32376,7 @@ def _session_server_command(
     ]
     command.extend(_rich_terminal_server_arguments(profile))
     command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
-    if nic_tap:
-        command.extend(("--nic-tap", nic_tap))
+    command.extend(passed)
     if audio:
         command.append("--audio")
     return command
@@ -36646,7 +32390,9 @@ def serve(
     cols: int,
     rows: int,
     ext_mem_mib: int | None = None,
-    nic_tap: str | None = None,
+    nic: str | None = None,
+    local_access: bool = False,
+    debug_access: bool = False,
     audio: bool = False,
     backend: str = "emulator",
     semantic_step_budget: int | None = None,
@@ -36662,7 +32408,9 @@ def serve(
         cols=cols,
         rows=rows,
         ext_mem_mib=ext_mem_mib,
-        nic_tap=nic_tap,
+        nic=nic,
+        local_access=local_access,
+        debug_access=debug_access,
         audio=audio,
         backend=backend,
         semantic_step_budget=semantic_step_budget,
@@ -36674,7 +32422,7 @@ def serve(
 
 
 def accept_physical_desktop(
-    image_path: Path,
+    image_path: Path | None,
     *,
     profile_name: str = "desktop-apt1",
     socket_path: str,
@@ -36696,6 +32444,7 @@ def accept_physical_desktop(
     screen_profile: bool = False,
     safe_mode: str | None = None,
     user_volume: bool = False,
+    attach: bool = False,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
@@ -36703,7 +32452,13 @@ def accept_physical_desktop(
     each step runs under, in ARTIFACT_ROOT/screen-profile.  SAFE_MODE says
     why the guest is in safe mode, "boot" or "config", so the journey must
     see the notice that says so.  USER_VOLUME says the image was built with
-    the user volume, so the journey follows the shipping form's places."""
+    the user volume, so the journey follows the shipping form's places.
+
+    The harness serves IMAGE_PATH on SOCKET_PATH with debugging access,
+    since the journey reads the guest's state.  ATTACH instead drives the
+    session another program already serves there, started with
+    --debug-access under this account; IMAGE_PATH is then None, and the
+    server's options are that program's."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -36737,25 +32492,28 @@ def accept_physical_desktop(
             paced_link=terminal_link_pace is not None,
             user_volume=user_volume,
         )
-    command = _session_server_command(
-        profile_name,
-        image_path,
-        socket_path=socket_path,
-        cols=cols,
-        rows=rows,
-        ext_mem_mib=ext_mem_mib,
-        backend=backend,
-        full_cores=full_cores,
-        clusters=clusters,
-        terminal_link_pace=terminal_link_pace,
-        profile_dir=artifact_root / "screen-profile" if screen_profile else None,
-    )
-    server = subprocess.Popen(command)
+    server = None
+    if not attach:
+        command = _session_server_command(
+            profile_name,
+            image_path,
+            socket_path=socket_path,
+            cols=cols,
+            rows=rows,
+            ext_mem_mib=ext_mem_mib,
+            debug_access=True,
+            backend=backend,
+            full_cores=full_cores,
+            clusters=clusters,
+            terminal_link_pace=terminal_link_pace,
+            profile_dir=artifact_root / "screen-profile" if screen_profile else None,
+        )
+        server = subprocess.Popen(command)
     try:
         evidence = run_physical_desktop_acceptance(
             socket_path,
             artifact_root,
-            expected_server_pid=server.pid,
+            expected_server_pid=None if server is None else server.pid,
             cols=cols,
             rows=rows,
             ready_markers=ready_markers,
@@ -36775,7 +32533,7 @@ def accept_physical_desktop(
         print(f"Physical desktop acceptance: FAIL\n  {exc}")
         return False
     finally:
-        if server.poll() is None:
+        if server is not None and server.poll() is None:
             server.terminate()
             try:
                 server.wait(timeout=10.0)
@@ -37909,7 +33667,8 @@ _dst-run
     ),
     linked=True,
     include_large_sample=False,
-    total_sectors=8192,
+    # Room beside the files Desk's closure ships, the root set among them.
+    total_sectors=16384,
 )
 
 
@@ -38123,6 +33882,8 @@ PROFILES["streams-configured-refresh-live"] = Profile(
         "net/tls-trust-registry.f",
         "tui/applets/streams/refresh-owner.f",
         "tui/applets/streams/syndication-http.f",
+        "tui/platform/mp64fs-vfs.f",
+        "net/web-roots.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - live exact-host configured refresh qualification
@@ -38131,7 +33892,8 @@ ENTER-USERLAND
 REQUIRE net/tls-trust-registry.f
 REQUIRE tui/applets/streams/refresh-owner.f
 REQUIRE tui/applets/streams/syndication-http.f
-REQUIRE local_testing/streams-live-trust.f
+REQUIRE tui/platform/mp64fs-vfs.f
+REQUIRE net/web-roots.f
 
 VARIABLE _lrc-checks
 VARIABLE _lrc-depth
@@ -38168,8 +33930,14 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
     THEN
     DEPTH _lrc-depth @ = _lrc-assert ;
 
-: _lrc-trust-emit  ( builder context -- status )
-    DROP _lrc-artifact _lrc-artifact-u ROT MTRUST-MPTA+ ;
+\ The machine's global root set, read from the image's root through a place
+\ over the boot volume, as Desk reads it from its origin.
+: _lrc-roots  ( -- )
+    S" boot" PLACES-VOLUME 0= _lrc-assert
+    >R S" files" S" /" PLACE-WRITABLE R> PLACES-DECLARE 0= _lrc-assert
+    PLSET-NEW 0= _lrc-assert >R
+    PLACE-WRITABLE SWAP R> PLSET-GRANT 0= _lrc-assert
+    WEB-ROOTS-REGISTER MTRUST-S-OK = _lrc-assert ;
 
 : _lrc-authorize  ( exact-source canonical-target context -- allowed? )
     _lrc-auth-policy ! _lrc-auth-target ! _lrc-auth-source !
@@ -38306,9 +34074,7 @@ CREATE _lrc-source STREAMS-SOURCE-SIZE ALLOT
 
 : _lrc-exercise  ( -- )
     DEPTH _lrc-depth !
-    S" org.akashic.trust.streams-syndication-live"
-        ['] _lrc-trust-emit 0 MTRUST-REGISTER
-        MTRUST-S-OK = _lrc-assert
+    _lrc-roots
     MTRUST-FREEZE DUP _lrc-status ! MTRUST-S-OK <> IF
         ." STREAMS CONFIGURED REFRESH LIVE TRUST FAIL status=" _lrc-status @ .
         ."  detail=" MTRUST-LAST-DETAIL@ . CR TX-FLUSH
@@ -38406,14 +34172,8 @@ _lrc-run
     ),
     linked=True,
     link_chunk_bytes=64 * 1024,
-    requires_tap=True,
+    requires_network=True,
     include_large_sample=False,
-    initial_files=(
-        (
-            "local_testing/streams-live-trust.f",
-            _streams_live_exact_host_trust_leaf(),
-        ),
-    ),
 )
 
 
@@ -38733,7 +34493,8 @@ def _parser() -> argparse.ArgumentParser:
             help=(
                 "put the profile's modules on an ext4 system volume as plain "
                 "files and load them from it; the boot image then holds what "
-                "mounts that volume (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
+                "mounts that volume (needs e2fsprogs: the pinned copy that "
+                "AKASHIC_E2FSPROGS_TOOL_DIR names, or this computer's own)"
             ),
         )
         command.add_argument(
@@ -38763,7 +34524,9 @@ def _parser() -> argparse.ArgumentParser:
                 "build a fresh ext4 user volume beside the boot image, attach "
                 "it as the fourth storage unit, and declare the shipping "
                 "form's places: documents and records there, records the "
-                "home, and a read-only origin (needs AKASHIC_E2FSPROGS_TOOL_DIR)"
+                "home, and a read-only origin (needs e2fsprogs: the pinned "
+                "copy that AKASHIC_E2FSPROGS_TOOL_DIR names, or this "
+                "computer's own)"
             ),
         )
         command.add_argument(
@@ -38821,10 +34584,21 @@ def _parser() -> argparse.ArgumentParser:
             )
         if name in ("smoke", "serve"):
             command.add_argument(
-                "--nic-tap",
-                nargs="?",
-                const="mp64tap0",
-                help="attach a preconfigured Linux TAP device",
+                "--nic",
+                metavar="SPEC",
+                help=(
+                    "attach a network card, as MegaPad's servers' --nic: "
+                    "slirp, which needs no administrator rights, or "
+                    "tap:IFNAME for a TAP device set up beforehand"
+                ),
+            )
+            command.add_argument(
+                "--local-access",
+                action="store_true",
+                help=(
+                    "let the slirp network reach this computer and its "
+                    "local network, which it refuses otherwise"
+                ),
             )
         if name == "smoke":
             command.add_argument(
@@ -38847,9 +34621,29 @@ def _parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="attach MegaPad's optional pygame PCM16 playback sink",
             )
+            command.add_argument(
+                "--debug-access",
+                action="store_true",
+                help=(
+                    "let clients such as session_ctl.py read the guest's "
+                    "memory and dictionary, control its execution and write "
+                    "captures over the socket"
+                ),
+            )
         if name == "accept":
             command.add_argument(
                 "--socket", default="/tmp/akashic-tui-acceptance.sock"
+            )
+            command.add_argument(
+                "--attach",
+                action="store_true",
+                help=(
+                    "drive the session another program already serves on "
+                    "--socket, started with --debug-access under this "
+                    "account, instead of building and serving the profile; "
+                    "the form and safe-mode options then say what that "
+                    "session was built as"
+                ),
             )
             command.add_argument(
                 "--artifact-root",
@@ -38927,6 +34721,30 @@ def main() -> int:
             f"{args.backend} does not use the cycle-budget smoke loop; "
             "use serve or accept"
         )
+    attach = args.command == "accept" and args.attach
+    if attach:
+        # Another program built and serves the session.
+        given = [
+            option
+            for option, value in (
+                ("--output", args.output),
+                ("--codex-auth-checkpoint", args.codex_auth_checkpoint),
+                ("--shadow-check", args.shadow_check),
+                ("--every-frame-checks", args.every_frame_checks),
+                ("--keep-module-source", args.keep_module_source),
+                ("--ext-mem-mib", args.ext_mem_mib),
+                ("--cores", args.cores),
+                ("--clusters", args.clusters),
+                ("--terminal-link-pace", args.terminal_link_pace),
+                ("--screen-profile", args.screen_profile),
+            )
+            if value not in (None, False)
+        ]
+        if given:
+            parser.error(
+                f"{', '.join(given)} belong to the build or the server, which "
+                "--attach leaves to the program serving the session"
+            )
     system_volume, token_modules, user_volume = build_form(
         args.profile,
         linked=args.linked,
@@ -38934,7 +34752,7 @@ def main() -> int:
         token_modules=args.token_modules,
         user_volume=args.user_volume,
     )
-    image_path = build_image(
+    image_path = None if attach else build_image(
         args.profile,
         args.output,
         args.codex_auth_checkpoint,
@@ -38964,7 +34782,8 @@ def main() -> int:
             max_steps=max_steps,
             timeout=timeout,
             ext_mem_mib=ext_mem_mib,
-            nic_tap=args.nic_tap,
+            nic=args.nic,
+            local_access=args.local_access,
             backend=args.backend,
             full_cores=args.cores,
             clusters=args.clusters,
@@ -38998,6 +34817,7 @@ def main() -> int:
                 else None
             ),
             user_volume=user_volume,
+            attach=attach,
         ) else 1
     serve(
         args.profile,
@@ -39006,7 +34826,9 @@ def main() -> int:
         cols=args.cols,
         rows=args.rows,
         ext_mem_mib=ext_mem_mib,
-        nic_tap=args.nic_tap,
+        nic=args.nic,
+        local_access=args.local_access,
+        debug_access=args.debug_access,
         audio=args.audio,
         backend=args.backend,
         semantic_step_budget=args.semantic_step_budget,

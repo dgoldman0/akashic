@@ -1791,9 +1791,12 @@ for safe mode. The settings hold three keys under `[desk.rich-terminal]`:
 `safe-mode`, which turns safe mode on (`tui/check-mode.f`) with the system
 settings as its reason, and `full-refresh-quiet-ms` and
 `full-refresh-interval-ms`, the times of the occasional full refresh (§9.2),
-1,000 and 5,000 ms when absent. Settings that are absent, unreadable or
-malformed ask for nothing: they are outside data, not an anomaly. The
-baseline Desk reads none of this.
+1,000 and 5,000 ms when absent. One more key, `local-access` under
+`[desk.network]`, says that the machine may reach the host computer and its
+local network, which MegaPad's network refuses otherwise; while it is true,
+Desk's first frame carries a warning notice for ten seconds, at every start.
+Settings that are absent, unreadable or malformed ask for nothing: they are
+outside data, not an anomaly. The baseline Desk reads none of this.
 
 ### 9.2 The occasional full refresh
 

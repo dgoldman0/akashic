@@ -26,7 +26,7 @@ if str(LOCAL_TESTING) not in sys.path:
 import test_vfs_fat as fat_harness  # noqa: E402
 import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
 import machine_backends  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from machine_backends import Printed  # noqa: E402
 from native_forth import load_sources, module_source  # noqa: E402
 from system import HBW_SIZE as EMULATOR_HBW_SIZE  # noqa: E402
@@ -67,7 +67,7 @@ _EXT4_SOURCE_JIT_BEGIN = (
 _EXT4_SOURCE_JIT_END = (
     ("JIT-OFF",) if _EXT4_SOURCE_JIT_ENABLED else ()
 )
-MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
+MANIFEST = ext4_fixture_generator.DEFAULT_MANIFEST
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
 
 with MANIFEST.open("r", encoding="utf-8") as source:
@@ -90147,6 +90147,11 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         ),
         ": _EXT4-BUILD-UNINIT-BLOCK-BITMAP  ( group buffer ctx -- ior )",
         ": _EXT4-BUILD-UNINIT-INODE-BITMAP  ( buffer ctx -- ior )",
+        ": _EXT4-UNINIT-BLOCK-SET?  ( block group ctx -- set? ior )",
+        (
+            ": _EXT4-UNINIT-RANGE-SET?  "
+            "( first count group ctx -- set? ior )"
+        ),
     )
     service_names = (
         "_EXT4-GROUP-BLOCK-COUNT",
@@ -90159,6 +90164,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-BLOCK-ALLOCATED?",
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP",
         "_EXT4-BUILD-UNINIT-INODE-BITMAP",
+        "_EXT4-UNINIT-RANGE-SET?",
     )
     for definition in service_definitions:
         assert bitmap.splitlines().count(definition) == 1
@@ -90202,11 +90208,18 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-UB-FIRST",
         "_EXT4-UB-COUNT",
         "_EXT4-UB-SPAN",
+        "_EXT4-US-BLOCK",
+        "_EXT4-US-GROUP",
+        "_EXT4-US-CTX",
+        "_EXT4-UR-FIRST",
+        "_EXT4-UR-COUNT",
+        "_EXT4-UR-GROUP",
+        "_EXT4-UR-CTX",
         "_EXT4-UI-BUF",
         "_EXT4-UI-CTX",
         "_EXT4-UI-BYTES",
     }
-    assert len(private_cells) == 31
+    assert len(private_cells) == 38
     assert all(cell not in facade for cell in private_cells)
     for removed in (
         "_EXT4-BBC-BUFFER",
@@ -90243,6 +90256,8 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
     block_loader = word_body(bitmap_executable, "_EXT4-LOAD-BLOCK-BITMAP")
     inode_loader = word_body(bitmap_executable, "_EXT4-LOAD-INODE-BITMAP")
     allocated = word_body(bitmap_executable, "_EXT4-BLOCK-ALLOCATED?")
+    uninit_block = word_body(bitmap_executable, "_EXT4-UNINIT-BLOCK-SET?")
+    uninit_range = word_body(bitmap_executable, "_EXT4-UNINIT-RANGE-SET?")
     uninit_inodes = word_body(
         bitmap_executable, "_EXT4-BUILD-UNINIT-INODE-BITMAP"
     )
@@ -90309,7 +90324,25 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         assert "_EXT4-CRC@" not in loader
 
     assert "_EXT4-GROUP-BLOCK-COUNT" in allocated
-    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN" in allocated
+    # A BLOCK_UNINIT group answers from the bitmap it stands for, whose set
+    # bits are its static metadata, with the group's descriptor loaded.
+    assert (
+        "_EXT4-BG-BLOCK-UNINIT AND IF _EXT4-BA-BLOCK @ _EXT4-BA-GROUP @ "
+        "_EXT4-BA-CTX @ _EXT4-UNINIT-BLOCK-SET? EXIT THEN"
+    ) in allocated
+    assert allocated.index("_EXT4-LOAD-DESC") < allocated.index(
+        "_EXT4-UNINIT-BLOCK-SET?"
+    )
+    assert uninit_block.index("_EXT4-SPARSE-GROUP?") < (
+        uninit_block.index("_EXT4-BACKUP-END")
+    ) < uninit_block.index("_EXT4-GD.BLOCK-BITMAP-LO")
+    assert "_EXT4-GD-SPAN @ U<" in uninit_block
+    assert "_EXT4-READ-BLOCK" not in uninit_block
+    assert "_EXT4-LOAD-DESC" not in uninit_block
+    assert uninit_range.count("_EXT4-LOAD-DESC") == 1
+    assert uninit_range.index("_EXT4-LOAD-DESC") < uninit_range.index(
+        "_EXT4-UNINIT-BLOCK-SET?"
+    )
     assert "_EXT4-LOAD-BLOCK-BITMAP" not in allocated
     assert (
         "_EXT4-BA-GROUP-BLOCKS @ _EXT4-BA-INDEX @ BITSET-TEST?"
@@ -90353,6 +90386,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 4,
         "_EXT4-LOAD-INODE-BITMAP": 11,
         "_EXT4-BUILD-UNINIT-INODE-BITMAP": 1,
+        "_EXT4-UNINIT-RANGE-SET?": 1,
         "_EXT4-BLOCK-BITMAP-CRC": 8,
         "_EXT4-INODE-BITMAP-CRC": 11,
     }
@@ -92430,7 +92464,18 @@ def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
         in allocated
     )
     assert "DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated
-    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN" in allocated
+    # A BLOCK_UNINIT group answers from the bitmap it stands for, in which
+    # its static metadata is allocated, before any read of the medium's
+    # zeroed bitmap; it never answers every block free, as it once did.
+    uninit_block = (
+        "_EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF\n"
+        "        _EXT4-BA-BLOCK @ _EXT4-BA-GROUP @ _EXT4-BA-CTX @\n"
+        "        _EXT4-UNINIT-BLOCK-SET? EXIT\n"
+        "    THEN"
+    )
+    assert uninit_block in allocated
+    assert allocated.index(uninit_block) < allocated.index("_EXT4-READ-BLOCK")
+    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE" not in allocated
 
     assert allocated_range.count("_EXT4-GROUP-BLOCK-COUNT") == 1
     assert (
@@ -92448,10 +92493,23 @@ def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
     )
     assert (
         "_EXT4-RAR-GROUP-BLOCKS @\n"
-        "        _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ "
+        "            _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ "
         "BITSET-ALL-SET?"
         in allocated_range
     )
+    # A run in a BLOCK_UNINIT group is checked block by block against the
+    # bitmap the group stands for, instead of being refused outright, and
+    # its zeroed bitmap is never read.
+    uninit, medium = allocated_range.split(
+        "_EXT4-BG-BLOCK-UNINIT AND IF", 1
+    )[1].split("ELSE", 1)
+    assert (
+        "DROP _EXT4-RAR-CURRENT @ _EXT4-RAR-CHUNK @\n"
+        "            _EXT4-RAR-GROUP @ _EXT4-RAR-CTX @ _EXT4-UNINIT-RANGE-SET?\n"
+        "            ?DUP IF NIP EXIT THEN"
+    ) in uninit
+    assert "_EXT4-CORRUPT" not in uninit and "_EXT4-READ-BLOCK" not in uninit
+    assert "_EXT4-RAR-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN" in medium
     assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated_range
     assert "0= IF _EXT4-RAR-DETAIL @ _EXT4-CORRUPT EXIT THEN" in (
         allocated_range

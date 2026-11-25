@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from forth_dependencies import dependency_markers
+from toolchain.image.closure import dependency_markers
 from refactor_inventory import _lexical_definitions
 
 

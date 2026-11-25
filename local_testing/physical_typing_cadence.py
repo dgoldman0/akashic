@@ -212,7 +212,7 @@ def worker(args):
     ordinary = tui._session_server_command(
         "desktop-apt1", image, socket_path=socket_path,
         cols=tui.DESKTOP_ACCEPTANCE_COLS, rows=tui.DESKTOP_ACCEPTANCE_ROWS,
-        backend="simulator",
+        backend="simulator", debug_access=True,
         profile_dir=artifact / "screen-profile" if args.screen_profile else None)
     command = [sys.executable, str(Path(__file__).resolve()), "server",
                "--megapad-root", str(args.megapad_root), "--artifact", str(artifact),

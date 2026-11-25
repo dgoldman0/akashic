@@ -269,7 +269,7 @@ Android 1.47.2 build while the host checker and debugger are Ubuntu 1.47.0;
 neither mixture is qualification.
 
 The machine-readable authority for this profile is
-`local_testing/fixtures/ext4-profile/manifest.json`.  Its committed
+`toolchain/image/ext4-profile/manifest.json`.  Its committed
 `mke2fs.conf` hash, exact command argv, source pins, feature ledger, geometry,
 and environment are contract data rather than suggestions.
 

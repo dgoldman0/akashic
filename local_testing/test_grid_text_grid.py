@@ -197,7 +197,7 @@ def test_grid_draw_lifecycle_uses_canonical_model_and_keeps_existing_editor() ->
 
 def _grid_runtime():
     """Load the complete applet, including its real state-layout words."""
-    from forth_dependencies import dependency_order
+    from toolchain.image.closure import dependency_order
     from test_textarea import MEGAPAD_ROOT
     from simulator.platform import create_address_space
     from simulator.runtime import MegaForthRuntime

@@ -23,7 +23,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from forth_dependencies import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the Akashic root
+from toolchain.image.closure import (
     PROVIDED_RE,
     REQUIRE_RE,
     dependency_markers,

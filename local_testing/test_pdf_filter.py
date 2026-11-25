@@ -22,7 +22,7 @@ import zlib
 import pytest
 from PIL import Image
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_png import _filter
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from simulator.platform import create_address_space

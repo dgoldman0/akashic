@@ -264,7 +264,7 @@
           "coverage": "covered",
           "facets": ["providers", "actions", "failures"],
           "preserve": ["Offline and scripted providers", "OpenAI provider/source and Codex provider/source/catalog/auth paths", "Masked credential cancel/submit/clear, device authorization and model/effort/tier/verbosity settings"],
-          "evidence": ["profile:agent", "profile:agent-provider-ui-commands", "profile:openai-codec", "profile:openai-provider", "profile:openai-source", "profile:codex-auth", "profile:codex-catalog", "profile:codex-source", "profile:desktop-codex", "profile:agent-auth-ui", "profile:agent-device-ui", "profile:agent-widgets"]
+          "evidence": ["profile:agent", "profile:agent-provider-ui-commands", "profile:openai-codec", "profile:openai-provider", "profile:openai-source", "profile:codex-auth", "profile:codex-catalog", "pytest:local_testing/test_codex_source.py::test_source", "profile:desktop-codex", "profile:agent-auth-ui", "profile:agent-device-ui", "profile:agent-widgets"]
         },
         {
           "id": "agent.transcript-persistence",

@@ -25,7 +25,6 @@ import collections
 import json
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -60,12 +59,9 @@ def tracked_forth(root: Path, pattern: str) -> list[str]:
 
 
 def _dependency_markers(root: Path):
-    """KDOS's REQUIRE rule, from the dependency tool the harness uses."""
-    sys.path.insert(0, str(root / "local_testing"))
-    try:
-        from forth_dependencies import dependency_markers  # type: ignore
-    finally:
-        sys.path.pop(0)
+    """KDOS's REQUIRE rule, from the image tool's closure."""
+    from toolchain.image.closure import dependency_markers
+
     return dependency_markers
 
 

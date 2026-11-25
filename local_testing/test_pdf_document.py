@@ -18,7 +18,7 @@ import zlib
 
 import pytest
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_pdf_content import FILE_BYTES, HELVETICA, page_pdf
 from test_pdf_crypt import encrypt
 from test_pdf_file import stream_object, write_pdf

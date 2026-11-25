@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 import test_uidl_collection_snapshot as base
 
 _CLOSURE = dependency_order(base.AK, ("tui/uidl-dialog-snapshot.f",))

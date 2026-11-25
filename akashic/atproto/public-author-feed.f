@@ -7,7 +7,7 @@
 \ =====================================================================
 
 \ KDOS module identities are bounded to 23 bytes.  Keep this identifier
-\ complete within that boundary and distinct from the public-trust module.
+\ complete within that boundary.
 PROVIDED akashic-atp-pubfeed
 
 REQUIRE ../net/external-io.f

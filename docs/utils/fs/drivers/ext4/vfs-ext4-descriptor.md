@@ -10,7 +10,9 @@ verifies its seeded CRC, rejects high block addresses and invalid metadata
 pointers, bounds the inode-table span, and validates initialized flags and
 counter widths. It also owns the shared descriptor-CRC predicate and the
 checked descriptor restamper used by allocation, deletion, recovery, and
-transaction builders. It depends only on
+transaction builders, and `_EXT4-BACKUP-END`, the first block after a sparse
+group's backup superblock, descriptor table and reserved descriptor blocks,
+which the bitmap and backup units share. It depends only on
 [`vfs-ext4-admission.f`](vfs-ext4-admission.md) and has no callback into later
 allocation, recovery, or mutation policy.
 

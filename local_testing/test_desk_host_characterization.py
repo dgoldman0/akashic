@@ -452,6 +452,16 @@ VARIABLE _dh-er VARIABLE _dh-ec VARIABLE _dh-eh VARIABLE _dh-ew
 _DESK-FILL-DESC
 ' _dh-desk-init DESK-DESC APP.INIT-XT !
 : _dh-shell-run  ( -- ) DESK-DESC ASHELL-RUN ;
+\ The machine's trust, composed before the baseline as a boot composition
+\ composes it: the global root set read from the origin, then the freeze.
+\ KDOS keeps the root set for the boot, so the balance measures only what
+\ Desk takes and gives back; Desk then finds the registry frozen.
+: _dh-machine-trust  ( -- )
+    PLACES-DEFAULT DUP 0= ABORT" DESK HOST CHARACTERIZATION FAIL no places"
+    PLSET-ORIGIN DUP 0= ABORT" DESK HOST CHARACTERIZATION FAIL no origin"
+    WEB-ROOTS-REGISTER MTRUST-S-OK <> ABORT" DESK HOST CHARACTERIZATION FAIL root set"
+    MTRUST-FREEZE MTRUST-S-OK <> ABORT" DESK HOST CHARACTERIZATION FAIL machine trust" ;
+_dh-machine-trust
 DEPTH _dh-shell-depth !
 HEAP-FREE-BYTES _dh-shell-heap !
 _dh-xmem-available _dh-shell-xmem !

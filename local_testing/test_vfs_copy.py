@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from native_forth import (
     MEGAPAD_ROOT,
     SOURCE_ROOT,

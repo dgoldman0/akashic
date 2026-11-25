@@ -1,4 +1,5 @@
 """The sample PDFs on the Desktop disk, written the same on every host.
+generate_desktop_samples.py writes them into assets/samples/desktop.
 
 One three-page document in three copies: plain, tagged, and encrypted with
 RC4 under the empty user password.  Its first page has a title, paragraphs

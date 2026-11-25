@@ -448,7 +448,7 @@ The combined witness command is:
 
 ```text
 python3 local_testing/akashic_tui.py smoke \
-  --profile desktop-streams-vertical --nic-tap mp64tap0 \
+  --profile desktop-streams-vertical --nic tap:mp64tap0 \
   --max-steps 9000000000 --timeout 300
 ```
 

@@ -157,7 +157,7 @@ def test_private_mke2fs_config_and_environment_are_pinned(manifest: dict) -> Non
         "TZ": "UTC",
         "E2FSPROGS_FAKE_TIME": "1704067200",
         "MKE2FS_CONFIG": (
-            "{repo}/local_testing/fixtures/ext4-profile/mke2fs.conf"
+            "{repo}/toolchain/image/ext4-profile/mke2fs.conf"
         ),
     }
     mkfs = manifest["generator"]["mkfs_argv"]
