@@ -1352,6 +1352,27 @@ chunks on the boot volume ("The shipping form and the linked form" above).
 Plain `akashic_tui.py accept --backend simulator` runs the same journey, on
 the same default form, with only its own 900-second timeout.
 
+The same journey also runs on the Desktop fantasy-engine ships, which the
+`fantasy-engine` command builds and serves:
+
+```bash
+python3 local_testing/physical_desktop_acceptance.py \
+  --through-command ../fantasy-engine --cache-dir /dev/shm/fe-cache \
+  --font assets/fonts/DejaVuSansMono.ttf \
+  --output-parent local_testing/out/physical-desktop
+```
+
+The launcher copies the shipped configuration under a name of its own with
+the journey's 280 by 84 terminal, runs it with `fantasy-engine run
+--no-viewer --debug-access`, and drives the journey with `accept --attach` on
+the socket the command names. In release mode, the default, the command
+builds the components at the commits its lock file records, and the journey
+runs from the assembled Akashic, so the evidence names the lock file's digest
+and the commits the session manifest records, with no git involved.
+`--workspace DIR` runs development mode instead, over that workspace's
+checkouts, which must be committed. The configuration settles the form and
+the server, so the build and server options do not apply.
+
 For testing, `--terminal-link-pace BYTES_PER_SECOND:FRAME_US` on the launcher,
 or on `akashic_tui.py serve` and `accept`, makes the hosted terminal take the
 guest's bytes no faster than that rate, as a real serial link would, and ask

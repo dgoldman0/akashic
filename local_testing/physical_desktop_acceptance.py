@@ -76,6 +76,22 @@ and the Desktop then loads those files from their token forms (MegaPad's
 docs/token-modules-proposal-2026-11-11.md).  A system volume then holds
 token files and no source; --keep-module-source writes each module's source
 beside its token file as well.  The journey is the same one.
+
+With --through-command FANTASY_ENGINE the journey runs on the Desktop that
+fantasy-engine ships, built and served by the fantasy-engine command of that
+checkout: the child makes a configuration of its own from the shipped one,
+with the journey's terminal size, runs it with `run --no-viewer
+--debug-access`, and drives the journey on the socket the command names.
+The command builds the shipping form, so the form's options and the other
+build and server options do not apply.  In release mode, the default, the
+command builds from the components at the commits its lock file records
+(--components, or the checkout's components.toml), and the child runs this
+journey from the assembled Akashic, so the evidence is bound to the lock
+file's digest and the commits the session manifest records, and no git
+runs.  With --workspace DIR the command uses that workspace's checkouts as
+they stand, which must be committed, and the evidence binds them as the
+ordinary journey does.  The configuration's folder, user volume included,
+is in the artifact's data folder, and the user volume is checked as above.
 """
 from __future__ import annotations
 
@@ -84,12 +100,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 WATCHDOG_SECONDS = 900
 RSS_STOP_BYTES = 3584 * 1024**2  # Aggregate processes; below the 4 GiB gate.
@@ -100,6 +118,16 @@ APPLET_KIND = "physical-desk-single-applet-check"
 APPLET_TIMEOUT_SECONDS = 300
 APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
            "folio", "small-terminal", "photo", "damaged", "sandbox", "keyring")
+# The journey through the command runs the Desktop fantasy-engine ships,
+# copied under a name of the journey's own so that its terminal takes the
+# journey's size.
+COMMAND_SHIPPED = "desktop"
+COMMAND_CONFIGURATION = "desktop-journey"
+COMPONENTS = ("megapad", "akashic", "lm1")
+# What the command prints once its server answers.
+COMMAND_SERVING = re.compile(r"^Serving (?P<name>\S+) on (?P<socket>.+); Ctrl\+C stops it$")
+# How long the command may take to build the configuration and serve it.
+COMMAND_SERVE_SECONDS = 300
 
 
 def write_json(path: Path, value) -> None:
@@ -183,6 +211,8 @@ def child(args) -> int:
 
     if tui.DESKTOP_ACCEPTANCE_TIMEOUT != WATCHDOG_SECONDS:
         raise RuntimeError("review the changed canonical watchdog before using this launcher")
+    if args.through_command is not None:
+        return command_child(args, tui)
     clean = args.applet is None
     profile = "desktop-apt1" if clean else f"desktop-apt1-{args.applet}"
     bindings = {"akashic": git_binding(args.akashic_root, clean=clean),
@@ -364,9 +394,224 @@ def user_volume_problems(image: Path, expected: dict[str, bytes | None],
     return problems, record
 
 
+def fantasy_engine(*arguments: str) -> list[str]:
+    """The fantasy-engine command with ARGUMENTS, run from its checkout."""
+
+    return [sys.executable, "-m", "fantasy_engine.command", *arguments]
+
+
+def command_sources(args) -> list[str]:
+    """The options that tell ARGS's command where the components come from:
+    the workspace in development mode, or else the lock file, and where it
+    keeps the assembled components."""
+
+    sources = []
+    if args.workspace is not None:
+        sources += ["--workspace", str(args.workspace)]
+    elif args.components is not None:
+        sources += ["--components", str(args.components)]
+    if args.cache_dir is not None:
+        sources += ["--cache-dir", str(args.cache_dir)]
+    return sources
+
+
+def command_trees(args) -> dict[str, Path]:
+    """The component trees the command builds and serves from: in
+    development mode the workspace's checkouts, and in release mode the
+    components at the lock file's commits, which `fantasy-engine prepare`
+    assembles, builds and names."""
+
+    if args.workspace is not None:
+        return {name: args.workspace / name for name in COMPONENTS}
+    prepared = subprocess.run(fantasy_engine("prepare", *command_sources(args)),
+                              cwd=args.through_command, capture_output=True, text=True,
+                              check=False)
+    if prepared.returncode != 0:
+        raise RuntimeError("fantasy-engine prepare failed:\n"
+                           + (prepared.stdout + prepared.stderr).strip())
+    trees = {}
+    for line in prepared.stdout.splitlines():
+        name, separator, path = line.partition(": ")
+        if separator and name in COMPONENTS:
+            trees[name] = Path(path)
+    if set(trees) != set(COMPONENTS):
+        raise RuntimeError(f"fantasy-engine prepare named no tree for "
+                           f"{', '.join(sorted(set(COMPONENTS) - set(trees)))}")
+    return trees
+
+
+def with_journey_geometry(text: str, cols: int, rows: int) -> str:
+    """A configuration's TEXT with its viewer's terminal COLS by ROWS and
+    everything else as written: its [viewer] table, wherever it stands,
+    gives way to one at the end with the new size and the font size the
+    file gave."""
+
+    data = tomllib.loads(text)
+    viewer = dict(data.get("viewer", {}))
+    if not all(isinstance(value, int) and not isinstance(value, bool)
+               for value in viewer.values()):
+        raise ValueError("the configuration's [viewer] holds a value that is not a whole number")
+    kept, inside = [], False
+    for line in text.splitlines(keepends=True):
+        header = re.match(r"\s*\[\[?\s*([^\]\s]+)\s*\]\]?\s*(#.*)?$", line)
+        if header:
+            inside = header.group(1) == "viewer"
+        if not inside:
+            kept.append(line)
+    viewer.update(cols=cols, rows=rows)
+    result = ("".join(kept).rstrip("\n") + "\n\n[viewer]\n"
+              + "".join(f"{key} = {value}\n" for key, value in viewer.items()))
+    changed = tomllib.loads(result)
+    if ({key: value for key, value in changed.items() if key != "viewer"}
+            != {key: value for key, value in data.items() if key != "viewer"}
+            or changed["viewer"] != viewer):
+        raise ValueError("the configuration could not take the journey's terminal size")
+    return result
+
+
+def session_manifest(folder: Path) -> Path:
+    """The session manifest the image tool wrote in a configuration's FOLDER."""
+
+    found = sorted(folder.glob("*-session.json"))
+    if len(found) != 1:
+        raise RuntimeError(f"{folder} holds {len(found)} session manifests, not one")
+    return found[0]
+
+
+def command_binding(args, folder: Path) -> dict:
+    """What a run through the command is bound to: the commits and the
+    configuration's digests the session manifest records, which the command
+    took from its sources.  In release mode they are the lock file's, whose
+    digest joins them, and no git runs; in development mode the workspace's
+    checkouts are bound as the ordinary journey binds them."""
+
+    built_from = json.loads(session_manifest(folder).read_text())["built_from"]
+    if args.workspace is None:
+        lock = args.components or args.through_command / "components.toml"
+        return {"mode": "release", "built_from": built_from,
+                "lock_file": {"path": str(lock), "sha256": sha256(lock)}}
+    return {"mode": "development", "built_from": built_from,
+            **{name: git_binding(args.workspace / name) for name in COMPONENTS}}
+
+
+def serving_socket(log: Path, process, deadline: float) -> Path:
+    """The socket the command's run in PROCESS says, in LOG, that it
+    serves on, once it says so."""
+
+    while True:
+        for line in log.read_text(errors="replace").splitlines():
+            match = COMMAND_SERVING.match(line)
+            if match and match["name"] == COMMAND_CONFIGURATION:
+                return Path(match["socket"])
+        if process.poll() is not None:
+            raise RuntimeError(f"the command stopped before it served "
+                               f"(status {process.returncode}); see {log}")
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"the command did not serve within {COMMAND_SERVE_SECONDS} s")
+        time.sleep(0.25)
+
+
+def stop_command(process) -> None:
+    """Stop the command's run as Ctrl+C would; it stops its server."""
+
+    if process.poll() is None:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def command_child(args, tui) -> int:
+    """The canonical journey on the Desktop fantasy-engine ships, which the
+    command of ARGS builds and serves: a configuration of its own from the
+    shipped one with the journey's terminal, served with debugging access,
+    driven by the harness's accept on the socket the command names, and
+    checked afterwards as the ordinary journey checks its user volume."""
+
+    import _megaforth_native as extension
+    from rich_terminal.font_set import discover_fallback_fonts, discover_style_fonts
+
+    data = args.artifact / "data"
+    made = subprocess.run(
+        fantasy_engine("new", COMMAND_CONFIGURATION, COMMAND_SHIPPED, *command_sources(args),
+                       "--data-dir", str(data)),
+        cwd=args.through_command, capture_output=True, text=True, check=False)
+    if made.returncode != 0:
+        raise RuntimeError("fantasy-engine new failed:\n" + (made.stdout + made.stderr).strip())
+    configuration = Path(made.stdout.strip().splitlines()[-1].split(": ", 1)[1])
+    configuration.write_text(with_journey_geometry(
+        configuration.read_text(encoding="utf-8"),
+        tui.DESKTOP_ACCEPTANCE_COLS, tui.DESKTOP_ACCEPTANCE_ROWS), encoding="utf-8")
+    folder = configuration.parent
+    log = args.artifact / "command.log"
+    with log.open("w") as stream:
+        run = subprocess.Popen(
+            fantasy_engine("run", COMMAND_CONFIGURATION, "--no-viewer", "--debug-access",
+                           *command_sources(args), "--data-dir", str(data)),
+            cwd=args.through_command, stdout=stream, stderr=subprocess.STDOUT)
+    try:
+        socket_path = serving_socket(log, run, time.monotonic() + COMMAND_SERVE_SECONDS)
+        bindings = command_binding(args, folder)
+        extension_path = Path(extension.__file__).resolve()
+        write_json(args.artifact / "bindings.json", {
+            "kind": KIND, **bindings, "profile": "desktop-apt1",
+            "through_command": str(args.through_command),
+            "configuration": str(configuration),
+            "trees": {"akashic": str(args.akashic_root), "megapad": str(args.megapad_root)},
+            "backend": "simulator", "executor": "native",
+            "launcher_sha256": sha256(Path(__file__)),
+            "font": str(args.font), "font_sha256": sha256(args.font),
+            "fallback_fonts": [{"path": str(path), "sha256": sha256(path)}
+                               for path in discover_fallback_fonts()],
+            "style_fonts": {name: {"path": str(path), "sha256": sha256(path)}
+                            for name, path in discover_style_fonts(args.font).items()},
+            "native_extension": str(extension_path), "native_sha256": sha256(extension_path),
+            "socket": str(socket_path), "font_size": 18, "action_delay_seconds": 0.75,
+            "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,
+        })
+        sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
+                    "accept", "--profile", "desktop-apt1", "--attach",
+                    "--backend", "simulator", "--socket", str(socket_path),
+                    "--artifact-root", str(args.artifact / "evidence"),
+                    "--timeout", str(WATCHDOG_SECONDS),
+                    "--font", str(args.font), "--font-size", "18", "--action-delay", "0.75",
+                    "--hold-seconds", "10"]
+        result = tui.main()
+    finally:
+        stop_command(run)
+    if command_binding(args, folder) != bindings:
+        raise RuntimeError("what the run was bound to changed during physical acceptance")
+    built = json.loads(session_manifest(folder).read_text())
+    expected = user_volume_expected(None, tui) if result == 0 else {}
+    problems, record = user_volume_problems(
+        folder / built["storage"]["user"], expected, tui._system_volume_toolchain())
+    write_json(args.artifact / "user-volume-check.json", record)
+    for problem in problems:
+        print(f"User volume: {problem}", flush=True)
+    if not problems:
+        print("User volume: e2fsck passes it and its journal is empty"
+              + ("; every file the journey leaves holds what it should "
+                 f"({len(expected)} checked)" if result == 0 else ""), flush=True)
+    elif result == 0:
+        result = 1
+    return result
+
+
 def supervise(args) -> int:
-    for root in (args.akashic_root, args.megapad_root):
-        git_binding(root, clean=args.applet is None)
+    launcher = Path(__file__).resolve()
+    if args.through_command is not None:
+        if args.workspace is not None:
+            for name in COMPONENTS:
+                git_binding(args.workspace / name)
+        trees = command_trees(args)
+        args.akashic_root, args.megapad_root = trees["akashic"], trees["megapad"]
+        # The journey and its checks come from the Akashic the command runs.
+        launcher = args.akashic_root / "local_testing" / Path(__file__).name
+    else:
+        for root in (args.akashic_root, args.megapad_root):
+            git_binding(root, clean=args.applet is None)
     if not args.font.is_file():
         raise ValueError("--font must name an existing physical viewer font")
     if os.environ.get("SDL_VIDEODRIVER", "").lower() in ("dummy", "offscreen"):
@@ -374,10 +619,12 @@ def supervise(args) -> int:
     args.output_parent.mkdir(parents=True, exist_ok=True)
     artifact = Path(tempfile.mkdtemp(prefix="physical-desktop-", dir=args.output_parent))
     socket_root = Path(tempfile.mkdtemp(prefix="rich-physical-desktop-"))
-    command = [sys.executable, str(Path(__file__).resolve()), "--child",
+    command = [sys.executable, str(launcher), "--child",
                "--akashic-root", str(args.akashic_root), "--megapad-root", str(args.megapad_root),
                "--font", str(args.font), "--artifact", str(artifact),
                "--socket", str(socket_root / "session.sock"), "--backend", args.backend]
+    if args.through_command is not None:
+        command += ["--through-command", str(args.through_command), *command_sources(args)]
     if args.applet is not None:
         command += ["--applet", args.applet]
     if args.cores is not None:
@@ -405,6 +652,10 @@ def supervise(args) -> int:
     if args.user_volume:
         command += ["--user-volume", "--user-volume-mib", str(args.user_volume_mib)]
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
+    if args.through_command is not None:
+        kind += (", the Desktop fantasy-engine ships, built and served through the command "
+                 + ("from the workspace" if args.workspace is not None
+                    else "from the lock file's commits"))
     if args.backend != "simulator":
         kind += f" ({args.backend})"
     if args.cores is not None:
@@ -536,13 +787,29 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     """ARGV, or the command line, parsed, with its paths resolved and the
     image's form settled.  Every profile this runs builds the shipping form
     unless it is asked for the linked one (akashic_tui.SHIPPING_FORM_PROFILES),
-    so without --linked the three options of that form are all on."""
+    so without --linked the three options of that form are all on.  Through
+    the command the configuration settles the form and the server, so none
+    of those options may be given, and the trees come from the command."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--akashic-root", required=True, type=Path)
-    parser.add_argument("--megapad-root", required=True, type=Path)
+    parser.add_argument("--akashic-root", type=Path,
+                        help="the Akashic checkout (needed unless --through-command)")
+    parser.add_argument("--megapad-root", type=Path,
+                        help="the MegaPad checkout (needed unless --through-command)")
     parser.add_argument("--font", required=True, type=Path)
     parser.add_argument("--output-parent", type=Path)
+    parser.add_argument("--through-command", type=Path, metavar="FANTASY_ENGINE",
+                        help="run the journey on the Desktop fantasy-engine ships, built "
+                             "and served by the command of this fantasy-engine checkout")
+    parser.add_argument("--workspace", type=Path, metavar="DIR",
+                        help="with --through-command, development mode: the command "
+                             "uses this workspace's committed checkouts")
+    parser.add_argument("--components", type=Path, metavar="FILE",
+                        help="with --through-command in release mode, the lock file "
+                             "(default: the checkout's components.toml)")
+    parser.add_argument("--cache-dir", type=Path, metavar="DIR",
+                        help="with --through-command, where the command keeps the "
+                             "assembled components (default: the command's own)")
     parser.add_argument("--applet", choices=APPLETS,
                         help="run Desk with only this applet, the small-terminal "
                              "check of Desk with Pad, the photo or damaged-picture "
@@ -605,7 +872,8 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifact", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--socket", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    for name in ("akashic_root", "megapad_root", "font", "output_parent", "artifact", "socket"):
+    for name in ("akashic_root", "megapad_root", "font", "output_parent", "artifact", "socket",
+                 "through_command", "workspace", "components", "cache_dir"):
         value = getattr(args, name)
         if value is not None:
             setattr(args, name, value.expanduser().resolve())
@@ -616,6 +884,38 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--output-parent is required")
     if args.cores is not None and args.cores < 1:
         parser.error("--cores must be positive")
+    if args.through_command is None:
+        given = [option for option, value in (("--workspace", args.workspace),
+                                              ("--components", args.components),
+                                              ("--cache-dir", args.cache_dir)) if value]
+        if given:
+            parser.error(f"{', '.join(given)} need --through-command")
+        if args.akashic_root is None or args.megapad_root is None:
+            parser.error("--akashic-root and --megapad-root are needed, unless the "
+                         "journey runs --through-command")
+    else:
+        given = [option for option, value in (
+            ("--applet", args.applet), ("--backend", args.backend != "simulator"),
+            ("--cores", args.cores), ("--terminal-link-pace", args.terminal_link_pace),
+            ("--shadow-check", args.shadow_check),
+            ("--every-frame-checks", args.every_frame_checks),
+            ("--safe-mode", args.safe_mode), ("--settings-safe-mode", args.settings_safe_mode),
+            ("--linked", args.linked), ("--system-volume", args.system_volume),
+            ("--token-modules", args.token_modules),
+            ("--keep-module-source", args.keep_module_source),
+            ("--user-volume", args.user_volume),
+            ("--user-volume-mib", args.user_volume_mib != 64),
+            ("--screen-profile", args.screen_profile),
+        ) if value not in (None, False)]
+        if given:
+            parser.error(f"{', '.join(given)} belong to the build or the server, which "
+                         "the configuration and the command settle --through-command")
+        if args.workspace is not None and args.components is not None:
+            parser.error("--components names the lock file of release mode, which "
+                         "--workspace replaces")
+        if not args.child and (args.akashic_root or args.megapad_root):
+            parser.error("--through-command takes the trees the command builds from")
+        return args
     if not args.linked:
         args.system_volume = args.token_modules = args.user_volume = True
     return args

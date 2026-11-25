@@ -8,13 +8,11 @@ then a few definitions.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(AKASHIC_ROOT))
+from akashic_path import AKASHIC_ROOT  # noqa: E402  (also puts the root on the path)
 
 from toolchain.language import effects as E  # noqa: E402
 from toolchain.language.checker import Checker  # noqa: E402

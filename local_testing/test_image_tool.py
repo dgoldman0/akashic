@@ -8,13 +8,11 @@ import json
 import os
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(AKASHIC_ROOT))
+from akashic_path import AKASHIC_ROOT  # noqa: E402  (also puts the root on the path)
 
 from toolchain.image import build as image_build  # noqa: E402
 from toolchain.image import ext4 as image_ext4  # noqa: E402

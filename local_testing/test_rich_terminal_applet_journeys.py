@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -3097,3 +3099,104 @@ def test_fexp_fails_when_the_table_highlights_a_row_file_explorer_has_not_select
                        match=re.escape(f"highlights {FEXP_SHIPPED}, which File Explorer has not")):
         _run(journey, ((_cells(), _listing(SHIPPED_ROWS, status=folder,
                                            selected=FEXP_SHIPPED, place=origin)),))
+
+
+# The journey through the fantasy-engine command.
+
+def test_the_driver_takes_the_configurations_form_through_the_command(tmp_path) -> None:
+    """Through the command the trees come from the command and the
+    configuration settles the form and the server, so the driver refuses
+    the options that would say otherwise, and without the command it still
+    needs its two checkouts."""
+
+    parse = physical_desktop_acceptance.parse_arguments
+    base = ["--font", str(tmp_path / "font.ttf"), "--output-parent", str(tmp_path)]
+    command = [*base, "--through-command", str(tmp_path / "fantasy-engine")]
+    args = parse(command)
+    assert args.through_command == tmp_path / "fantasy-engine"
+    assert args.akashic_root is None and args.workspace is None
+    assert (args.linked, args.system_volume, args.token_modules, args.user_volume) == (
+        False, False, False, False)
+    assert parse([*command, "--workspace", str(tmp_path)]).workspace == tmp_path
+    refused = (["--linked"], ["--user-volume"], ["--applet", "pad"], ["--cores", "2"],
+               ["--screen-profile"], ["--akashic-root", str(tmp_path)],
+               ["--workspace", str(tmp_path), "--components", str(tmp_path / "lock")])
+    for extra in refused:
+        with pytest.raises(SystemExit):
+            parse([*command, *extra])
+    for missing in (base, [*base, "--workspace", str(tmp_path),
+                           "--akashic-root", str(tmp_path), "--megapad-root", str(tmp_path)]):
+        with pytest.raises(SystemExit):
+            parse(missing)
+
+
+def test_the_journey_gives_its_configuration_the_journeys_terminal() -> None:
+    geometry = physical_desktop_acceptance.with_journey_geometry
+    text = ('[configuration]\nformat = 1\ntitle = "Desktop"\n\n'
+            '# The terminal\n[viewer]\ncols = 160\nrows = 48\nfont-size = 16\n\n'
+            '[[practice.entry]]\napplet = "pad"\n')
+    changed = geometry(text, 280, 84)
+    assert tomllib.loads(changed)["viewer"] == {"cols": 280, "rows": 84, "font-size": 16}
+    assert {key: value for key, value in tomllib.loads(changed).items() if key != "viewer"} == {
+        key: value for key, value in tomllib.loads(text).items() if key != "viewer"}
+    assert "cols = 160" not in changed and changed.count("[viewer]") == 1
+    bare = '[configuration]\nformat = 1\ntitle = "Pad"\n'
+    assert tomllib.loads(geometry(bare, 280, 84))["viewer"] == {"cols": 280, "rows": 84}
+    with pytest.raises(ValueError, match="not a whole number"):
+        geometry(bare + '[viewer]\ncols = "wide"\n', 280, 84)
+
+
+def test_the_command_says_where_it_serves(tmp_path) -> None:
+    serving = physical_desktop_acceptance.serving_socket
+    log = tmp_path / "command.log"
+    log.write_text("Building desktop-journey\nServing desktop-journey on "
+                   "/run/user/1000/fantasy-engine/desktop-journey.sock; Ctrl+C stops it\n")
+    running = SimpleNamespace(poll=lambda: None, returncode=None)
+    assert serving(log, running, float("inf")) == Path(
+        "/run/user/1000/fantasy-engine/desktop-journey.sock")
+    log.write_text("Building desktop-journey\n")
+    stopped = SimpleNamespace(poll=lambda: 1, returncode=1)
+    with pytest.raises(RuntimeError, match=r"stopped before it served \(status 1\)"):
+        serving(log, stopped, float("inf"))
+
+
+def test_release_mode_binds_the_lock_file_and_the_manifests_commits(tmp_path, monkeypatch) -> None:
+    """In release mode the evidence names the lock file's digest and the
+    commits the session manifest records, and no git runs."""
+
+    folder = tmp_path / "desktop-journey"
+    folder.mkdir()
+    built_from = {"components": {"akashic": "a" * 40, "megapad": "b" * 40, "lm1": "c" * 40},
+                  "configuration": {"sha256": "d" * 64}}
+    (folder / "machine-session.json").write_text(json.dumps({"built_from": built_from}))
+    lock = tmp_path / "components.toml"
+    lock.write_text("[megapad]\n")
+
+    def no_git(*arguments, **options):
+        raise AssertionError("release mode runs no git")
+
+    monkeypatch.setattr(physical_desktop_acceptance.subprocess, "check_output", no_git)
+    args = SimpleNamespace(workspace=None, components=None, through_command=tmp_path)
+    binding = physical_desktop_acceptance.command_binding(args, folder)
+    assert binding == {"mode": "release", "built_from": built_from,
+                       "lock_file": {"path": str(lock),
+                                     "sha256": physical_desktop_acceptance.sha256(lock)}}
+
+
+def test_release_mode_runs_the_trees_the_command_prepares(tmp_path, monkeypatch) -> None:
+    printed = "".join(f"{name}: {tmp_path / name}\n" for name in ("megapad", "akashic", "lm1"))
+    seen = []
+
+    def prepare(arguments, **options):
+        seen.append((arguments[3:], options["cwd"]))
+        return SimpleNamespace(returncode=0, stdout=printed, stderr="warning: unpushed\n")
+
+    monkeypatch.setattr(physical_desktop_acceptance.subprocess, "run", prepare)
+    args = SimpleNamespace(workspace=None, components=tmp_path / "lock.toml",
+                           cache_dir=tmp_path / "cache", through_command=tmp_path / "fe")
+    trees = physical_desktop_acceptance.command_trees(args)
+    assert trees == {name: tmp_path / name for name in ("megapad", "akashic", "lm1")}
+    assert seen == [(["prepare", "--components", str(tmp_path / "lock.toml"),
+                      "--cache-dir", str(tmp_path / "cache")], tmp_path / "fe")]
+    workspace = SimpleNamespace(workspace=tmp_path / "ws", components=None, cache_dir=None)
+    assert physical_desktop_acceptance.command_trees(workspace)["akashic"] == tmp_path / "ws" / "akashic"

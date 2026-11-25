@@ -28,11 +28,9 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-# The image tool, toolchain/image, sits in the Akashic root, which a run of
-# this file as a script does not put on the path.
-if str(AKASHIC_ROOT) not in sys.path:
-    sys.path.append(str(AKASHIC_ROOT))
+# Also puts the image tool's root on the path for a run of this file as a
+# script.
+from akashic_path import AKASHIC_ROOT  # noqa: E402
 
 from toolchain.image.closure import REQUIRE_RE  # noqa: E402
 from toolchain.image.megapad import MEGAPAD_ROOT, SOURCE_ROOT  # noqa: E402
@@ -210,7 +208,6 @@ from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
     RetainedPolicy,
 )
-from emulator.session import MachineSession  # noqa: E402
 from shared.session import (  # noqa: E402
     RichTerminalSessionPolicy,
     TerminalSnapshot,
@@ -390,6 +387,20 @@ from toolchain.image.build import (  # noqa: E402, F401  (tests read some throug
     system_volume_geometry,
     user_image_path,
 )
+
+
+def __getattr__(name: str):
+    """The emulator's session, MachineSession, which only the emulator's
+    smoke runs use, imported when first asked for.  Importing it loads the
+    emulator's native extension, which a machine that only simulates, such
+    as one the fantasy-engine command prepares, does not have; the module
+    still answers for the name, as the tests that patch it expect."""
+
+    if name == "MachineSession":
+        from emulator.session import MachineSession
+
+        return MachineSession
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26446,6 +26457,8 @@ def smoke(
     stop_reason = "budget"
     audio_captures: list[dict[str, object]] = []
 
+    from emulator.session import MachineSession
+
     with MachineSession.from_bios(
         MEGAPAD_ROOT / "bios.asm",
         storage_image=image_path,
@@ -29532,6 +29545,8 @@ def smoke(
                 f"{image_path.stem}-{name}{image_path.suffix}"
             )
             path.write_bytes(image)
+            from emulator.session import MachineSession
+
             with MachineSession.from_bios(
                 MEGAPAD_ROOT / "bios.asm",
                 storage_image=path,

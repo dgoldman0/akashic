@@ -15,10 +15,10 @@ import sys
 import time
 from pathlib import Path
 
+from akashic_path import AKASHIC_ROOT
 from toolchain.image.closure import dependency_order
 
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = AKASHIC_ROOT / "akashic"
 PROJECT_ROOT = AKASHIC_ROOT.parent
 MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT", PROJECT_ROOT / "megapad"))

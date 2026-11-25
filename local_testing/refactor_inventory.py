@@ -23,7 +23,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the Akashic root
+import akashic_path  # noqa: E402, F401  (the image tool's root on the path)
 from toolchain.image.closure import (
     PROVIDED_RE,
     REQUIRE_RE,
