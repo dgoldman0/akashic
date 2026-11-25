@@ -9,12 +9,11 @@ ran before, over the recorded feeds in fixtures/syndication/:
   applet inside Desk, with the recorded JSON Feed pumped through Desk's
   external-I/O service, and checks the refusals, the durable accept, the
   applet after a relaunch and recovery.
-
 - streams-refresh-owner-contracts runs the configured refresh owner's
   twenty cases over its durable checkpoint: first success, unchanged,
   failures of each kind, cancellation, release, boot recovery and a
-  blocked store.  It takes about 144 s on the emulator, so its profile
-  allows 300.
+  blocked store.  It takes about two minutes on the emulator, around the
+  harness's 120 s default, so its profile allows 300.
 
 With test_streams_syndication_http.py, which admits a source through the
 configured provider's open policy, and the captured-chain checks of
