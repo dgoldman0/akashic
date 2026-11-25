@@ -22,6 +22,7 @@
 \    PRM-ON-CANCEL    ( xt prompt -- )       xt: ( prompt -- )
 \    PRM-COLORS!      ( fg bg prompt -- )
 \    PRM-MASK!        ( codepoint prompt -- )  0 disables masking
+\    PRM-PLACEHOLDER! ( text-a text-u prompt -- )  0 0 for none
 \    PRM-WIPE         ( prompt -- )          Zero caller-owned input
 \    PRM-SET-BOUNDS   ( row col h w prompt -- )
 \    PRM-FREE         ( prompt -- )
@@ -211,6 +212,11 @@ VARIABLE _PRM-S-LU
 
 : PRM-MASK!  ( codepoint prompt -- )
     DUP >R _PRM-O-INPUT + @ INP-MASK!  R> _PRM-FOLLOW ;
+
+\ What the empty field shows, such as what to type into it; 0 0 for none.
+\ The prompt keeps the address, so the text must outlive its use.
+: PRM-PLACEHOLDER!  ( text-a text-u prompt -- )
+    DUP >R _PRM-O-INPUT + @ INP-SET-PLACEHOLDER  R> _PRM-FOLLOW ;
 
 : PRM-WIPE  ( prompt -- )
     DUP _PRM-O-INPUT + @ INP-WIPE  _PRM-FOLLOW ;
