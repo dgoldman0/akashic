@@ -4767,6 +4767,21 @@ class KeyringJourney(_AppletJourney):
         text = _overlay_text(projection, screen)
         return status in text and row in text
 
+    def _noticed(self, offer, projection, text: str) -> bool:
+        """Whether the notice TEXT has shown at this stage.  A notice lasts
+        a moment, and the key sent after it may be backpressured and wait
+        for a later frame that no longer shows it."""
+
+        seen = self.__dict__.setdefault("_notices_seen", set())
+        if self.stage in seen:
+            return True
+        notice = _notice_claim(projection, text)
+        if notice is None:
+            return False
+        _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+        seen.add(self.stage)
+        return True
+
     @staticmethod
     def _selected_row(projection) -> str | None:
         """The row the keyring screen's list shows selected."""
@@ -4817,10 +4832,8 @@ class KeyringJourney(_AppletJourney):
                 or self.OVER_FIRST <= self.stage < self.OVER_DERIVING):
             return self._entry(offer, generation, projection, sender)
         if self.stage == self.DERIVING:
-            notice = _notice_claim(projection, KEYRING_SET_UP)
-            if notice is None:
+            if not self._noticed(offer, projection, KEYRING_SET_UP):
                 return self._wait(f"the notice {KEYRING_SET_UP!r}")
-            _require_notice(offer, notice, StatusSeverity.NEUTRAL)
             return self._step("keyring-set-up", "send_key", "alt+k", self.SCREEN_AGAIN,
                               offer, generation, sender)
         if self.stage == self.SCREEN_AGAIN:
@@ -4829,10 +4842,8 @@ class KeyringJourney(_AppletJourney):
             return self._step("keyring-screen-offers-lock", "send_key", "enter",
                               self.LOCKING, offer, generation, sender)
         if self.stage == self.LOCKING:
-            notice = _notice_claim(projection, KEYRING_LOCKED)
-            if notice is None:
+            if not self._noticed(offer, projection, KEYRING_LOCKED):
                 return self._wait(f"the notice {KEYRING_LOCKED!r}")
-            _require_notice(offer, notice, StatusSeverity.NEUTRAL)
             return self._step("keyring-locked", "send_key", "alt+k", self.SCREEN_LOCKED,
                               offer, generation, sender)
         if self.stage == self.SCREEN_LOCKED:

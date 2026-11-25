@@ -1738,6 +1738,30 @@ def test_the_keyring_journey_sets_up_locks_and_starts_over_through_desks_screen(
     assert journey.final_cell_markers == (KEYRING_STARTED_OVER,)
 
 
+def test_the_keyring_journey_sends_again_a_key_backpressured_after_a_notice() -> None:
+    """The locked notice lasts a moment: Alt+K sent on its frame may be
+    backpressured, and a later frame that no longer shows the notice sends
+    it again."""
+
+    journey = KeyringJourney(PAD_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = KeyringJourney.LOCKING
+    pad = _pad_frame("", (1, 0))
+    answers = iter(("backpressured", "progress"))
+    sent = []
+
+    def sender(method, value, _offer, _generation):
+        sent.append((method, value))
+        return next(answers)
+
+    journey.after_present(replace(_notice_offer(KEYRING_LOCKED), offer_id=1), 9,
+                          _noticed(pad, _notice(KEYRING_LOCKED)), sender)
+    assert journey.stage == KeyringJourney.LOCKING
+    journey.after_present(replace(_cell_offer(1, ()), offer_id=2), 9, pad, sender)
+    assert sent == [("send_key", "alt+k"), ("send_key", "alt+k")]
+    assert journey.stage == KeyringJourney.SCREEN_LOCKED
+
+
 def test_the_keyring_journey_refuses_a_passphrase_shown() -> None:
     """Desk's prompt must mask the passphrase in its field and in CELL, and
     only while it is asking, or just after, may it hold the taskbar row."""
