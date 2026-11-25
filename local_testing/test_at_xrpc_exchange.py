@@ -54,6 +54,7 @@ _ATXET-KDOS-PORT NET-IO-PORT-SIZE + CONSTANT KDOSTLS-SIZE
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "atproto/xrpc-exchange.f",
         "atproto/get-session-response.f",
         "utils/fs/vfs.f",

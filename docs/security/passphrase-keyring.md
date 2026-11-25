@@ -95,3 +95,9 @@ the same file with a wrong and a right passphrase, a change of passphrase and
 count that keeps the key, a cancel, a sealed record opened through the
 keyring's resolver before and after a lock, and a count changed in the file,
 which reads as corrupt.
+
+The AT tests' shared fixture, `local_testing/at-xrpc-auth-read-test.f`, takes
+its vaults' root key from a keyring on its RAM volume, set up at 64
+iterations. Its restart opens the keyring over the file again and finds it
+locked: the key slot's load answers locked and the keyring is wanted, and once
+the passphrase unlocks it the same load succeeds.

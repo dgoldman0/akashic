@@ -46,6 +46,7 @@ TRANSPORT_DOUBLE = xrpc_exchange.TRANSPORT_DOUBLE
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "atproto/create-record.f",
         "utils/fs/vfs.f",
     ),

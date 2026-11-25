@@ -74,6 +74,7 @@ _ATFVT-KDOS-PORT NET-IO-PORT-SIZE + CONSTANT KDOSTLS-SIZE
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "tui/applets/streams/atproto-author-feed-present.f",
         "utils/fs/vfs.f",
     ),

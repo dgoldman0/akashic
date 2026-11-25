@@ -58,6 +58,7 @@ REPLACED_CRYPTO_MODULES = frozenset(
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "atproto/xrpc.f",
         "net/http-buffered.f",
         "utils/fs/vfs.f",
@@ -74,6 +75,103 @@ class LoadItem:
     inline: str | None = None
     remove_requires: bool = True
 
+
+
+# Staged checks split prepared Forth into units they may load one stage at
+# a time.  A unit ends only after a complete definition, conditional or
+# declaration, so no stage leaves a top-level value on the stack for the
+# next one; the provider and bidirectional verticals share this splitter.
+def structural_tokens(text: str) -> tuple[str, ...]:
+    """The line's executable words.  The harness tokenizer already drops
+    parser-word payloads: string bodies, comments and CHAR's character."""
+    return harness._forth_line_tokens(text)  # noqa: SLF001
+
+
+def safe_top_level_boundary(
+    tokens: tuple[str, ...],
+    *,
+    ended_definition: bool,
+    closed_conditional: bool,
+) -> bool:
+    """Recognize declarations and complete evaluator control structures.
+
+    A line of top-level data that ends with "," or "C," is complete too:
+    the next unit appends at HERE where it left off, so a large table, such
+    as text/unicode-tables.f's, splits between its lines.
+    """
+    if ended_definition or closed_conditional:
+        return True
+    if tokens and tokens[-1].upper() in {",", "C,"}:
+        return True
+    upper = {token.upper() for token in tokens}
+    return bool(
+        upper
+        & {
+            "CONSTANT",
+            "2CONSTANT",
+            "VARIABLE",
+            "2VARIABLE",
+            "FVARIABLE",
+            "VALUE",
+            "2VALUE",
+            "CREATE",
+            "ALLOT",
+            "PROVIDED",
+            "DEFER",
+        }
+    )
+
+
+def top_level_units(payload: bytes, owner: str) -> tuple[bytes, ...]:
+    """Split only after a complete definition, conditional, or declaration."""
+    units: list[bytearray] = []
+    unit = bytearray()
+    definition_depth = 0
+    conditional_depth = 0
+    for line in payload.splitlines(keepends=True):
+        unit.extend(line)
+        text = line.decode("utf-8").rstrip("\r\n")
+        tokens = structural_tokens(text)
+        ended_definition = False
+        closed_conditional = False
+        if tokens and (
+            tokens[0] == ":" or tokens[0].upper() == ":NONAME"
+        ):
+            definition_depth = 1
+        if definition_depth and any(
+            token == ";"
+            and (
+                index == 0
+                or tokens[index - 1].upper() not in {"CHAR", "[CHAR]"}
+            )
+            for index, token in enumerate(tokens)
+        ):
+            definition_depth = 0
+            ended_definition = True
+        for token in tokens:
+            upper = token.upper()
+            if upper == "[IF]":
+                conditional_depth += 1
+            elif upper == "[THEN]" and conditional_depth:
+                conditional_depth -= 1
+                if conditional_depth == 0:
+                    closed_conditional = True
+        if (
+            definition_depth == 0
+            and conditional_depth == 0
+            and safe_top_level_boundary(
+                tokens,
+                ended_definition=ended_definition,
+                closed_conditional=closed_conditional,
+            )
+        ):
+            units.append(unit)
+            unit = bytearray()
+    if unit:
+        if definition_depth or conditional_depth:
+            raise RuntimeError(f"Prepared {owner} source ends inside a unit")
+        units.append(unit)
+    return tuple(bytes(source_unit) for source_unit in units)
 
 # A staged image's roots are empty, so the harness cannot see that a staged
 # module consumes KDOS networking.  Such a run declares it on its profile and
@@ -474,11 +572,21 @@ def _assert_static_contracts() -> None:
     restart = _word_body(fixture, "_ATXR-RESTART")
     for earlier, later in (
         ("O2SESSION-FINI", "CVAULT-FINI"),
-        ("CVAULT-FINI", "_atxr-select-owner-b"),
-        ("_atxr-configure-active-vault", "OAUTH2-P256-KEY-SLOT-LOAD-DPOP"),
-        ("OAUTH2-P256-KEY-SLOT-LOAD-DPOP", "O2SESSION-OPEN"),
+        ("CVAULT-FINI", "KEYRING-FINI"),
+        ("KEYRING-FINI", "_atxr-select-owner-b"),
+        ("_atxr-configure-active-vault", "_atxr-load-key-slot-b"),
+        ("OAUTH2-P256-KEY-S-LOCKED", "_atxr-unlock"),
+        ("_atxr-unlock", "O2SESSION-OPEN"),
     ):
         assert restart.index(earlier) < restart.index(later)
+    # The restarted keyring is locked: the first load answers locked, and
+    # the same load runs again once the passphrase unlocks it.
+    assert _word_count(restart, "_atxr-load-key-slot-b") == 2
+    assert "OAUTH2-P256-KEY-SLOT-LOAD-DPOP" in _word_body(
+        fixture, "_atxr-load-key-slot-b"
+    )
+    resolver = _word_body(fixture, "_atxr-resolver")
+    assert "KEYRING-RESOLVER" in resolver
     build = _word_body(fixture, "_ATXR-BUILD")
     assert build.index("_O2PKD-RESET") < build.index(
         "AT-XRPC-AUTH-REQUEST-BUILD"
