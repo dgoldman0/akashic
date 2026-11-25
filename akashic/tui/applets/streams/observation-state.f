@@ -293,9 +293,20 @@ STREAMS-OBSERVATION-CHECKPOINT-SIZE OCHK-BLOB-OFFSET -
         DROP R> DROP 0 EXIT
     THEN R> _OCHK-KEY-NTH-RAW ;
 
+\ A checkpoint's unused tails must hold only zeros.  They are compared
+\ with a block of zeros a block at a time, as COMPARE's block compare
+\ does it in one instruction, rather than byte by byte.
+1024 CONSTANT _OCHK-ZEROS-U
+CREATE _OCHK-ZEROS _OCHK-ZEROS-U ALLOT
+_OCHK-ZEROS _OCHK-ZEROS-U 0 FILL
+
 : _OCHK-ZERO?  ( a u -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
-    0 ?DO DUP I + C@ IF DROP 0 UNLOOP EXIT THEN LOOP DROP -1 ;
+    BEGIN DUP WHILE
+        2DUP _OCHK-ZEROS-U MIN DUP >R _OCHK-ZEROS R@ COMPARE R>
+        SWAP IF 2DROP DROP 0 EXIT THEN
+        /STRING
+    REPEAT 2DROP -1 ;
 
 : _OCHK-SPAN?  ( a u -- flag )
     OVER 0= IF 2DROP 0 EXIT THEN

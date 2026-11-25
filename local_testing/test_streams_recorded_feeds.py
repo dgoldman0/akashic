@@ -1,7 +1,7 @@
 """Recorded feeds through Streams' decoder and its manual refresh.
 
-Runs two deterministic contracts that only the harness's command line ran
-before, over the recorded feeds in fixtures/syndication/:
+Runs three deterministic contracts that only the harness's command line
+ran before, over the recorded feeds in fixtures/syndication/:
 
 - streams-syndec-contracts decodes the JSON Feed, RSS and Atom recordings
   and rejects the malformed ones without a partial commit.
@@ -10,12 +10,16 @@ before, over the recorded feeds in fixtures/syndication/:
   external-I/O service, and checks the refusals, the durable accept, the
   applet after a relaunch and recovery.
 
+- streams-refresh-owner-contracts runs the configured refresh owner's
+  twenty cases over its durable checkpoint: first success, unchanged,
+  failures of each kind, cancellation, release, boot recovery and a
+  blocked store.  It takes about 144 s on the emulator, so its profile
+  allows 300.
+
 With test_streams_syndication_http.py, which admits a source through the
 configured provider's open policy, and the captured-chain checks of
 test_web_roots.py, these prove the fetch path offline everywhere but the
-network itself.  The refresh owner's own contract,
-streams-refresh-owner-contracts, is not here yet: it prints nothing within
-its 120-second limit, on an image whose modules are the same as main's.
+network itself.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from contract_script import run_profile_smoke  # noqa: E402
 @pytest.mark.parametrize("profile", [
     "streams-syndec-contracts",
     "streams-manual-refresh-contracts",
+    "streams-refresh-owner-contracts",
 ])
 def test_contracts(profile: str, tmp_path: Path, monkeypatch) -> None:
     run_profile_smoke(profile, tmp_path, monkeypatch)
