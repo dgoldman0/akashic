@@ -16,6 +16,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -1303,19 +1304,71 @@ def _settings_image_for(profile: ImageSpec, image_path: Path) -> Path | None:
     return settings_image_path(image_path) if profile.settings_files else None
 
 
-def _build_settings_image(profile: ImageSpec, target: Path, *, safe_mode: bool) -> Path:
+# A settings file's table header and a key's line: indentation, key, the
+# equals sign, the value, and any comment after it.
+_SETTINGS_TABLE = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
+_SETTINGS_KEY = re.compile(
+    r"^(?P<lead>\s*)(?P<key>[A-Za-z0-9_-]+)(?P<equals>\s*=\s*)"
+    r"(?P<value>[^#]*?)(?P<tail>\s*(?:#.*)?)$"
+)
+
+
+def _toml_value(value: object) -> str:
+    """VALUE written as TOML: a boolean, a whole number or a string."""
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    raise TypeError(f"a setting is a boolean, a whole number or a string, not {value!r}")
+
+
+def with_settings_values(text: str, values: Mapping[str, Mapping[str, object]]) -> str:
+    """TEXT, a settings file, with VALUES, {table: {key: value}}, in place of
+    the values its keys hold.  Comments and layout stay as the file has
+    them.  Every table and key named must be in TEXT, each once."""
+
+    pending = {table: dict(keys) for table, keys in values.items()}
+    lines = []
+    table = None
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\n")
+        header = _SETTINGS_TABLE.match(body)
+        if header:
+            table = header.group(1).strip()
+        elif table in pending:
+            setting = _SETTINGS_KEY.match(body)
+            if setting and setting.group("key") in pending[table]:
+                value = _toml_value(pending[table].pop(setting.group("key")))
+                line = (
+                    setting.group("lead") + setting.group("key") + setting.group("equals")
+                    + value + setting.group("tail") + line[len(body):]
+                )
+        lines.append(line)
+    missing = [f"{table}.{key}" for table, keys in pending.items() for key in keys]
+    if missing:
+        raise ValueError("the settings file holds no " + ", ".join(sorted(missing)))
+    return "".join(lines)
+
+
+def _build_settings_image(
+    profile: ImageSpec,
+    target: Path,
+    *,
+    values: Mapping[str, Mapping[str, Mapping[str, object]]],
+) -> Path:
     """Write PROFILE's settings disk beside TARGET: its system settings
-    files on an MP64FS volume.  SAFE_MODE writes Desk's settings asking for
-    safe mode."""
+    files on an MP64FS volume, each with the values VALUES gives it by its
+    path, {path: {table: {key: value}}}, in place of its own."""
 
     fs = MP64FS(total_sectors=SETTINGS_DISK_SECTORS)
     fs.format()
     for relative in profile.settings_files:
         text = (AKASHIC_ROOT / "akashic" / relative).read_text(encoding="utf-8")
-        if safe_mode and relative == DESK_SYSTEM_SETTINGS:
-            if text.count("safe-mode = false\n") != 1:
-                raise RuntimeError(f"{relative} must hold one safe-mode = false line")
-            text = text.replace("safe-mode = false\n", "safe-mode = true\n")
+        if relative in values:
+            text = with_settings_values(text, values[relative])
         fs.inject_file(Path(relative).name, text.encode("utf-8"), ftype=FTYPE_TEXT)
     settings = settings_image_path(target)
     fs.save(_private_file(settings))
@@ -1945,11 +1998,14 @@ def _write_session_manifest(
     system: bool,
     user: bool,
     built_from: Mapping[str, object] | None,
+    facts: Mapping[str, object] | None = None,
 ) -> Path:
     """Write what a server needs to run TARGET's images: each storage unit's
     image by file name, the machine's memory and cores, the boot's backend,
-    and the rich terminal's policies; and BUILT_FROM, what the caller built
-    them from, as given."""
+    and the rich terminal's policies; BUILT_FROM, what the caller built them
+    from, as given; and FACTS, the caller's further facts, such as the
+    viewer's and the network's settings, which may not replace any of
+    these."""
 
     rich = spec.rich_terminal
     manifest = {
@@ -1977,6 +2033,10 @@ def _write_session_manifest(
         },
         "built_from": None if built_from is None else dict(built_from),
     }
+    taken = sorted(manifest.keys() & (facts or {}).keys())
+    if taken:
+        raise ValueError("session facts may not replace " + ", ".join(taken))
+    manifest.update(facts or {})
     path = _private_file(session_manifest_path(target))
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return path
@@ -2003,6 +2063,7 @@ def build(
     samples_for: Samples | None = None,
     adjust_autoexec: Adjust | None = None,
     settings_safe_mode: bool = False,
+    settings_values: Mapping[str, Mapping[str, Mapping[str, object]]] | None = None,
     system_volume: bool = False,
     token_modules: bool = False,
     keep_module_source: bool = False,
@@ -2011,6 +2072,7 @@ def build(
     fresh_user_volume: bool = False,
     session_manifest: bool = False,
     built_from: Mapping[str, object] | None = None,
+    session_facts: Mapping[str, object] | None = None,
 ) -> Path:
     """Build SPEC's boot image at TARGET and the images of its other disks
     beside it, for BACKEND.  NAME names the image in errors and the report.
@@ -2056,11 +2118,14 @@ def build(
     account alone.  SESSION_MANIFEST writes beside the images what a server
     needs to run them (:func:`session_manifest_path`), with BUILT_FROM, what
     the caller built SPEC from, such as its components' commits and its
-    configuration's digest, as given.  The build runs no program to find
-    them, since the caller knows them.
+    configuration's digest, as given, and SESSION_FACTS, the caller's
+    further facts.  The build runs no program to find them, since the
+    caller knows them.  SETTINGS_VALUES gives values for the settings
+    files, {path: {table: {key: value}}}, in place of the files' own
+    (with_settings_values); SETTINGS_SAFE_MODE sets Desk's safe-mode to true.
     """
-    if built_from is not None and not session_manifest:
-        raise ValueError("built_from goes into the session manifest; ask for one")
+    if (built_from is not None or session_facts is not None) and not session_manifest:
+        raise ValueError("built_from and session_facts go into the session manifest; ask for one")
     if keep_module_source and not (token_modules and system_volume):
         raise ValueError(
             "keeping module source beside token files needs a system volume "
@@ -2078,6 +2143,7 @@ def build(
                     samples_for=samples_for,
                     adjust_autoexec=adjust_autoexec,
                     settings_safe_mode=settings_safe_mode,
+                    settings_values=settings_values,
                     system_volume=system_volume,
                     user_volume=user_volume,
                     user_volume_mib=user_volume_mib,
@@ -2125,6 +2191,20 @@ def build(
             "--settings-safe-mode needs a profile whose settings disk holds "
             f"{DESK_SYSTEM_SETTINGS}"
         )
+    settings_by_file = {
+        path: {table: dict(keys) for table, keys in tables.items()}
+        for path, tables in (settings_values or {}).items()
+    }
+    outside = sorted(settings_by_file.keys() - set(profile.settings_files))
+    if outside:
+        raise RuntimeError(
+            "settings values for files the settings disk does not hold: "
+            + ", ".join(outside)
+        )
+    if settings_safe_mode:
+        settings_by_file.setdefault(DESK_SYSTEM_SETTINGS, {}).setdefault(
+            "desk.rich-terminal", {}
+        )["safe-mode"] = True
     autoexec = profile.autoexec
     profile_modules = (
         dependency_order(profile.roots)
@@ -2520,7 +2600,7 @@ def build(
         fs.delete_file(".growth-hole-2")
     fs.save(_private_file(target))
     settings = (
-        _build_settings_image(profile, target, safe_mode=settings_safe_mode)
+        _build_settings_image(profile, target, values=settings_by_file)
         if profile.settings_files
         else None
     )
@@ -2561,7 +2641,7 @@ def build(
         _write_session_manifest(
             spec, target, name=name, backend=backend,
             settings=settings, system=system is not None, user=user_volume,
-            built_from=built_from,
+            built_from=built_from, facts=session_facts,
         )
 
     info = fs.info()

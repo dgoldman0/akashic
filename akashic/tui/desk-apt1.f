@@ -643,12 +643,20 @@ _A1D-PHASE-COLD _A1D-PHASE !
     THEN
     -1 SWAP ;
 
+\ How long a warning Desk gives as it starts stays on screen.
+10000 CONSTANT _A1D-WARNING-MS
+
 \ Desk's system settings may ask for safe mode, so they are read before
-\ the first frame is built; they also set the full refresh's times.
+\ the first frame is built; they also set the full refresh's times.  While
+\ they let the machine reach this computer and its local network, Desk's
+\ first frame warns so.
 : _A1D-RUN-BODY  ( -- )
     DSET-APPLY
     _A1D-SETUP
     DUP SCB-S-OK <> IF _A1D-STATUS-THROW THEN DROP
+    DSET-LOCAL-ACCESS @ IF
+        DSET-LOCAL-ACCESS-WARNING _A1D-WARNING-MS ASHELL-TOAST-WARNING
+    THEN
     ['] _A1D-REFRESH-CHECK 0 RFSH-CHECK!
     DESK-RUN ;
 
