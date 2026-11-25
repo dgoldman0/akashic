@@ -33847,6 +33847,9 @@ _srtc-finish
         ("jsonfeed-update.json", SYNDICATION_JSON_FEED_UPDATE_FIXTURE),
         ("malformed.json", SYNDICATION_JSON_FEED_MALFORMED_FIXTURE),
     ),
+    # Twenty cases over a 128 KiB checkpoint: about 144 s on the emulator
+    # (927 million steps, measured 2026-11-24), past the 120 s default.
+    smoke_timeout=300.0,
 )
 
 
