@@ -48,6 +48,24 @@ draw progress between steps. The start runs the first iteration, as PBKDF2's
 `BEGIN` does, so a derivation reports one done before its first step.
 `KEYRING-CANCEL` returns to the state the derivation started from.
 
+## Starting over
+
+A user who loses the passphrase, or whose keyring file is damaged, can
+start over. `KEYRING-START-OVER` makes a new keyring, with a new id, salt
+and root key, in place of a locked or damaged one; its derivation runs as a
+setup's does, in `KEYRING-SETTING-UP`. The file is replaced only when the
+new key is derived, sealed and written, so a cancel or a failure leaves the
+old file and the keyring's state as they were. Secrets sealed under the old
+root key name the old id, which the resolver no longer lends, so they read
+as an unknown key, never as a wrong passphrase, and their owners ask for
+them afresh.
+
+A file of another size, or with another magic, version, count of zero or
+revision of zero, reads as damaged: `KEYRING-INIT` succeeds in
+`KEYRING-DAMAGED`, from which only a start over leads on. A file whose
+header is sound but whose sealed record does not open reads as locked, and
+its unlock answers `KEYRING-S-CORRUPT`; that keyring can start over too.
+
 ## Wanting the key
 
 A resolver call while the keyring is locked answers `SEALED-RECORD-S-KEY`,
@@ -61,12 +79,13 @@ retries once the keyring is unlocked.
 | Word | Effect |
 |---|---|
 | `KEYRING-SIZE` | `( -- u )` The bytes a keyring takes, its PBKDF2 workspace among them. |
-| `KEYRING-INIT` | `( path-a path-u place keyring -- status )` Bind a caller-owned keyring of `KEYRING-SIZE` bytes to the file at the path in the place, settle a replacement a crash interrupted, and read the file: `KEYRING-LOCKED`, or `KEYRING-ABSENT` when there is none. |
+| `KEYRING-INIT` | `( path-a path-u place keyring -- status )` Bind a caller-owned keyring of `KEYRING-SIZE` bytes to the file at the path in the place, settle a replacement a crash interrupted, and read the file: `KEYRING-LOCKED`, `KEYRING-ABSENT` when there is none, or `KEYRING-DAMAGED` when it has another size or header. |
 | `KEYRING-FINI` | `( keyring -- )` Abandon any derivation and wipe the keyring. |
 | `KEYRING-SETUP` | `( pass-a pass-u iterations keyring -- status )` From `ABSENT`: a fresh root key, id and salt, derived at `iterations`; `KEYRING-S-PENDING`. |
 | `KEYRING-UNLOCK` | `( pass-a pass-u keyring -- status )` From `LOCKED`: derive the file's key; `KEYRING-S-PENDING`. |
 | `KEYRING-CHANGE` | `( pass-a pass-u iterations keyring -- status )` From `UNLOCKED`: seal the same root key under a new passphrase, salt and count; `KEYRING-S-PENDING`. |
-| `KEYRING-STEP` | `( budget keyring -- status )` Run up to `budget` iterations. `KEYRING-S-PENDING` while some remain; at the end `KEYRING-S-OK`, `KEYRING-S-WRONG` for an unlock whose passphrase does not open the key, or the failure. Setup and change write the file before they answer `OK`. |
+| `KEYRING-START-OVER` | `( pass-a pass-u iterations keyring -- status )` From `LOCKED` or `DAMAGED`: a new root key, id and salt in place of the old, derived at `iterations` as a setup's; `KEYRING-S-PENDING`. |
+| `KEYRING-STEP` | `( budget keyring -- status )` Run up to `budget` iterations. `KEYRING-S-PENDING` while some remain; at the end `KEYRING-S-OK`, `KEYRING-S-WRONG` for an unlock whose passphrase does not open the key, or the failure. Setup, change and start over write the file before they answer `OK`. |
 | `KEYRING-PROGRESS` | `( keyring -- done total )` The running derivation's iterations, or `0 0`. |
 | `KEYRING-CANCEL` | `( keyring -- )` Abandon the derivation and return to the state it started from. |
 | `KEYRING-LOCK` | `( keyring -- )` Wipe the root key. |
@@ -75,12 +94,13 @@ retries once the keyring is unlocked.
 | `KEYRING-STATE@` `KEYRING-ID` `KEYRING-ITERATIONS@` | The state, the 32-byte id the vault names the key by, and the file's count. |
 
 States: `KEYRING-ABSENT` 0 (no file yet), `-LOCKED` 1, `-UNLOCKING` 2,
-`-SETTING-UP` 3, `-CHANGING` 4, `-UNLOCKED` 5.
+`-SETTING-UP` 3, `-CHANGING` 4, `-UNLOCKED` 5, `-DAMAGED` 6 (a file of
+another size or header).
 
 Statuses: `KEYRING-S-OK` 0, `-INVALID` 1, `-STATE` 2, `-PENDING` 3,
 `-WRONG` 4, `-IO` 5, `-CORRUPT` 6, `-CRYPTO` 7, `-ENTROPY` 8, `-CAPACITY` 9.
-A failure during setup or change leaves the keyring as it was before the
-derivation started, its file unchanged.
+A failure during setup, change or start over leaves the keyring as it was
+before the derivation started, its file unchanged.
 
 `KEYRING-ITERATIONS-DEFAULT` is 100,000, the count an interactive owner sets
 up and changes with; `KEYRING-FILE-SIZE` is 304 and `KEYRING-ID-SIZE` 32.
@@ -93,8 +113,10 @@ iterations on a RAM volume: setup in steps and the progress it reports, the key 
 lends and the ids it refuses, lock and the wanted flag, a second keyring over
 the same file with a wrong and a right passphrase, a change of passphrase and
 count that keeps the key, a cancel, a sealed record opened through the
-keyring's resolver before and after a lock, and a count changed in the file,
-which reads as corrupt.
+keyring's resolver before and after a lock, a count changed in the file,
+which reads as corrupt, and starting over: from that locked keyring, where a
+cancel keeps the old file and the old key's secret then reads as an unknown
+key, and from files of another size or header, which read as damaged.
 
 The AT tests' shared fixture, `local_testing/at-xrpc-auth-read-test.f`, takes
 its vaults' root key from a keyring on its RAM volume, set up at 64

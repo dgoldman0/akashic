@@ -9,7 +9,11 @@ entries match, starts the setup at Desk's count, and leaves no passphrase
 in the prompt or in Desk; its ticks run the derivation and tell how far it
 has come, and the screen's Cancel stops it.  A keyring something asked
 while locked brings the unlock prompt, which asks again after a wrong
-passphrase and stops asking on Escape.  The screen's own rows are
+passphrase and stops asking on Escape.  Starting over asks for a new
+passphrase twice, the empty field first saying the saved secrets will be
+lost, and a cancel leaves the old keyring; a damaged keyring file opens
+in its own state, and something asking it for its key brings a notice
+that Alt+K can start over.  The screen's own rows are
 test_desk_keyring_surface.py's; the overlay and the prompt on a running
 Desk run in Desk's smokes.
 """
@@ -70,6 +74,12 @@ CREATE T-EV 32 ALLOT
 : T-STEPS  ( -- status )
     BEGIN 64 _DESK-KEYRING @ KEYRING-STEP DUP KEYRING-S-PENDING = WHILE DROP REPEAT ;
 : T-CONSUME  ( key u context -- status ) 2DROP DROP 0 ;
+: T-HINT.  ( -- ) _DESK-AGENT-PROMPT @ _PRM-O-INPUT + @ INP-PLACEHOLDER@ TYPE ;
+\ A file at FILE in the home that is no keyring.
+CREATE T-REPL VREPL-SIZE ALLOT
+: T-DAMAGE  ( file-a file-u -- )
+    T-REPL VREPL-SIZE 0 FILL  T-PLACE -1 T-REPL PLACE-VREPL! THROW
+    S" not a keyring" T-REPL VREPL-REPLACE DROP T-REPL VREPL-FINI DROP ;
 """
 
 # Desk's net modules use the constants MegaPad's networking module defines.
@@ -98,14 +108,16 @@ def test_desk_opens_the_keyring_in_its_own_home(desk):
         # Without a home there is no keyring, and the screen says so.
         "0 _DESK-OWN-PLACES ! _DESK-KEYRING-INIT _DESK-KEYRING @ . CR",
         "_DESK-SHOW-KEYRING T-NOTICE. CR",
-        "KEYRING-S-CORRUPT _DESK-KEYRING-STATUS ! _DESK-SHOW-KEYRING T-NOTICE. CR",
+        # A damaged file is a keyring in its own state.
+        'S" /keyring.bin" T-DAMAGE T-SET _DESK-OWN-PLACES ! _DESK-KEYRING-INIT',
+        "_DESK-KEYRING-STATUS @ . _DESK-KEYRING @ 0<> . T-STATE. CR _DESK-KEYRING-FINI",
     ])
     assert rows == [
         "0 -1 0",
         "0",
         "0",
         "The keyring is unavailable",
-        "The keyring file is damaged",
+        "0 -1 6",
     ]
 
 
@@ -205,4 +217,53 @@ def test_a_change_runs_in_desks_ticks(desk):
         "0 -1 4 4",
         "Changing the passphrase: 0%",
         "5 64",
+    ]
+
+
+def test_start_over_asks_twice_and_a_cancel_keeps_the_old_keyring(desk):
+    rows = run(desk, [
+        'S" /over" T-START',
+        'S" correct horse" 64 _DESK-KEYRING @ KEYRING-SETUP DROP T-STEPS . CR',
+        "_DESK-KEYRING @ KEYRING-LOCK",
+        "KRS-START-OVER _DESK-KEYRING-CARRY-OUT T-MODE. T-ACTIVE. T-MASK. T-HINT. CR",
+        'S" battery staple" T-TYPE T-ENTER T-MODE. T-HINT. CR',
+        'S" battery staple" T-TYPE T-ENTER',
+        "T-MODE. T-WIPED. _DESK-KEYRING-OP @ . T-STATE. CR",
+        "_DESK-KEYRING-TICK T-NOTICE. CR",
+        # Stopped, the old keyring is locked as it was, under its passphrase.
+        "KRS-CANCEL _DESK-KEYRING-CARRY-OUT T-NOTICE. CR T-STATE. CR",
+        'S" correct horse" _DESK-KEYRING @ KEYRING-UNLOCK DROP T-STEPS . CR',
+        # The end of a start over says so.
+        "KRS-START-OVER _DESK-KEYRING-OP ! KEYRING-S-OK _DESK-KEYRING-ENDED T-NOTICE. CR",
+        "T-END",
+    ])
+    assert rows == [
+        "0",
+        "6 -1 42 the saved secrets will be lost",
+        "7 type it again to confirm",
+        "0 -1 6 3",
+        "Starting the keyring over: 0%",
+        "Stopped; the keyring is as it was",
+        "1",
+        "0",
+        "New keyring set up and unlocked",
+    ]
+
+
+def test_a_damaged_keyring_points_to_start_over(desk):
+    rows = run(desk, [
+        'S" /damaged" T-DAMAGE S" /damaged" T-START T-STATE. CR',
+        # Something asks the damaged keyring for its key: no prompt, a notice.
+        "_DESK-KEYRING @ KEYRING-ID ' T-CONSUME 0 _DESK-KEYRING @ KEYRING-RESOLVER .",
+        "_DESK-KEYRING @ KEYRING-WANTED? . CR",
+        "_DESK-KEYRING-TICK T-NOTICE. CR",
+        "_DESK-KEYRING @ KEYRING-WANTED? . T-ACTIVE. CR",
+        "KRS-START-OVER _DESK-KEYRING-CARRY-OUT T-MODE. T-ACTIVE. CR T-END",
+    ])
+    assert rows == [
+        "6",
+        "5 -1",
+        "The keyring file is damaged: Alt+K can start over",
+        "0 0",
+        "6 -1",
     ]

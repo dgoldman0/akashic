@@ -1568,11 +1568,14 @@ VARIABLE _DSBI-STATUS
 
 0 CONSTANT _DESK-PM-ASK
 1 CONSTANT _DESK-PM-UNLOCK
-\ A setup's or change's first entry; the mode after it asks for the second.
+\ A setup's, change's or start over's first entry; the mode after it asks
+\ for the second.
 2 CONSTANT _DESK-PM-SETUP
 3 CONSTANT _DESK-PM-SETUP-AGAIN
 4 CONSTANT _DESK-PM-CHANGE
 5 CONSTANT _DESK-PM-CHANGE-AGAIN
+6 CONSTANT _DESK-PM-START-OVER
+7 CONSTANT _DESK-PM-START-OVER-AGAIN
 
 \ The fewest characters a new passphrase takes.
 8 CONSTANT _DESK-KEYRING-MIN-CHARS
@@ -1594,16 +1597,18 @@ VARIABLE _DSBI-STATUS
 
 \ A new passphrase is asked for twice under one label, since a field's
 \ label belongs to what it is: the second time, the empty field says to
-\ type it again.
+\ type it again.  Starting over, the empty field first says what is lost.
 : _DESK-KEYRING-LABEL$  ( mode -- a u )
     _DESK-PM-UNLOCK = IF S" Keyring passphrase:" ELSE S" New keyring passphrase:" THEN ;
 
 : _DESK-KEYRING-HINT$  ( mode -- a u )
-    DUP _DESK-PM-SETUP-AGAIN = SWAP _DESK-PM-CHANGE-AGAIN = OR IF
-        S" type it again to confirm"
-    ELSE
-        0 0
-    THEN ;
+    CASE
+        _DESK-PM-SETUP-AGAIN OF S" type it again to confirm" ENDOF
+        _DESK-PM-CHANGE-AGAIN OF S" type it again to confirm" ENDOF
+        _DESK-PM-START-OVER-AGAIN OF S" type it again to confirm" ENDOF
+        _DESK-PM-START-OVER OF S" the saved secrets will be lost" ENDOF
+        >R 0 0 R>
+    ENDCASE ;
 
 \ Opens Desk's prompt, empty and masked, for MODE.
 : _DESK-KEYRING-ASK  ( mode -- )
@@ -1646,8 +1651,8 @@ VARIABLE _DSBI-STATUS
     DUP _DESK-KEYRING-FIRST-U !  _DESK-KEYRING-FIRST SWAP MOVE
     _DESK-PROMPT-MODE @ 1+ _DESK-KEYRING-ASK ;
 
-\ The second entry, the same as the first, starts the setup or the
-\ change; a different one asks for both again.
+\ The second entry, the same as the first, starts the setup, the change
+\ or the start over; a different one asks for both again.
 : _DESK-KEYRING-AGAIN-SUBMIT  ( prompt -- )
     DUP PRM-GET-TEXT _DESK-KEYRING-FIRST _DESK-KEYRING-FIRST-U @ COMPARE IF
         _DESK-PROMPT-MODE @ 1- >R  _DESK-KEYRING-PROMPT-END
@@ -1655,11 +1660,11 @@ VARIABLE _DSBI-STATUS
         R> _DESK-KEYRING-ASK EXIT
     THEN
     DUP PRM-GET-TEXT KEYRING-ITERATIONS-DEFAULT _DESK-KEYRING @
-    _DESK-PROMPT-MODE @ _DESK-PM-SETUP-AGAIN = IF
-        KEYRING-SETUP KRS-SETUP
-    ELSE
-        KEYRING-CHANGE KRS-CHANGE
-    THEN
+    _DESK-PROMPT-MODE @ CASE
+        _DESK-PM-SETUP-AGAIN OF KEYRING-SETUP KRS-SETUP ENDOF
+        _DESK-PM-CHANGE-AGAIN OF KEYRING-CHANGE KRS-CHANGE ENDOF
+        >R KEYRING-START-OVER KRS-START-OVER R>
+    ENDCASE
     ROT _DESK-KEYRING-PROMPT-END
     _DESK-KEYRING-STARTED ;
 
@@ -1677,6 +1682,7 @@ VARIABLE _DSBI-STATUS
         _DESK-PM-UNLOCK OF _DESK-KEYRING-UNLOCK-SUBMIT ENDOF
         _DESK-PM-SETUP OF _DESK-KEYRING-NEW-SUBMIT ENDOF
         _DESK-PM-CHANGE OF _DESK-KEYRING-NEW-SUBMIT ENDOF
+        _DESK-PM-START-OVER OF _DESK-KEYRING-NEW-SUBMIT ENDOF
         >R _DESK-KEYRING-AGAIN-SUBMIT R>
     ENDCASE
     ASHELL-DIRTY! ;
@@ -3110,14 +3116,11 @@ _DESK-LAUNCHER-DESC-SETUP
 \ MHz, so Desk goes on answering keys while a key is derived.
 1000 CONSTANT _DESK-KEYRING-BUDGET
 
-\ Opens the keyring's screen; without a keyring, a notice says why.
+\ Opens the keyring's screen; without a keyring, a notice says so.  A
+\ damaged keyring file has its own state, which the screen shows.
 : _DESK-SHOW-KEYRING  ( -- )
     _DESK-KEYRING @ 0= IF
-        _DESK-KEYRING-STATUS @ KEYRING-S-CORRUPT = IF
-            S" The keyring file is damaged" 2400 ASHELL-TOAST-ERROR
-        ELSE
-            S" The keyring is unavailable" 1800 ASHELL-TOAST-WARNING
-        THEN EXIT
+        S" The keyring is unavailable" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
@@ -3132,6 +3135,7 @@ _DESK-LAUNCHER-DESC-SETUP
         KRS-SETUP OF _DESK-PM-SETUP _DESK-KEYRING-ASK ENDOF
         KRS-UNLOCK OF _DESK-PM-UNLOCK _DESK-KEYRING-ASK ENDOF
         KRS-CHANGE OF _DESK-PM-CHANGE _DESK-KEYRING-ASK ENDOF
+        KRS-START-OVER OF _DESK-PM-START-OVER _DESK-KEYRING-ASK ENDOF
         KRS-LOCK OF
             _DESK-KEYRING @ KEYRING-LOCK
             S" Keyring locked" 1400 ASHELL-TOAST
@@ -3146,11 +3150,14 @@ _DESK-LAUNCHER-DESC-SETUP
 
 \ The notice of how far a derivation has come: what it does, then its
 \ share done, built here; the shell keeps its own copy.
+: _DESK-KEYRING-DAMAGED$  ( -- a u )
+    S" The keyring file is damaged: Alt+K can start over" ;
 : _DESK-KEYRING-UNLOCKING$  ( -- a u ) S" Unlocking the keyring: " ;
 : _DESK-KEYRING-SETTING-UP$  ( -- a u ) S" Setting up the keyring: " ;
 : _DESK-KEYRING-CHANGING$  ( -- a u ) S" Changing the passphrase: " ;
+: _DESK-KEYRING-STARTING-OVER$  ( -- a u ) S" Starting the keyring over: " ;
 _DESK-KEYRING-UNLOCKING$ NIP _DESK-KEYRING-SETTING-UP$ NIP MAX
-_DESK-KEYRING-CHANGING$ NIP MAX 4 +
+_DESK-KEYRING-CHANGING$ NIP MAX _DESK-KEYRING-STARTING-OVER$ NIP MAX 4 +
     CONSTANT _DESK-KEYRING-NOTE-MAX
 CREATE _DESK-KEYRING-NOTE _DESK-KEYRING-NOTE-MAX ALLOT
 VARIABLE _DESK-KEYRING-NOTE-U
@@ -3164,6 +3171,7 @@ VARIABLE _DESK-KEYRING-NOTE-U
     _DESK-KEYRING-OP @ CASE
         KRS-UNLOCK OF _DESK-KEYRING-UNLOCKING$ ENDOF
         KRS-SETUP OF _DESK-KEYRING-SETTING-UP$ ENDOF
+        KRS-START-OVER OF _DESK-KEYRING-STARTING-OVER$ ENDOF
         >R _DESK-KEYRING-CHANGING$ R>
     ENDCASE ;
 
@@ -3186,6 +3194,7 @@ VARIABLE _DESK-KEYRING-NOTE-U
             CASE
                 KRS-UNLOCK OF S" Keyring unlocked" ENDOF
                 KRS-SETUP OF S" Keyring set up and unlocked" ENDOF
+                KRS-START-OVER OF S" New keyring set up and unlocked" ENDOF
                 >R S" Passphrase changed" R>
             ENDCASE
             1600 ASHELL-TOAST
@@ -3195,7 +3204,7 @@ VARIABLE _DESK-KEYRING-NOTE-U
             _DESK-PM-UNLOCK _DESK-KEYRING-ASK
         ENDOF
         KEYRING-S-CORRUPT OF
-            DROP S" The keyring file is damaged" 2400 ASHELL-TOAST-ERROR
+            DROP _DESK-KEYRING-DAMAGED$ 2400 ASHELL-TOAST-ERROR
         ENDOF
         KEYRING-S-IO OF
             DROP S" The keyring file could not be read or written" 2400
@@ -3238,6 +3247,10 @@ VARIABLE _DESK-KEYRING-NOTE-U
             S" Saving a secret needs a keyring: choose its passphrase" 2600
             ASHELL-TOAST
             _DESK-PM-SETUP _DESK-KEYRING-ASK
+        ENDOF
+        KEYRING-DAMAGED OF
+            _DESK-KEYRING @ KEYRING-WANT-CLEAR
+            _DESK-KEYRING-DAMAGED$ 2600 ASHELL-TOAST-ERROR
         ENDOF
     ENDCASE ;
 

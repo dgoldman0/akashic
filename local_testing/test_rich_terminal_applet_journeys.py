@@ -112,10 +112,16 @@ from rich_terminal_applet_journeys import (
     KEYRING_NEW_LABEL,
     KEYRING_LOCK_ROW,
     KEYRING_LOCKED,
+    KEYRING_LOCKED_STATUS,
+    KEYRING_LOST_HINT,
+    KEYRING_NEW_PASSPHRASE,
     KEYRING_PASSPHRASE,
     KEYRING_SET_UP,
     KEYRING_SETUP_ROW,
+    KEYRING_START_OVER_ROW,
+    KEYRING_STARTED_OVER,
     KEYRING_TITLE,
+    KEYRING_UNLOCK_ROW,
     KEYRING_UNLOCKED,
     AgentAloneJourney,
     KeyringJourney,
@@ -1606,9 +1612,10 @@ def test_the_sandbox_journey_requires_its_jobs_on_a_worker_core() -> None:
 KEYRING_SCREEN_ID = 40_030
 
 
-def _keyring_screen(status: str, rows: tuple[str, ...]) -> RichScreenProjection:
+def _keyring_screen(status: str, rows: tuple[str, ...],
+                    selected: int = 0) -> RichScreenProjection:
     """Desk's keyring screen over Pad: a modal dialog titled Keyring whose
-    message is STATUS, around a list of ROWS with the first selected."""
+    message is STATUS, around a list of ROWS with row SELECTED selected."""
 
     left, top, right, bottom = 60, 30, 136, 42
     content = DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
@@ -1618,7 +1625,7 @@ def _keyring_screen(status: str, rows: tuple[str, ...]) -> RichScreenProjection:
         KEYRING_TITLE, ControlState.VISIBLE, content, modal=True)
     items = tuple(
         ViewItem(index + 1, 0, index, 0,
-                 ItemState.SELECTED if index == 0 else ItemState(0),
+                 ItemState.SELECTED if index == selected else ItemState(0),
                  ItemRole.ITEM, (ItemField(row),))
         for index, row in enumerate(rows)
     )
@@ -1659,12 +1666,14 @@ def _keyring_prompt_offer(typed: str):
     return _cell_offer(1, ((ROWS - 1, 1, f"{KEYRING_NEW_LABEL} {'*' * len(typed)}"),))
 
 
-def test_the_keyring_journey_sets_up_and_locks_through_desks_screen_and_prompt() -> None:
+def test_the_keyring_journey_sets_up_locks_and_starts_over_through_desks_screen() -> None:
     journey = applet_journey("keyring", PAD_READY)
     assert isinstance(journey, KeyringJourney)
     blank = _cell_offer(1, ())
     pad = _pad_frame("", (1, 0))
     typed = KEYRING_PASSPHRASE
+    new = KEYRING_NEW_PASSPHRASE
+    locked = (KEYRING_UNLOCK_ROW, KEYRING_START_OVER_ROW)
     steps = (
         (blank, pad),
         # Alt+K has not opened the screen yet.
@@ -1687,6 +1696,16 @@ def test_the_keyring_journey_sets_up_and_locks_through_desks_screen_and_prompt()
         (_notice_offer(KEYRING_SET_UP), _noticed(pad, _notice(KEYRING_SET_UP))),
         (blank, _keyring_screen(KEYRING_UNLOCKED, (KEYRING_LOCK_ROW, "Change the passphrase"))),
         (_notice_offer(KEYRING_LOCKED), _noticed(pad, _notice(KEYRING_LOCKED))),
+        (blank, _keyring_screen(KEYRING_LOCKED_STATUS, locked)),
+        # Down has not reached the screen yet.
+        (blank, _keyring_screen(KEYRING_LOCKED_STATUS, locked)),
+        (blank, _keyring_screen(KEYRING_LOCKED_STATUS, locked, selected=1)),
+        (_keyring_prompt_offer(""), _keyring_prompt("", hint=KEYRING_LOST_HINT)),
+        (_keyring_prompt_offer(new), _keyring_prompt(new, hint=KEYRING_LOST_HINT)),
+        (_keyring_prompt_offer(""), _keyring_prompt("", hint=KEYRING_AGAIN_HINT)),
+        (_keyring_prompt_offer(new), _keyring_prompt(new, hint=KEYRING_AGAIN_HINT)),
+        (blank, pad),
+        (_notice_offer(KEYRING_STARTED_OVER), _noticed(pad, _notice(KEYRING_STARTED_OVER))),
     )
     results = _run(journey, steps)
     assert [(result.milestone, sent) for result, sent in results] == [
@@ -1704,10 +1723,19 @@ def test_the_keyring_journey_sets_up_and_locks_through_desks_screen_and_prompt()
         (None, []),
         ("keyring-set-up", [("send_key", "alt+k")]),
         ("keyring-screen-offers-lock", [("send_key", "enter")]),
-        ("keyring-locked", []),
+        ("keyring-locked", [("send_key", "alt+k")]),
+        ("keyring-screen-offers-start-over", [("send_key", "down")]),
+        (None, []),
+        ("keyring-start-over-selected", [("send_key", "enter")]),
+        ("keyring-start-over-first-prompt", [("send_text", new)]),
+        ("keyring-start-over-first-typed-masked", [("send_key", "enter")]),
+        ("keyring-start-over-again-prompt", [("send_text", new)]),
+        ("keyring-start-over-again-typed-masked", [("send_key", "enter")]),
+        (None, []),
+        ("keyring-started-over", []),
     ]
     assert results[-1][0].complete
-    assert journey.final_cell_markers == (KEYRING_LOCKED,)
+    assert journey.final_cell_markers == (KEYRING_STARTED_OVER,)
 
 
 def test_the_keyring_journey_refuses_a_passphrase_shown() -> None:

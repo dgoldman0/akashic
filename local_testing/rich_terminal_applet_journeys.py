@@ -4691,6 +4691,13 @@ KEYRING_AGAIN_HINT = "type it again to confirm"
 KEYRING_PASSPHRASE = "correct horse battery"
 KEYRING_SET_UP = "Keyring set up and unlocked"
 KEYRING_LOCKED = "Keyring locked"
+KEYRING_LOCKED_STATUS = "Locked. Unlock it so that applets can open their saved secrets."
+KEYRING_UNLOCK_ROW = "Unlock"
+KEYRING_START_OVER_ROW = "Start over, losing the saved secrets"
+# Starting over, the empty field first says what is lost.
+KEYRING_LOST_HINT = "the saved secrets will be lost"
+KEYRING_NEW_PASSPHRASE = "staple orbit lantern"
+KEYRING_STARTED_OVER = "New keyring set up and unlocked"
 
 
 class KeyringJourney(_AppletJourney):
@@ -4706,27 +4713,37 @@ class KeyringJourney(_AppletJourney):
     type it again, and the derivation then runs in Desk's ticks until a
     notice says the keyring is set up and unlocked.  Alt+K again shows the
     keyring unlocked, with Lock now first, and Enter locks it, which a
-    notice says.
+    notice says.  Alt+K once more shows the keyring locked, with Unlock and
+    then Start over; Down and Enter choose Start over, and Desk's prompt
+    asks for a new passphrase twice, its empty field first saying that the
+    saved secrets will be lost, until a notice says a new keyring is set
+    up and unlocked.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
     (READY, SCREEN, FIRST, FIRST_TYPED, AGAIN, AGAIN_TYPED, DERIVING,
-     SCREEN_AGAIN, LOCKING) = range(9)
+     SCREEN_AGAIN, LOCKING, SCREEN_LOCKED, OVER_CHOSEN, OVER_FIRST, OVER_FIRST_TYPED,
+     OVER_AGAIN, OVER_AGAIN_TYPED, OVER_DERIVING) = range(16)
+
+    # Each new passphrase's prompts: the stage asking for its first entry,
+    # its name, the passphrase typed and the hint its first empty field shows.
+    _ENTRIES = {FIRST: ("keyring", KEYRING_PASSPHRASE, ""),
+                OVER_FIRST: ("keyring-start-over", KEYRING_NEW_PASSPHRASE, KEYRING_LOST_HINT)}
 
     @property
     def final_stage(self) -> int:
-        return self.LOCKING
+        return self.OVER_DERIVING
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        # The last frame shows the notice that the keyring is locked.
-        return (KEYRING_LOCKED,)
+        # The last frame shows the notice that a new keyring is set up.
+        return (KEYRING_STARTED_OVER,)
 
     def _desk_prompt_expected(self) -> bool:
         # A frame drawn before Desk takes the last Enter still shows its
         # prompt, so the derivation's first frames may hold the row too.
-        return self.stage in (self.FIRST, self.FIRST_TYPED, self.AGAIN, self.AGAIN_TYPED,
-                              self.DERIVING)
+        return (self.FIRST <= self.stage <= self.DERIVING
+                or self.OVER_FIRST <= self.stage <= self.OVER_DERIVING)
 
     def _desk_prompt_held(self, projection) -> bool:
         return self._prompt(projection, KEYRING_NEW_LABEL) is not None
@@ -4750,10 +4767,43 @@ class KeyringJourney(_AppletJourney):
         text = _overlay_text(projection, screen)
         return status in text and row in text
 
+    @staticmethod
+    def _selected_row(projection) -> str | None:
+        """The row the keyring screen's list shows selected."""
+
+        for claim in projection.semantic_item_view_claims:
+            for item in claim.content.items:
+                if (item.state & ItemState.SELECTED
+                        and item.fields[0].text in (KEYRING_UNLOCK_ROW,
+                                                    KEYRING_START_OVER_ROW)):
+                    return item.fields[0].text
+        return None
+
+    def _entry(self, offer, generation, projection, sender) -> JourneyProgress:
+        """A stage of a new passphrase's two entries: its empty prompt, then
+        the passphrase masked in it, the first time and again."""
+
+        first = self.FIRST if self.stage <= self.DERIVING else self.OVER_FIRST
+        name, passphrase, first_hint = self._ENTRIES[first]
+        step = self.stage - first
+        which = "first" if step < 2 else "again"
+        prompt = self._prompt(projection, KEYRING_NEW_LABEL)
+        if step in (0, 2):
+            hint = first_hint if step == 0 else KEYRING_AGAIN_HINT
+            if prompt is None or prompt.content.text or prompt.content.placeholder != hint:
+                return self._wait(f"Desk's empty prompt {KEYRING_NEW_LABEL!r} "
+                                  f"showing {hint!r}")
+            return self._step(f"{name}-{which}-prompt", "send_text", passphrase,
+                              self.stage + 1, offer, generation, sender)
+        if prompt is None or prompt.content.text != "*" * len(passphrase):
+            return self._wait("the passphrase masked in Desk's prompt")
+        return self._step(f"{name}-{which}-typed-masked", "send_key", "enter",
+                          self.stage + 1, offer, generation, sender)
+
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
-        if offer.cell.find(KEYRING_PASSPHRASE):
+        if offer.cell.find(KEYRING_PASSPHRASE) or offer.cell.find(KEYRING_NEW_PASSPHRASE):
             raise PhysicalDesktopAcceptanceError("CELL shows the passphrase typed")
         if self.stage == self.READY:
             return self._step("keyring-ready", "send_key", "alt+k", self.SCREEN,
@@ -4763,22 +4813,9 @@ class KeyringJourney(_AppletJourney):
                 return self._wait("Desk's keyring screen offering a setup")
             return self._step("keyring-screen-offers-setup", "send_key", "enter",
                               self.FIRST, offer, generation, sender)
-        if self.stage in (self.FIRST, self.AGAIN):
-            which = "first" if self.stage == self.FIRST else "again"
-            hint = "" if self.stage == self.FIRST else KEYRING_AGAIN_HINT
-            prompt = self._prompt(projection, KEYRING_NEW_LABEL)
-            if prompt is None or prompt.content.text or prompt.content.placeholder != hint:
-                return self._wait(f"Desk's empty prompt {KEYRING_NEW_LABEL!r} "
-                                  f"showing {hint!r}")
-            return self._step(f"keyring-{which}-prompt", "send_text",
-                              KEYRING_PASSPHRASE, self.stage + 1, offer, generation, sender)
-        if self.stage in (self.FIRST_TYPED, self.AGAIN_TYPED):
-            which = "first" if self.stage == self.FIRST_TYPED else "again"
-            prompt = self._prompt(projection, KEYRING_NEW_LABEL)
-            if prompt is None or prompt.content.text != "*" * len(KEYRING_PASSPHRASE):
-                return self._wait("the passphrase masked in Desk's prompt")
-            return self._step(f"keyring-{which}-typed-masked", "send_key", "enter",
-                              self.stage + 1, offer, generation, sender)
+        if (self.FIRST <= self.stage < self.DERIVING
+                or self.OVER_FIRST <= self.stage < self.OVER_DERIVING):
+            return self._entry(offer, generation, projection, sender)
         if self.stage == self.DERIVING:
             notice = _notice_claim(projection, KEYRING_SET_UP)
             if notice is None:
@@ -4791,11 +4828,30 @@ class KeyringJourney(_AppletJourney):
                 return self._wait("Desk's keyring screen offering a lock")
             return self._step("keyring-screen-offers-lock", "send_key", "enter",
                               self.LOCKING, offer, generation, sender)
-        notice = _notice_claim(projection, KEYRING_LOCKED)
+        if self.stage == self.LOCKING:
+            notice = _notice_claim(projection, KEYRING_LOCKED)
+            if notice is None:
+                return self._wait(f"the notice {KEYRING_LOCKED!r}")
+            _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+            return self._step("keyring-locked", "send_key", "alt+k", self.SCREEN_LOCKED,
+                              offer, generation, sender)
+        if self.stage == self.SCREEN_LOCKED:
+            if (not self._screen(projection, KEYRING_LOCKED_STATUS, KEYRING_UNLOCK_ROW)
+                    or not self._screen(projection, KEYRING_LOCKED_STATUS,
+                                        KEYRING_START_OVER_ROW)):
+                return self._wait("Desk's keyring screen offering Unlock and Start over")
+            return self._step("keyring-screen-offers-start-over", "send_key", "down",
+                              self.OVER_CHOSEN, offer, generation, sender)
+        if self.stage == self.OVER_CHOSEN:
+            if self._selected_row(projection) != KEYRING_START_OVER_ROW:
+                return self._wait(f"the row {KEYRING_START_OVER_ROW!r} selected")
+            return self._step("keyring-start-over-selected", "send_key", "enter",
+                              self.OVER_FIRST, offer, generation, sender)
+        notice = _notice_claim(projection, KEYRING_STARTED_OVER)
         if notice is None:
-            return self._wait(f"the notice {KEYRING_LOCKED!r}")
+            return self._wait(f"the notice {KEYRING_STARTED_OVER!r}")
         _require_notice(offer, notice, StatusSeverity.NEUTRAL)
-        return self._done("keyring-locked", offer)
+        return self._done("keyring-started-over", offer)
 
 
 def applet_journey(

@@ -123,7 +123,7 @@ def test_passphrases_go_through_desks_masked_prompt() -> None:
     _in_order(unlock, "PRM-GET-TEXT", "_DESK-KEYRING @ KEYRING-UNLOCK",
               "SWAP _DESK-KEYRING-PROMPT-END")
     again = _definition(source, "_DESK-KEYRING-AGAIN-SUBMIT")
-    _in_order(again, "COMPARE", "KEYRING-SETUP", "KEYRING-CHANGE",
+    _in_order(again, "COMPARE", "KEYRING-SETUP", "KEYRING-CHANGE", "KEYRING-START-OVER",
               "ROT _DESK-KEYRING-PROMPT-END", "_DESK-KEYRING-STARTED")
     assert "KEYRING-ITERATIONS-DEFAULT" in again
     first = _definition(source, "_DESK-KEYRING-NEW-SUBMIT")

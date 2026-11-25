@@ -8,9 +8,13 @@
 \  state allows:
 \
 \    not set up       Set up a passphrase
-\    locked           Unlock
+\    locked           Unlock, then Start over
+\    damaged file     Start over
 \    unlocked         Lock now, then Change the passphrase
 \    deriving a key   Cancel, while the status line counts the work done
+\
+\  Start over makes a new keyring in place of the old one, whose saved
+\  secrets are then lost; its row says so.
 \
 \  The rows follow the keyring: when a derivation ends while the screen
 \  is open, the rows change with it.  Enter chooses the selected row and
@@ -27,7 +31,7 @@
 \    KRS-SERVICE    ( instance -- close? )
 \    KRS-CHOSEN     ( instance -- action )
 \  The actions: KRS-NONE, after Escape, then KRS-SETUP, KRS-UNLOCK,
-\  KRS-LOCK, KRS-CHANGE and KRS-CANCEL.
+\  KRS-LOCK, KRS-CHANGE, KRS-CANCEL and KRS-START-OVER.
 \ =====================================================================
 
 PROVIDED akashic-desk-keyring-ui
@@ -50,6 +54,7 @@ REQUIRE ../../../security/passphrase-keyring.f
 3 CONSTANT KRS-LOCK
 4 CONSTANT KRS-CHANGE
 5 CONSTANT KRS-CANCEL
+6 CONSTANT KRS-START-OVER
 
 \ The status line's texts: one for each settled state, and one naming
 \ each derivation, followed by its share done.
@@ -59,6 +64,8 @@ REQUIRE ../../../security/passphrase-keyring.f
     S" Locked. Unlock it so that applets can open their saved secrets." ;
 : _KRS-UNLOCKED$  ( -- a u )
     S" Unlocked. Applets can open the secrets they saved." ;
+: _KRS-DAMAGED$  ( -- a u )
+    S" The keyring file is damaged. Start over to make a new one." ;
 : _KRS-UNLOCKING$  ( -- a u ) S" Unlocking: " ;
 : _KRS-SETTING-UP$  ( -- a u ) S" Setting up: " ;
 : _KRS-CHANGING$  ( -- a u ) S" Changing the passphrase: " ;
@@ -66,6 +73,7 @@ REQUIRE ../../../security/passphrase-keyring.f
 \ The status line holds the longest of them, a derivation's with "100%".
 _KRS-UNLOCKING$ NIP _KRS-SETTING-UP$ NIP MAX _KRS-CHANGING$ NIP MAX 4 +
 _KRS-ABSENT$ NIP MAX _KRS-LOCKED$ NIP MAX _KRS-UNLOCKED$ NIP MAX
+_KRS-DAMAGED$ NIP MAX
     CONSTANT _KRS-STATUS-MAX
 
   0 CONSTANT _KRS-KEYRING
@@ -110,14 +118,18 @@ _KRS-STATUS _KRS-STATUS-MAX + CONSTANT _KRS-SIZE
     DUP _KRS-DERIVING? IF DROP 0= IF KRS-CANCEL ELSE KRS-NONE THEN EXIT THEN
     CASE
         KEYRING-ABSENT OF 0= IF KRS-SETUP ELSE KRS-NONE THEN ENDOF
-        KEYRING-LOCKED OF 0= IF KRS-UNLOCK ELSE KRS-NONE THEN ENDOF
+        KEYRING-LOCKED OF
+            DUP 0= IF DROP KRS-UNLOCK ELSE 1 = IF KRS-START-OVER ELSE KRS-NONE THEN THEN
+        ENDOF
+        KEYRING-DAMAGED OF 0= IF KRS-START-OVER ELSE KRS-NONE THEN ENDOF
         KEYRING-UNLOCKED OF
             DUP 0= IF DROP KRS-LOCK ELSE 1 = IF KRS-CHANGE ELSE KRS-NONE THEN THEN
         ENDOF
         NIP KRS-NONE SWAP
     ENDCASE ;
 
-: _KRS-ROW-N  ( state -- n )  KEYRING-UNLOCKED = IF 2 ELSE 1 THEN ;
+: _KRS-ROW-N  ( state -- n )
+    DUP KEYRING-UNLOCKED = SWAP KEYRING-LOCKED = OR IF 2 ELSE 1 THEN ;
 
 : _KRS-ACTION$  ( action -- a u )
     CASE
@@ -126,6 +138,7 @@ _KRS-STATUS _KRS-STATUS-MAX + CONSTANT _KRS-SIZE
         KRS-LOCK OF S" Lock now" ENDOF
         KRS-CHANGE OF S" Change the passphrase" ENDOF
         KRS-CANCEL OF S" Cancel" ENDOF
+        KRS-START-OVER OF S" Start over, losing the saved secrets" ENDOF
         >R 0 0 R>
     ENDCASE ;
 
@@ -170,6 +183,7 @@ _KRS-STATUS _KRS-STATUS-MAX + CONSTANT _KRS-SIZE
     CASE
         KEYRING-ABSENT OF _KRS-ABSENT$ ENDOF
         KEYRING-LOCKED OF _KRS-LOCKED$ ENDOF
+        KEYRING-DAMAGED OF _KRS-DAMAGED$ ENDOF
         >R _KRS-UNLOCKED$ R>
     ENDCASE ;
 

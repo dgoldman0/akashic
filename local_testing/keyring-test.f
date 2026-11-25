@@ -9,6 +9,7 @@ VARIABLE _kt-consumed  VARIABLE _kt-seen-u  VARIABLE _kt-ws  VARIABLE _kt-fd
 CREATE _kt-seen 32 ALLOT
 CREATE _kt-root 32 ALLOT
 CREATE _kt-other-id 32 ALLOT
+CREATE _kt-old-id 32 ALLOT
 CREATE _kt-image KEYRING-FILE-SIZE ALLOT
 CREATE _kt-repl VREPL-SIZE ALLOT
 CREATE _kt-secret 16 ALLOT
@@ -167,6 +168,70 @@ CREATE _kt-record _kt-record-u ALLOT
     _kt-kr2 @ _kt-run KEYRING-S-CORRUPT = _kt-assert
     _kt-kr2 @ KEYRING-STATE@ KEYRING-LOCKED = _kt-assert ;
 
+\ Write A U as the keyring's file.
+: _kt-write  ( a u -- )
+    _kt-repl VREPL-SIZE 0 FILL
+    _kt-path _kt-place @ -1 _kt-repl PLACE-VREPL! 0= _kt-assert
+    _kt-repl VREPL-REPLACE VREPL-S-OK = _kt-assert
+    _kt-repl VREPL-FINI DROP ;
+
+\ The keyring over its file, read afresh.
+: _kt-reread  ( keyring -- )
+    DUP KEYRING-FINI >R _kt-path _kt-place @ R> KEYRING-INIT
+    KEYRING-S-OK = _kt-assert ;
+
+\ Start over: from a locked keyring that no passphrase opens, where a
+\ cancel leaves the old file; the old key's secrets then read as an
+\ unknown key.  Files of another size or header read as damaged, and a
+\ damaged keyring starts over too.  Other states refuse it.
+: _kt-test-start-over  ( -- )
+    \ The tamper left a file no passphrase opens.
+    _kt-kr2 @ KEYRING-ID _kt-old-id SWAP MOVE
+    S" fresh horse" 0 _kt-kr2 @ KEYRING-START-OVER KEYRING-S-INVALID = _kt-assert
+    S" fresh horse" 64 _kt-kr2 @ KEYRING-START-OVER
+        KEYRING-S-PENDING = _kt-assert
+    _kt-kr2 @ KEYRING-STATE@ KEYRING-SETTING-UP = _kt-assert
+    _kt-kr2 @ KEYRING-CANCEL
+    _kt-kr2 @ KEYRING-STATE@ KEYRING-LOCKED = _kt-assert
+    _kt-kr2 @ _kt-reread
+    _kt-kr2 @ KEYRING-ID _kt-old-id 32 COMPARE 0= _kt-assert
+    S" fresh horse" 64 _kt-kr2 @ KEYRING-START-OVER DROP
+    _kt-kr2 @ _kt-run KEYRING-S-OK = _kt-assert
+    _kt-kr2 @ KEYRING-STATE@ KEYRING-UNLOCKED = _kt-assert
+    _kt-kr2 @ KEYRING-ID _kt-old-id 32 COMPARE 0<> _kt-assert
+    _kt-kr2 @ _kt-borrow SEALED-RECORD-S-OK = _kt-assert
+    _kt-seen 32 _kt-root 32 COMPARE 0<> _kt-assert
+    S" fresh horse" 64 _kt-kr2 @ KEYRING-START-OVER KEYRING-S-STATE = _kt-assert
+    SEALED-RECORD-WORKSPACE-SIZE ALLOCATE 0= _kt-assert _kt-ws !
+    _kt-record _kt-record-u _kt-plain 16 _kt-desc!
+    _kt-old-id _kt-desc SEALED-RECORD-D.KEY-ID !
+    _kt-desc _kt-ws @ SEALED-RECORD-OPEN
+        SEALED-RECORD-S-KEY = _kt-assert DROP
+    _kt-ws @ FREE
+    _kt-kr2 @ _kt-reread
+    S" fresh horse" _kt-kr2 @ KEYRING-UNLOCK DROP
+    _kt-kr2 @ _kt-run KEYRING-S-OK = _kt-assert
+    \ Another size, then another header.
+    S" not a keyring" _kt-write  _kt-kr2 @ _kt-reread
+    _kt-kr2 @ KEYRING-STATE@ KEYRING-DAMAGED = _kt-assert
+    S" fresh horse" _kt-kr2 @ KEYRING-UNLOCK KEYRING-S-STATE = _kt-assert
+    S" fresh horse" 64 _kt-kr2 @ KEYRING-SETUP KEYRING-S-STATE = _kt-assert
+    _kt-image KEYRING-FILE-SIZE 0x5A FILL
+    _kt-image KEYRING-FILE-SIZE _kt-write  _kt-kr2 @ _kt-reread
+    _kt-kr2 @ KEYRING-STATE@ KEYRING-DAMAGED = _kt-assert
+    S" new start" 64 _kt-kr2 @ KEYRING-START-OVER
+        KEYRING-S-PENDING = _kt-assert
+    _kt-kr2 @ _kt-run KEYRING-S-OK = _kt-assert
+    _kt-kr2 @ _kt-reread
+    _kt-kr2 @ KEYRING-STATE@ KEYRING-LOCKED = _kt-assert
+    S" new start" _kt-kr2 @ KEYRING-UNLOCK DROP
+    _kt-kr2 @ _kt-run KEYRING-S-OK = _kt-assert
+    \ With no file, a keyring sets up rather than starts over.
+    _kt-kr @ KEYRING-FINI
+    S" /none" _kt-place @ _kt-kr @ KEYRING-INIT KEYRING-S-OK = _kt-assert
+    _kt-kr @ KEYRING-STATE@ KEYRING-ABSENT = _kt-assert
+    S" fresh horse" 64 _kt-kr @ KEYRING-START-OVER KEYRING-S-STATE = _kt-assert ;
+
 : _KT-RUN  ( -- )
     0 _kt-fails ! 0 _kt-checks ! DEPTH _kt-depth !
     _kt-volume
@@ -175,6 +240,7 @@ CREATE _kt-record _kt-record-u ALLOT
     _kt-test-reopen
     _kt-test-sealed
     _kt-test-tamper
+    _kt-test-start-over
     _kt-kr @ KEYRING-FINI  _kt-kr2 @ KEYRING-FINI
     DEPTH _kt-depth @ = _kt-assert
     _kt-fails @ 0= IF

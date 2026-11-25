@@ -7,8 +7,11 @@ setup in steps and the progress it reports, the key the resolver lends and
 the ids it refuses, lock and the wanted flag, a second keyring over the
 same file with a wrong and a right passphrase, a change of passphrase and
 count that keeps the key, a cancel, the sealed-record contract through the
-keyring's resolver, and a count changed in the file, which reads as
-corrupt rather than as a wrong passphrase.
+keyring's resolver, a count changed in the file, which reads as
+corrupt rather than as a wrong passphrase, and starting over: from a
+locked keyring no passphrase opens, where a cancel keeps the old file and
+the old key's secrets then read as an unknown key, and from files of
+another size or header, which read as damaged.
 """
 
 from __future__ import annotations

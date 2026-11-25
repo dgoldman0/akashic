@@ -3,9 +3,10 @@
 
 The suite drives the screen's state over a real passphrase keyring on a
 RAM volume of its own, without a screen: the rows each state of the
-keyring offers and their text, the status line and a derivation's share
-done, the rows following the keyring when its state moves, Enter choosing
-a row's action and Escape choosing none.  The overlay's drawing and
+keyring offers and their text, a damaged file's state and its one row,
+the status line and a derivation's share done, the rows following the
+keyring when its state moves, Enter choosing a row's action and Escape
+choosing none.  The overlay's drawing and
 Desk's prompts run in Desk's smokes.
 """
 
@@ -30,6 +31,11 @@ KEYRING-SIZE ALLOCATE THROW KR !
 \ The keyring over FILE, read afresh.
 : K-OPEN  ( file-a file-u -- )
     KR @ KEYRING-FINI KPLACE KR @ KEYRING-INIT . ;
+\ A file at FILE that is no keyring.
+CREATE KREPL VREPL-SIZE ALLOT
+: K-DAMAGE  ( file-a file-u -- )
+    KREPL VREPL-SIZE 0 FILL  KPLACE -1 KREPL PLACE-VREPL! THROW
+    S" not a keyring" KREPL VREPL-REPLACE DROP KREPL VREPL-FINI DROP ;
 \ Run the derivation to its end.
 : K-RUN  ( -- status )
     BEGIN 64 KR @ KEYRING-STEP DUP KEYRING-S-PENDING = WHILE DROP REPEAT ;
@@ -86,7 +92,7 @@ def test_each_state_offers_its_rows(forth):
         '16 KR @ KEYRING-STEP . CR SCREEN.',
         # Unlocked: Lock now, then Change the passphrase.
         'K-RUN . CR SCREEN.',
-        # Locked: Unlock.
+        # Locked: Unlock, then Start over.
         'KR @ KEYRING-LOCK SCREEN.',
         # Unlocking: Cancel again.
         'S" correct horse" KR @ KEYRING-UNLOCK . CR SCREEN.',
@@ -105,7 +111,7 @@ def test_each_state_offers_its_rows(forth):
         "0",
         "Lock now|Change the passphrase|",
         "Unlocked. Applets can open the secrets they saved.",
-        "Unlock|",
+        "Unlock|Start over, losing the saved secrets|",
         "Locked. Unlock it so that applets can open their saved secrets.",
         "3",
         "Cancel|",
@@ -142,12 +148,14 @@ def test_enter_chooses_and_escape_closes(forth):
         # A row past the state's rows chooses nothing.
         'LIST-OFF LIST-ON 2 OPEN-ROW SERVICE.',
         'KR @ KEYRING-LOCK LIST-OFF LIST-ON 0 OPEN-ROW SERVICE.',
+        'LIST-OFF LIST-ON 1 OPEN-ROW SERVICE.',
         'S" correct horse" KR @ KEYRING-UNLOCK DROP',
         'LIST-OFF LIST-ON 0 OPEN-ROW SERVICE. KR @ KEYRING-CANCEL',
         # Escape closes with no action.
         'LIST-OFF LIST-ON ESCAPE CR SERVICE. LIST-OFF',
     ])
-    # The actions: NONE 0, SETUP 1, UNLOCK 2, LOCK 3, CHANGE 4, CANCEL 5.
+    # The actions: NONE 0, SETUP 1, UNLOCK 2, LOCK 3, CHANGE 4, CANCEL 5,
+    # START-OVER 6.
     assert rows == [
         "0",
         "0 0",
@@ -156,6 +164,7 @@ def test_enter_chooses_and_escape_closes(forth):
         "-1 4",
         "0 0",
         "-1 2",
+        "-1 6",
         "-1 5",
         "-1",
         "-1 0",
@@ -178,4 +187,27 @@ def test_the_rows_follow_the_keyring(forth):
         "-1",
         "Lock now|Change the passphrase|",
         "0",
+    ]
+
+
+def test_a_damaged_file_offers_to_start_over(forth):
+    rows = run(forth, [
+        # A file of another size reads as damaged, which the keyring opens.
+        'S" /k5" K-DAMAGE S" /k5" K-OPEN CR LIST-ON SCREEN.',
+        '0 OPEN-ROW SERVICE.',
+        # Starting over derives the new key as a setup does.
+        'S" fresh horse" 64 KR @ KEYRING-START-OVER . CR SCREEN.',
+        'K-RUN . CR SCREEN. LIST-OFF',
+    ])
+    assert rows == [
+        "0",
+        "Start over, losing the saved secrets|",
+        "The keyring file is damaged. Start over to make a new one.",
+        "-1 6",
+        "3",
+        "Cancel|",
+        "Setting up: 1%",
+        "0",
+        "Lock now|Change the passphrase|",
+        "Unlocked. Applets can open the secrets they saved.",
     ]

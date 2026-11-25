@@ -583,16 +583,18 @@ own home, the file `/keyring.bin`, and opens it as it starts. The keyring
 holds the root key that sealed secrets are sealed under, behind a
 passphrase the user gives once per boot. A Desk with no home, as in
 recovery without its volume, has no keyring, and Alt+K says so; a keyring
-file that reads as damaged is named as such.
+file that reads as damaged opens in a state of its own, which the screen
+names.
 
 - **Keyring.** Alt+K opens a screen (`keyring-surface.f`) in Desk's one
   screen slot. Its status line says what state the keyring is in, and its
   rows offer what that state allows: Set up a passphrase when there is
-  none; Unlock when it is locked; Lock now, then Change the passphrase,
-  when it is unlocked; and Cancel while a key is being derived, when the
-  status line counts the share done. Enter chooses and Esc closes; the
-  screen itself asks for nothing and changes nothing, and Desk carries out
-  the choice once it has closed.
+  none; Unlock, then Start over, when it is locked; Start over alone when
+  its file is damaged; Lock now, then Change the passphrase, when it is
+  unlocked; and Cancel while a key is being derived, when the status line
+  counts the share done. Enter chooses and Esc closes; the screen itself
+  asks for nothing and changes nothing, and Desk carries out the choice
+  once it has closed.
 
 Desk asks for passphrases in its own prompt, masked: the prompt shows and
 publishes mask characters only, and Desk wipes what was typed as soon as
@@ -601,7 +603,19 @@ twice under the one label "New keyring passphrase:", the second time with
 the empty field saying to type it again, since a rich frame keeps a
 field's label as part of what the field is. It takes one of at least 8
 characters and goes ahead only when both entries match, at 100,000 PBKDF2
-iterations. The derivation runs in Desk's
+iterations.
+
+Start over is the way back from a lost passphrase or a damaged file. Its
+row says that the saved secrets are lost, and so does the empty field of
+its first entry; it then asks for a new passphrase as a setup does. The
+keyring makes a new id and root key and replaces its file only once the
+new key is derived, sealed and written, so Esc on the prompt or Cancel
+during the derivation leaves the old keyring as it was. Secrets sealed
+under the old root key name the old id, so they read as an unknown key,
+never as a wrong passphrase, and the applets that saved them ask for their
+sign-ins afresh.
+
+The derivation runs in Desk's
 ticks, 1,000 iterations a tick, about 66 ms of MegaPad's time at 100 MHz,
 so Desk goes on answering keys; a notice tells how far it has come at its
 start and each tenth, and another how it ended. A wrong passphrase is
@@ -612,7 +626,8 @@ through answers `CVAULT-S-LOCKED` and the keyring is marked wanted. Desk
 then opens the unlock prompt once the user has no other screen or prompt
 open, or the setup prompt when no keyring was ever set up; the asker
 retries once the keyring is unlocked. Esc on the prompt stops Desk asking
-until something asks again.
+until something asks again. A damaged keyring brings no prompt: a notice
+says the file is damaged and that Alt+K can start over.
 
 ## Lending services
 
@@ -723,7 +738,7 @@ All shortcuts require **Alt** modifier:
 | Alt+H | Open the selectable catalog launcher |
 | Alt+S | Open the sandbox module inspector |
 | Alt+P | Open the scheduled run permissions |
-| Alt+K | Open the keyring: set up, unlock, lock or change its passphrase |
+| Alt+K | Open the keyring: set up, unlock, lock, change its passphrase or start over |
 | Alt+Q | Shut Desk down, asking first while a scheduled run is in flight or waiting |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on

@@ -19,6 +19,14 @@
 \  there and marks the keyring wanted, so its owner can ask for the
 \  passphrase; the vault reports CVAULT-S-LOCKED and its caller retries.
 \
+\  A file of another size or header reads as damaged, a state of its
+\  own.  A damaged keyring, or a locked one whose passphrase is lost,
+\  can start over: a new keyring with a new id and root key replaces the
+\  file once its key is derived, sealed and written, so a cancel or a
+\  failure leaves the old file as it was.  Secrets sealed under the old
+\  root key name the old id, which the resolver no longer lends, so they
+\  read as an unknown key and their owners ask for them afresh.
+\
 \  The file is one fixed-size record, written by checked replacement:
 \    magic "AKPKRNG1", version, iterations, revision    4 x 8 bytes
 \    salt                                                32 bytes
@@ -43,6 +51,7 @@
 \    KEYRING-SETUP  ( pass-a pass-u iterations keyring -- status )
 \    KEYRING-UNLOCK ( pass-a pass-u keyring -- status )
 \    KEYRING-CHANGE ( pass-a pass-u iterations keyring -- status )
+\    KEYRING-START-OVER ( pass-a pass-u iterations keyring -- status )
 \    KEYRING-STEP   ( budget keyring -- status )
 \    KEYRING-PROGRESS ( keyring -- done total )
 \    KEYRING-CANCEL ( keyring -- )
@@ -80,6 +89,7 @@ REQUIRE ../utils/fs/place-replace.f
 3 CONSTANT KEYRING-SETTING-UP
 4 CONSTANT KEYRING-CHANGING
 5 CONSTANT KEYRING-UNLOCKED
+6 CONSTANT KEYRING-DAMAGED         \ the file is there but unreadable
 
 \ The count a new keyring takes unless its owner chooses another: about
 \ 6.6 s on MegaPad at 100 MHz (docs/security/pbkdf2-sha256.md).
@@ -189,7 +199,8 @@ VARIABLE _KRR-FD
 VARIABLE _KRR-KR
 
 \ Read the file into the image: KEYRING-ABSENT's state when there is
-\ none; a file of another size or header is corrupt.
+\ none, and KEYRING-DAMAGED's, with the image wiped, for a file of
+\ another size or header.
 : _KR-READ  ( keyring -- status state )
     _KRR-KR !
     _KRR-KR @ _KR-PATH-A + @ _KRR-KR @ _KR-PATH-U + @
@@ -201,13 +212,14 @@ VARIABLE _KRR-KR
         THEN EXIT
     THEN _KRR-FD !
     _KRR-FD @ VFS-SIZE KEYRING-FILE-SIZE <> IF
-        _KRR-FD @ VFS-CLOSE? DROP KEYRING-S-CORRUPT KEYRING-ABSENT EXIT
+        _KRR-FD @ VFS-CLOSE? DROP KEYRING-S-OK KEYRING-DAMAGED EXIT
     THEN
     _KRR-KR @ _KR-FILE + KEYRING-FILE-SIZE _KRR-FD @ VFS-READ-EXACT
     _KRR-FD @ VFS-CLOSE? DROP
     IF KEYRING-S-IO KEYRING-ABSENT EXIT THEN
     _KRR-KR @ _KR-FILE + _KR-HEADER-OK? 0= IF
-        KEYRING-S-CORRUPT KEYRING-ABSENT EXIT
+        _KRR-KR @ _KR-FILE + KEYRING-FILE-SIZE 0 FILL
+        KEYRING-S-OK KEYRING-DAMAGED EXIT
     THEN
     KEYRING-S-OK KEYRING-LOCKED ;
 
@@ -355,17 +367,32 @@ VARIABLE _KRS-NEXT
     THEN
     KEYRING-SIZE 0 FILL ;
 
-: KEYRING-SETUP  ( pass-a pass-u iterations keyring -- status )
-    DUP _KR-VALID? 0= IF 2DROP 2DROP KEYRING-S-INVALID EXIT THEN
-    DUP KEYRING-STATE@ KEYRING-ABSENT <> IF
-        2DROP 2DROP KEYRING-S-STATE EXIT
-    THEN
+\ Start deriving the key of a new keyring, with a new id, salt and root
+\ key, in a keyring whose state allows one (FLAG).  The file changes
+\ only when the derivation ends (_KR-FINISH).
+: _KR-BEGIN-NEW  ( pass-a pass-u iterations keyring flag -- status )
+    OVER _KR-VALID? 0= IF DROP 2DROP 2DROP KEYRING-S-INVALID EXIT THEN
+    0= IF 2DROP 2DROP KEYRING-S-STATE EXIT THEN
     OVER 1 < IF 2DROP 2DROP KEYRING-S-INVALID EXIT THEN
-    >R 1 -1 R@ _KR-NEW-IMAGE ?DUP IF 2DROP R> DROP EXIT THEN
+    >R 1 -1 R@ _KR-NEW-IMAGE ?DUP IF NIP NIP R> DROP EXIT THEN
     R@ _KR-NEW-ROOT + 32 ENTROPY-FILL IF
         2DROP R> DROP KEYRING-S-ENTROPY EXIT
     THEN
     R@ _KR-NEW + KEYRING-SETTING-UP R> _KR-START ;
+
+: KEYRING-SETUP  ( pass-a pass-u iterations keyring -- status )
+    DUP DUP _KR-VALID? IF KEYRING-STATE@ KEYRING-ABSENT = ELSE DROP 0 THEN
+    _KR-BEGIN-NEW ;
+
+\ A new keyring in place of a damaged one, or of a locked one whose
+\ passphrase is lost.  The derivation runs as a setup's does.
+: KEYRING-START-OVER  ( pass-a pass-u iterations keyring -- status )
+    DUP DUP _KR-VALID? IF
+        KEYRING-STATE@ DUP KEYRING-LOCKED = SWAP KEYRING-DAMAGED = OR
+    ELSE
+        DROP 0
+    THEN
+    _KR-BEGIN-NEW ;
 
 : KEYRING-UNLOCK  ( pass-a pass-u keyring -- status )
     DUP _KR-VALID? 0= IF DROP 2DROP KEYRING-S-INVALID EXIT THEN
@@ -382,7 +409,7 @@ VARIABLE _KRS-NEXT
     OVER 1 < IF 2DROP 2DROP KEYRING-S-INVALID EXIT THEN
     >R
     R@ _KR-FILE + _KRF-REVISION + _KR-BE64@ 1+ 0 R@ _KR-NEW-IMAGE
-    ?DUP IF 2DROP R> DROP EXIT THEN
+    ?DUP IF NIP NIP R> DROP EXIT THEN
     R@ _KR-NEW + KEYRING-CHANGING R> _KR-START ;
 
 : KEYRING-LOCK  ( keyring -- )
