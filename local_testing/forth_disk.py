@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import akashic_path  # noqa: F401  (the image tool's root on the path)
 from toolchain.image.closure import dependency_order
 from forth_snapshot import KDOS_DIAGNOSTICS, SOURCE_ROOT
 

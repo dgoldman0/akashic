@@ -31,12 +31,6 @@ VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 VFS_MP_F  = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "drivers", "vfs-mp64fs.f")
 
 sys.path.insert(0, MEGAPAD_ROOT)
-# The image tool, toolchain/image, which forth_snapshot reads the closure
-# from, sits in the Akashic root.  The cold-process worker runs this file as
-# a script, which puts only local_testing on the path, so the root is added
-# here as the harness adds it.
-if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
 from asm import assemble
 from devices import (
     STORAGE_CMD_FLUSH,

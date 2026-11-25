@@ -28,11 +28,9 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-# The image tool, toolchain/image, sits in the Akashic root, which a run of
-# this file as a script does not put on the path.
-if str(AKASHIC_ROOT) not in sys.path:
-    sys.path.append(str(AKASHIC_ROOT))
+# Also puts the image tool's root on the path for a run of this file as a
+# script.
+from akashic_path import AKASHIC_ROOT  # noqa: E402
 
 from toolchain.image.closure import REQUIRE_RE  # noqa: E402
 from toolchain.image.megapad import MEGAPAD_ROOT, SOURCE_ROOT  # noqa: E402

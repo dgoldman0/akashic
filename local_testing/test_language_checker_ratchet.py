@@ -18,13 +18,11 @@ it, written by::
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(AKASHIC_ROOT))
+from akashic_path import AKASHIC_ROOT  # noqa: E402  (also puts the root on the path)
 
 from toolchain.language.measure import build, ratchet_counts  # noqa: E402
 from toolchain.language.vocabulary import megapad_root  # noqa: E402

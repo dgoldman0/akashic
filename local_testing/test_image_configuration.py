@@ -13,8 +13,7 @@ from pathlib import Path
 
 import pytest
 
-AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(AKASHIC_ROOT))
+from akashic_path import AKASHIC_ROOT  # noqa: E402  (also puts the root on the path)
 
 from toolchain.image import configuration as config  # noqa: E402
 from toolchain.image.__main__ import main  # noqa: E402
