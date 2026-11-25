@@ -1,0 +1,4 @@
+Item,Qty,Price,Total
+"Paper, A4",3,12,=B2*C2
+Ink,2,25,=B3*C3
+Subtotal,,,=SUM(D2:D3)

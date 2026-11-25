@@ -20,7 +20,7 @@ import pytest
 
 import generate_markdown_reference as reference
 import qoi_codec
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_media import _gradient
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from test_widget_pointer import _run_forth  # noqa: F401  (puts MegaPad on the path)

@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 import akashic_tui as tui
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from test_vfs_module_source import _boot_disk
 from simulator.platform import create_address_space

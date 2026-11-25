@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_textarea import MEGAPAD_ROOT
 from diskutil import FTYPE_TEXT, MP64FS
 from simulator.platform import create_address_space
@@ -74,6 +74,10 @@ def _safe_mode(runtime: MegaForthRuntime) -> int:
     return _results(runtime, "DSET-APPLY CHK-SAFE-MODE @")[0]
 
 
+def _local_access(runtime: MegaForthRuntime) -> int:
+    return _results(runtime, "DSET-APPLY DSET-LOCAL-ACCESS @")[0]
+
+
 def test_the_settings_ask_for_safe_mode_and_give_it_their_reason() -> None:
     asked = SYSTEM_TOML.replace("safe-mode = false\n", "safe-mode = true\n")
     assert asked != SYSTEM_TOML
@@ -100,9 +104,25 @@ def test_settings_that_do_not_ask_leave_normal_mode(files) -> None:
     outside data, so none is an anomaly."""
     runtime = _runtime(_settings_image(files))
     assert _safe_mode(runtime) == 0
+    assert _local_access(runtime) == 0
     assert _results(runtime, "CHK-DAMAGE-COUNT @")[0] == 0
     # A missing key or broken text leaves no TOML error for the next parse.
     assert _results(runtime, "TOML-ERR @ TOML-ABORT-ON-ERROR @") == (0, 0)
+
+
+def test_the_settings_say_whether_the_machine_may_reach_this_computer() -> None:
+    """Local access, which the host's network refuses otherwise, is on only
+    when system.toml says local-access = true; Desk then warns as it
+    starts.  It asks nothing of safe mode."""
+    allowed = SYSTEM_TOML.replace("local-access = false\n", "local-access = true\n")
+    assert allowed != SYSTEM_TOML
+    runtime = _runtime(_settings_image({"system.toml": allowed.encode()}))
+    assert _local_access(runtime) != 0
+    assert _safe_mode(runtime) == 0
+    address, length = _results(runtime, "DSET-LOCAL-ACCESS-WARNING")
+    warning = runtime.memory.read_bytes(address, length).decode()
+    assert warning.startswith("Local access is on")
+    assert "this computer and its local network" in warning
 
 
 def _refresh_times(runtime: MegaForthRuntime) -> tuple[int, int]:

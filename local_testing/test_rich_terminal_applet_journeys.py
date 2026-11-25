@@ -105,7 +105,18 @@ from rich_terminal_applet_journeys import (
     FEXP_PHOTO,
     FEXP_PHOTO_FACTS,
     FEXP_PHOTO_SIZE,
+    KEYRING_ABSENT,
+    KEYRING_AGAIN_HINT,
+    KEYRING_NEW_LABEL,
+    KEYRING_LOCK_ROW,
+    KEYRING_LOCKED,
+    KEYRING_PASSPHRASE,
+    KEYRING_SET_UP,
+    KEYRING_SETUP_ROW,
+    KEYRING_TITLE,
+    KEYRING_UNLOCKED,
     AgentAloneJourney,
+    KeyringJourney,
     DaybookAloneJourney,
     FEXP_ALONE_FOCUS_MARKER,
     FexpAloneJourney,
@@ -1590,18 +1601,155 @@ def test_the_sandbox_journey_requires_its_jobs_on_a_worker_core() -> None:
         _sandbox_measured(refused, "long", (900, 50, 0, 0), (90_000, 100, 0, 0))
 
 
+KEYRING_SCREEN_ID = 40_030
+
+
+def _keyring_screen(status: str, rows: tuple[str, ...]) -> RichScreenProjection:
+    """Desk's keyring screen over Pad: a modal dialog titled Keyring whose
+    message is STATUS, around a list of ROWS with the first selected."""
+
+    left, top, right, bottom = 60, 30, 136, 42
+    content = DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
+                            FieldRect(2, 2, len(status), 1), message=status)
+    dialog = acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, KEYRING_SCREEN_ID), left, top, right, bottom,
+        KEYRING_TITLE, ControlState.VISIBLE, content, modal=True)
+    items = tuple(
+        ViewItem(index + 1, 0, index, 0,
+                 ItemState.SELECTED if index == 0 else ItemState(0),
+                 ItemRole.ITEM, (ItemField(row),))
+        for index, row in enumerate(rows)
+    )
+    view = acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, KEYRING_SCREEN_ID + 1),
+        left + 2, top + 6, right - 2, top + 6 + len(rows),
+        ItemViewContent(1, ItemViewRole.LIST, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT),), len(items), 0, len(items),
+                        items),
+    )
+    frame = _asked(_pad_frame("", (1, 0)), dialog)
+    return replace(frame, semantic_item_view_claims=frame.semantic_item_view_claims + (view,))
+
+
+def _keyring_prompt(typed: str, *, masked: bool = True,
+                    hint: str = "") -> RichScreenProjection:
+    """Desk's prompt for a new passphrase across the taskbar row over Pad,
+    holding TYPED, which a MASKED field shows as one mask character a
+    character, its empty field showing HINT."""
+
+    label = KEYRING_NEW_LABEL
+    shown = "*" * len(typed) if masked else typed
+    frame = _screen({0: " File  Build  Edit  Selection  View  Go  Help",
+                     ROWS - 1: f" {label} {shown or hint}"},
+                    (acceptance_runner.PAD_MENU_SIGNATURE,))
+    prompt = _prompt(label, shown, row=ROWS - 1)
+    prompt = replace(prompt, identity=ControlIdentity(1, 1, DESK_PROMPT_ID),
+                     content=replace(prompt.content,
+                                     flags=FieldFlag.MASKED if masked else FieldFlag(0),
+                                     placeholder=hint))
+    return _held(frame, prompt)
+
+
+def _keyring_prompt_offer(typed: str):
+    """CELL with Desk's prompt for a new passphrase on the bottom row,
+    masking TYPED."""
+
+    return _cell_offer(1, ((ROWS - 1, 1, f"{KEYRING_NEW_LABEL} {'*' * len(typed)}"),))
+
+
+def test_the_keyring_journey_sets_up_and_locks_through_desks_screen_and_prompt() -> None:
+    journey = applet_journey("keyring", PAD_READY)
+    assert isinstance(journey, KeyringJourney)
+    blank = _cell_offer(1, ())
+    pad = _pad_frame("", (1, 0))
+    typed = KEYRING_PASSPHRASE
+    steps = (
+        (blank, pad),
+        # Alt+K has not opened the screen yet.
+        (blank, pad),
+        (blank, _keyring_screen(KEYRING_ABSENT, (KEYRING_SETUP_ROW, "Cancel"))),
+        (_keyring_prompt_offer(""), _keyring_prompt("")),
+        # The typing has not reached Desk yet.
+        (_keyring_prompt_offer(""), _keyring_prompt("")),
+        (_keyring_prompt_offer(typed), _keyring_prompt(typed)),
+        # Enter has not reached Desk yet, then the field empties without
+        # its hint, which the second entry needs.
+        (_keyring_prompt_offer(typed), _keyring_prompt(typed)),
+        (_keyring_prompt_offer(""), _keyring_prompt("")),
+        (_keyring_prompt_offer(""), _keyring_prompt("", hint=KEYRING_AGAIN_HINT)),
+        (_keyring_prompt_offer(typed), _keyring_prompt(typed, hint=KEYRING_AGAIN_HINT)),
+        # A frame drawn before Desk took the last Enter, then the derivation
+        # runs in Desk's ticks.
+        (_keyring_prompt_offer(typed), _keyring_prompt(typed, hint=KEYRING_AGAIN_HINT)),
+        (blank, pad),
+        (_notice_offer(KEYRING_SET_UP), _noticed(pad, _notice(KEYRING_SET_UP))),
+        (blank, _keyring_screen(KEYRING_UNLOCKED, (KEYRING_LOCK_ROW, "Change the passphrase"))),
+        (_notice_offer(KEYRING_LOCKED), _noticed(pad, _notice(KEYRING_LOCKED))),
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("keyring-ready", [("send_key", "alt+k")]),
+        (None, []),
+        ("keyring-screen-offers-setup", [("send_key", "enter")]),
+        ("keyring-first-prompt", [("send_text", typed)]),
+        (None, []),
+        ("keyring-first-typed-masked", [("send_key", "enter")]),
+        (None, []),
+        (None, []),
+        ("keyring-again-prompt", [("send_text", typed)]),
+        ("keyring-again-typed-masked", [("send_key", "enter")]),
+        (None, []),
+        (None, []),
+        ("keyring-set-up", [("send_key", "alt+k")]),
+        ("keyring-screen-offers-lock", [("send_key", "enter")]),
+        ("keyring-locked", []),
+    ]
+    assert results[-1][0].complete
+    assert journey.final_cell_markers == (KEYRING_LOCKED,)
+
+
+def test_the_keyring_journey_refuses_a_passphrase_shown() -> None:
+    """Desk's prompt must mask the passphrase in its field and in CELL, and
+    only while it is asking, or just after, may it hold the taskbar row."""
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage: int) -> KeyringJourney:
+        journey = KeyringJourney(PAD_READY)
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        journey.stage = stage
+        return journey
+
+    typed = KEYRING_PASSPHRASE
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is not masked"):
+        journey_at(KeyringJourney.FIRST_TYPED).after_present(
+            _keyring_prompt_offer(typed), 9, _keyring_prompt(typed, masked=False), sender)
+    shown = _cell_offer(1, ((ROWS - 1, 1, f"{KEYRING_NEW_LABEL} {typed}"),))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="CELL shows the passphrase"):
+        journey_at(KeyringJourney.AGAIN_TYPED).after_present(
+            shown, 9, _keyring_prompt(typed, hint=KEYRING_AGAIN_HINT), sender)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="lost focus"):
+        journey_at(KeyringJourney.LOCKING).after_present(
+            _keyring_prompt_offer(""), 9, _keyring_prompt(""), sender)
+
+
 def test_every_single_applet_profile_has_a_journey() -> None:
     assert physical_desktop_acceptance.APPLETS == akashic_tui.DESKTOP_APT1_CHECKS
     for name in akashic_tui.DESKTOP_APT1_CHECKS:
         profile = akashic_tui.PROFILES[f"desktop-apt1-{name}"]
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
+        # The runner checks these on the final frame; a journey without
+        # them fails only once it has done everything else.
+        assert journey.final_cell_markers, name
         # Desk and the one applet, nothing else but the Agent's demo provider
         # and the device-flow fixture that gives it a catalog.
         # Observatory is checked beside Worlds, which hands it a run.
         # The sandbox check is Desk with the Agent, whose scripted provider
-        # asks the sandbox, and Probe, which its autoexec defines.
-        applets = {"small-terminal": ("pad",), "photo": ("fexp",),
+        # asks the sandbox, and Probe, which its autoexec defines.  The
+        # keyring check is Desk with Pad, since the keyring is Desk's own.
+        applets = {"small-terminal": ("pad",), "keyring": ("pad",), "photo": ("fexp",),
                    "damaged": ("fexp",),
                    "observatory": ("observatory", "worlds"),
                    "sandbox": ("agent",)}.get(name, (name,))

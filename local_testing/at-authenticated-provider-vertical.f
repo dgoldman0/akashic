@@ -12,6 +12,7 @@
 \ and receipt-panel assertions; this gate qualifies their concrete provider.
 
 REQUIRE at-bidirectional-vertical.f
+REQUIRE test-root-place.f
 REQUIRE ../akashic/tui/applets/streams/atproto-authenticated-provider.f
 REQUIRE ../akashic/tui/applets/streams/streams-online.f
 
@@ -38,6 +39,8 @@ VARIABLE _satpt-feed-count
 VARIABLE _satpt-local-sequence-before
 VARIABLE _satpt-clock-before-post
 VARIABLE _satpt-clock-after-delivery
+VARIABLE _satpt-home-vfs
+VARIABLE _satpt-places
 
 CREATE _satpt-service XIO-SERVICE-SIZE ALLOT
 CREATE _satpt-endpoint IENDPOINT-SIZE ALLOT
@@ -75,12 +78,32 @@ VARIABLE _satpt-failed-text-u
     _satpt-service XIO-ACTIVE? 0=
     _satpt-service XIOS.RETAINED @ 0= AND ;
 
+\ The endpoint Desk gives Streams: the external I/O service, and the place
+\ set whose home holds Streams' own records.  This check runs no Desk or
+\ Practice, so it lends a set of its own, over a RAM volume.
 : _satpt-service-for  ( id-a id-u caller context -- service|0 )
-    NIP >R S" org.akashic.net.external-io" STR-STR= IF
+    NIP >R
+    2DUP S" org.akashic.fs.places" STR-STR= IF
+        2DROP R> DROP _satpt-places @ EXIT
+    THEN
+    S" org.akashic.net.external-io" STR-STR= IF
         R>
     ELSE
         R> DROP 0
     THEN ;
+
+\ Streams' home: one writable place over the root of a RAM volume.
+: _satpt-home-init  ( -- )
+    4194304 A-XMEM ARENA-NEW 0 _satpt-status
+    VFS-RAM-BINDING 0 VFS-NEW 0 _satpt-status
+    DUP 0<> _satpt-assert _satpt-home-vfs !
+    _satpt-home-vfs @ S" satpt" _t-root-set _satpt-places ! ;
+
+: _satpt-home-free  ( -- )
+    _satpt-places @ ?DUP IF S" satpt" _t-root-set-free THEN
+    0 _satpt-places !
+    _satpt-home-vfs @ ?DUP IF VFS-DESTROY THEN
+    0 _satpt-home-vfs ! ;
 
 : _satpt-factory  ( vfs xio-service -- provider status )
     _satpt-account STREAMS-AT-AUTH-PROVIDER-NEW ;
@@ -263,6 +286,7 @@ VARIABLE _satpt-failed-text-u
     _satpt-account-init
     _satpt-peer-buffers-allocate
     _satpt-service XIO-SERVICE-INIT XIO-S-OK _satpt-status
+    _satpt-home-init
     _satpt-endpoint IENDPOINT-INIT
     _satpt-service _satpt-endpoint IEND.CONTEXT !
     ['] _satpt-service-for _satpt-endpoint IEND.SERVICE-XT !
@@ -546,6 +570,7 @@ VARIABLE _satpt-failed-text-u
     0 _satpt-other-instance !
     _satpt-service XIO-SERVICE-FINI XIO-S-OK _satpt-status
     _satpt-service XIO-SERVICE-SIZE _satpt-zeroed? _satpt-assert
+    _satpt-home-free
 
     _satpt-peer-buffers-free
     _atbv-document-a @ ?DUP IF

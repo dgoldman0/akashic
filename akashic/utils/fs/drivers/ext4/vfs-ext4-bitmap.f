@@ -176,8 +176,7 @@ VARIABLE _EXT4-UB-SPAN
     _EXT4-UB-BUF @ _EXT4-UB-CTX @ _EXT4-C.BSIZE + @ 0 FILL
     _EXT4-UB-GROUP @ _EXT4-SPARSE-GROUP? IF
         _EXT4-UB-FIRST @
-        1 _EXT4-UB-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ +
-        _EXT4-UB-CTX @ _EXT4-C.SB + _EXT4-SB.RESERVED-GDT + W@ +
+        _EXT4-UB-GROUP @ _EXT4-UB-CTX @ _EXT4-BACKUP-END OVER -
         _EXT4-UB-MARK ?DUP IF EXIT THEN
     THEN
     _EXT4-UB-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
@@ -204,6 +203,52 @@ VARIABLE _EXT4-UB-SPAN
         EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
     0 ;
+
+VARIABLE _EXT4-US-BLOCK
+VARIABLE _EXT4-US-GROUP
+VARIABLE _EXT4-US-CTX
+
+\ Whether BLOCK of BLOCK_UNINIT group GROUP, whose descriptor is the one
+\ loaded, is set in the bitmap the group stands for, as the kernel's
+\ ext4_init_block_bitmap sets it: the backup superblock, descriptor table
+\ and reserved descriptor blocks of a sparse group, and the group's own
+\ bitmaps and inode table where they lie in it.  The answer takes no read.
+\ _EXT4-BUILD-UNINIT-BLOCK-BITMAP also sets a bitmap or inode table that
+\ another group's descriptor places here, which mke2fs never leaves in an
+\ uninitialized group, so this answer is never the more permissive.
+: _EXT4-UNINIT-BLOCK-SET?  ( block group ctx -- set? ior )
+    _EXT4-US-CTX ! _EXT4-US-GROUP ! _EXT4-US-BLOCK !
+    _EXT4-US-GROUP @ _EXT4-SPARSE-GROUP? IF
+        _EXT4-US-GROUP @ _EXT4-US-CTX @ _EXT4-GROUP-BLOCK-RANGE
+        ?DUP IF NIP NIP FALSE SWAP EXIT THEN
+        DROP _EXT4-US-BLOCK @ OVER - SWAP
+        _EXT4-US-GROUP @ _EXT4-US-CTX @ _EXT4-BACKUP-END SWAP -
+        U< IF TRUE 0 EXIT THEN
+    THEN
+    _EXT4-US-CTX @ _EXT4-C.DESC +
+    DUP _EXT4-GD.BLOCK-BITMAP-LO + L@ _EXT4-US-BLOCK @ =
+    OVER _EXT4-GD.INODE-BITMAP-LO + L@ _EXT4-US-BLOCK @ = OR
+    SWAP _EXT4-GD.INODE-TABLE-LO + L@ _EXT4-US-BLOCK @ SWAP -
+    _EXT4-GD-SPAN @ U< OR 0 ;
+
+VARIABLE _EXT4-UR-FIRST
+VARIABLE _EXT4-UR-COUNT
+VARIABLE _EXT4-UR-GROUP
+VARIABLE _EXT4-UR-CTX
+
+\ Whether every block of the COUNT blocks from FIRST, all in BLOCK_UNINIT
+\ group GROUP, is set in the bitmap the group stands for.
+: _EXT4-UNINIT-RANGE-SET?  ( first count group ctx -- set? ior )
+    _EXT4-UR-CTX ! _EXT4-UR-GROUP ! _EXT4-UR-COUNT ! _EXT4-UR-FIRST !
+    _EXT4-UR-GROUP @ _EXT4-UR-CTX @ _EXT4-LOAD-DESC
+    ?DUP IF FALSE SWAP EXIT THEN
+    BEGIN _EXT4-UR-COUNT @ WHILE
+        _EXT4-UR-FIRST @ _EXT4-UR-GROUP @ _EXT4-UR-CTX @
+        _EXT4-UNINIT-BLOCK-SET? ?DUP IF NIP FALSE SWAP EXIT THEN
+        0= IF FALSE 0 EXIT THEN
+        1 _EXT4-UR-FIRST +! -1 _EXT4-UR-COUNT +!
+    REPEAT
+    TRUE 0 ;
 
 VARIABLE _EXT4-UI-BUF
 VARIABLE _EXT4-UI-CTX
@@ -236,7 +281,10 @@ VARIABLE _EXT4-BA-GROUP
 VARIABLE _EXT4-BA-INDEX
 VARIABLE _EXT4-BA-GROUP-BLOCKS
 
-\ Report raw allocation evidence while retaining BLOCK_UNINIT as false.
+\ Whether the medium's block bitmap marks PHYSICAL-BLOCK allocated, or for a
+\ BLOCK_UNINIT group the bitmap the group stands for (_EXT4-UNINIT-BLOCK-SET?),
+\ in which only the group's static metadata is allocated, such as the
+\ reserved descriptor blocks the resize inode maps in a sparse group.
 : _EXT4-BLOCK-ALLOCATED?  ( physical-block ctx -- allocated? ior )
     _EXT4-BA-CTX ! DUP _EXT4-BA-BLOCK !
     DUP _EXT4-BA-CTX @ _EXT4-C.FIRST + @ U<
@@ -250,7 +298,10 @@ VARIABLE _EXT4-BA-GROUP-BLOCKS
     DUP IF NIP FALSE SWAP EXIT THEN DROP _EXT4-BA-GROUP-BLOCKS !
     _EXT4-BA-GROUP @ _EXT4-BA-CTX @ _EXT4-LOAD-DESC
     ?DUP IF FALSE SWAP EXIT THEN
-    _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF
+        _EXT4-BA-BLOCK @ _EXT4-BA-GROUP @ _EXT4-BA-CTX @
+        _EXT4-UNINIT-BLOCK-SET? EXIT
+    THEN
     _EXT4-BA-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@
     _EXT4-BA-CTX @ _EXT4-READ-BLOCK ?DUP IF FALSE SWAP EXIT THEN
     _EXT4-BA-CTX @ _EXT4-C.BLOCK +

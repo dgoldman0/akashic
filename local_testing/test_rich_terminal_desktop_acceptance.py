@@ -8993,8 +8993,8 @@ def test_connect_rejects_a_socket_owned_by_another_server_process(
     monkeypatch.setattr(acceptance_runner, "SessionClient", Client)
     monkeypatch.setattr(
         acceptance_runner,
-        "_connected_peer_pid",
-        lambda _client: 111,
+        "_connected_peer",
+        lambda _client: (111, os.getuid()),
     )
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
@@ -9008,6 +9008,44 @@ def test_connect_rejects_a_socket_owned_by_another_server_process(
     assert len(clients) == 1
     assert clients[0].timeout == acceptance_runner.SESSION_REQUEST_TIMEOUT_SECONDS
     assert clients[0].closed
+
+
+def test_connect_takes_an_outside_session_of_this_account_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients = []
+
+    class Client:
+        def __init__(self, socket_path, timeout):
+            self.closed = False
+            clients.append(self)
+
+        def connect(self):
+            return None
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(acceptance_runner, "SessionClient", Client)
+    monkeypatch.setattr(
+        acceptance_runner, "_connected_peer", lambda _client: (333, os.getuid())
+    )
+    client = acceptance_runner._connect(
+        "/tmp/outside-session.sock", time.monotonic() + 1.0, None
+    )
+    assert client is clients[-1] and not client.closed
+
+    monkeypatch.setattr(
+        acceptance_runner, "_connected_peer", lambda _client: (333, os.getuid() + 1)
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match=f"process 333 of user {os.getuid() + 1}, not to this account",
+    ):
+        acceptance_runner._connect(
+            "/tmp/outside-session.sock", time.monotonic() + 1.0, None
+        )
+    assert clients[-1].closed
 
 
 def _cell_observation(

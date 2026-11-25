@@ -17,7 +17,7 @@ sys.path.insert(0, str(LOCAL_TESTING))
 import akashic_tui as harness  # noqa: E402
 import test_at_xrpc_auth_read as auth_read  # noqa: E402
 import test_at_xrpc_exchange as xrpc_exchange  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
 
 
@@ -59,6 +59,7 @@ TRANSPORT_DOUBLE = xrpc_exchange.TRANSPORT_DOUBLE
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "tui/applets/streams/atproto-author-feed-connector.f",
         "tui/applets/streams/atproto-text-post-connector.f",
         "utils/fs/vfs.f",
@@ -156,49 +157,12 @@ def _bundle_source(item: auth_read.LoadItem) -> bytes:
     ).encode("utf-8")
 
 
-def _top_level_units(payload: bytes) -> tuple[bytes, ...]:
-    """Split prepared Forth only where the evaluator is at top level."""
-    units: list[bytearray] = []
-    unit = bytearray()
-    definition_depth = 0
-    conditional_depth = 0
-    for line in payload.splitlines(keepends=True):
-        unit.extend(line)
-        text = line.decode("utf-8").rstrip("\r\n")
-        tokens = harness._forth_line_tokens(text)  # noqa: SLF001
-        if tokens and (
-            tokens[0] == ":" or tokens[0].upper() == ":NONAME"
-        ):
-            definition_depth = 1
-        if definition_depth and any(
-            token == ";"
-            and (
-                index == 0
-                or tokens[index - 1].upper() not in {"CHAR", "[CHAR]"}
-            )
-            for index, token in enumerate(tokens)
-        ):
-            definition_depth = 0
-        for token in tokens:
-            upper = token.upper()
-            if upper == "[IF]":
-                conditional_depth += 1
-            elif upper == "[THEN]" and conditional_depth:
-                conditional_depth -= 1
-        if definition_depth == 0 and conditional_depth == 0:
-            units.append(unit)
-            unit = bytearray()
-    if unit:
-        raise RuntimeError("Prepared bidirectional source ends inside a unit")
-    return tuple(bytes(source_unit) for source_unit in units)
-
-
 def _bundle_files() -> tuple[tuple[str, bytes], ...]:
     """Greedily pack ordered top-level units under the audited ceiling."""
     bundles: list[bytes] = []
     current = bytearray()
     for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
-        for source_unit in _top_level_units(_bundle_source(item)):
+        for source_unit in auth_read.top_level_units(_bundle_source(item), "bidirectional"):
             if len(source_unit) > BUNDLE_BYTES:
                 raise RuntimeError(
                     f"bidirectional source unit too large: {item.name}"

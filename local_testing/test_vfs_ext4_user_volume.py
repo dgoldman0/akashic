@@ -524,6 +524,163 @@ def test_fresh_volume_takes_its_first_writes(
 
 
 # ---------------------------------------------------------------------
+#  A volume as e2fsprogs 1.47.0 leaves it
+# ---------------------------------------------------------------------
+
+
+def _uninitialize_backup_groups(
+    image: Path, groups: tuple[int, ...] = (1, 3, 5)
+) -> None:
+    """Mark GROUPS BLOCK_UNINIT as e2fsprogs 1.47.0 leaves them: the flag
+    set, the block bitmap zeroed with a zero checksum, and the descriptor
+    restamped in the primary table and in every backup.  Each group holds a
+    superblock backup and descriptor table, which 1.47.4 initializes.  The
+    result is 1.47.0's own volume but for the superblock's count of
+    kilobytes written."""
+    media = bytearray(image.read_bytes())
+    superblock = bytes(media[1024:2048])
+    blocks_count = struct.unpack_from("<I", superblock, 0x04)[0]
+    first = struct.unpack_from("<I", superblock, 0x14)[0]
+    per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    count = -(-(blocks_count - first) // per_group)
+    backups = [g for g in range(count) if ext4._ext4_sparse_group(g)]
+    for group in groups:
+        assert group in backups
+        home = (first + 1) * _BLOCK + group * 64
+        descriptor = bytearray(media[home : home + 64])
+        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
+        assert not flags & _BG_BLOCK_UNINIT
+        struct.pack_into("<H", descriptor, 0x12, flags | _BG_BLOCK_UNINIT)
+        bitmap = struct.unpack_from("<I", descriptor, 0x00)[0]
+        media[bitmap * _BLOCK : (bitmap + 1) * _BLOCK] = bytes(_BLOCK)
+        struct.pack_into("<H", descriptor, 0x18, 0)
+        struct.pack_into("<H", descriptor, 0x38, 0)
+        stamped = ext4._group_descriptor_with_checksum(superblock, descriptor, group)
+        for backup in backups:
+            table = (first + backup * per_group + 1) * _BLOCK + group * 64
+            media[table : table + 64] = stamped
+    image.write_bytes(media)
+
+
+@pytest.fixture(scope="session")
+def backup_uninit_volume(
+    jbd2_toolchain: dict[str, object],  # noqa: F811
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """A 64 MiB volume with one 2 KiB document whose groups 1, 3 and 5 are
+    BLOCK_UNINIT, as e2fsprogs 1.47.0 makes a user volume."""
+    directory = tmp_path_factory.mktemp("ext4-backup-uninit")
+    document = directory / "doc.bin"
+    document.write_bytes((b"old document line\n" * 200)[:2048])
+    image = _make_volume(
+        directory / "backup-uninit.img",
+        jbd2_toolchain,
+        commands=(f"write {document} /doc.txt",),
+    )
+    _uninitialize_backup_groups(image)
+    groups = _groups(image, jbd2_toolchain)
+    assert {
+        group for group, facts in groups.items() if "BLOCK_UNINIT" in facts["flags"]
+    } == {1, 3, 4, 5, 6}
+    ext4._assert_e2fsck_clean(image, jbd2_toolchain)
+    return image
+
+
+def test_writes_reach_an_uninitialized_group_that_holds_a_backup(
+    backup_uninit_volume: Path,
+    jbd2_toolchain: dict[str, object],  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    """A volume from e2fsprogs 1.47.0 proves its ownership and takes writes,
+    and a write into BLOCK_UNINIT group 1 keeps its backup superblock and
+    descriptor tables.
+
+    The proof walks the resize inode, which maps the reserved descriptor
+    blocks of every sparse group, uninitialized ones among them.  The
+    document's next blocks then have their goal at group 1's first block,
+    its backup superblock, so the driver must build the group's bitmap with
+    the backup, its descriptor block and the reserved descriptor blocks in
+    use, and allocate after them.  A folder, a file and a sync follow, as a
+    new Desk's first writes would.
+    """
+    first_block = int(
+        _debugfs(backup_uninit_volume, "blocks /doc.txt", jbd2_toolchain).split()[0]
+    )
+    group_start = 1 + 8 * _BLOCK
+    reserved = struct.unpack_from("<H", _superblock(backup_uninit_volume), 0xCE)[0]
+    first_free = group_start + 2 + reserved
+    logical = group_start - first_block
+    backing = tmp_path / "backup-uninit.img"
+    before = backup_uninit_volume.read_bytes()
+    output, trace, _ = ext4.run_recovery_forth(
+        backup_uninit_volume,
+        backing,
+        [
+            "CREATE _BU-BUF 3000 ALLOT _BU-BUF 3000 55 FILL",
+            *_mount("_BU"),
+            "_BU-CTX _EXT4-PROVE-OWNERSHIP CONSTANT _BU-PROOF-IOR",
+            (
+                'S" /doc.txt" VFS-FF-READ VFS-FF-WRITE OR _BU-V VFS-OPEN? '
+                "CONSTANT _BU-OPEN-IOR CONSTANT _BU-FD"
+            ),
+            f"{logical * _BLOCK} _BU-FD VFS-SEEK? CONSTANT _BU-SEEK-IOR",
+            "_BU-BUF 3000 _BU-FD VFS-WRITE-EXACT CONSTANT _BU-WRITE-IOR",
+            "_BU-FD VFS-CLOSE? CONSTANT _BU-CLOSE-IOR",
+            'S" made" _BU-V VFS-MKDIR CONSTANT _BU-MKDIR-IOR',
+            (
+                'S" second.txt" _BU-V VFS-MKFILE? '
+                "CONSTANT _BU-SECOND-IOR CONSTANT _BU-SECOND-D"
+            ),
+            "_BU-V VFS-SYNC CONSTANT _BU-SYNC-IOR",
+            *_checked(
+                "_BU-OK",
+                "EXT4-BACKUP-UNINIT-WRITES",
+                [
+                    *_mounted("_BU"),
+                    "_BU-PROOF-IOR 0=",
+                    "_BU-OPEN-IOR 0=",
+                    "_BU-SEEK-IOR 0=",
+                    "_BU-WRITE-IOR 0=",
+                    "_BU-CLOSE-IOR 0=",
+                    "_BU-MKDIR-IOR 0=",
+                    "_BU-SECOND-IOR 0=",
+                    "_BU-SECOND-D 0<>",
+                    "_BU-SYNC-IOR 0=",
+                    "_BU-V V.LAST-IOR @ 0=",
+                    "_BU-V V.FLAGS @ VFS-F-RO AND 0=",
+                    *ext4._EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+                ],
+            ),
+            *_unmount("_BU", "EXT4-BACKUP-UNINIT-UNMOUNTED"),
+        ],
+        capture_media=backing,
+        max_steps=600_000_000,
+    )
+    _emitted(output, "EXT4-BACKUP-UNINIT-WRITES")
+    _emitted(output, "EXT4-BACKUP-UNINIT-UNMOUNTED")
+    assert trace
+    ext4._assert_e2fsck_clean(backing, jbd2_toolchain)
+    stat = _debugfs(backing, "stat /doc.txt", jbd2_toolchain)
+    assert (
+        f"({logical}-{logical + 2}):{first_free}-{first_free + 2}" in stat
+    ), stat
+    after = backing.read_bytes()
+    # The backup superblock, its descriptor table and the reserved
+    # descriptor blocks of group 1 are as mke2fs wrote them.
+    kept = slice(group_start * _BLOCK, first_free * _BLOCK)
+    assert after[kept] == before[kept]
+    groups = _groups(backing, jbd2_toolchain)
+    assert "BLOCK_UNINIT" not in groups[1]["flags"]
+    # Every block of the group but the backup's, the reserved ones and the
+    # three the write took.
+    assert groups[1]["free_blocks"] == 8 * _BLOCK - (first_free - group_start) - 3
+    assert {
+        group for group, facts in groups.items() if "BLOCK_UNINIT" in facts["flags"]
+    } == {3, 4, 5, 6}
+    assert {"made", "second.txt"} <= _names(backing, "/", jbd2_toolchain).keys()
+
+
+# ---------------------------------------------------------------------
 #  Inode groups on first use
 # ---------------------------------------------------------------------
 

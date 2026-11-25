@@ -88,7 +88,7 @@ def _profile(leaf: bytes, intermediate: bytes) -> object:
             GUEST_SOURCE.read_bytes(),
         ),),
         linked=False,
-        requires_tap=False,
+        requires_network=False,
         include_large_sample=False,
     )
 

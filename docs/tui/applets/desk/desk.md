@@ -597,8 +597,11 @@ file that reads as damaged is named as such.
 Desk asks for passphrases in its own prompt, masked: the prompt shows and
 publishes mask characters only, and Desk wipes what was typed as soon as
 the keyring has taken it. A setup or change asks for the new passphrase
-twice, takes one of at least 8 characters, and goes ahead only when both
-entries match, at 100,000 PBKDF2 iterations. The derivation runs in Desk's
+twice under the one label "New keyring passphrase:", the second time with
+the empty field saying to type it again, since a rich frame keeps a
+field's label as part of what the field is. It takes one of at least 8
+characters and goes ahead only when both entries match, at 100,000 PBKDF2
+iterations. The derivation runs in Desk's
 ticks, 1,000 iterations a tick, about 66 ms of MegaPad's time at 100 MHz,
 so Desk goes on answering keys; a notice tells how far it has come at its
 start and each tenth, and another how it ended. A wrong passphrase is

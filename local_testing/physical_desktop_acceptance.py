@@ -99,7 +99,7 @@ APPLET_KIND = "physical-desk-single-applet-check"
 # well inside the outer watchdog, so the runner still writes its diagnostics.
 APPLET_TIMEOUT_SECONDS = 300
 APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
-           "folio", "small-terminal", "photo", "damaged", "sandbox")
+           "folio", "small-terminal", "photo", "damaged", "sandbox", "keyring")
 
 
 def write_json(path: Path, value) -> None:

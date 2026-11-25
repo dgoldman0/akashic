@@ -41,7 +41,7 @@ sys.path.insert(0, str(LOCAL_TESTING))
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from asm import assemble  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from system import MegapadSystem  # noqa: E402
 
 

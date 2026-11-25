@@ -19,7 +19,7 @@ sys.path.insert(0, str(LOCAL_TESTING))
 import akashic_tui as harness  # noqa: E402
 import test_at_xrpc_auth_read as auth_read  # noqa: E402
 import test_at_xrpc_exchange as xrpc_exchange  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
 
 
@@ -148,6 +148,7 @@ VARIABLE _SATPT-DNV-DOTS
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "tui/applets/streams/atproto-authenticated-provider.f",
         "tui/applets/streams/streams-online.f",
         "utils/fs/vfs.f",
@@ -230,6 +231,13 @@ FIXTURE_ITEMS = (
         marker="AT AUTH PROVIDER PEER FIXTURE READY",
         source=BIDIRECTIONAL_FIXTURE,
     ),
+    # Streams' home in this check: its own place set over a RAM volume.
+    auth_read.LoadItem(
+        name="root-place-fixture",
+        guest="local_testing/satpv-root.f",
+        marker="AT AUTH PROVIDER ROOT PLACE READY",
+        source=LOCAL_TESTING / "test-root-place.f",
+    ),
     auth_read.LoadItem(
         name="provider-vertical-fixture",
         guest="local_testing/satpv-test.f",
@@ -251,106 +259,13 @@ def _bundle_source(item: auth_read.LoadItem) -> bytes:
     ).encode("utf-8")
 
 
-def _structural_tokens(text: str) -> tuple[str, ...]:
-    """The line's executable words.  The harness tokenizer already drops
-    parser-word payloads: string bodies, comments and CHAR's character."""
-    return harness._forth_line_tokens(text)  # noqa: SLF001
-
-
-def _safe_top_level_boundary(
-    tokens: tuple[str, ...],
-    *,
-    ended_definition: bool,
-    closed_conditional: bool,
-) -> bool:
-    """Recognize declarations and complete evaluator control structures.
-
-    A line of top-level data that ends with "," or "C," is complete too:
-    the next unit appends at HERE where it left off, so a large table, such
-    as text/unicode-tables.f's, splits between its lines.
-    """
-    if ended_definition or closed_conditional:
-        return True
-    if tokens and tokens[-1].upper() in {",", "C,"}:
-        return True
-    upper = {token.upper() for token in tokens}
-    return bool(
-        upper
-        & {
-            "CONSTANT",
-            "2CONSTANT",
-            "VARIABLE",
-            "2VARIABLE",
-            "FVARIABLE",
-            "VALUE",
-            "2VALUE",
-            "CREATE",
-            "ALLOT",
-            "PROVIDED",
-            "DEFER",
-        }
-    )
-
-
-def _top_level_units(payload: bytes) -> tuple[bytes, ...]:
-    """Split only after a complete definition, conditional, or declaration."""
-    units: list[bytearray] = []
-    unit = bytearray()
-    definition_depth = 0
-    conditional_depth = 0
-    for line in payload.splitlines(keepends=True):
-        unit.extend(line)
-        text = line.decode("utf-8").rstrip("\r\n")
-        tokens = _structural_tokens(text)
-        ended_definition = False
-        closed_conditional = False
-        if tokens and (
-            tokens[0] == ":" or tokens[0].upper() == ":NONAME"
-        ):
-            definition_depth = 1
-        if definition_depth and any(
-            token == ";"
-            and (
-                index == 0
-                or tokens[index - 1].upper() not in {"CHAR", "[CHAR]"}
-            )
-            for index, token in enumerate(tokens)
-        ):
-            definition_depth = 0
-            ended_definition = True
-        for token in tokens:
-            upper = token.upper()
-            if upper == "[IF]":
-                conditional_depth += 1
-            elif upper == "[THEN]" and conditional_depth:
-                conditional_depth -= 1
-                if conditional_depth == 0:
-                    closed_conditional = True
-        if (
-            definition_depth == 0
-            and conditional_depth == 0
-            and _safe_top_level_boundary(
-                tokens,
-                ended_definition=ended_definition,
-                closed_conditional=closed_conditional,
-            )
-        ):
-            units.append(unit)
-            unit = bytearray()
-    if unit:
-        if definition_depth or conditional_depth:
-            raise RuntimeError("Prepared provider source ends inside a unit")
-        units.append(unit)
-    return tuple(bytes(source_unit) for source_unit in units)
-
-
 def _source_fragments() -> tuple[bytes, ...]:
     """Pack complete top-level units into compile checkpoints of about
     COMPILE_CHECKPOINT_BYTES; a larger unit is a checkpoint of its own."""
     fragments: list[bytes] = []
     current = bytearray()
     for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
-        for source_unit in _top_level_units(_bundle_source(item)):
+        for source_unit in auth_read.top_level_units(_bundle_source(item), "provider"):
             if (
                 current
                 and len(current) + len(source_unit)
@@ -567,7 +482,7 @@ def _assert_static() -> None:
     # Only a unit that cannot be split may make a checkpoint past the size.
     assert all(
         len(source) <= COMPILE_CHECKPOINT_BYTES
-        or len(_top_level_units(source)) == 1
+        or len(auth_read.top_level_units(source, "provider")) == 1
         for source in SOURCE_FRAGMENTS
     )
     assert all(len(source) <= BUNDLE_BYTES for _, source in BUNDLE_FILES)
@@ -614,6 +529,8 @@ def _assert_static() -> None:
 
     assert _requires(CONTRACT) == [
         "at-bidirectional-vertical.f",
+        # Streams' home: the check's own place set over a RAM volume.
+        "test-root-place.f",
         "../akashic/tui/applets/streams/atproto-authenticated-provider.f",
         "../akashic/tui/applets/streams/streams-online.f",
     ]

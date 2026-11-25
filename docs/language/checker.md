@@ -103,7 +103,7 @@ Each module is checked against the dictionary an image would hold when the
 module loads: the base vocabulary, then the modules its REQUIRE lines load,
 in KDOS's depth-first order, each once. A word that a module uses without
 the REQUIRE that defines it is therefore undefined, as it is to the image
-builder's own closure (`local_testing/forth_dependencies.py`, whose
+builder's own closure (`toolchain/image/closure.py`, whose
 REQUIRE rule the measurement uses). Declared kinds travel the same way: a
 module sees the kinds its REQUIRE closure declares.
 

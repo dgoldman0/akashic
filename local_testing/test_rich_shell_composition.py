@@ -1,17 +1,32 @@
-"""The rich Desktop profile is the shell-free base plus the shell."""
+"""The rich Desktop profile is the shell-free base plus the shell.
+
+The profiles and the boot composition live in the image tool
+(toolchain/image); the harness's own profiles are read through the harness,
+whose import also puts the image tool and MegaPad on the module path."""
 from dataclasses import replace
 import json
 
 import pytest
 import akashic_tui as packaging
 
-from akashic_tui import (
+from rich_terminal.retained_model import RetainedFeature
+from toolchain.image.build import (
     COLD_SOURCE_LOADER_PATH,
-    DESKTOP_APT1_RICH_TERMINAL,
-    DESKTOP_APT1_RICH_TERMINAL_BASE,
     MEGAPAD_NETWORKING_BOOT_LINE,
+    _linked_chunks,
     _with_megapad_rich_terminal,
     _with_rich_desktop_boot_progress,
+    _with_userland_xmem_reserve,
+    dependency_order,
+)
+from toolchain.image.megapad import MEGAPAD_ROOT
+from toolchain.image.rich import (
+    DESKTOP_APT1_EXT_MEM_MIB,
+    DESKTOP_APT1_RICH_TERMINAL,
+    DESKTOP_APT1_RICH_TERMINAL_BASE,
+    DESKTOP_APT1_SHELL_MAX_ENTRIES,
+    DESKTOP_APT1_SHELL_TEXT_BYTES,
+    desktop_apt1_shell_profile,
 )
 
 
@@ -55,11 +70,11 @@ def test_shell_selection_is_an_actual_bool(bad):
 
 def test_shell_selection_adds_only_owned_shell_quotas_to_the_base():
     base = DESKTOP_APT1_RICH_TERMINAL_BASE
-    selected = packaging.desktop_apt1_shell_profile()
+    selected = desktop_apt1_shell_profile()
     old, new = base.retained_policy, selected.retained_policy
-    assert (packaging.DESKTOP_APT1_SHELL_MAX_ENTRIES,
-            packaging.DESKTOP_APT1_SHELL_TEXT_BYTES) == (140, 25504)
-    assert new.features == old.features | packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS
+    assert (DESKTOP_APT1_SHELL_MAX_ENTRIES,
+            DESKTOP_APT1_SHELL_TEXT_BYTES) == (140, 25504)
+    assert new.features == old.features | RetainedFeature.PANES | RetainedFeature.TASKBARS
     for name, delta in (('max_regions',283), ('max_objects',282),
                         ('max_operations_per_transaction',565), ('total_utf8_bytes',25504),
                         ('max_retained_transaction_bytes',92136), ('base_max_transaction_bytes',92136)):
@@ -69,9 +84,9 @@ def test_shell_selection_adds_only_owned_shell_quotas_to_the_base():
                  'guest_rx_bytes', 'guest_tx_bytes', 'host_policy'):
         assert getattr(selected, name) == getattr(base, name)
     assert (base.shell, selected.shell) == (False, True)
-    assert not old.features & (packaging.RetainedFeature.PANES | packaging.RetainedFeature.TASKBARS)
+    assert not old.features & (RetainedFeature.PANES | RetainedFeature.TASKBARS)
     with pytest.raises(ValueError, match='without the shell'):
-        packaging.desktop_apt1_shell_profile(base=selected)
+        desktop_apt1_shell_profile(base=selected)
 
 
 def test_rich_desktop_profile_selects_the_shell():
@@ -79,7 +94,7 @@ def test_rich_desktop_profile_selects_the_shell():
     # DELTAs, so the rich Desktop publishes its panes and taskbar by default.
     default = packaging.PROFILES['desktop-apt1']
     assert default.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
-    assert DESKTOP_APT1_RICH_TERMINAL == packaging.desktop_apt1_shell_profile()
+    assert DESKTOP_APT1_RICH_TERMINAL == desktop_apt1_shell_profile()
     assert 'desktop-apt1-shell' not in packaging.PROFILES
     boot = _with_megapad_rich_terminal(_boot(), default.rich_terminal)
     assert "-1 CONSTANT APT1-DESK-SHELL-ENABLED\n" in boot
@@ -98,7 +113,7 @@ def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_bank
                                            # same smaller graphics bank.
                                            max_path_points=240 // 16,
                                            total_path_points=240 // 16))
-    selected = packaging.desktop_apt1_shell_profile(base=base)
+    selected = desktop_apt1_shell_profile(base=base)
     assert selected.retained_policy.client_to_terminal_max_payload == 25608
     assert selected.guest_tx_bytes == 25648
     with pytest.raises(ValueError, match='selected native object'):
@@ -114,7 +129,7 @@ def test_shell_selection_rejects_overflow_instead_of_shrinking_existing_quotas(c
     base = replace(DESKTOP_APT1_RICH_TERMINAL_BASE,
                    retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy, **change))
     with pytest.raises(ValueError):
-        packaging.desktop_apt1_shell_profile(base=base)
+        desktop_apt1_shell_profile(base=base)
 
 
 @pytest.mark.parametrize('shell_enabled', [False, True])
@@ -125,20 +140,20 @@ def test_shell_opt_in_cold_setup_unwind_and_foreign_observer_preservation(shell_
 
     runtime = MegaForthRuntime(
         memory=create_address_space(
-            external_size=packaging.DESKTOP_APT1_EXT_MEM_MIB << 20,
+            external_size=DESKTOP_APT1_EXT_MEM_MIB << 20,
             hbw_size=1 << 20,
         ), execution_backend="native",
     )
-    runtime.evaluate((packaging.MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")
+    runtime.evaluate((MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")
     profile = packaging.PROFILES["desktop-apt1"]
-    runtime.evaluate(packaging._with_userland_xmem_reserve(
+    runtime.evaluate(_with_userland_xmem_reserve(
         "ENTER-USERLAND\n", profile.general_xmem_reserve_bytes,
     ).encode(), source_name="shell-userland")
     for name in ("networking.f", "rich-terminal.f"):
-        runtime.evaluate((packaging.MEGAPAD_ROOT / name).read_bytes(),
+        runtime.evaluate((MEGAPAD_ROOT / name).read_bytes(),
                          source_name=name, step_budget=40_000_000)
     if shell_enabled:
-        selected = packaging.desktop_apt1_shell_profile()
+        selected = desktop_apt1_shell_profile()
         boot = _with_megapad_rich_terminal(_boot(), selected)
         declarations = '\n'.join(line for line in boot.splitlines() if ' CONSTANT APT1-DESK-' in line)
         runtime.evaluate(declarations.encode(), source_name="shell-test-bounds")
@@ -153,8 +168,8 @@ VARIABLE _SHT-REFUSE-INSTALL
 """
     marker = b"PROVIDED akashic-tui-desk-apt1"
     injection_count = 0
-    for name, content in packaging._linked_chunks(
-        packaging.dependency_order(profile.roots),
+    for name, content in _linked_chunks(
+        dependency_order(profile.roots),
         profile.link_chunk_bytes, profile.audited_link_line_bytes,
     ).items():
         injection_count += content.count(marker)
@@ -262,7 +277,7 @@ VARIABLE _SHT-REFUSE-INSTALL
     after = values("XMEM-HERE @ XMEM-LIMIT @")
     assert after == before
     print("DESK SHELL STORAGE " + json.dumps({
-        "external_mib": packaging.DESKTOP_APT1_EXT_MEM_MIB,
+        "external_mib": DESKTOP_APT1_EXT_MEM_MIB,
         "xmem_here": after[0], "xmem_limit": after[1],
         "remaining": after[1] - after[0],
     }), flush=True)

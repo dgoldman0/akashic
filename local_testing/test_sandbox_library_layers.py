@@ -20,7 +20,7 @@ LOCAL_TESTING = REPO_ROOT / "local_testing"
 
 sys.path.insert(0, str(LOCAL_TESTING))
 
-from forth_dependencies import dependency_closure  # noqa: E402
+from toolchain.image.closure import dependency_closure  # noqa: E402
 
 
 def _modules(directory: str, pattern: str) -> list[str]:

@@ -172,6 +172,14 @@ VARIABLE _C4-AVAILABLE-BASELINE
         HEAP-FREE-BYTES
     THEN ;
 
+: _C4-MACHINE-TRUST  ( -- )
+    PLACES-DEFAULT DUP 0= ABORT" DESK LIBRARY BURROW FAIL no places"
+    PLSET-ORIGIN DUP 0= ABORT" DESK LIBRARY BURROW FAIL no origin"
+    WEB-ROOTS-REGISTER MTRUST-S-OK <>
+    ABORT" DESK LIBRARY BURROW FAIL root set"
+    MTRUST-FREEZE MTRUST-S-OK <>
+    ABORT" DESK LIBRARY BURROW FAIL machine trust" ;
+
 : _C4-STREAMS-INIT  ( instance -- )
     DUP _C4-STREAMS-INSTANCE !
     DUP CINST-STATE _C4-STREAMS-STATE !
@@ -949,6 +957,9 @@ CREATE _C4-AGENT-DESC APP-DESC ALLOT
     _C4-BURROW-REF RREF-INIT
     _C4-TEMP-REF RREF-INIT
     _C4-REQUEST-DIGEST SHA3-256-HEX-LEN 0 FILL
+    \ Machine trust is composed before the baseline, as a boot composition
+    \ composes it, since KDOS keeps the global root set for the boot.
+    _C4-MACHINE-TRUST
     \ Capture before the composition hook: later checkpoints may allocate a
     \ caller-owned graph here and must return it before the final witness.
     _C4-AVAILABLE _C4-AVAILABLE-BASELINE !

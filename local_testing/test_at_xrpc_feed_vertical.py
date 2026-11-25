@@ -17,7 +17,7 @@ sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
 import test_at_xrpc_auth_read as auth_read  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
 
 
@@ -74,6 +74,7 @@ _ATFVT-KDOS-PORT NET-IO-PORT-SIZE + CONSTANT KDOSTLS-SIZE
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
+        "security/passphrase-keyring.f",
         "tui/applets/streams/atproto-author-feed-present.f",
         "utils/fs/vfs.f",
     ),

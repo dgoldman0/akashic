@@ -20,7 +20,7 @@ import pytest
 from PIL import Image
 
 import qoi_codec
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from test_media import _gradient, _interlaced, _noise, _png, _scaled
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from simulator.platform import create_address_space

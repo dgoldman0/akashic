@@ -162,7 +162,24 @@ The cycle-budget `smoke` loop remains emulator-only. The backend-neutral
 shared-session viewer journey is reached through `serve`, or through `accept`
 with `--backend simulator`. Sibling `akashic/` and `megapad/` checkouts are the
 normal defaults; set `MEGAPAD_ROOT` explicitly to select a different checkout.
-The simulator launcher does not accept `--nic-tap` or `--audio`.
+The simulator launcher does not accept `--audio`.
+
+`smoke` and `serve` take `--nic SPEC` and `--local-access`, which reach
+MegaPad's server as given: `--nic slirp` attaches the user-mode network,
+which needs no administrator rights and refuses the guest's packets to this
+computer and its local network unless `--local-access` is given, and `--nic
+tap:IFNAME` attaches a TAP device set up beforehand. The hybrid backend
+attaches no network card.
+
+`serve --debug-access` lets clients such as MegaPad's `session_ctl.py` read
+the guest's memory and dictionary, control its execution and write captures
+over the socket. Without it the server refuses those requests, since the
+guest's memory can hold keys and tokens, and serves the viewer as usual.
+`accept` starts its server with debugging access, since its journey reads
+the guest's state. `accept --attach` drives the session another program
+already serves on `--socket` instead, started with `--debug-access` under
+this account; the form and safe-mode options then say how that session was
+built, and the build's and the server's own options are refused.
 
 `smoke`, `serve` and `accept` take `--cores N` for full cores and
 `--clusters N` for micro-core clusters. Each profile names its default, which
@@ -190,9 +207,9 @@ and
 The September 8 limitations are preserved in
 [`evidence/rich-desktop-native-simulator-checkpoint-20260908.md`](evidence/rich-desktop-native-simulator-checkpoint-20260908.md).
 
-A live networking qualification additionally requires the local port setup;
-run that setup before attempting such a test rather than treating an
-unconfigured port as a permanently absent NIC.
+A live networking qualification needs a network card: `--nic slirp` needs no
+setup, while `--nic tap:IFNAME` needs its TAP device set up first ("Opt-In
+Live Network" below).
 
 Most smoke and served sessions use 128 MiB of emulated external memory by
 default.  The `desktop-apt1` rich profile uses an actual 320 MiB machine.  At
@@ -234,9 +251,10 @@ The rich Desktop, `desktop-apt1`, and Desk with one applet, the
 asked for the linked one. The shipping form is three options that the
 sections below describe: the modules in their token form (`--token-modules`)
 on the ext4 system volume (`--system-volume`), and the user volume with the
-shipping form's places (`--user-volume`). Its build needs the pinned
-e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR` names, and it boots the image once
-in the simulator to record the token forms. `--linked` builds the linked form
+shipping form's places (`--user-volume`). Its build takes the pinned
+e2fsprogs that `AKASHIC_E2FSPROGS_TOOL_DIR` names, as the tests do, or else
+this computer's own from 1.47.0 on, and it boots the image once in the
+simulator to record the token forms. `--linked` builds the linked form
 instead: the modules in linked chunks on the boot volume, with one place over
 it, as these profiles built before the canonical journey passed in the
 shipping form (places slice 9, [`docs/utils/fs/places.md`](../docs/utils/fs/places.md)).
@@ -298,8 +316,9 @@ python3 local_testing/physical_desktop_acceptance.py --linked --system-volume \
   --font assets/fonts/DejaVuSansMono.ttf --output-parent /dev/shm/journey
 ```
 
-The build needs the pinned e2fsprogs of the ext4 fixtures; it stops before
-writing anything when `AKASHIC_E2FSPROGS_TOOL_DIR` does not name them. The
+The build takes the pinned e2fsprogs of the ext4 fixtures that
+`AKASHIC_E2FSPROGS_TOOL_DIR` names, or else this computer's own from 1.47.0
+on; it stops before writing anything when it finds neither. The
 option is part of the shipping form, which the Desktop's profiles build by
 default; any other profile, or one given `--linked`, has it only when it is
 given. With the user volume as well, the boot image's resources and samples
@@ -310,11 +329,11 @@ Explorer needs a listing at least three rows longer than the 35 its table
 shows there. A linked Desktop's 53 source chunks supply those rows in its
 root without the step naming them; with the modules on the system volume the
 boot volume's root lists nine chunks. A Desktop built with the option, or with
-the user volume, therefore carries the sample documents
-(`sample_documents.py`), thirty short notes and lists in text and Markdown,
-in the list File Explorer opens on: with the option alone the boot volume's
-root, and with the user volume its documents place. Nothing else makes either
-list long, and the documents stand for what a person keeps there. The
+the user volume, therefore carries the sample documents, thirty short notes
+and lists in text and Markdown (`sample_documents.py`), in the list File
+Explorer opens on: with the option alone the boot volume's root, and with
+the user volume its documents place. Nothing else makes either list long,
+and the documents stand for what a person keeps there. The
 documents place sets their number. It holds the samples and the documents,
 41 files, which is the table's 35 rows, a detent and a detent to spare, with
 the journey's pointer file in the first view and rows to spare above and
@@ -440,8 +459,12 @@ the pinned profile's features, and holds two folders, `/documents` and
 boot volume then holds none of: the text samples, `large.txt` among them,
 with File Explorer the sample picture, document and PDFs, a check's own
 picture such as the photograph of `--applet photo`, and on a Desktop the
-sample documents. The build checks the volume with the pinned `e2fsck` and
-needs the same `AKASHIC_E2FSPROGS_TOOL_DIR` as `--system-volume`.
+sample documents. Every sample comes from `assets/samples/desktop`, which
+`generate_desktop_samples.py` writes and `test_desktop_samples.py` keeps
+current; a configuration names the same folder as its user volume's first
+documents. The build checks the volume with `e2fsck` and takes the same
+e2fsprogs as `--system-volume`. A build keeps a user volume that is already
+there, unless asked for a fresh one, as the harness asks on every build.
 
 The profile then loads `utils/fs/user-volume.f` with the ext4 driver, in its
 linked chunks or from the system volume, and its `autoexec.f` mounts the
@@ -577,7 +600,7 @@ profile's general release gates remain open.
 
 The ext4 format contract is pinned in
 `docs/utils/fs/ext4-compatibility-profile.md` and mirrored by the
-machine-readable `fixtures/ext4-profile/manifest.json`.  It requires one
+machine-readable `toolchain/image/ext4-profile/manifest.json`.  It requires one
 source-built e2fsprogs v1.47.4 prefix; ambient `PATH` tools are deliberately
 rejected.  Generate the four geometry images plus the supplemental
 `read-side-1k-i256` image and run the profile gates with:
@@ -1123,10 +1146,10 @@ The Streams qualification path is intentionally split by boundary:
   Its launcher now uses the production online composition; no fixture, source,
   actor, or startup tile is preseeded.
 - `streams-multiprotocol-composition` is the focused no-network composition
-  gate for the reviewed vertical. It registers the public AT trust
-  contribution, imports the exact-host RSS trust artifact, configures the
-  authorized production syndication provider, and configures the production
-  public Bluesky provider.
+  gate for the reviewed vertical. It configures the authorized production
+  syndication provider and the production public Bluesky provider. It
+  registers no trust: the vertical verifies against the machine's global root
+  set, which Desk registers from its origin.
 - `desktop-streams-vertical` is the opt-in TAP-facing product journey. In one
   Desk-hosted Streams instance it fetches and visibly retains the reviewed RSS
   source, fetches a public Bluesky author feed through AT Protocol XRPC, then
@@ -1174,7 +1197,7 @@ also intentionally opt-in and not yet recorded as passing:
 
 ```text
 python3 local_testing/akashic_tui.py smoke \
-  --profile desktop-streams-vertical --nic-tap mp64tap0 \
+  --profile desktop-streams-vertical --nic tap:mp64tap0 \
   --max-steps 9000000000 --timeout 300
 ```
 
@@ -1352,9 +1375,10 @@ show the first time, near four minutes on the simulator, so this check has a
 
 ## Opt-In Live Network
 
-The live profiles require a user-owned TAP interface. From the workspace root,
-the setup script creates or reuses `mp64tap0`, enables forwarding and
-masquerading, and then exits:
+The live profiles require a network card: `--nic slirp`, or `--nic
+tap:mp64tap0` on a user-owned TAP interface, which the runs recorded below
+used. From the workspace root, the setup script creates or reuses `mp64tap0`,
+enables forwarding and masquerading, and then exits:
 
 ```bash
 sudo local_testing/setup_codex_live.sh
@@ -1372,7 +1396,7 @@ extension-uniqueness and loader exception-cleanup hardening:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py smoke \
-  --profile streams-live-public --nic-tap mp64tap0 \
+  --profile streams-live-public --nic tap:mp64tap0 \
   --max-steps 5000000000 --timeout 300
 ```
 
@@ -1383,20 +1407,20 @@ authenticated TLS 1.3 `NewSessionTicket` messages without implementing or
 claiming session resumption; unsupported post-handshake messages still fail
 closed.
 
-The separate Codex TLS gate authenticates both source-pinned hosts with the
-native KDOS TLS stack but sends no application request:
+The separate Codex TLS gate authenticates both hosts with the native KDOS TLS
+stack but sends no application request:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py smoke \
-  --profile codex-live-tls --nic-tap mp64tap0 \
+  --profile codex-live-tls --nic tap:mp64tap0 \
   --max-steps 5000000000 --timeout 300
 ```
 
-The Codex source provisions Google Trust Services WE1 as two exact-host
-anchors: `auth.openai.com` and `chatgpt.com`. It does not trust `openai.com`,
-`api.openai.com`, arbitrary subdomains, or unrelated services. The anchor is
-valid through 2029-02-20; certificate/algorithm rotation must be handled as an
-explicit reviewed update, not an automatic network download.
+Both hosts, `auth.openai.com` and `chatgpt.com`, verify against the machine's
+global root set (`docs/net/web-roots.md`). The gate declares a place over the
+boot volume and registers the set before it freezes the trust registry, as
+Desk does from its origin. Roots change only through the set's reviewed
+refresh, never through a network download.
 
 The live gate uses MegaPad's standards-only public ClientHello. Private
 MegaPad hybrid suites and groups are not offered to OpenAI endpoints. On
@@ -1408,7 +1432,7 @@ browser authorization run:
 
 ```bash
 python3 akashic/local_testing/akashic_tui.py serve \
-  --profile codex-live-auth --nic-tap mp64tap0 \
+  --profile codex-live-auth --nic tap:mp64tap0 \
   --socket /tmp/akashic-tui.sock
 ```
 
@@ -1430,7 +1454,7 @@ For native Codex account access after the credential-free gate passes:
 
 ```bash
 python3 local_testing/akashic_tui.py serve \
-  --profile desktop-codex-live --nic-tap mp64tap0 \
+  --profile desktop-codex-live --nic tap:mp64tap0 \
   --socket /tmp/akashic-tui.sock
 ```
 
@@ -1443,7 +1467,9 @@ python3 megapad/session_viewer.py \
   --title "Akashic TUI"
 ```
 
-The viewer and automation clients share the same guest. Control it with:
+The viewer and automation clients share the same guest. `session_ctl.py`'s
+commands other than `send`, `key`, `resize` and `shutdown` need a server
+started with `serve --debug-access`. Control it with:
 
 ```bash
 python3 megapad/session_ctl.py --socket /tmp/akashic-tui.sock status

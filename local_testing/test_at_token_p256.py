@@ -15,7 +15,7 @@ SOURCE_ROOT = ROOT / "akashic"
 sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from test_oauth2_p256_key import (  # noqa: E402
     P256_JWK_DOUBLES,
     seam_after_modules,

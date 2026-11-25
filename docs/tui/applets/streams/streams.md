@@ -512,7 +512,7 @@ HTTP request, including the generic JSON Feed media spelling.
 
 The optional `streams-configured-refresh-live` gate performs one successful
 fetch of the bounded public `foo-dogsquared.github.io` More Contentful RSS
-feed through reviewed exact-host trust, DNS, TCP,
+feed through the machine's global root set, DNS, TCP,
 authenticated TLS 1.3, bounded HTTP, decode, durable owner commit, cleanup,
 and owner release/reinitialization durability. This live gate
 is deliberately provider-to-owner; `streams-manual-refresh-contracts` owns the

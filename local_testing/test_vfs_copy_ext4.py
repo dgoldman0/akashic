@@ -37,7 +37,7 @@ if str(LOCAL_TESTING) not in sys.path:
 
 import machine_backends  # noqa: E402
 import test_vfs_ext4 as ext4  # noqa: E402
-from forth_dependencies import dependency_order  # noqa: E402
+from toolchain.image.closure import dependency_order  # noqa: E402
 from machine_backends import Printed  # noqa: E402
 from native_forth import module_source  # noqa: E402
 from test_vfs_ext4 import (  # noqa: E402,F401  (pytest fixtures)

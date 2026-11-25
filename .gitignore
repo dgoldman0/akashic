@@ -104,7 +104,6 @@ local_testing/*
 !local_testing/cold-source-loader.f
 !local_testing/test_cold_source_loader.py
 # Refactor architecture inventory and ratchet
-!local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
 !local_testing/refactor_architecture.json
 !local_testing/test_refactor_inventory.py
@@ -262,6 +261,10 @@ local_testing/*
 !local_testing/kdos_tls_memory_peer.py
 !local_testing/kdos_tls_vertical_harness.py
 !local_testing/physical_desktop_acceptance.py
+!local_testing/test_image_tool.py
+!local_testing/generate_desktop_samples.py
+!local_testing/test_desktop_samples.py
+!local_testing/test_image_configuration.py
 !local_testing/tls-inbound-vertical.f
 !local_testing/tls-inbound-failures.f
 !local_testing/evidence/
@@ -280,8 +283,6 @@ local_testing/fixtures/atproto/*
 !local_testing/fixtures/desk-gate0/**
 !local_testing/fixtures/slh-dsa/
 !local_testing/fixtures/slh-dsa/**
-!local_testing/fixtures/ext4-profile/
-!local_testing/fixtures/ext4-profile/**
 
 # Generated system images and captures stay local.
 local_testing/out/

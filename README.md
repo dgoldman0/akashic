@@ -509,3 +509,8 @@ See [assets/fonts/README.md](assets/fonts/README.md) for full license details.
 
 **KDOS / Megapad-64** with its 64-bit Forth environment. Akashic source is plain
 Forth loaded at runtime via `REQUIRE`.
+
+The test harness in `local_testing/` and the image tool in `toolchain/` run on
+CPython 3.13. Where the system's Python is older, [uv](https://docs.astral.sh/uv/)
+installs 3.13 without administrator rights (`uv python install 3.13`). The image
+tool builds ext4 volumes with e2fsprogs 1.47.0 or later, and the tests pin 1.47.4.

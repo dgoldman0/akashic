@@ -11,13 +11,23 @@
 \ owners over the same VFS, reloads the key slot, rebuilds its address-free
 \ binding, opens the session, builds com.atproto.server.getSession, and
 \ sends that exact request through a tiny fake NIO/HBUF 200 response.
+\
+\ The vaults' root key comes from a passphrase keyring whose file stands on
+\ the same RAM volume, set up at a small iteration count.  The restart
+\ opens the keyring over that file again and finds it locked: the key
+\ slot's load answers locked and the keyring is wanted until the
+\ passphrase unlocks it, and the same load then succeeds.
 
 REQUIRE at-oauth-client-test.f
 
 PROVIDED at-xrpc-auth-read
 
 1700000200 CONSTANT _ATXR-IAT
-0x4154585252455331 CONSTANT _ATXR-RESOLVER-TOKEN
+
+\ The keyring's iteration count, passphrase and file on the RAM volume.
+64 CONSTANT _ATXR-KEYRING-ITERATIONS
+: _atxr-passphrase  ( -- a u )  S" at fixture passphrase" ;
+: _atxr-keyring-path  ( -- a u )  S" /keyring" ;
 
 O2SESSION-RECORD-SIZE CVAULT-BACKING-SIZE
     CONSTANT _ATXR-BACKING-U
@@ -44,6 +54,9 @@ VARIABLE _atxr-session-generation
 VARIABLE _atxr-resolver-calls
 VARIABLE _atxr-arena
 VARIABLE _atxr-vfs
+VARIABLE _atxr-keyring
+VARIABLE _atxr-place
+VARIABLE _atxr-place-set
 
 VARIABLE _atxr-vault-config
 VARIABLE _atxr-vault-a
@@ -67,11 +80,8 @@ CREATE _atxr-ops VFS-OPS-SIZE ALLOT
 CREATE _atxr-binding-desc VFS-BINDING-DESC-SIZE ALLOT
 
 CREATE _atxr-vault-id-store RID-SIZE 7 + ALLOT
-CREATE _atxr-root-key-id-store RID-SIZE 7 + ALLOT
 CREATE _atxr-key-rid-store RID-SIZE 7 + ALLOT
 CREATE _atxr-session-rid-store RID-SIZE 7 + ALLOT
-CREATE _atxr-root-key-store
-    SEALED-RECORD-ROOT-KEY-SIZE 7 + ALLOT
 
 CREATE _atxr-session-config-store
     O2SESSION-CONFIG-SIZE 7 + ALLOT
@@ -130,17 +140,11 @@ VARIABLE _atxr-poll-count
 : _atxr-vault-id  ( -- rid )
     _atxr-vault-id-store 7 + -8 AND ;
 
-: _atxr-root-key-id  ( -- rid )
-    _atxr-root-key-id-store 7 + -8 AND ;
-
 : _atxr-key-rid  ( -- rid )
     _atxr-key-rid-store 7 + -8 AND ;
 
 : _atxr-session-rid  ( -- rid )
     _atxr-session-rid-store 7 + -8 AND ;
-
-: _atxr-root-key  ( -- key )
-    _atxr-root-key-store 7 + -8 AND ;
 
 \ =====================================================================
 \  Small assertion, storage, and byte helpers
@@ -235,32 +239,63 @@ VARIABLE _atxr-needle-u
     AGAIN ;
 
 \ =====================================================================
-\  Exact root-key resolver and production vault construction
+\  The passphrase keyring and production vault construction
 \ =====================================================================
 
-VARIABLE _atxr-r-key-a
-VARIABLE _atxr-r-key-u
-VARIABLE _atxr-r-consumer-xt
-VARIABLE _atxr-r-consumer-context
-VARIABLE _atxr-r-resolver-context
+\ A place over the RAM volume's root, in a set of its own, for the
+\ keyring's file.
+: _atxr-declare-place  ( -- )
+    S" atxr" PLACES-VOLUME 0 _atxr-status >R
+    _atxr-vfs @ R@ PVOL-ATTACH 0 _atxr-status
+    S" atxr" S" /" PLACE-WRITABLE R> PLACES-DECLARE 0 _atxr-status
+    PLSET-NEW 0 _atxr-status >R
+    PLACE-WRITABLE SWAP R@ PLSET-GRANT 0 _atxr-status
+    _atxr-place !  R> _atxr-place-set ! ;
 
+: _atxr-release-place  ( -- )
+    _atxr-place-set @ ?DUP IF
+        S" atxr" PLACES-VOLUME 0 _atxr-status PVOL-DETACH
+        PLSET-FREE
+    THEN
+    0 _atxr-place-set !  0 _atxr-place ! ;
+
+\ Run the keyring's derivation to its end.
+: _atxr-keyring-run  ( -- status )
+    BEGIN
+        _ATXR-KEYRING-ITERATIONS _atxr-keyring @ KEYRING-STEP
+        DUP KEYRING-S-PENDING =
+    WHILE
+        DROP
+    REPEAT ;
+
+\ Open the keyring over its file: absent before setup, locked after.
+: _atxr-open-keyring  ( -- state )
+    _atxr-keyring-path _atxr-place @ _atxr-keyring @ KEYRING-INIT
+        KEYRING-S-OK _atxr-status
+    _atxr-keyring @ KEYRING-STATE@ ;
+
+: _atxr-unlock  ( -- )
+    _atxr-passphrase _atxr-keyring @ KEYRING-UNLOCK
+        KEYRING-S-PENDING _atxr-status
+    _atxr-keyring-run KEYRING-S-OK _atxr-status
+    _atxr-keyring @ KEYRING-STATE@ KEYRING-UNLOCKED = _atxr-assert ;
+
+: _atxr-setup-keyring  ( -- )
+    _atxr-declare-place
+    KEYRING-SIZE _atxr-keyring _atxr-allocate
+    _atxr-open-keyring KEYRING-ABSENT = _atxr-assert
+    _atxr-passphrase _ATXR-KEYRING-ITERATIONS _atxr-keyring @
+        KEYRING-SETUP KEYRING-S-PENDING _atxr-status
+    _atxr-keyring-run KEYRING-S-OK _atxr-status
+    _atxr-keyring @ KEYRING-STATE@ KEYRING-UNLOCKED = _atxr-assert ;
+
+\ The vaults' resolver: the keyring's, counting the calls.
 : _atxr-resolver
   \ ( key-id key-id-u consumer-xt consumer-context resolver-context
   \   -- status )
-    _atxr-r-resolver-context !
-    _atxr-r-consumer-context !
-    _atxr-r-consumer-xt !
-    _atxr-r-key-u !
-    _atxr-r-key-a !
-    _atxr-r-resolver-context @
-        _ATXR-RESOLVER-TOKEN = _atxr-assert
-    _atxr-r-key-u @ RID-SIZE = _atxr-assert
-    _atxr-r-key-a @ _atxr-r-key-u @
-        _atxr-root-key-id RID-SIZE COMPARE 0= _atxr-assert
+    DUP _atxr-keyring @ = _atxr-assert
     1 _atxr-resolver-calls +!
-    _atxr-root-key SEALED-RECORD-ROOT-KEY-SIZE
-    _atxr-r-consumer-context @
-    _atxr-r-consumer-xt @ EXECUTE ;
+    KEYRING-RESOLVER ;
 
 : _atxr-configure-active-vault  ( -- )
     _atxr-vault-config @ CVAULT-CONFIG-CLEAR
@@ -278,11 +313,11 @@ VARIABLE _atxr-r-resolver-context
         _atxr-vault-config @ CVAULT-C.VFS !
     _atxr-vault-id
         _atxr-vault-config @ CVAULT-C.VAULT-ID !
-    _atxr-root-key-id
+    _atxr-keyring @ KEYRING-ID DROP
         _atxr-vault-config @ CVAULT-C.KEY-ID !
     ['] _atxr-resolver
         _atxr-vault-config @ CVAULT-C.RESOLVER-XT !
-    _ATXR-RESOLVER-TOKEN
+    _atxr-keyring @
         _atxr-vault-config @ CVAULT-C.RESOLVER-CONTEXT !
     _atxr-vault-config @ _atxr-active-vault @ CVAULT-INIT
     CVAULT-S-OK _atxr-status
@@ -442,10 +477,8 @@ VARIABLE _atxr-r-resolver-context
     _atxr-sent @ _ATXR-REQUEST-CAPACITY 0 FILL
 
     _atxr-vault-id RID-SIZE 0x51 FILL
-    _atxr-root-key-id RID-SIZE 0x52 FILL
     _atxr-key-rid RID-SIZE 0x61 FILL
     _atxr-session-rid RID-SIZE 0x62 FILL
-    _atxr-root-key SEALED-RECORD-ROOT-KEY-SIZE 0x53 FILL
     _atxr-key-rid _atxr-session-rid RID= 0= _atxr-assert
 
     _atxr-session-config O2SESSION-CONFIG-SIZE 0 FILL
@@ -478,6 +511,7 @@ VARIABLE _atxr-r-resolver-context
     _atxr-vfs !
     S" vault" _atxr-vfs @ VFS-MKDIR
     0 _atxr-status
+    _atxr-setup-keyring
 
     _ATOCT-INIT
     _atopt-profile-ready
@@ -527,6 +561,13 @@ VARIABLE _atxr-r-resolver-context
     _atxr-check-session-record
     _atxr-stack ;
 
+: _atxr-load-key-slot-b  ( -- generation status )
+    _atxr-key-work @ OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+        0 FILL
+    _atxr-key-rid _atxr-active-vault @
+    _atxr-key-slot-b _atxr-key-work @
+    OAUTH2-P256-KEY-SLOT-LOAD-DPOP ;
+
 : _ATXR-RESTART  ( -- )
     _atxr-session-a @ O2SESSION-CLOSE
     O2SESSION-S-OK _atxr-status
@@ -540,13 +581,21 @@ VARIABLE _atxr-r-resolver-context
     _atxr-backing-a @ _ATXR-BACKING-U
         _atxr-zero? _atxr-assert
 
+    \ The restarted owners' keyring is a new one over the same file.
+    _atxr-keyring @ KEYRING-FINI
+    _atxr-keyring @ KEYRING-SIZE _atxr-zero? _atxr-assert
+    _atxr-open-keyring KEYRING-LOCKED = _atxr-assert
+
     _atxr-select-owner-b
     _atxr-configure-active-vault
-    _atxr-key-work @ OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
-        0 FILL
-    _atxr-key-rid _atxr-active-vault @
-    _atxr-key-slot-b _atxr-key-work @
-    OAUTH2-P256-KEY-SLOT-LOAD-DPOP
+    \ Locked, the keyring lends no key: the load answers locked and the
+    \ keyring is wanted.  Unlocked, the same load succeeds.
+    _atxr-load-key-slot-b
+    OAUTH2-P256-KEY-S-LOCKED _atxr-status DROP
+    _atxr-keyring @ KEYRING-WANTED? _atxr-assert
+    _atxr-unlock
+    _atxr-keyring @ KEYRING-WANTED? 0= _atxr-assert
+    _atxr-load-key-slot-b
     OAUTH2-P256-KEY-S-OK _atxr-status
     _atxr-key-generation @ = _atxr-assert
     _atxr-key-slot-a OAUTH2-P256-KEY-SLOT-SIZE
@@ -886,10 +935,11 @@ VARIABLE _atxr-io-n
     _atxr-binding-b OAUTH2-P256-KEY-BINDING-CLEAR
     OAUTH2-P256-KEY-S-OK _atxr-status
     _atxr-vault-id RID-CLEAR
-    _atxr-root-key-id RID-CLEAR
     _atxr-key-rid RID-CLEAR
     _atxr-session-rid RID-CLEAR
-    _atxr-root-key SEALED-RECORD-ROOT-KEY-SIZE 0 FILL
+    _atxr-keyring @ ?DUP IF KEYRING-FINI THEN
+    _atxr-keyring _atxr-free
+    _atxr-release-place
 
     _atxr-vfs @ ?DUP IF
         VFS-DESTROY
@@ -913,11 +963,6 @@ VARIABLE _atxr-io-n
     0 _atxr-active-backing !
     0 _atxr-active-session !
     0 _atxr-active-binding !
-    0 _atxr-r-key-a !
-    0 _atxr-r-key-u !
-    0 _atxr-r-consumer-xt !
-    0 _atxr-r-consumer-context !
-    0 _atxr-r-resolver-context !
     0 _atxr-hay-a !
     0 _atxr-hay-u !
     0 _atxr-needle-a !

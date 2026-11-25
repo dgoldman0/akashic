@@ -1588,23 +1588,29 @@ VARIABLE _DSBI-STATUS
 \ Returns PROMPT to asking the Agent, unmasked, with no passphrase left
 \ in it or in Desk.
 : _DESK-KEYRING-PROMPT-END  ( prompt -- )
-    DUP PRM-WIPE  0 SWAP PRM-MASK!
+    DUP PRM-WIPE  0 0 2 PICK PRM-PLACEHOLDER!  0 SWAP PRM-MASK!
     _DESK-PM-ASK _DESK-PROMPT-MODE !
     _DESK-KEYRING-FIRST-WIPE ;
 
+\ A new passphrase is asked for twice under one label, since a field's
+\ label belongs to what it is: the second time, the empty field says to
+\ type it again.
 : _DESK-KEYRING-LABEL$  ( mode -- a u )
-    CASE
-        _DESK-PM-UNLOCK OF S" Keyring passphrase:" ENDOF
-        _DESK-PM-SETUP OF S" New keyring passphrase:" ENDOF
-        _DESK-PM-CHANGE OF S" New keyring passphrase:" ENDOF
-        >R S" Type it again:" R>
-    ENDCASE ;
+    _DESK-PM-UNLOCK = IF S" Keyring passphrase:" ELSE S" New keyring passphrase:" THEN ;
+
+: _DESK-KEYRING-HINT$  ( mode -- a u )
+    DUP _DESK-PM-SETUP-AGAIN = SWAP _DESK-PM-CHANGE-AGAIN = OR IF
+        S" type it again to confirm"
+    ELSE
+        0 0
+    THEN ;
 
 \ Opens Desk's prompt, empty and masked, for MODE.
 : _DESK-KEYRING-ASK  ( mode -- )
     _DESK-AGENT-PROMPT @ ?DUP 0= IF DROP EXIT THEN >R
     DUP _DESK-PROMPT-MODE !
     R@ PRM-WIPE  42 R@ PRM-MASK!
+    DUP _DESK-KEYRING-HINT$ R@ PRM-PLACEHOLDER!
     _DESK-KEYRING-LABEL$ 0 0 R> PRM-SHOW
     ASHELL-DIRTY! ;
 

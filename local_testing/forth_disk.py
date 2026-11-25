@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from forth_dependencies import dependency_order
+from toolchain.image.closure import dependency_order
 from forth_snapshot import KDOS_DIAGNOSTICS, SOURCE_ROOT
 
 

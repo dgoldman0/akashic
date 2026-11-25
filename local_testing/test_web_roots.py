@@ -168,7 +168,8 @@ def test_root_set_loads_through_a_place_and_verifies_captured_chains(
     profile = "web-roots-contract"
     harness.PROFILES[profile] = harness.Profile(
         roots=("tui/platform/mp64fs-vfs.f", "net/web-roots.f"),
-        resources=("net/web-roots/web-roots.mpta",),
+        # The image tool's data-file map ships the bundle with net/web-roots.f.
+        resources=(),
         autoexec=(
             "\\ autoexec.f - the global root set, loaded and used\n"
             "ENTER-USERLAND\n"

@@ -20,3 +20,14 @@ safe-mode = false
 # Times are in milliseconds.
 full-refresh-quiet-ms = 1000
 full-refresh-interval-ms = 5000
+
+# ---------------------------------------------------------
+#  Network
+# ---------------------------------------------------------
+[desk.network]
+# Whether the machine may reach this computer and its local
+# network, which its network refuses otherwise.  While it
+# may, Desk warns at every start: any program on the
+# machine can then reach services that expect only local
+# callers.
+local-access = false

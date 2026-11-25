@@ -123,7 +123,6 @@ from akashic_tui import (  # noqa: E402
     PLACES_BOOT_LINES,
     MP64FS_VFS_PLATFORM_MODULE,
     PROFILES,
-    PROVIDED_RE,
     REQUIRE_RE,
     SOURCE_ROOT,
     _coalesce_audited_forth_lines,
@@ -170,13 +169,21 @@ from diskutil import (  # noqa: E402
     PARENT_ROOT,
     pack_forth_source,
 )
-from forth_dependencies import dependency_markers, module_key  # noqa: E402
+from toolchain.image.closure import (  # noqa: E402
+    PROVIDED_RE,
+    dependency_markers,
+    module_key,
+)
+from toolchain.image.build import MODULE_DATA_FILES  # noqa: E402
 from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
 )
 from shared.session_options import link_pace  # noqa: E402
 
+
+# The global TLS root set, which net/web-roots.f reads from its image's origin.
+(WEB_ROOTS_BUNDLE,) = MODULE_DATA_FILES["net/web-roots.f"]
 
 LIBRARY_RENDERER_FREE_PROFILES = (
     "library-projection-owner-contracts",
@@ -492,6 +499,7 @@ def test_image_paths_reject_file_directory_aliases() -> None:
         _validate_image_paths(
             {"collision", "collision/child.f"},
             ["collision"],
+            sample_names=frozenset(),
         )
 
 
@@ -1610,7 +1618,7 @@ def test_ordinary_streams_excludes_public_network_composition() -> None:
     assert "tui/applets/streams/public-provider.f" in modules
     assert "tui/applets/streams/bluesky-public.f" not in modules
     assert "atproto/public-author-feed.f" not in modules
-    assert "atproto/public-trust.f" not in modules
+    assert "net/web-roots.f" not in modules
     assert "net/transports/kdos-tls.f" not in modules
     assert not _requires_megapad_networking(closure)
 
@@ -1659,7 +1667,7 @@ def test_explicit_bluesky_composition_still_does_not_supply_trust() -> None:
     assert "tui/applets/streams/streams.f" in modules
     assert "atproto/public-author-feed.f" in modules
     assert "net/transports/kdos-tls.f" in modules
-    assert "atproto/public-trust.f" not in modules
+    assert "net/web-roots.f" not in modules
     assert _requires_megapad_networking(closure)
 
 
@@ -1721,9 +1729,12 @@ def test_streams_vertical_binds_both_reviewed_live_providers() -> None:
         "https://foo-dogsquared.github.io/"
         "hugo-theme-more-contentful/feed.rss"
     )
-    assert profile.requires_tap
-    assert "atproto/public-trust.f" in profile.roots
-    assert "ATPUBLIC-TRUST-REGISTER" in profile.autoexec
+    assert profile.requires_network
+    # The vertical supplies no trust of its own and leaves the registry open:
+    # Desk registers the global root set from its origin and freezes it.
+    assert "MTRUST-REGISTER" not in profile.autoexec
+    assert "MTRUST-FREEZE" not in profile.autoexec
+    assert "net/web-roots.f" in dependency_closure(profile.roots)
     assert (
         "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED" in profile.autoexec
     )
@@ -2289,7 +2300,9 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         cols=100,
         rows=32,
         ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
-        nic_tap=None,
+        nic=None,
+        local_access=False,
+        debug_access=False,
         audio=False,
         backend="emulator",
         semantic_step_budget=None,
@@ -2359,7 +2372,6 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         "--batch-steps",
         "--clusters",
         "--lanes",
-        "--nic-tap",
         "--audio",
         "--virtual-clock",
         "--host-profile",
@@ -2385,7 +2397,9 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         cols=280,
         rows=84,
         ext_mem_mib=DESKTOP_APT1_EXT_MEM_MIB,
-        nic_tap=None,
+        nic=None,
+        local_access=False,
+        debug_access=False,
         audio=False,
         backend="simulator",
         semantic_step_budget=123_456,
@@ -2395,16 +2409,28 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
     )
     execv.assert_called_once_with(sys.executable, command)
 
-    with pytest.raises(SystemExit, match="live local network port"):
-        _session_server_command(
-            "desktop-apt1",
-            image,
-            socket_path="/tmp/unused.sock",
-            cols=100,
-            rows=32,
-            backend="simulator",
-            nic_tap="mp64tap0",
+    # Network and debugging options reach MegaPad's server as given; it
+    # reads the network SPEC and refuses one its backend cannot attach.
+    for backend in ("simulator", "hybrid", "emulator"):
+        plain = _session_server_command(
+            "desktop-apt1", image, socket_path="/tmp/unused.sock",
+            cols=100, rows=32, backend=backend,
         )
+        passed = _session_server_command(
+            "desktop-apt1", image, socket_path="/tmp/unused.sock",
+            cols=100, rows=32, backend=backend,
+            nic="slirp", local_access=True, debug_access=True,
+        )
+        assert passed == plain + ["--nic", "slirp", "--local-access", "--debug-access"]
+    live = next(name for name, profile in PROFILES.items() if profile.requires_network)
+    with pytest.raises(SystemExit, match="requires --nic SPEC"):
+        _session_server_command(
+            live, image, socket_path="/tmp/unused.sock", cols=100, rows=32,
+        )
+    assert "--nic" in _session_server_command(
+        live, image, socket_path="/tmp/unused.sock", cols=100, rows=32,
+        nic="tap:mp64tap0",
+    )
     with pytest.raises(SystemExit, match="does not expose an audio sink"):
         _session_server_command(
             "desktop-apt1",
@@ -3169,7 +3195,8 @@ def test_a_user_volume_build_puts_samples_in_documents_and_shipped_files_on_the_
     profile's initial files are files it ships for its own code to read:
     with both volumes the system volume is the origin, and they stand there,
     at their paths, where the Streams check reads its feed through its
-    origin, and nowhere on the boot volume."""
+    origin, and nowhere on the boot volume.  So do the data files of the
+    modules in its closure, the global root set among them."""
 
     tool_dir = _pinned_ext4_tools()
     picture = akashic_tui.SAMPLE_DAMAGED_NAME
@@ -3191,11 +3218,17 @@ def test_a_user_volume_build_puts_samples_in_documents_and_shipped_files_on_the_
         system_volume=True, user_volume=True,
     )
     boot = MP64FS(bytearray(image.read_bytes()))
-    assert PurePosixPath(fixture).name not in {entry.name for entry in boot.list_files()}
+    boot_names = {entry.name for entry in boot.list_files()}
+    assert PurePosixPath(fixture).name not in boot_names
+    assert PurePosixPath(WEB_ROOTS_BUNDLE).name not in boot_names
     held = _system_volume_files(
-        akashic_tui.system_image_path(image), (fixture,), tool_dir, tmp_path / "dump"
+        akashic_tui.system_image_path(image), (fixture, WEB_ROOTS_BUNDLE),
+        tool_dir, tmp_path / "dump",
     )
     assert held[fixture] == content
+    # The data file of a module in the closure stands there too: Desk reads
+    # the global root set from its origin.
+    assert held[WEB_ROOTS_BUNDLE] == (SOURCE_ROOT / WEB_ROOTS_BUNDLE).read_bytes()
 
 
 def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:
@@ -3229,12 +3262,18 @@ def test_desktop_apt1_requires_nest_within_the_loader_depth() -> None:
     assert 2 < deepest <= limit
 
 
-def test_system_volume_build_asks_for_the_pinned_tools_first(
+def test_system_volume_build_asks_for_its_tools_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Without the pinned tools named, a build takes this computer's own
+    # e2fsprogs, and one that finds none is refused.
+    import toolchain.image.build as image_build
+
     monkeypatch.delenv("AKASHIC_E2FSPROGS_TOOL_DIR", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
+    monkeypatch.setattr(image_build, "HOST_TOOL_FOLDERS", ())
     target = tmp_path / "desktop.img"
-    with pytest.raises(RuntimeError, match="AKASHIC_E2FSPROGS_TOOL_DIR"):
+    with pytest.raises(RuntimeError, match="needs e2fsprogs 1.47.0 or later"):
         build_image("desktop-apt1", target, system_volume=True)
     # Nothing was written: no boot image waits for a volume that is absent.
     assert not target.exists()
@@ -3811,6 +3850,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "cols": DESKTOP_ACCEPTANCE_COLS,
                 "rows": DESKTOP_ACCEPTANCE_ROWS,
                 "ext_mem_mib": 128,
+                # The journey reads the guest's state.
+                "debug_access": True,
                 "backend": "simulator",
                 "full_cores": None,
                 "clusters": None,
@@ -3855,6 +3896,119 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         assert "viewer journey failed" in output
     else:
         assert str(tmp_path / "manifest.json") in output
+
+
+def test_physical_acceptance_drives_a_session_another_program_serves(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    runner_calls = []
+
+    def run_acceptance(*args, **kwargs):
+        runner_calls.append((args, kwargs))
+        return SimpleNamespace(manifest_path=tmp_path / "manifest.json")
+
+    acceptance_module = ModuleType("rich_terminal_desktop_acceptance")
+    acceptance_module.PhysicalDesktopAcceptanceError = RuntimeError
+    acceptance_module.run_physical_desktop_acceptance = run_acceptance
+    monkeypatch.setitem(sys.modules, "rich_terminal_desktop_acceptance", acceptance_module)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("an attached journey starts no server")
+
+    monkeypatch.setattr("akashic_tui._session_server_command", refuse)
+    monkeypatch.setattr("akashic_tui.subprocess.Popen", refuse)
+    assert accept_physical_desktop(
+        None,
+        socket_path="/run/user/1000/fantasy-engine/desktop.sock",
+        cols=DESKTOP_ACCEPTANCE_COLS,
+        rows=DESKTOP_ACCEPTANCE_ROWS,
+        ext_mem_mib=128,
+        artifact_root=tmp_path / "evidence",
+        timeout=45.0,
+        font_path=None,
+        font_size=18,
+        action_delay=0.75,
+        hold_seconds=0.0,
+        user_volume=True,
+        attach=True,
+    )
+    [(args, kwargs)] = runner_calls
+    assert args == ("/run/user/1000/fantasy-engine/desktop.sock", tmp_path / "evidence")
+    assert kwargs["expected_server_pid"] is None
+    assert kwargs["user_volume"] is True
+    assert "Physical desktop acceptance: PASS" in capsys.readouterr().out
+
+
+def test_attach_refuses_the_options_of_the_build_and_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("an attached journey builds nothing")
+
+    monkeypatch.setattr("akashic_tui.build_image", refuse)
+    for option in (
+        ["--cores", "2"],
+        ["--screen-profile"],
+        ["--terminal-link-pace", "115200:16667"],
+        ["--shadow-check"],
+        ["--output", "desktop.img"],
+    ):
+        monkeypatch.setattr(sys, "argv", ["akashic_tui.py", "accept", "--attach", *option])
+        with pytest.raises(SystemExit) as stopped:
+            akashic_tui.main()
+        assert stopped.value.code == 2
+        assert f"{option[0]} belong to the build or the server" in capsys.readouterr().err
+
+
+def test_serve_and_smoke_take_the_network_and_debugging_options() -> None:
+    serve_args = _parser().parse_args(
+        ["serve", "--nic", "slirp", "--local-access", "--debug-access"]
+    )
+    assert (serve_args.nic, serve_args.local_access, serve_args.debug_access) == (
+        "slirp", True, True,
+    )
+    smoke_args = _parser().parse_args(["smoke", "--nic", "tap:mp64tap0"])
+    assert (smoke_args.nic, smoke_args.local_access) == ("tap:mp64tap0", False)
+    accept_args = _parser().parse_args(["accept", "--attach"])
+    assert accept_args.attach
+    for refused in (["accept", "--nic", "slirp"], ["smoke", "--debug-access"]):
+        with pytest.raises(SystemExit):
+            _parser().parse_args(refused)
+
+
+def test_smoke_attaches_the_network_megapad_names(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _from_bios(*_args, **kwargs):
+        captured.update(kwargs)
+        raise _Stop
+
+    image = Path("desktop-sandbox.img")
+    arguments = dict(cols=100, rows=32, max_steps=1, timeout=1.0)
+    with patch("akashic_tui.MachineSession.from_bios", side_effect=_from_bios):
+        with pytest.raises(_Stop):
+            smoke("desktop-sandbox", image, nic="slirp", local_access=True, **arguments)
+    assert captured["nic_backend"].name == "slirp, local access"
+    assert captured["realtime_clock"] is True
+    assert "[shared] network: slirp, local access" in capsys.readouterr().out
+
+    monkeypatch.setattr("nic_backends.tap_available", lambda _name: False)
+    with patch("akashic_tui.MachineSession.from_bios") as from_bios:
+        assert not smoke("desktop-sandbox", image, nic="tap:missing", **arguments)
+        assert not smoke("desktop-sandbox", image, local_access=True, **arguments)
+    from_bios.assert_not_called()
+    output = capsys.readouterr().out
+    assert "TAP device 'missing' does not exist" in output
+    assert "--local-access needs --nic slirp" in output
 
 
 def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
@@ -3945,6 +4099,12 @@ def test_complete_desktop_uses_stored_checked_source_on_32_mib_mp64fs(
     info = filesystem.info()
     assert info["total_sectors"] == 65536
     assert info["free_sectors"] * 512 >= 1 << 20
+    # Desk reads the global root set from its origin, here the boot volume,
+    # at the path the data-file map gives it.
+    bundle = PurePosixPath(WEB_ROOTS_BUNDLE)
+    assert filesystem.read_file(
+        bundle.name, parent=filesystem.resolve_path(str(bundle.parent))
+    ) == (SOURCE_ROOT / WEB_ROOTS_BUNDLE).read_bytes()
     assert filesystem.read_file("networking.f") == pack_forth_source(
         (MEGAPAD_ROOT / "networking.f").read_bytes()
     )
