@@ -171,6 +171,12 @@ STATE: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("_VMZR-START", BOTH, "the first sector of the run the MP64FS binding cleared last"),
 )
 
+# Listed words whose two values follow the two volumes' contents and may
+# happen to agree, so they need not explain a byte: the group descriptor
+# check ends on the group it checked last, whose descriptor can be the same
+# in both volumes.
+MAY_AGREE = frozenset({"_EXT4-GDC-*"})
+
 # Words whose data is set from a clock when their module loads.
 CLOCK: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("DNS-ID", BOTH, "the next DNS query's identifier, taken from the timer when networking loads"),
@@ -483,7 +489,7 @@ def compare(
                 say(f"    {kind}: {changed:,} bytes in {places:,} places of {len(words):,} words")
     for table in (state, clock):
         for word, pairs, _reason in table:
-            if layout in pairs and word not in used:
+            if layout in pairs and word not in used and word not in MAY_AGREE:
                 fail(f"{word} is listed for this pair and explains no byte")
     for kind in ("state", "clock"):
         for name, changed in sorted(result.words.get(kind, {}).items()):

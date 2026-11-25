@@ -421,8 +421,8 @@ _IN-A _WR-W !  S" shown" _IN-A INP-SET-TEXT  _IN-A WDG-DRAW
 KINDS["prompt"] = Kind(
     modules=("tui/semantic-collections.f", "tui/widgets/prompt.f"),
     change=(
-        "PRM-SHOW", "PRM-COLORS!", "PRM-MASK!", "PRM-WIPE", "PRM-SET-BOUNDS",
-        "PRM-HIDE",
+        "PRM-SHOW", "PRM-COLORS!", "PRM-MASK!", "PRM-PLACEHOLDER!", "PRM-WIPE",
+        "PRM-SET-BOUNDS", "PRM-HIDE",
     ),
     same=(
         "PRM-ACTIVE?", "PRM-GET-TEXT", "PRM-ON-SUBMIT", "PRM-ON-CANCEL",
@@ -446,6 +446,7 @@ CREATE _PR-EV 24 ALLOT
 : _PS6  _WR-W @ PRM-HIDE ;                       ' _PS6 _WR-STEP
 : _PS7  S" Again:" S" xy" _WR-W @ PRM-SHOW ;     ' _PS7 _WR-STEP
 : _PS8  122 _PR-CHAR ;                           ' _PS8 _WR-STEP
+: _PS9  S" hint" _WR-W @ PRM-PLACEHOLDER! ;      ' _PS9 _WR-STEP
 0 0 1 30 RGN-NEW _PR-BUF-A 64 PRM-NEW CONSTANT _PR-A
 0 0 1 30 RGN-NEW _PR-BUF-B 64 PRM-NEW CONSTANT _PR-B
 _PR-A _PR-B _WR-RUN

@@ -194,7 +194,7 @@ def test_desk_composes_over_read_only_places_in_recovery(
         ),
         linked=True,
         include_large_sample=False,
-        total_sectors=8192,
+        total_sectors=16384,
     ))
     image = harness.build_image(PROFILE, tmp_path / "desk-recovery.img")
     assert harness.smoke(
