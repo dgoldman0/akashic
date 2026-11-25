@@ -130,10 +130,19 @@ _SRO-EFFECTIVE OCHK-URI-MAX + CONSTANT STREAMS-REFRESH-OWNER-SIZE
 \ VALID? is deliberately an ownership/lifecycle predicate.  An offline owner
 \ still owns its checkpoints and decoder and must remain releasable; provider
 \ and service readiness belong exclusively to AVAILABLE?.
+\
+\ It checks the live checkpoint's header only, since Streams asks it on
+\ every tick and before each read.  The live checkpoint only ever receives
+\ bytes that were validated whole: INIT's fresh checkpoint, a load, which
+\ the store validates, or a candidate copied in only after its save
+\ validated it, by _SREF-PERSIST and by boot recovery.  RELEASE wipes it
+\ and clears the pointer; nothing else writes it.  The words that build on
+\ it, OCHK-BEGIN, OCHK-APPLY, OCHK-TERMINAL and OCHK-RECOVER-INDETERMINATE,
+\ validate their copy of it whole on entry.
 : STREAMS-REFRESH-OWNER-VALID?  ( owner -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP SREF.MAGIC @ _SREF-MAGIC =
-    OVER SREF.LIVE @ DUP 0<> IF OCHK-VALID? ELSE DROP 0 THEN AND
+    OVER SREF.LIVE @ OCHK-HEADER-VALID? AND
     OVER SREF.CANDIDATE @ 0<> AND
     OVER SREF.DECODER @ DUP 0<> IF
         STREAMS-SYNDICATION-DECODER-VALID?

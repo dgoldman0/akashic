@@ -120,11 +120,13 @@ VARIABLE _OSSS-STORE
     _OSCB-PAYLOAD-U @ STREAMS-OBSERVATION-CHECKPOINT-SIZE <> IF
         VFSNAP-S-CAPACITY EXIT
     THEN
-    _OSCB-CONTEXT @ OCHK-VALID? 0= IF VFSNAP-S-INVALID EXIT THEN
     _OSCB-CONTEXT @ OCHK.GENERATION @ _OSCB-GENERATION @ <> IF
         VFSNAP-S-INVALID EXIT
     THEN
-    \ OCHK-VALID? proves every fixed table/blob tail byte canonical.
+    \ Each caller validated the checkpoint whole before the core reached
+    \ here, which proves every fixed table and blob tail byte canonical:
+    \ SAVE before the core's recovery and read, which write only the
+    \ store's scratch, and the encode helper just before encoding.
     _OSCB-CONTEXT @ _OSCB-PAYLOAD @ STREAMS-OBSERVATION-CHECKPOINT-SIZE
         CMOVE
     VFSNAP-S-OK ;
@@ -401,6 +403,7 @@ VARIABLE _OSSS-STORE
     _OSSS-STORE @ STREAMS-OBSERVATION-STORE-VALID? 0= IF
         0 OSTORE-S-INVALID EXIT
     THEN
+    _OSSS-CHECKPOINT @ OCHK-VALID? 0= IF 0 OSTORE-S-INVALID EXIT THEN
     _OSSS-STORE @ STREAMS-OBSERVATION-STORE.CORE _VFSOP-STORE !
     _OSSS-CHECKPOINT @ _VFSS-CONTEXT !
     _OSSS-CHECKPOINT @ OCHK.GENERATION @ _VFSS-NEXT !

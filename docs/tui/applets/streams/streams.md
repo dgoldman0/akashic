@@ -318,6 +318,15 @@ immutable versions and exact-key heads. On relaunch, a durably accepted head
 with no terminal record is changed to `indeterminate` and saved before the
 checkpoint is exposed.
 
+The whole checkpoint, its CRC included, is validated where its bytes arrive
+from the volume or become the base of a change: each load, the entry to
+`BEGIN`, `TERMINAL`, `APPLY` and relaunch recovery, `APPLY`'s result, and
+each save before it writes. The owner's live checkpoint only ever receives
+bytes validated there, so `STREAMS-REFRESH-OWNER-VALID?`, which Streams asks
+on every tick and before each read, checks the live checkpoint's header
+alone. A stray write into the live checkpoint is therefore caught before
+anything builds on it or saves it, not on the tick it happens.
+
 Each deduplication head is keyed by the source RID, exact source-identity
 namespace digest, provider kind, native-identity kind, and exact admitted
 native-identity bytes. The source identity is therefore part of equality: the

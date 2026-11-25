@@ -442,13 +442,18 @@ VARIABLE _OCHK-V-LEN-FIELD
     _OCHK-V-KEY @ OCK.NATIVE-U @ DUP 1 >=
         SWAP OCHK-NATIVE-ID-MAX <= AND ;
 
-: OCHK-VALID?  ( checkpoint -- flag )
-    DUP 0= IF DROP 0 EXIT THEN
+\ Whether CHECKPOINT spans memory without wrapping and its header names
+\ this layout: the magic, ABI and size.  It reads the header alone, a few
+\ cells, and says nothing of the contents, which OCHK-VALID? checks whole.
+: OCHK-HEADER-VALID?  ( checkpoint -- flag )
     DUP STREAMS-OBSERVATION-CHECKPOINT-SIZE _OCHK-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP OCHK.MAGIC @ OCHK-MAGIC =
+    OVER OCHK.ABI @ OCHK-ABI = AND
+    SWAP OCHK.SIZE @ STREAMS-OBSERVATION-CHECKPOINT-SIZE = AND ;
+
+: OCHK-VALID?  ( checkpoint -- flag )
+    DUP OCHK-HEADER-VALID? 0= IF DROP 0 EXIT THEN
     _OCHK-V-C !
-    _OCHK-V-C @ OCHK.MAGIC @ OCHK-MAGIC <> IF 0 EXIT THEN
-    _OCHK-V-C @ OCHK.ABI @ OCHK-ABI <> IF 0 EXIT THEN
-    _OCHK-V-C @ OCHK.SIZE @ STREAMS-OBSERVATION-CHECKPOINT-SIZE <> IF 0 EXIT THEN
     _OCHK-V-C @ OCHK.GENERATION @ 0< IF 0 EXIT THEN
     _OCHK-V-C @ OCHK.SEQUENCE @ 0< IF 0 EXIT THEN
     _OCHK-V-C @ OCHK.SOURCE-COUNT @ DUP 0< SWAP OCHK-SOURCE-MAX > OR IF 0 EXIT THEN
